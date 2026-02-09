@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="anina-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ec4899" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#ec4899" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Outer sacred circle -->
+  <circle cx="64" cy="64" r="58" fill="url(#anina-bg)" stroke="#ec4899" stroke-width="2.5"/>
+  <!-- Ashtadala Padma: 8-petal lotus, petals at 0,45,90,135,180,225,270,315 degrees -->
+  <!-- Each petal: elliptical arc from center, radius 28, petal width ~20deg -->
+  <!-- Petal 1: 0deg (right) -->
+  <path d="M 64,64 Q 88,54 92,64 Q 88,74 64,64 Z" fill="#ec4899" fill-opacity="0.15" stroke="#ec4899" stroke-width="1.5"/>
+  <!-- Petal 2: 45deg -->
+  <path d="M 64,64 Q 81.8,44.2 84.8,55.8 Q 74.2,56.2 64,64 Z" fill="#ec4899" fill-opacity="0.15" stroke="#ec4899" stroke-width="1.5"/>
+  <!-- Using proper rotation: each petal is a teardrop rotated around center -->
+  <!-- Recalculating with proper geometry: petal tip at radius 30 from center -->
+  <!-- Petal at angle θ: tip at (64+30cos(θ), 64-30sin(θ)), control points ±18deg -->
+  <g fill="#ec4899" fill-opacity="0.12" stroke="#ec4899" stroke-width="1.5" stroke-linejoin="round">
+    <!-- 0° -->
+    <path d="M 64,64 C 72,56 90,56 94,64 C 90,72 72,72 64,64 Z"/>
+    <!-- 45° -->
+    <path d="M 64,64 C 64.3,54 78.7,39.6 85.2,42.8 C 88.4,49.3 74,63.7 64,64 Z"/>
+    <!-- 90° -->
+    <path d="M 64,64 C 56,56 56,38 64,34 C 72,38 72,56 64,64 Z"/>
+    <!-- 135° -->
+    <path d="M 64,64 C 54,63.7 39.6,49.3 42.8,42.8 C 49.3,39.6 63.7,54 64,64 Z"/>
+    <!-- 180° -->
+    <path d="M 64,64 C 56,72 38,72 34,64 C 38,56 56,56 64,64 Z"/>
+    <!-- 225° -->
+    <path d="M 64,64 C 63.7,74 49.3,88.4 42.8,85.2 C 39.6,78.7 54,64.3 64,64 Z"/>
+    <!-- 270° -->
+    <path d="M 64,64 C 72,72 72,90 64,94 C 56,90 56,72 64,64 Z"/>
+    <!-- 315° -->
+    <path d="M 64,64 C 74,64.3 88.4,78.7 85.2,85.2 C 78.7,88.4 64.3,74 64,64 Z"/>
+  </g>
+  <!-- Inner circle (seed/mani) -->
+  <circle cx="64" cy="64" r="6" fill="#ec4899" fill-opacity="0.25" stroke="#ec4899" stroke-width="1.5"/>
+  <!-- Bindu -->
+  <circle cx="64" cy="64" r="2" fill="#ec4899"/>
+</svg>

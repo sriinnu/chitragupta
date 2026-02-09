@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="yantra-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Outer sacred circle -->
+  <circle cx="64" cy="64" r="58" fill="url(#yantra-bg)" stroke="#fbbf24" stroke-width="2.5"/>
+  <!-- Hexagonal gear mandala -->
+  <!-- Outer hexagon (gear rim) with 12 teeth -->
+  <!-- Hexagon vertices at radius 40: cos/sin at 0,60,120,180,240,300 degrees -->
+  <!-- Inner hexagon at radius 30 -->
+  <polygon points="104,64 84,98.6 44,98.6 24,64 44,29.4 84,29.4"
+           fill="none" stroke="#fbbf24" stroke-width="1" stroke-opacity="0.3"/>
+  <!-- Gear teeth: 12 trapezoidal teeth around a circle of radius 38 -->
+  <path d="M 100,64 L 104,60 L 110,60 L 110,68 L 104,68 Z" fill="none" stroke="#fbbf24" stroke-width="1.2" stroke-opacity="0"/>
+  <!-- Simplified gear: hexagonal mandala with inner structure -->
+  <!-- Outer gear hexagon -->
+  <polygon points="98,64 81,93.4 47,93.4 30,64 47,34.6 81,34.6"
+           fill="none" stroke="#fbbf24" stroke-width="2" stroke-linejoin="round"/>
+  <!-- 12 gear teeth as small triangles on each edge midpoint and vertex -->
+  <!-- Teeth at vertices -->
+  <polygon points="98,64 104,60 104,68" fill="#fbbf24" fill-opacity="0.3" stroke="#fbbf24" stroke-width="1"/>
+  <polygon points="81,93.4 84,99.6 77,99.6" fill="#fbbf24" fill-opacity="0.3" stroke="#fbbf24" stroke-width="1"/>
+  <polygon points="47,93.4 44,99.6 51,99.6" fill="#fbbf24" fill-opacity="0.3" stroke="#fbbf24" stroke-width="1"/>
+  <polygon points="30,64 24,60 24,68" fill="#fbbf24" fill-opacity="0.3" stroke="#fbbf24" stroke-width="1"/>
+  <polygon points="47,34.6 44,28.4 51,28.4" fill="#fbbf24" fill-opacity="0.3" stroke="#fbbf24" stroke-width="1"/>
+  <polygon points="81,34.6 84,28.4 77,28.4" fill="#fbbf24" fill-opacity="0.3" stroke="#fbbf24" stroke-width="1"/>
+  <!-- Teeth at edge midpoints -->
+  <polygon points="89.5,78.7 95,78.7 92,84" fill="#fbbf24" fill-opacity="0.3" stroke="#fbbf24" stroke-width="1"/>
+  <polygon points="64,93.4 60.5,99 67.5,99" fill="#fbbf24" fill-opacity="0.3" stroke="#fbbf24" stroke-width="1"/>
+  <polygon points="38.5,78.7 33,78.7 36,84" fill="#fbbf24" fill-opacity="0.3" stroke="#fbbf24" stroke-width="1"/>
+  <polygon points="38.5,49.3 33,49.3 36,44" fill="#fbbf24" fill-opacity="0.3" stroke="#fbbf24" stroke-width="1"/>
+  <polygon points="64,34.6 60.5,29 67.5,29" fill="#fbbf24" fill-opacity="0.3" stroke="#fbbf24" stroke-width="1"/>
+  <polygon points="89.5,49.3 95,49.3 92,44" fill="#fbbf24" fill-opacity="0.3" stroke="#fbbf24" stroke-width="1"/>
+  <!-- Inner hexagon -->
+  <polygon points="82,64 73,79.6 55,79.6 46,64 55,48.4 73,48.4"
+           fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- Spokes connecting inner to outer -->
+  <line x1="98" y1="64" x2="82" y2="64" stroke="#fbbf24" stroke-width="1.2"/>
+  <line x1="81" y1="93.4" x2="73" y2="79.6" stroke="#fbbf24" stroke-width="1.2"/>
+  <line x1="47" y1="93.4" x2="55" y2="79.6" stroke="#fbbf24" stroke-width="1.2"/>
+  <line x1="30" y1="64" x2="46" y2="64" stroke="#fbbf24" stroke-width="1.2"/>
+  <line x1="47" y1="34.6" x2="55" y2="48.4" stroke="#fbbf24" stroke-width="1.2"/>
+  <line x1="81" y1="34.6" x2="73" y2="48.4" stroke="#fbbf24" stroke-width="1.2"/>
+  <!-- Central hub -->
+  <circle cx="64" cy="64" r="8" fill="#fbbf24" fill-opacity="0.15" stroke="#fbbf24" stroke-width="1.5"/>
+  <circle cx="64" cy="64" r="2.5" fill="#fbbf24"/>
+</svg>

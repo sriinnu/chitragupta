@@ -1,0 +1,35 @@
+{
+	"name": "chitragupta-monorepo",
+	"private": true,
+	"type": "module",
+	"version": "0.1.0",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/sriinnu/chitragupta.git"
+	},
+	"scripts": {
+		"clean": "npm run clean --workspaces --if-present",
+		"build": "pnpm -r run build",
+		"dev": "concurrently --names \"core,swara,anina,smriti,ui,yantra,dharma,netra,vayu,sutra,cli\" \"cd packages/core && npm run dev\" \"cd packages/swara && npm run dev\" \"cd packages/anina && npm run dev\" \"cd packages/smriti && npm run dev\" \"cd packages/ui && npm run dev\" \"cd packages/yantra && npm run dev\" \"cd packages/dharma && npm run dev\" \"cd packages/netra && npm run dev\" \"cd packages/vayu && npm run dev\" \"cd packages/sutra && npm run dev\" \"cd packages/cli && npm run dev\"",
+		"check": "biome check --write --error-on-warnings .",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage",
+		"chitragupta": "tsx packages/cli/src/cli.ts",
+		"publish:dry": "bash scripts/publish.sh",
+		"publish:real": "bash scripts/publish.sh --real"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"concurrently": "^9.2.1",
+		"typescript": "^5.7.0",
+		"vitest": "^4.0.18"
+	},
+	"engines": {
+		"node": ">=22"
+	},
+	"pnpm": {
+		"onlyBuiltDependencies": ["better-sqlite3", "esbuild"]
+	}
+}
