@@ -1,0 +1,46 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Chitragupta — Docker Compose
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+  chitragupta:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3141:3141"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+      - CHITRAGUPTA_AUTH_TOKEN=${CHITRAGUPTA_AUTH_TOKEN:-}
+      - CHITRAGUPTA_API_KEYS=${CHITRAGUPTA_API_KEYS:-}
+      - NODE_ENV=production
+    volumes:
+      - chitragupta-data:/home/chitragupta/.chitragupta
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_started
+        required: false
+
+  # Optional: local Ollama for embeddings / local models
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    # Uncomment below for GPU passthrough (requires nvidia-container-toolkit)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+volumes:
+  chitragupta-data:
+  ollama-data:

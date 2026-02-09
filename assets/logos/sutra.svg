@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="sutra-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f97316" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#f97316" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Outer sacred circle -->
+  <circle cx="64" cy="64" r="58" fill="url(#sutra-bg)" stroke="#f97316" stroke-width="2.5"/>
+  <!-- Sutra: Interlocking rings forming a chain (Borromean/Olympic style) -->
+  <!-- Thread of connection — 5 interlocking rings arranged in a gentle arc -->
+  <!-- Ring 1 (leftmost) -->
+  <circle cx="34" cy="58" r="14" fill="none" stroke="#f97316" stroke-width="2.2"/>
+  <!-- Ring 2 -->
+  <circle cx="50" cy="68" r="14" fill="none" stroke="#f97316" stroke-width="2.2"/>
+  <!-- Ring 3 (center) -->
+  <circle cx="64" cy="58" r="14" fill="none" stroke="#f97316" stroke-width="2.2"/>
+  <!-- Ring 4 -->
+  <circle cx="78" cy="68" r="14" fill="none" stroke="#f97316" stroke-width="2.2"/>
+  <!-- Ring 5 (rightmost) -->
+  <circle cx="94" cy="58" r="14" fill="none" stroke="#f97316" stroke-width="2.2"/>
+  <!-- Interlocking overlay: hide sections to create weave effect -->
+  <!-- Ring 1 passes over Ring 2 at bottom -->
+  <path d="M 40,69 A 14,14 0 0,0 28,69" fill="none" stroke="#f97316" stroke-width="2.8"/>
+  <!-- Ring 2 passes over Ring 3 at top -->
+  <path d="M 56,57 A 14,14 0 0,0 44,57" fill="none" stroke="#f97316" stroke-width="2.8"/>
+  <!-- Ring 3 passes over Ring 4 at bottom -->
+  <path d="M 70,69 A 14,14 0 0,0 58,69" fill="none" stroke="#f97316" stroke-width="2.8"/>
+  <!-- Ring 4 passes over Ring 5 at top -->
+  <path d="M 84,57 A 14,14 0 0,0 72,57" fill="none" stroke="#f97316" stroke-width="2.8"/>
+  <!-- Connection nodes at intersections -->
+  <circle cx="42" cy="63" r="1.5" fill="#f97316"/>
+  <circle cx="57" cy="63" r="1.5" fill="#f97316"/>
+  <circle cx="71" cy="63" r="1.5" fill="#f97316"/>
+  <circle cx="86" cy="63" r="1.5" fill="#f97316"/>
+</svg>

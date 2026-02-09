@@ -1,0 +1,87 @@
+<!-- Lekhaka — The Writer (Documenter) -->
+<!-- Symbol: Quill/pen + scroll, flowing calligraphic curves, geometric feather -->
+<!-- Colors: Warm ivory (#fef3c7) + Burnt sienna (#b45309) + Gold (#d97706) -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <radialGradient id="lekhaka-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#d97706" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#b45309" stop-opacity="0.02"/>
+    </radialGradient>
+    <linearGradient id="lekhaka-quill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d97706"/>
+      <stop offset="100%" stop-color="#b45309"/>
+    </linearGradient>
+    <linearGradient id="lekhaka-scroll" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fef3c7" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#d97706" stop-opacity="0.3"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer sacred circle -->
+  <circle cx="100" cy="100" r="92" fill="url(#lekhaka-bg)" stroke="#d97706" stroke-width="2.5"/>
+
+  <!-- Inner decorative circle (scroll border motif) -->
+  <circle cx="100" cy="100" r="78" fill="none" stroke="#b45309" stroke-width="0.8" stroke-opacity="0.2"
+          stroke-dasharray="4 3 1 3"/>
+
+  <!-- Scroll shape (background parchment) -->
+  <g transform="translate(100, 108)">
+    <!-- Main scroll body -->
+    <rect x="-35" y="-45" width="70" height="80" rx="3" ry="3"
+          fill="url(#lekhaka-scroll)" stroke="#d97706" stroke-width="1.2" stroke-opacity="0.5"/>
+    <!-- Top scroll curl -->
+    <path d="M -35,-45 Q -35,-55 -25,-55 L 25,-55 Q 35,-55 35,-45"
+          fill="none" stroke="#d97706" stroke-width="1.2" stroke-opacity="0.5"/>
+    <path d="M -35,-45 Q -42,-45 -42,-38 Q -42,-31 -35,-31"
+          fill="none" stroke="#d97706" stroke-width="1" stroke-opacity="0.35"/>
+    <!-- Bottom scroll curl -->
+    <path d="M -35,35 Q -42,35 -42,42 Q -42,49 -35,49"
+          fill="none" stroke="#d97706" stroke-width="1" stroke-opacity="0.35"/>
+    <path d="M 35,35 Q 42,35 42,42 Q 42,49 35,49"
+          fill="none" stroke="#d97706" stroke-width="1" stroke-opacity="0.35"/>
+    <!-- Text lines on scroll -->
+    <g stroke="#b45309" stroke-width="0.8" stroke-opacity="0.3" stroke-linecap="round">
+      <line x1="-22" y1="-32" x2="22" y2="-32"/>
+      <line x1="-22" y1="-22" x2="18" y2="-22"/>
+      <line x1="-22" y1="-12" x2="22" y2="-12"/>
+      <line x1="-22" y1="-2" x2="14" y2="-2"/>
+      <line x1="-22" y1="8" x2="20" y2="8"/>
+      <line x1="-22" y1="18" x2="16" y2="18"/>
+    </g>
+  </g>
+
+  <!-- Quill pen (geometric feather construction) -->
+  <g transform="translate(142, 52) rotate(35)">
+    <!-- Feather shaft -->
+    <line x1="0" y1="0" x2="0" y2="65" stroke="url(#lekhaka-quill)" stroke-width="1.8" stroke-linecap="round"/>
+    <!-- Nib (writing tip) -->
+    <path d="M 0,65 L -3,72 L 0,80 L 3,72 Z" fill="#b45309" fill-opacity="0.7" stroke="#b45309" stroke-width="0.8"/>
+    <!-- Feather barbs (left) -->
+    <line x1="0" y1="5" x2="-14" y2="-5" stroke="#d97706" stroke-width="0.9" stroke-opacity="0.5" stroke-linecap="round"/>
+    <line x1="0" y1="12" x2="-16" y2="3" stroke="#d97706" stroke-width="0.9" stroke-opacity="0.5" stroke-linecap="round"/>
+    <line x1="0" y1="19" x2="-17" y2="11" stroke="#d97706" stroke-width="0.9" stroke-opacity="0.45" stroke-linecap="round"/>
+    <line x1="0" y1="26" x2="-16" y2="19" stroke="#d97706" stroke-width="0.8" stroke-opacity="0.4" stroke-linecap="round"/>
+    <line x1="0" y1="33" x2="-14" y2="27" stroke="#d97706" stroke-width="0.8" stroke-opacity="0.35" stroke-linecap="round"/>
+    <line x1="0" y1="40" x2="-11" y2="35" stroke="#d97706" stroke-width="0.7" stroke-opacity="0.3" stroke-linecap="round"/>
+    <!-- Feather barbs (right) -->
+    <line x1="0" y1="5" x2="12" y2="-3" stroke="#d97706" stroke-width="0.9" stroke-opacity="0.5" stroke-linecap="round"/>
+    <line x1="0" y1="12" x2="14" y2="5" stroke="#d97706" stroke-width="0.9" stroke-opacity="0.5" stroke-linecap="round"/>
+    <line x1="0" y1="19" x2="15" y2="13" stroke="#d97706" stroke-width="0.9" stroke-opacity="0.45" stroke-linecap="round"/>
+    <line x1="0" y1="26" x2="14" y2="21" stroke="#d97706" stroke-width="0.8" stroke-opacity="0.4" stroke-linecap="round"/>
+    <line x1="0" y1="33" x2="12" y2="29" stroke="#d97706" stroke-width="0.8" stroke-opacity="0.35" stroke-linecap="round"/>
+    <line x1="0" y1="40" x2="9" y2="37" stroke="#d97706" stroke-width="0.7" stroke-opacity="0.3" stroke-linecap="round"/>
+  </g>
+
+  <!-- Calligraphic flourish (ink trail from quill) -->
+  <path d="M 152,138 Q 140,145 128,140 Q 115,135 110,142 Q 105,150 95,148"
+        fill="none" stroke="#b45309" stroke-width="1.2" stroke-opacity="0.3" stroke-linecap="round"/>
+
+  <!-- Decorative corner dots (manuscript illumination) -->
+  <circle cx="30" cy="30" r="2" fill="#d97706" fill-opacity="0.4"/>
+  <circle cx="170" cy="30" r="2" fill="#d97706" fill-opacity="0.4"/>
+  <circle cx="30" cy="170" r="2" fill="#b45309" fill-opacity="0.35"/>
+  <circle cx="170" cy="170" r="2" fill="#b45309" fill-opacity="0.35"/>
+
+  <!-- Ink drop bindu -->
+  <circle cx="152" cy="138" r="2.5" fill="#b45309" fill-opacity="0.6"/>
+</svg>

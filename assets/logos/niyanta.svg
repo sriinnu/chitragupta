@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="niyanta-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#f59e0b" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Outer sacred circle -->
+  <circle cx="64" cy="64" r="58" fill="url(#niyanta-bg)" stroke="#f59e0b" stroke-width="2.5"/>
+  <!-- Niyanta: Crown/Multi-armed orchestrator figure -->
+  <!-- Inspired by the Nataraja/cosmic conductor archetype -->
+  <!-- Crown (three-pointed, Trimurti style) -->
+  <path d="M 48,38 L 52,22 L 56,32 L 60,18 L 64,30 L 68,18 L 72,32 L 76,22 L 80,38"
+        fill="none" stroke="#f59e0b" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  <!-- Crown base arc -->
+  <path d="M 48,38 Q 64,44 80,38" fill="none" stroke="#f59e0b" stroke-width="1.8"/>
+  <!-- Head circle -->
+  <circle cx="64" cy="46" r="8" fill="#f59e0b" fill-opacity="0.12" stroke="#f59e0b" stroke-width="1.8"/>
+  <!-- Body (torso line) -->
+  <line x1="64" y1="54" x2="64" y2="82" stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round"/>
+  <!-- 6 arms radiating from shoulders (multi-armed like Vishwakarma/conductor) -->
+  <!-- Shoulder point at (64, 58) -->
+  <!-- Upper left arm -->
+  <path d="M 64,58 C 52,48 36,38 26,34" fill="none" stroke="#f59e0b" stroke-width="1.8" stroke-linecap="round"/>
+  <!-- Middle left arm -->
+  <path d="M 64,58 C 48,56 32,54 22,56" fill="none" stroke="#f59e0b" stroke-width="1.8" stroke-linecap="round"/>
+  <!-- Lower left arm -->
+  <path d="M 64,62 C 50,68 36,76 28,82" fill="none" stroke="#f59e0b" stroke-width="1.8" stroke-linecap="round"/>
+  <!-- Upper right arm -->
+  <path d="M 64,58 C 76,48 92,38 102,34" fill="none" stroke="#f59e0b" stroke-width="1.8" stroke-linecap="round"/>
+  <!-- Middle right arm -->
+  <path d="M 64,58 C 80,56 96,54 106,56" fill="none" stroke="#f59e0b" stroke-width="1.8" stroke-linecap="round"/>
+  <!-- Lower right arm -->
+  <path d="M 64,62 C 78,68 92,76 100,82" fill="none" stroke="#f59e0b" stroke-width="1.8" stroke-linecap="round"/>
+  <!-- Hand mudra circles at arm tips -->
+  <circle cx="26" cy="34" r="2.5" fill="#f59e0b" fill-opacity="0.4" stroke="#f59e0b" stroke-width="1"/>
+  <circle cx="22" cy="56" r="2.5" fill="#f59e0b" fill-opacity="0.4" stroke="#f59e0b" stroke-width="1"/>
+  <circle cx="28" cy="82" r="2.5" fill="#f59e0b" fill-opacity="0.4" stroke="#f59e0b" stroke-width="1"/>
+  <circle cx="102" cy="34" r="2.5" fill="#f59e0b" fill-opacity="0.4" stroke="#f59e0b" stroke-width="1"/>
+  <circle cx="106" cy="56" r="2.5" fill="#f59e0b" fill-opacity="0.4" stroke="#f59e0b" stroke-width="1"/>
+  <circle cx="100" cy="82" r="2.5" fill="#f59e0b" fill-opacity="0.4" stroke="#f59e0b" stroke-width="1"/>
+  <!-- Legs (standing stable, slight outward) -->
+  <line x1="64" y1="82" x2="52" y2="102" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+  <line x1="64" y1="82" x2="76" y2="102" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+  <!-- Aura/halo behind head -->
+  <circle cx="64" cy="46" r="14" fill="none" stroke="#f59e0b" stroke-width="0.8" stroke-opacity="0.35"/>
+  <!-- Face bindu (third eye) -->
+  <circle cx="64" cy="44" r="1.5" fill="#f59e0b"/>
+</svg>

@@ -1,0 +1,38 @@
+{
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"paths": {
+			"@chitragupta/core": ["./packages/core/src/index.ts"],
+			"@chitragupta/core/*": ["./packages/core/src/*"],
+			"@chitragupta/swara": ["./packages/swara/src/index.ts"],
+			"@chitragupta/swara/*": ["./packages/swara/src/*"],
+			"@chitragupta/anina": ["./packages/anina/src/index.ts"],
+			"@chitragupta/anina/*": ["./packages/anina/src/*"],
+			"@chitragupta/smriti": ["./packages/smriti/src/index.ts"],
+			"@chitragupta/smriti/*": ["./packages/smriti/src/*"],
+			"@chitragupta/ui": ["./packages/ui/src/index.ts"],
+			"@chitragupta/ui/*": ["./packages/ui/src/*"],
+			"@chitragupta/yantra": ["./packages/yantra/src/index.ts"],
+			"@chitragupta/yantra/*": ["./packages/yantra/src/*"],
+			"@chitragupta/dharma": ["./packages/dharma/src/index.ts"],
+			"@chitragupta/dharma/*": ["./packages/dharma/src/*"],
+			"@chitragupta/netra": ["./packages/netra/src/index.ts"],
+			"@chitragupta/netra/*": ["./packages/netra/src/*"],
+			"@chitragupta/vayu": ["./packages/vayu/src/index.ts"],
+			"@chitragupta/vayu/*": ["./packages/vayu/src/*"],
+			"@chitragupta/sutra": ["./packages/sutra/src/index.ts"],
+			"@chitragupta/sutra/*": ["./packages/sutra/src/*"],
+			"@chitragupta/tantra": ["./packages/tantra/src/index.ts"],
+			"@chitragupta/tantra/*": ["./packages/tantra/src/*"],
+			"@chitragupta/niyanta": ["./packages/niyanta/src/index.ts"],
+			"@chitragupta/niyanta/*": ["./packages/niyanta/src/*"],
+			"@chitragupta/vidhya-skills": ["./packages/vidhya-skills/src/index.ts"],
+			"@chitragupta/vidhya-skills/*": ["./packages/vidhya-skills/src/*"],
+			"@chitragupta/cli": ["./packages/cli/src/index.ts"],
+			"@chitragupta/cli/*": ["./packages/cli/src/*"]
+		}
+	},
+	"include": ["packages/*/src/**/*", "packages/*/test/**/*"],
+	"exclude": ["**/dist/**", "**/node_modules/**"]
+}

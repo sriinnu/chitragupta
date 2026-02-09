@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="dharma-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ef4444" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#ef4444" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Outer sacred circle -->
+  <circle cx="64" cy="64" r="58" fill="url(#dharma-bg)" stroke="#ef4444" stroke-width="2.5"/>
+  <!-- Dharma Wheel (Ashoka Chakra style) -->
+  <!-- Outer rim -->
+  <circle cx="64" cy="64" r="38" fill="none" stroke="#ef4444" stroke-width="2.5"/>
+  <!-- Inner rim -->
+  <circle cx="64" cy="64" r="34" fill="none" stroke="#ef4444" stroke-width="0.8" stroke-opacity="0.4"/>
+  <!-- Hub -->
+  <circle cx="64" cy="64" r="10" fill="#ef4444" fill-opacity="0.12" stroke="#ef4444" stroke-width="2"/>
+  <!-- 8 spokes at 0, 45, 90, 135, 180, 225, 270, 315 degrees -->
+  <!-- Each spoke goes from hub (r=10) to rim (r=34) -->
+  <!-- 0° (right) -->
+  <line x1="74" y1="64" x2="98" y2="64" stroke="#ef4444" stroke-width="2"/>
+  <!-- 45° -->
+  <line x1="71.07" y1="56.93" x2="88.04" y2="39.96" stroke="#ef4444" stroke-width="2"/>
+  <!-- 90° (up) -->
+  <line x1="64" y1="54" x2="64" y2="30" stroke="#ef4444" stroke-width="2"/>
+  <!-- 135° -->
+  <line x1="56.93" y1="56.93" x2="39.96" y2="39.96" stroke="#ef4444" stroke-width="2"/>
+  <!-- 180° (left) -->
+  <line x1="54" y1="64" x2="30" y2="64" stroke="#ef4444" stroke-width="2"/>
+  <!-- 225° -->
+  <line x1="56.93" y1="71.07" x2="39.96" y2="88.04" stroke="#ef4444" stroke-width="2"/>
+  <!-- 270° (down) -->
+  <line x1="64" y1="74" x2="64" y2="98" stroke="#ef4444" stroke-width="2"/>
+  <!-- 315° -->
+  <line x1="71.07" y1="71.07" x2="88.04" y2="88.04" stroke="#ef4444" stroke-width="2"/>
+  <!-- Crescent shapes between spokes (simplified as small arcs at rim) -->
+  <!-- Small dots at spoke-rim intersections for ornamentation -->
+  <circle cx="98" cy="64" r="2" fill="#ef4444" fill-opacity="0.5"/>
+  <circle cx="88.04" cy="39.96" r="2" fill="#ef4444" fill-opacity="0.5"/>
+  <circle cx="64" cy="30" r="2" fill="#ef4444" fill-opacity="0.5"/>
+  <circle cx="39.96" cy="39.96" r="2" fill="#ef4444" fill-opacity="0.5"/>
+  <circle cx="30" cy="64" r="2" fill="#ef4444" fill-opacity="0.5"/>
+  <circle cx="39.96" cy="88.04" r="2" fill="#ef4444" fill-opacity="0.5"/>
+  <circle cx="64" cy="98" r="2" fill="#ef4444" fill-opacity="0.5"/>
+  <circle cx="88.04" cy="88.04" r="2" fill="#ef4444" fill-opacity="0.5"/>
+  <!-- Hub center bindu -->
+  <circle cx="64" cy="64" r="3" fill="#ef4444"/>
+</svg>

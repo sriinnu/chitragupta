@@ -1,0 +1,47 @@
+{
+	"name": "@chitragupta/tantra",
+	"version": "0.1.0",
+	"description": "MCP server manager with lifecycle state machine, circuit breaker, and capability aggregation",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/srinivaspendela/chitragupta.git",
+		"directory": "packages/tantra"
+	},
+	"keywords": [
+		"chitragupta",
+		"tantra",
+		"mcp",
+		"model-context-protocol",
+		"server-lifecycle",
+		"circuit-breaker",
+		"typescript"
+	],
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"dev": "tsc -w -p tsconfig.json",
+		"clean": "rm -rf dist"
+	},
+	"dependencies": {
+		"@chitragupta/core": "workspace:*"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	]
+}

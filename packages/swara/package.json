@@ -1,0 +1,50 @@
+{
+	"name": "@chitragupta/swara",
+	"version": "0.1.0",
+	"description": "AI provider abstraction layer with pluggable LLM backends for the Chitragupta platform",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/srinivaspendela/chitragupta.git",
+		"directory": "packages/swara"
+	},
+	"keywords": [
+		"chitragupta",
+		"swara",
+		"ai",
+		"llm",
+		"provider",
+		"anthropic",
+		"openai",
+		"ollama",
+		"typescript"
+	],
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+		"./providers": { "types": "./dist/providers/index.d.ts", "import": "./dist/providers/index.js" },
+		"./provider-registry": { "types": "./dist/provider-registry.d.ts", "import": "./dist/provider-registry.js" },
+		"./types": { "types": "./dist/types.d.ts", "import": "./dist/types.js" },
+		"./*": { "types": "./dist/*.d.ts", "import": "./dist/*.js" }
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"dev": "tsc -p tsconfig.json --watch",
+		"clean": "rm -rf dist"
+	},
+	"dependencies": {
+		"@chitragupta/core": "workspace:*"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	]
+}

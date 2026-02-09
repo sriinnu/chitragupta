@@ -1,0 +1,43 @@
+import { defineConfig } from "vitest/config";
+import { resolve } from "node:path";
+
+export default defineConfig({
+	test: {
+		globals: true,
+		include: ["packages/*/test/**/*.test.ts"],
+		alias: {
+			"@chitragupta/core": resolve(__dirname, "packages/core/src/index.ts"),
+			"@chitragupta/swara/provider-registry": resolve(__dirname, "packages/swara/src/provider-registry.ts"),
+			"@chitragupta/swara/providers": resolve(__dirname, "packages/swara/src/providers/index.ts"),
+			"@chitragupta/swara/types": resolve(__dirname, "packages/swara/src/types.ts"),
+			"@chitragupta/swara": resolve(__dirname, "packages/swara/src/index.ts"),
+			"@chitragupta/anina": resolve(__dirname, "packages/anina/src/index.ts"),
+			"@chitragupta/smriti/db/database": resolve(__dirname, "packages/smriti/src/db/database.ts"),
+			"@chitragupta/smriti/db/schema": resolve(__dirname, "packages/smriti/src/db/schema.ts"),
+			"@chitragupta/smriti/db": resolve(__dirname, "packages/smriti/src/db/index.ts"),
+			"@chitragupta/smriti/session-store": resolve(__dirname, "packages/smriti/src/session-store.ts"),
+			"@chitragupta/smriti/markdown-writer": resolve(__dirname, "packages/smriti/src/markdown-writer.ts"),
+			"@chitragupta/smriti/search": resolve(__dirname, "packages/smriti/src/search.ts"),
+			"@chitragupta/smriti/types": resolve(__dirname, "packages/smriti/src/types.ts"),
+			"@chitragupta/smriti": resolve(__dirname, "packages/smriti/src/index.ts"),
+			"@chitragupta/ui/ansi": resolve(__dirname, "packages/ui/src/ansi.ts"),
+			"@chitragupta/ui": resolve(__dirname, "packages/ui/src/index.ts"),
+			"@chitragupta/yantra": resolve(__dirname, "packages/yantra/src/index.ts"),
+			"@chitragupta/dharma": resolve(__dirname, "packages/dharma/src/index.ts"),
+			"@chitragupta/netra": resolve(__dirname, "packages/netra/src/index.ts"),
+			"@chitragupta/vayu": resolve(__dirname, "packages/vayu/src/index.ts"),
+			"@chitragupta/sutra": resolve(__dirname, "packages/sutra/src/index.ts"),
+			"@chitragupta/tantra": resolve(__dirname, "packages/tantra/src/index.ts"),
+			"@chitragupta/niyanta": resolve(__dirname, "packages/niyanta/src/index.ts"),
+			"@chitragupta/cli": resolve(__dirname, "packages/cli/src/index.ts"),
+			"@chitragupta/vidhya-skills": resolve(__dirname, "packages/vidhya-skills/src/index.ts"),
+		},
+		coverage: {
+			provider: "v8",
+			include: ["packages/*/src/**/*.ts"],
+			exclude: ["packages/*/src/index.ts", "packages/*/src/types.ts"],
+		},
+		testTimeout: 10000,
+		hookTimeout: 10000,
+	},
+});

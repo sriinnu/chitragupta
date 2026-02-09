@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="cli-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e6edf3" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#e6edf3" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Outer sacred circle -->
+  <circle cx="64" cy="64" r="58" fill="url(#cli-bg)" stroke="#e6edf3" stroke-width="2.5"/>
+  <!-- North Star / Compass Rose (Dhruva Tara — the fixed guiding star) -->
+  <!-- 4 major cardinal points (long, sharp diamond rays) -->
+  <!-- North -->
+  <polygon points="64,14 60,54 64,50 68,54" fill="#e6edf3" fill-opacity="0.25" stroke="#e6edf3" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- South -->
+  <polygon points="64,114 60,74 64,78 68,74" fill="#e6edf3" fill-opacity="0.25" stroke="#e6edf3" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- East -->
+  <polygon points="114,64 74,60 78,64 74,68" fill="#e6edf3" fill-opacity="0.25" stroke="#e6edf3" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- West -->
+  <polygon points="14,64 54,60 50,64 54,68" fill="#e6edf3" fill-opacity="0.25" stroke="#e6edf3" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- 4 ordinal points (shorter, thinner rays) -->
+  <!-- r_ordinal = distance to tip: 40 from center => tip at 64 +/- 28.28 on diagonals -->
+  <!-- NE -->
+  <polygon points="92.3,35.7 70.2,57.8 67.4,55 69.4,52" fill="#e6edf3" fill-opacity="0.18" stroke="#e6edf3" stroke-width="1.2" stroke-linejoin="round"/>
+  <!-- SE -->
+  <polygon points="92.3,92.3 70.2,70.2 69.4,76 67.4,73" fill="#e6edf3" fill-opacity="0.18" stroke="#e6edf3" stroke-width="1.2" stroke-linejoin="round"/>
+  <!-- SW -->
+  <polygon points="35.7,92.3 57.8,70.2 60.6,73 58.6,76" fill="#e6edf3" fill-opacity="0.18" stroke="#e6edf3" stroke-width="1.2" stroke-linejoin="round"/>
+  <!-- NW -->
+  <polygon points="35.7,35.7 57.8,57.8 58.6,52 60.6,55" fill="#e6edf3" fill-opacity="0.18" stroke="#e6edf3" stroke-width="1.2" stroke-linejoin="round"/>
+  <!-- Inner compass circle -->
+  <circle cx="64" cy="64" r="12" fill="none" stroke="#e6edf3" stroke-width="1.2" stroke-opacity="0.5"/>
+  <!-- Dhruva (Polaris) center star -->
+  <circle cx="64" cy="64" r="4" fill="#e6edf3" fill-opacity="0.3" stroke="#e6edf3" stroke-width="1.5"/>
+  <circle cx="64" cy="64" r="2" fill="#e6edf3"/>
+</svg>
