@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="swara-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Outer sacred circle -->
+  <circle cx="64" cy="64" r="58" fill="url(#swara-bg)" stroke="#06b6d4" stroke-width="2.5"/>
+  <!-- Sound wave: primary sine wave (Nada Brahma — sound is creation) -->
+  <!-- Sine wave sampled at 24 points across the circle, amplitude modulated by envelope -->
+  <path d="M 18,64
+           C 22,64 24,44 30,44
+           C 36,44 36,84 42,84
+           C 48,84 48,34 54,34
+           C 60,34 60,94 64,94
+           C 68,94 68,34 74,34
+           C 80,34 80,84 86,84
+           C 92,84 92,44 98,44
+           C 104,44 106,64 110,64"
+        fill="none" stroke="#06b6d4" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Harmonic overtone: smaller amplitude sine -->
+  <path d="M 24,64
+           C 27,64 28,52 32,52
+           C 36,52 36,76 40,76
+           C 44,76 44,46 48,46
+           C 52,46 52,82 56,82
+           C 60,82 60,46 64,46
+           C 68,46 68,82 72,82
+           C 76,82 76,46 80,46
+           C 84,46 84,76 88,76
+           C 92,76 92,52 96,52
+           C 100,52 101,64 104,64"
+        fill="none" stroke="#06b6d4" stroke-width="1.2" stroke-opacity="0.5" stroke-linecap="round"/>
+  <!-- Om bindu at center -->
+  <circle cx="64" cy="64" r="2" fill="#06b6d4"/>
+  <!-- Resonance dots at nodes -->
+  <circle cx="18" cy="64" r="1.5" fill="#06b6d4" fill-opacity="0.6"/>
+  <circle cx="110" cy="64" r="1.5" fill="#06b6d4" fill-opacity="0.6"/>
+</svg>

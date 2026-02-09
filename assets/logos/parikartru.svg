@@ -1,0 +1,78 @@
+<!-- Parikartru — The Refiner (Refactorer) -->
+<!-- Symbol: Diamond being polished + transformation arrows, faceted surfaces -->
+<!-- Colors: Rose gold (#f472b6) + Deep crimson (#be123c) -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <radialGradient id="parikartru-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f472b6" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#be123c" stop-opacity="0.02"/>
+    </radialGradient>
+    <linearGradient id="parikartru-facet" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f472b6"/>
+      <stop offset="100%" stop-color="#be123c"/>
+    </linearGradient>
+    <linearGradient id="parikartru-facet2" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f472b6" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#be123c" stop-opacity="0.3"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer sacred circle -->
+  <circle cx="100" cy="100" r="92" fill="url(#parikartru-bg)" stroke="#f472b6" stroke-width="2.5"/>
+
+  <!-- Transformation orbit ring -->
+  <circle cx="100" cy="100" r="72" fill="none" stroke="#f472b6" stroke-width="1" stroke-opacity="0.25"
+          stroke-dasharray="8 4"/>
+
+  <!-- Circular transformation arrows (3 arrows orbiting the diamond) -->
+  <!-- Arrow 1: top -->
+  <path d="M 65,38 A 55,55 0 0,1 135,38"
+        fill="none" stroke="#f472b6" stroke-width="1.8" stroke-opacity="0.5" stroke-linecap="round"/>
+  <polygon points="135,38 128,32 130,42" fill="#f472b6" fill-opacity="0.5"/>
+
+  <!-- Arrow 2: bottom-right -->
+  <path d="M 145,120 A 55,55 0 0,1 100,168"
+        fill="none" stroke="#be123c" stroke-width="1.8" stroke-opacity="0.5" stroke-linecap="round"/>
+  <polygon points="100,168 106,162 96,162" fill="#be123c" fill-opacity="0.5"/>
+
+  <!-- Arrow 3: bottom-left -->
+  <path d="M 55,155 A 55,55 0 0,1 42,80"
+        fill="none" stroke="#f472b6" stroke-width="1.8" stroke-opacity="0.5" stroke-linecap="round"/>
+  <polygon points="42,80 36,87 46,86" fill="#f472b6" fill-opacity="0.5"/>
+
+  <!-- Central diamond (multi-faceted) -->
+  <!-- Diamond outline -->
+  <polygon points="100,45 140,95 100,155 60,95"
+           fill="none" stroke="url(#parikartru-facet)" stroke-width="2" stroke-linejoin="round"/>
+
+  <!-- Upper facets (crown) -->
+  <polygon points="100,45 120,75 100,85 80,75"
+           fill="#f472b6" fill-opacity="0.12" stroke="#f472b6" stroke-width="1" stroke-linejoin="round"/>
+  <!-- Left crown facet -->
+  <polygon points="100,45 80,75 60,95"
+           fill="#be123c" fill-opacity="0.08" stroke="#be123c" stroke-width="0.8" stroke-linejoin="round"/>
+  <!-- Right crown facet -->
+  <polygon points="100,45 120,75 140,95"
+           fill="#be123c" fill-opacity="0.08" stroke="#be123c" stroke-width="0.8" stroke-linejoin="round"/>
+
+  <!-- Girdle line -->
+  <line x1="60" y1="95" x2="140" y2="95" stroke="url(#parikartru-facet)" stroke-width="1.5"/>
+
+  <!-- Lower facets (pavilion) -->
+  <polygon points="60,95 100,85 100,155"
+           fill="#f472b6" fill-opacity="0.08" stroke="#f472b6" stroke-width="0.8" stroke-linejoin="round"/>
+  <polygon points="140,95 100,85 100,155"
+           fill="#be123c" fill-opacity="0.06" stroke="#be123c" stroke-width="0.8" stroke-linejoin="round"/>
+
+  <!-- Internal facet lines (light refraction) -->
+  <line x1="80" y1="75" x2="100" y2="155" stroke="#f472b6" stroke-width="0.6" stroke-opacity="0.3"/>
+  <line x1="120" y1="75" x2="100" y2="155" stroke="#be123c" stroke-width="0.6" stroke-opacity="0.3"/>
+  <line x1="80" y1="75" x2="140" y2="95" stroke="#f472b6" stroke-width="0.5" stroke-opacity="0.2"/>
+  <line x1="120" y1="75" x2="60" y2="95" stroke="#be123c" stroke-width="0.5" stroke-opacity="0.2"/>
+
+  <!-- Sparkle dots (polishing gleam) -->
+  <circle cx="100" cy="45" r="2.5" fill="#f472b6" fill-opacity="0.7"/>
+  <circle cx="115" cy="60" r="1.5" fill="#f472b6" fill-opacity="0.4"/>
+  <circle cx="130" cy="90" r="1.8" fill="#be123c" fill-opacity="0.35"/>
+  <circle cx="85" cy="58" r="1.2" fill="#f472b6" fill-opacity="0.3"/>
+</svg>

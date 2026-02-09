@@ -1,0 +1,71 @@
+<!-- Drishti — दृष्टि — Sight (Observability) -->
+<!-- Symbol: Third eye with iris rings (tracing), radiating sight lines (metrics), -->
+<!--         pulse wave (health checks), layered awareness arcs (logging levels) -->
+<!-- Color: Teal #06b6d4 (clarity, monitoring) + Deep teal #0e7490 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <radialGradient id="drishti-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#0e7490" stop-opacity="0.02"/>
+    </radialGradient>
+    <linearGradient id="drishti-iris" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#0e7490"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer sacred circle -->
+  <circle cx="100" cy="100" r="92" fill="url(#drishti-bg)" stroke="#06b6d4" stroke-width="2.5"/>
+
+  <!-- Awareness arcs — 4 logging levels (debug, info, warn, error) -->
+  <path d="M 30,100 A 70,70 0 0,1 170,100" fill="none" stroke="#06b6d4" stroke-width="0.6" stroke-opacity="0.12"/>
+  <path d="M 38,100 A 62,62 0 0,1 162,100" fill="none" stroke="#06b6d4" stroke-width="0.7" stroke-opacity="0.18"/>
+  <path d="M 46,100 A 54,54 0 0,1 154,100" fill="none" stroke="#06b6d4" stroke-width="0.8" stroke-opacity="0.24"/>
+  <path d="M 54,100 A 46,46 0 0,1 146,100" fill="none" stroke="#0e7490" stroke-width="0.9" stroke-opacity="0.30"/>
+
+  <!-- Eye shape — almond/vesica piscis -->
+  <path d="M 30,100 Q 65,58 100,55 Q 135,58 170,100 Q 135,142 100,145 Q 65,142 30,100 Z"
+        fill="#06b6d4" fill-opacity="0.06" stroke="url(#drishti-iris)" stroke-width="1.8" stroke-linejoin="round"/>
+
+  <!-- Outer iris ring -->
+  <circle cx="100" cy="100" r="28" fill="none" stroke="#06b6d4" stroke-width="1.2" stroke-opacity="0.35"/>
+
+  <!-- Inner iris ring — tracing depth -->
+  <circle cx="100" cy="100" r="18" fill="#06b6d4" fill-opacity="0.08" stroke="#0e7490" stroke-width="1.0" stroke-opacity="0.40"/>
+
+  <!-- Iris radial lines — 8 metric dimensions -->
+  <g stroke="#06b6d4" stroke-width="0.5" stroke-opacity="0.20">
+    <line x1="100" y1="72" x2="100" y2="82"/>
+    <line x1="100" y1="118" x2="100" y2="128"/>
+    <line x1="72" y1="100" x2="82" y2="100"/>
+    <line x1="118" y1="100" x2="128" y2="100"/>
+    <line x1="80" y1="80" x2="87" y2="87"/>
+    <line x1="113" y1="113" x2="120" y2="120"/>
+    <line x1="120" y1="80" x2="113" y2="87"/>
+    <line x1="87" y1="113" x2="80" y2="120"/>
+  </g>
+
+  <!-- Sight rays — emanating from eye corners -->
+  <g stroke="#06b6d4" stroke-width="0.5" stroke-opacity="0.15">
+    <line x1="30" y1="100" x2="14" y2="92"/>
+    <line x1="30" y1="100" x2="14" y2="100"/>
+    <line x1="30" y1="100" x2="14" y2="108"/>
+    <line x1="170" y1="100" x2="186" y2="92"/>
+    <line x1="170" y1="100" x2="186" y2="100"/>
+    <line x1="170" y1="100" x2="186" y2="108"/>
+  </g>
+
+  <!-- Health pulse wave — below the eye -->
+  <path d="M 55,158 L 72,158 L 78,148 L 84,168 L 90,148 L 96,158 L 104,158 L 110,148 L 116,168 L 122,148 L 128,158 L 145,158"
+        fill="none" stroke="#06b6d4" stroke-width="1.0" stroke-opacity="0.30" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Pupil — the bindu -->
+  <circle cx="100" cy="100" r="8" fill="#0e7490"/>
+
+  <!-- Inner pupil depth -->
+  <circle cx="100" cy="100" r="4" fill="#064e5c"/>
+
+  <!-- Light reflection — consciousness spark -->
+  <circle cx="96" cy="96" r="2" fill="#ffffff" fill-opacity="0.55"/>
+  <circle cx="104" cy="103" r="1" fill="#ffffff" fill-opacity="0.30"/>
+</svg>

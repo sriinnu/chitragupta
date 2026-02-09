@@ -1,0 +1,66 @@
+<!-- Chitragupta — The Divine Scribe -->
+<!-- Symbol: Devanagari चि (chi) centered in a yantra mandala -->
+<!-- Colors: Saffron (#FF9933), Gold (#FFD700), Ink Blue (#1A1A4E) -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="chi-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1A1A4E" stop-opacity="0.95"/>
+      <stop offset="85%" stop-color="#1A1A4E" stop-opacity="0.60"/>
+      <stop offset="100%" stop-color="#1A1A4E" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="chi-saffron" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF9933"/>
+      <stop offset="100%" stop-color="#FFD700"/>
+    </linearGradient>
+    <linearGradient id="chi-gold" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFD700" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#FF9933" stop-opacity="0.4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Ink blue background circle -->
+  <circle cx="64" cy="64" r="60" fill="url(#chi-bg)" stroke="#FF9933" stroke-width="2"/>
+
+  <!-- Outer yantra ring -->
+  <circle cx="64" cy="64" r="56" fill="none" stroke="#FFD700" stroke-width="0.8" stroke-opacity="0.35"/>
+
+  <!-- Inner yantra ring -->
+  <circle cx="64" cy="64" r="44" fill="none" stroke="#FFD700" stroke-width="0.6" stroke-opacity="0.25"/>
+
+  <!-- Yantra cardinal lines (subtle) -->
+  <line x1="64" y1="8" x2="64" y2="20" stroke="#FFD700" stroke-width="0.6" stroke-opacity="0.3"/>
+  <line x1="64" y1="108" x2="64" y2="120" stroke="#FFD700" stroke-width="0.6" stroke-opacity="0.3"/>
+  <line x1="8" y1="64" x2="20" y2="64" stroke="#FFD700" stroke-width="0.6" stroke-opacity="0.3"/>
+  <line x1="108" y1="64" x2="120" y2="64" stroke="#FFD700" stroke-width="0.6" stroke-opacity="0.3"/>
+
+  <!-- Yantra diagonal lines (subtle) -->
+  <line x1="24" y1="24" x2="32" y2="32" stroke="#FFD700" stroke-width="0.5" stroke-opacity="0.2"/>
+  <line x1="104" y1="24" x2="96" y2="32" stroke="#FFD700" stroke-width="0.5" stroke-opacity="0.2"/>
+  <line x1="24" y1="104" x2="32" y2="96" stroke="#FFD700" stroke-width="0.5" stroke-opacity="0.2"/>
+  <line x1="104" y1="104" x2="96" y2="96" stroke="#FFD700" stroke-width="0.5" stroke-opacity="0.2"/>
+
+  <!-- Corner dots at cardinal intersections -->
+  <circle cx="64" cy="8" r="1.5" fill="#FFD700" fill-opacity="0.5"/>
+  <circle cx="64" cy="120" r="1.5" fill="#FFD700" fill-opacity="0.5"/>
+  <circle cx="8" cy="64" r="1.5" fill="#FFD700" fill-opacity="0.5"/>
+  <circle cx="120" cy="64" r="1.5" fill="#FFD700" fill-opacity="0.5"/>
+
+  <!-- Upward triangle (Shiva — consciousness) -->
+  <polygon points="64,22 98,78 30,78"
+           fill="none" stroke="url(#chi-saffron)" stroke-width="1.2"
+           stroke-linejoin="round" stroke-opacity="0.35"/>
+
+  <!-- Downward triangle (Shakti — energy) -->
+  <polygon points="64,106 30,50 98,50"
+           fill="none" stroke="url(#chi-gold)" stroke-width="1.2"
+           stroke-linejoin="round" stroke-opacity="0.30"/>
+
+  <!-- Central चि character -->
+  <text x="64" y="76" text-anchor="middle"
+        font-family="'Noto Sans Devanagari', 'Devanagari MT', 'Mangal', sans-serif"
+        font-size="52" font-weight="600"
+        fill="url(#chi-saffron)" fill-opacity="0.95">चि</text>
+
+  <!-- Subtle glow behind text -->
+  <circle cx="64" cy="64" r="24" fill="#FF9933" fill-opacity="0.06"/>
+</svg>

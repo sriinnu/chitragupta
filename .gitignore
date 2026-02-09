@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.claude/
+# Build
+dist/
+*.tsbuildinfo
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Runtime state
+.chitragupta/
+sessions/
+consolidation/
+
+# Logs
+*.log
+
+# Coverage
+coverage/
+
+# Spec docs & articles (local only — not pushed)
+CHITRAGUPTA_MASTER_SPEC.md
+PERFORMANCE_SPEC.md
+SMRITI_EVOLUTION_SPEC.md
+ARCHITECTURE.md
+TODO.md
+discussion.md
+AUDIT_REPORT.md
+_data.json
+_gen.mjs
+_write_tests.py
+articles/
+
+# OS
+.DS_Store

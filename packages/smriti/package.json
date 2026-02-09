@@ -1,0 +1,57 @@
+{
+	"name": "@chitragupta/smriti",
+	"version": "0.1.0",
+	"description": "Memory system with GraphRAG, information-theoretic compaction, and hybrid search",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/srinivaspendela/chitragupta.git",
+		"directory": "packages/smriti"
+	},
+	"keywords": [
+		"chitragupta",
+		"smriti",
+		"memory",
+		"graphrag",
+		"rag",
+		"compaction",
+		"information-theory",
+		"typescript"
+	],
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./*": {
+			"types": "./dist/*.d.ts",
+			"import": "./dist/*.js"
+		}
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"dev": "tsc -p tsconfig.json --watch",
+		"clean": "rm -rf dist"
+	},
+	"dependencies": {
+		"@chitragupta/core": "workspace:*",
+		"@chitragupta/swara": "workspace:*",
+		"better-sqlite3": "^12.6.2"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"devDependencies": {
+		"@types/better-sqlite3": "^7.6.13"
+	}
+}

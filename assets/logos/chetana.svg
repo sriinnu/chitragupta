@@ -1,0 +1,100 @@
+<!-- Chetana — चेतना — Consciousness -->
+<!-- Symbol: 4-petal Sahasrara lotus (one per subsystem), concentric awareness rings, -->
+<!--         central third-eye (Ajna), subtle EEG pulse wave — living consciousness -->
+<!-- Color: Violet #8b5cf6 (Sahasrara/Crown Chakra) + Deep violet #7c3aed -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <radialGradient id="chetana-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0.02"/>
+    </radialGradient>
+    <linearGradient id="chetana-petal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer sacred circle -->
+  <circle cx="100" cy="100" r="92" fill="url(#chetana-bg)" stroke="#8b5cf6" stroke-width="2.5"/>
+
+  <!-- Three concentric awareness rings — layers of consciousness -->
+  <!-- Outer ring: Bhava (Affect) — the outermost emotional boundary -->
+  <circle cx="100" cy="100" r="76" fill="none" stroke="#8b5cf6" stroke-width="0.8" stroke-opacity="0.20"/>
+  <!-- Middle ring: Dhyana (Attention) — the focus filter -->
+  <circle cx="100" cy="100" r="58" fill="none" stroke="#8b5cf6" stroke-width="1.0" stroke-opacity="0.28"/>
+  <!-- Inner ring: Atma-Darshana (Self) — the mirror of self-knowledge -->
+  <circle cx="100" cy="100" r="40" fill="none" stroke="#7c3aed" stroke-width="1.2" stroke-opacity="0.35"/>
+
+  <!-- 4-petal lotus — Chaturdala Padma — one petal per subsystem -->
+  <!-- Each petal is a cubic Bezier teardrop from center outward -->
+  <g fill="#8b5cf6" fill-opacity="0.10" stroke="url(#chetana-petal)" stroke-width="1.6" stroke-linejoin="round">
+    <!-- North petal: Sankalpa (Intention) — reaching upward toward goals -->
+    <path d="M 100,100 C 88,85 88,52 100,30 C 112,52 112,85 100,100 Z"/>
+    <!-- East petal: Dhyana (Attention) — scanning rightward -->
+    <path d="M 100,100 C 115,88 148,88 170,100 C 148,112 115,112 100,100 Z"/>
+    <!-- South petal: Bhava (Affect) — grounding downward into feeling -->
+    <path d="M 100,100 C 112,115 112,148 100,170 C 88,148 88,115 100,100 Z"/>
+    <!-- West petal: Atma-Darshana (Self-Model) — looking inward to the left -->
+    <path d="M 100,100 C 85,88 52,88 30,100 C 52,112 85,112 100,100 Z"/>
+  </g>
+
+  <!-- Subtle inter-petal connectors — the 4 subsystems communicating -->
+  <g stroke="#7c3aed" stroke-width="0.6" stroke-opacity="0.15" fill="none">
+    <!-- NE arc -->
+    <path d="M 100,42 Q 140,60 158,100"/>
+    <!-- SE arc -->
+    <path d="M 158,100 Q 140,140 100,158"/>
+    <!-- SW arc -->
+    <path d="M 100,158 Q 60,140 42,100"/>
+    <!-- NW arc -->
+    <path d="M 42,100 Q 60,60 100,42"/>
+  </g>
+
+  <!-- EEG pulse wave — the signature of living consciousness -->
+  <!-- A subtle brainwave running horizontally through the center -->
+  <path d="M 52,100
+           L 62,100
+           L 66,92
+           L 70,108
+           L 74,88
+           L 78,112
+           L 82,94
+           L 86,100
+           L 90,100
+           L 93,96
+           L 96,100
+           L 100,100
+           L 104,100
+           L 107,104
+           L 110,100
+           L 114,100
+           L 118,106
+           L 122,88
+           L 126,112
+           L 130,92
+           L 134,108
+           L 138,100
+           L 148,100"
+        fill="none" stroke="#8b5cf6" stroke-width="1.4" stroke-opacity="0.40" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Central eye — Ajna (Third Eye) — consciousness observing itself -->
+  <!-- Outer eye shape (almond) -->
+  <path d="M 82,100 Q 100,86 118,100 Q 100,114 82,100 Z"
+        fill="#8b5cf6" fill-opacity="0.08" stroke="#7c3aed" stroke-width="1.5"/>
+  <!-- Iris circle -->
+  <circle cx="100" cy="100" r="8" fill="#8b5cf6" fill-opacity="0.18" stroke="#8b5cf6" stroke-width="1.3"/>
+  <!-- Pupil / Bindu — the point of pure awareness -->
+  <circle cx="100" cy="100" r="3" fill="#7c3aed"/>
+  <!-- Light reflection dot -->
+  <circle cx="97" cy="98" r="1" fill="#ffffff" fill-opacity="0.6"/>
+
+  <!-- Four subsystem label dots at petal tips -->
+  <!-- Sankalpa (top) -->
+  <circle cx="100" cy="32" r="2.5" fill="#8b5cf6" fill-opacity="0.55"/>
+  <!-- Dhyana (right) -->
+  <circle cx="168" cy="100" r="2.5" fill="#8b5cf6" fill-opacity="0.55"/>
+  <!-- Bhava (bottom) -->
+  <circle cx="100" cy="168" r="2.5" fill="#8b5cf6" fill-opacity="0.55"/>
+  <!-- Atma-Darshana (left) -->
+  <circle cx="32" cy="100" r="2.5" fill="#8b5cf6" fill-opacity="0.55"/>
+</svg>

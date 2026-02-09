@@ -1,0 +1,77 @@
+<!-- Kartru — The Maker (Coding Agent) -->
+<!-- Symbol: Interlocking gears + code brackets, upward triangles for building -->
+<!-- Colors: Electric blue (#3b82f6) + Silver (#94a3b8) -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <radialGradient id="kartru-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="kartru-gear" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#94a3b8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer sacred circle -->
+  <circle cx="100" cy="100" r="92" fill="url(#kartru-bg)" stroke="#3b82f6" stroke-width="2.5"/>
+
+  <!-- Second containment circle -->
+  <circle cx="100" cy="100" r="80" fill="none" stroke="#3b82f6" stroke-width="1" stroke-opacity="0.3"/>
+
+  <!-- Upward triangles (building/construction) — nested -->
+  <polygon points="100,28 155,112 45,112"
+           fill="none" stroke="#3b82f6" stroke-width="1.8" stroke-linejoin="round" stroke-opacity="0.6"/>
+  <polygon points="100,40 145,106 55,106"
+           fill="none" stroke="#3b82f6" stroke-width="1.4" stroke-linejoin="round" stroke-opacity="0.4"/>
+  <polygon points="100,52 135,100 65,100"
+           fill="#3b82f6" fill-opacity="0.06" stroke="#3b82f6" stroke-width="1.2" stroke-linejoin="round" stroke-opacity="0.3"/>
+
+  <!-- Left gear (smaller, offset left) -->
+  <g transform="translate(72, 82)">
+    <!-- Gear ring -->
+    <circle cx="0" cy="0" r="20" fill="none" stroke="url(#kartru-gear)" stroke-width="1.8"/>
+    <!-- 8 gear teeth -->
+    <polygon points="0,-23 -3,-20 3,-20" fill="#3b82f6" fill-opacity="0.4" stroke="#3b82f6" stroke-width="0.8"/>
+    <polygon points="16.3,-16.3 14.1,-12 18.4,-12" fill="#3b82f6" fill-opacity="0.4" stroke="#3b82f6" stroke-width="0.8"/>
+    <polygon points="23,0 20,-3 20,3" fill="#3b82f6" fill-opacity="0.4" stroke="#3b82f6" stroke-width="0.8"/>
+    <polygon points="16.3,16.3 12,14.1 12,18.4" fill="#3b82f6" fill-opacity="0.4" stroke="#3b82f6" stroke-width="0.8"/>
+    <polygon points="0,23 3,20 -3,20" fill="#3b82f6" fill-opacity="0.4" stroke="#3b82f6" stroke-width="0.8"/>
+    <polygon points="-16.3,16.3 -14.1,12 -18.4,12" fill="#3b82f6" fill-opacity="0.4" stroke="#3b82f6" stroke-width="0.8"/>
+    <polygon points="-23,0 -20,3 -20,-3" fill="#3b82f6" fill-opacity="0.4" stroke="#3b82f6" stroke-width="0.8"/>
+    <polygon points="-16.3,-16.3 -12,-14.1 -12,-18.4" fill="#3b82f6" fill-opacity="0.4" stroke="#3b82f6" stroke-width="0.8"/>
+    <!-- Hub -->
+    <circle cx="0" cy="0" r="6" fill="#3b82f6" fill-opacity="0.15" stroke="#3b82f6" stroke-width="1.2"/>
+    <circle cx="0" cy="0" r="2" fill="#3b82f6"/>
+  </g>
+
+  <!-- Right gear (smaller, offset right, interlocking) -->
+  <g transform="translate(128, 82)">
+    <circle cx="0" cy="0" r="16" fill="none" stroke="#94a3b8" stroke-width="1.6"/>
+    <!-- 6 gear teeth -->
+    <polygon points="0,-19 -2.5,-16 2.5,-16" fill="#94a3b8" fill-opacity="0.4" stroke="#94a3b8" stroke-width="0.8"/>
+    <polygon points="16.5,-9.5 13.5,-8 14.5,-12" fill="#94a3b8" fill-opacity="0.4" stroke="#94a3b8" stroke-width="0.8"/>
+    <polygon points="16.5,9.5 14.5,12 13.5,8" fill="#94a3b8" fill-opacity="0.4" stroke="#94a3b8" stroke-width="0.8"/>
+    <polygon points="0,19 2.5,16 -2.5,16" fill="#94a3b8" fill-opacity="0.4" stroke="#94a3b8" stroke-width="0.8"/>
+    <polygon points="-16.5,9.5 -13.5,8 -14.5,12" fill="#94a3b8" fill-opacity="0.4" stroke="#94a3b8" stroke-width="0.8"/>
+    <polygon points="-16.5,-9.5 -14.5,-12 -13.5,-8" fill="#94a3b8" fill-opacity="0.4" stroke="#94a3b8" stroke-width="0.8"/>
+    <!-- Hub -->
+    <circle cx="0" cy="0" r="5" fill="#94a3b8" fill-opacity="0.15" stroke="#94a3b8" stroke-width="1"/>
+    <circle cx="0" cy="0" r="1.8" fill="#94a3b8"/>
+  </g>
+
+  <!-- Code brackets </> centered below gears -->
+  <g transform="translate(100, 140)" fill="none" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- < bracket -->
+    <path d="M -18,0 L -30,-12 L -18,-24" stroke-opacity="0.8"/>
+    <!-- / slash -->
+    <path d="M -6,-26 L 6,2" stroke-opacity="0.6"/>
+    <!-- > bracket -->
+    <path d="M 18,0 L 30,-12 L 18,-24" stroke-opacity="0.8"/>
+  </g>
+
+  <!-- Small decorative dots at triangle vertices -->
+  <circle cx="100" cy="28" r="2.5" fill="#3b82f6" fill-opacity="0.6"/>
+  <circle cx="155" cy="112" r="2" fill="#3b82f6" fill-opacity="0.4"/>
+  <circle cx="45" cy="112" r="2" fill="#3b82f6" fill-opacity="0.4"/>
+</svg>

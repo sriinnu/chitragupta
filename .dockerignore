@@ -1,0 +1,49 @@
+# Dependencies (re-installed in Docker)
+node_modules
+**/node_modules
+
+# Build artifacts (rebuilt in Docker)
+**/dist
+
+# Git
+.git
+.gitignore
+
+# Tests & coverage
+**/*.test.ts
+**/*.spec.ts
+**/test/
+**/tests/
+coverage
+.nyc_output
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# IDE & OS files
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Docker files (no need to COPY themselves)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Documentation & assets
+*.md
+assets/
+docs/
+
+# Reference monorepo (not part of build)
+ref-pi-mono/
+
+# Misc
+*.log
+tmp/
+.cache
