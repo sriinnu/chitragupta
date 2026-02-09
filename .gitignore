@@ -24,7 +24,7 @@ consolidation/
 # Coverage
 coverage/
 
-# Spec docs & articles (local only — not pushed)
+# Spec docs (local only — not pushed)
 CHITRAGUPTA_MASTER_SPEC.md
 PERFORMANCE_SPEC.md
 SMRITI_EVOLUTION_SPEC.md
@@ -35,7 +35,6 @@ AUDIT_REPORT.md
 _data.json
 _gen.mjs
 _write_tests.py
-articles/
 
 # OS
 .DS_Store
