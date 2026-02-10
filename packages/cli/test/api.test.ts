@@ -53,9 +53,10 @@ const mocks = vi.hoisted(() => {
 		models: [],
 		createStream: vi.fn(),
 	};
+	const apiKnownProviders = new Map<string, unknown>([["anthropic", mockProviderDef]]);
 	const mockRegistry = {
 		register: vi.fn(),
-		get: vi.fn().mockReturnValue(mockProviderDef),
+		get: vi.fn().mockImplementation((id: string) => apiKnownProviders.get(id)),
 		getAll: vi.fn().mockReturnValue([mockProviderDef]),
 	};
 	const mockCreateProviderRegistry = vi.fn().mockReturnValue(mockRegistry);
@@ -146,6 +147,7 @@ const mocks = vi.hoisted(() => {
 		mockBuiltInProfiles,
 		mockResolveProfile,
 		mockProviderDef,
+		apiKnownProviders,
 		mockRegistry,
 		mockCreateProviderRegistry,
 		mockRegisterBuiltinProviders,
@@ -202,6 +204,7 @@ vi.mock("@chitragupta/core", () => ({
 	resolveProfile: mocks.mockResolveProfile,
 	BUILT_IN_PROFILES: mocks.mockBuiltInProfiles,
 	DEFAULT_SETTINGS: mocks.mockSettings,
+	DEFAULT_PROVIDER_PRIORITY: ["claude-code", "codex-cli", "gemini-cli", "aider-cli", "ollama", "anthropic", "openai", "google"],
 }));
 
 vi.mock("@chitragupta/swara/provider-registry", () => ({
@@ -292,7 +295,9 @@ function resetMocks(): void {
 	mocks.mockResolveProfile.mockReset().mockReturnValue(mocks.mockBuiltInProfile);
 
 	mocks.mockRegistry.register.mockReset();
-	mocks.mockRegistry.get.mockReset().mockReturnValue(mocks.mockProviderDef);
+	mocks.apiKnownProviders.clear();
+	mocks.apiKnownProviders.set("anthropic", mocks.mockProviderDef);
+	mocks.mockRegistry.get.mockReset().mockImplementation((id: string) => mocks.apiKnownProviders.get(id));
 	mocks.mockRegistry.getAll.mockReset().mockReturnValue([mocks.mockProviderDef]);
 	mocks.mockCreateProviderRegistry.mockReset().mockReturnValue(mocks.mockRegistry);
 	mocks.mockRegisterBuiltinProviders.mockReset();
@@ -379,7 +384,7 @@ describe("createChitragupta", () => {
 
 		it("should respect the provider option", async () => {
 			const customProvider = { ...mocks.mockProviderDef, id: "openai" };
-			mocks.mockRegistry.get.mockReturnValue(customProvider);
+			mocks.apiKnownProviders.set("openai", customProvider);
 
 			const instance = await createChitragupta({ provider: "openai" });
 
@@ -409,18 +414,15 @@ describe("createChitragupta", () => {
 		});
 
 		it("should throw when provider is not found", async () => {
-			mocks.mockRegistry.get.mockReturnValue(undefined);
-			mocks.mockRegistry.getAll.mockReturnValue([
-				{ id: "anthropic" },
-				{ id: "openai" },
-			]);
+			mocks.apiKnownProviders.clear();
+			mocks.mockRegistry.getAll.mockReturnValue([]);
 
 			await expect(createChitragupta({ provider: "unknown-provider" }))
-				.rejects.toThrow(/Provider "unknown-provider" not found/);
+				.rejects.toThrow(/No provider available/);
 		});
 
 		it("should include available providers in error message", async () => {
-			mocks.mockRegistry.get.mockReturnValue(undefined);
+			mocks.apiKnownProviders.clear();
 			mocks.mockRegistry.getAll.mockReturnValue([
 				{ id: "anthropic" },
 				{ id: "openai" },

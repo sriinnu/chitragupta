@@ -12,6 +12,7 @@ import crypto from "crypto";
 
 import {
 	getChitraguptaHome,
+	DEFAULT_PROVIDER_PRIORITY,
 } from "@chitragupta/core";
 import type { AgentProfile, ChitraguptaSettings } from "@chitragupta/core";
 import type { ToolHandler } from "@chitragupta/core";
@@ -337,4 +338,46 @@ export async function createEmbeddingProviderInstance(): Promise<EmbeddingProvid
 		// Ollama unavailable — fall through
 	}
 	return undefined;
+}
+
+// ─── Provider Priority Resolution ───────────────────────────────────────────
+
+/**
+ * Resolve the best available provider from the user's priority list.
+ *
+ * Walks the priority array and returns the first provider that's
+ * actually registered in the registry. If the user specified an
+ * explicit `--provider` flag, that overrides everything.
+ *
+ * @param explicitProvider - `--provider` CLI flag (overrides priority)
+ * @param settings - User settings containing providerPriority
+ * @param registry - Provider registry with registered providers
+ * @returns { providerId, provider } or null if nothing available
+ */
+export function resolvePreferredProvider(
+	explicitProvider: string | undefined,
+	settings: ChitraguptaSettings,
+	registry: ProviderRegistry,
+): { providerId: string; provider: import("@chitragupta/swara").ProviderDefinition } | null {
+	// Explicit --provider flag always wins
+	if (explicitProvider) {
+		const p = registry.get(explicitProvider);
+		if (p) return { providerId: explicitProvider, provider: p };
+		return null;
+	}
+
+	// Walk the priority list, pick the first available
+	const priority = settings.providerPriority ?? DEFAULT_PROVIDER_PRIORITY;
+	for (const id of priority) {
+		const p = registry.get(id);
+		if (p) return { providerId: id, provider: p };
+	}
+
+	// Absolute fallback: try anything registered
+	const all = registry.getAll();
+	if (all.length > 0) {
+		return { providerId: all[0].id, provider: all[0] };
+	}
+
+	return null;
 }

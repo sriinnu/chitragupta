@@ -52,6 +52,7 @@ import {
 	loadCredentials,
 	registerBuiltinProviders,
 	registerCLIProviders,
+	resolvePreferredProvider,
 	getBuiltinTools,
 	getActionType,
 	createEmbeddingProviderInstance,
@@ -234,16 +235,16 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 	// 5-ii. Register API providers (Anthropic, OpenAI, Google, Ollama)
 	registerBuiltinProviders(registry, settings);
 
-	const providerId = options.provider ?? settings.defaultProvider ?? "anthropic";
-	const modelId = options.model ?? profile.preferredModel ?? settings.defaultModel ?? "claude-sonnet-4-5-20250929";
-
-	const provider = registry.get(providerId);
-	if (!provider) {
+	const resolved = resolvePreferredProvider(options.provider, settings, registry);
+	if (!resolved) {
 		const available = registry.getAll().map((p) => p.id).join(", ");
 		throw new Error(
-			`Provider "${providerId}" not found. Available providers: ${available}`,
+			`No provider available. Registered: ${available || "none"}. ` +
+			`Install a CLI (claude, codex, gemini), start Ollama, or set an API key.`,
 		);
 	}
+	const { providerId, provider } = resolved;
+	const modelId = options.model ?? profile.preferredModel ?? settings.defaultModel ?? "claude-sonnet-4-5-20250929";
 
 	// ─── 6. Load context files and memory ─────────────────────────────
 	const contextFiles = loadContextFiles(projectPath);

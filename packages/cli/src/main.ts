@@ -74,6 +74,7 @@ import {
 	registerBuiltinProviders,
 	registerCLIProviders,
 	formatProviderSummary,
+	resolvePreferredProvider,
 	getBuiltinTools,
 	getActionType,
 	createEmbeddingProviderInstance,
@@ -426,19 +427,22 @@ export async function main(args: ParsedArgs): Promise<void> {
 		return;
 	}
 
-	// Determine provider and model
-	const providerId = args.provider ?? settings.defaultProvider ?? "anthropic";
-	const modelId = args.model ?? profile.preferredModel ?? settings.defaultModel ?? "claude-sonnet-4-5-20250929";
-
-	const provider = registry.get(providerId);
-	if (!provider) {
+	// Determine provider (walk priority list) and model
+	const resolved = resolvePreferredProvider(args.provider, settings, registry);
+	if (!resolved) {
 		process.stderr.write(
-			`\nError: Provider "${providerId}" not found.\n` +
-			`Available providers: ${registry.getAll().map((p) => p.id).join(", ")}\n` +
-			`Run \`chitragupta provider list\` to see all providers.\n\n`,
+			`\nError: No provider available.\n` +
+			`Registered: ${registry.getAll().map((p) => p.id).join(", ") || "none"}\n` +
+			`Priority: ${(settings.providerPriority ?? []).join(" → ") || "default"}\n` +
+			`\nInstall a CLI (claude, codex, gemini), start Ollama, or set an API key.\n` +
+			`Run: chitragupta provider add anthropic\n\n`,
 		);
 		process.exit(1);
 	}
+	const { providerId, provider } = resolved;
+	const modelId = args.model ?? profile.preferredModel ?? settings.defaultModel ?? "claude-sonnet-4-5-20250929";
+
+	log.info("Provider selected", { providerId, modelId, source: args.provider ? "explicit" : "priority" });
 
 	// ─── 6. Load context files and memory ───────────────────────────────
 	const contextFiles = loadContextFiles(projectPath);

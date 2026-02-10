@@ -63,9 +63,10 @@ const mocks = vi.hoisted(() => {
 		models: [],
 		createStream: vi.fn(),
 	};
+	const e2eKnownProviders = new Map<string, unknown>([["anthropic", mockProviderDef]]);
 	const mockRegistry = {
 		register: vi.fn(),
-		get: vi.fn().mockReturnValue(mockProviderDef),
+		get: vi.fn().mockImplementation((id: string) => e2eKnownProviders.get(id)),
 		getAll: vi.fn().mockReturnValue([mockProviderDef]),
 	};
 	const mockCreateProviderRegistry = vi.fn().mockReturnValue(mockRegistry);
@@ -190,6 +191,7 @@ const mocks = vi.hoisted(() => {
 		mockBuiltInProfiles,
 		mockResolveProfile,
 		mockProviderDef,
+		e2eKnownProviders,
 		mockRegistry,
 		mockCreateProviderRegistry,
 		mockRegisterBuiltinProviders,
@@ -249,6 +251,7 @@ vi.mock("@chitragupta/core", () => ({
 	resolveProfile: mocks.mockResolveProfile,
 	BUILT_IN_PROFILES: mocks.mockBuiltInProfiles,
 	DEFAULT_SETTINGS: mocks.mockSettings,
+	DEFAULT_PROVIDER_PRIORITY: ["claude-code", "codex-cli", "gemini-cli", "aider-cli", "ollama", "anthropic", "openai", "google"],
 }));
 
 vi.mock("@chitragupta/swara/provider-registry", () => ({
@@ -342,7 +345,9 @@ function resetAllMocks(): void {
 	mocks.mockResolveProfile.mockReset().mockReturnValue(mocks.mockBuiltInProfile);
 
 	mocks.mockRegistry.register.mockReset();
-	mocks.mockRegistry.get.mockReset().mockReturnValue(mocks.mockProviderDef);
+	mocks.e2eKnownProviders.clear();
+	mocks.e2eKnownProviders.set("anthropic", mocks.mockProviderDef);
+	mocks.mockRegistry.get.mockReset().mockImplementation((id: string) => mocks.e2eKnownProviders.get(id));
 	mocks.mockRegistry.getAll.mockReset().mockReturnValue([mocks.mockProviderDef]);
 	mocks.mockCreateProviderRegistry.mockReset().mockReturnValue(mocks.mockRegistry);
 	mocks.mockRegisterBuiltinProviders.mockReset();
@@ -751,18 +756,15 @@ describe("E2E: API Flow", () => {
 
 	describe("provider not found error", () => {
 		it("should throw with descriptive error including available providers", async () => {
-			mocks.mockRegistry.get.mockReturnValue(undefined);
-			mocks.mockRegistry.getAll.mockReturnValue([
-				{ id: "anthropic" },
-				{ id: "openai" },
-			]);
+			mocks.e2eKnownProviders.clear();
+			mocks.mockRegistry.getAll.mockReturnValue([]);
 
 			await expect(createChitragupta({ provider: "nonexistent" }))
-				.rejects.toThrow(/Provider "nonexistent" not found/);
+				.rejects.toThrow(/No provider available/);
 		});
 
 		it("should list available providers in the error message", async () => {
-			mocks.mockRegistry.get.mockReturnValue(undefined);
+			mocks.e2eKnownProviders.clear();
 			mocks.mockRegistry.getAll.mockReturnValue([
 				{ id: "anthropic" },
 				{ id: "openai" },

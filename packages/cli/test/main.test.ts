@@ -31,6 +31,7 @@ const {
 	// @chitragupta/swara/provider-registry
 	mockCreateProviderRegistry,
 	mockRegistry,
+	knownProviders,
 	// @chitragupta/swara/providers
 	mockRegisterSwaraProviders,
 	mockCreateOpenAICompatProvider,
@@ -116,8 +117,11 @@ const {
 
 	// ─── Provider registry mock ────────────────────────────────────────
 	const mockProvider = { id: "anthropic", name: "Anthropic" };
+	// Only return provider for "anthropic" by default — resolvePreferredProvider
+	// walks the priority list, so get() must be selective.
+	const knownProviders = new Map<string, unknown>([["anthropic", mockProvider]]);
 	const mockRegistry = {
-		get: vi.fn().mockReturnValue(mockProvider),
+		get: vi.fn().mockImplementation((id: string) => knownProviders.get(id)),
 		getAll: vi.fn().mockReturnValue([mockProvider]),
 		register: vi.fn(),
 	};
@@ -254,6 +258,7 @@ const {
 		// @chitragupta/swara/provider-registry
 		mockCreateProviderRegistry: vi.fn().mockReturnValue(mockRegistry),
 		mockRegistry,
+		knownProviders,
 		// @chitragupta/swara/providers
 		mockRegisterSwaraProviders: vi.fn(),
 		mockCreateOpenAICompatProvider: vi.fn(),
@@ -360,6 +365,7 @@ vi.mock("@chitragupta/core", () => ({
 	getChitraguptaHome: mockGetChitraguptaHome,
 	resolveProfile: mockResolveProfile,
 	BUILT_IN_PROFILES: mockBuiltInProfiles,
+	DEFAULT_PROVIDER_PRIORITY: ["claude-code", "codex-cli", "gemini-cli", "aider-cli", "ollama", "anthropic", "openai", "google"],
 	createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
@@ -544,7 +550,9 @@ function restoreDefaults() {
 		preferredModel: "claude-sonnet-4-5-20250929",
 	});
 	mockCreateProviderRegistry.mockReturnValue(mockRegistry);
-	mockRegistry.get.mockReturnValue({ id: "anthropic", name: "Anthropic" });
+	knownProviders.clear();
+	knownProviders.set("anthropic", { id: "anthropic", name: "Anthropic" });
+	mockRegistry.get.mockImplementation((id: string) => knownProviders.get(id));
 	mockRegistry.getAll.mockReturnValue([{ id: "anthropic", name: "Anthropic" }]);
 	MockAgent.mockImplementation(function () { return mockAgent; });
 	mockAgent.getMessages.mockReturnValue([]);
@@ -882,17 +890,23 @@ describe("main()", () => {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	describe("provider resolution", () => {
-		it("should use args.provider when specified", async () => {
+		it("should use explicit --provider when specified", async () => {
+			knownProviders.set("openai", { id: "openai", name: "OpenAI" });
+
 			await runMain(makeArgs({ provider: "openai" }));
 
 			expect(mockRegistry.get).toHaveBeenCalledWith("openai");
 		});
 
-		it("should fall back to settings.defaultProvider when no args.provider", async () => {
+		it("should walk providerPriority and pick first available", async () => {
+			// Only "google" is registered — priority will skip CLIs/ollama and land on google
+			knownProviders.clear();
+			knownProviders.set("google", { id: "google", name: "Google" });
 			mockLoadGlobalSettings.mockReturnValue({
-				defaultProvider: "google",
+				defaultProvider: "anthropic",
 				defaultModel: "gemini-pro",
 				agentProfile: "chitragupta",
+				providerPriority: ["ollama", "google", "anthropic"],
 			});
 
 			await runMain(makeArgs());
@@ -900,22 +914,23 @@ describe("main()", () => {
 			expect(mockRegistry.get).toHaveBeenCalledWith("google");
 		});
 
-		it("should fall back to 'anthropic' when neither args nor settings have provider", async () => {
-			mockLoadGlobalSettings.mockReturnValue({});
-
+		it("should fall back to 'anthropic' via default priority when no explicit provider", async () => {
+			// anthropic is the only registered provider, so default priority
+			// will skip claude-code/codex-cli/etc. and land on anthropic
 			await runMain(makeArgs());
 
 			expect(mockRegistry.get).toHaveBeenCalledWith("anthropic");
 		});
 
-		it("should error and exit when provider is not found", async () => {
-			mockRegistry.get.mockReturnValue(undefined);
+		it("should error and exit when no provider is available", async () => {
+			knownProviders.clear();
+			mockRegistry.getAll.mockReturnValue([]);
 
 			await runMain(makeArgs({ provider: "nonexistent" }));
 
 			expect(exitSpy).toHaveBeenCalledWith(1);
 			expect(stderrSpy).toHaveBeenCalledWith(
-				expect.stringContaining('"nonexistent" not found'),
+				expect.stringContaining("No provider available"),
 			);
 		});
 	});
@@ -1121,7 +1136,7 @@ describe("main()", () => {
 
 		it("should set the resolved provider on the agent", async () => {
 			const provider = { id: "anthropic", name: "Anthropic" };
-			mockRegistry.get.mockReturnValue(provider);
+			knownProviders.set("anthropic", provider);
 
 			await runMain(makeArgs());
 
