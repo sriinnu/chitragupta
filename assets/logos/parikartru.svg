@@ -2,23 +2,9 @@
 <!-- Symbol: Diamond being polished + transformation arrows, faceted surfaces -->
 <!-- Colors: Rose gold (#f472b6) + Deep crimson (#be123c) -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
-  <defs>
-    <radialGradient id="parikartru-bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#f472b6" stop-opacity="0.10"/>
-      <stop offset="100%" stop-color="#be123c" stop-opacity="0.02"/>
-    </radialGradient>
-    <linearGradient id="parikartru-facet" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#f472b6"/>
-      <stop offset="100%" stop-color="#be123c"/>
-    </linearGradient>
-    <linearGradient id="parikartru-facet2" x1="100%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#f472b6" stop-opacity="0.5"/>
-      <stop offset="100%" stop-color="#be123c" stop-opacity="0.3"/>
-    </linearGradient>
-  </defs>
 
   <!-- Outer sacred circle -->
-  <circle cx="100" cy="100" r="92" fill="url(#parikartru-bg)" stroke="#f472b6" stroke-width="2.5"/>
+  <circle cx="100" cy="100" r="92" fill="#f472b6" fill-opacity="0.05" stroke="#f472b6" stroke-width="2.5"/>
 
   <!-- Transformation orbit ring -->
   <circle cx="100" cy="100" r="72" fill="none" stroke="#f472b6" stroke-width="1" stroke-opacity="0.25"
@@ -43,7 +29,7 @@
   <!-- Central diamond (multi-faceted) -->
   <!-- Diamond outline -->
   <polygon points="100,45 140,95 100,155 60,95"
-           fill="none" stroke="url(#parikartru-facet)" stroke-width="2" stroke-linejoin="round"/>
+           fill="none" stroke="#f472b6" stroke-width="2" stroke-linejoin="round"/>
 
   <!-- Upper facets (crown) -->
   <polygon points="100,45 120,75 100,85 80,75"
@@ -56,7 +42,7 @@
            fill="#be123c" fill-opacity="0.08" stroke="#be123c" stroke-width="0.8" stroke-linejoin="round"/>
 
   <!-- Girdle line -->
-  <line x1="60" y1="95" x2="140" y2="95" stroke="url(#parikartru-facet)" stroke-width="1.5"/>
+  <line x1="60" y1="95" x2="140" y2="95" stroke="#f472b6" stroke-width="1.5"/>
 
   <!-- Lower facets (pavilion) -->
   <polygon points="60,95 100,85 100,155"

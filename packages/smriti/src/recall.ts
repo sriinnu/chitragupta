@@ -38,6 +38,19 @@ import {
   resetOllamaAvailability,
 } from "./recall-scoring.js";
 
+// ─── SQLite Row Types ────────────────────────────────────────────────────────
+
+/** Shape of a row returned from the `embeddings` table. */
+interface EmbeddingRow {
+  id: string;
+  vector: Buffer;
+  source_type: string;
+  source_id: string;
+  text: string;
+  metadata: string | null;
+  created_at: string;
+}
+
 // ─── Configuration ───────────────────────────────────────────────────────────
 
 /** Default top-K results. */
@@ -139,7 +152,7 @@ export class RecallEngine {
   private loadIndex(): void {
     try {
       const db = this.getVectorsDb();
-      const rows = db.prepare("SELECT * FROM embeddings").all() as any[];
+      const rows = db.prepare("SELECT * FROM embeddings").all() as EmbeddingRow[];
       this.entries = rows.map((row) => {
         const metadata = JSON.parse(row.metadata ?? "{}");
         return {
