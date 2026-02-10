@@ -27,7 +27,7 @@ All packages live under `@chitragupta/*` npm scope.
 
 ### Bridge Pattern (In-Process)
 
-The primary integration is via `LodestarBridge` in Vaayu's gateway:
+The primary integration is via `ChitraguptaBridge` in Vaayu's gateway:
 
 ```
 vaayu/apps/gateway/src/lodestar/bridge.ts
@@ -122,7 +122,7 @@ User Message → Vaayu Agent Loop
 Run: `node chitragupta/packages/cli/dist/mcp-entry.js --agent`
 
 **Tools:** 12 yantra tools + `memory_search` + `session_list` + `session_show` + `agent_prompt`
-**Resources:** `lodestar://memory/project`, `lodestar://memory/global`
+**Resources:** `chitragupta://memory/project`, `chitragupta://memory/global`
 **Prompts:** `code_review`, `architectural_analysis`
 
 ---

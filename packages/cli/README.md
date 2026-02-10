@@ -43,7 +43,7 @@
 | `http-server.ts` | `ChitraguptaServer` (Dvaara) -- REST API, WebSocket, auth, metrics, health checks |
 | `ws-handler.ts` | `WebSocketServer` (Sandhana) -- real-time bidirectional communication |
 | `openapi.ts` | `generateOpenAPISpec()` -- programmatic OpenAPI 3.0 spec for all endpoints |
-| `mcp-entry.ts` | MCP server entry point (`lodestar-mcp` binary) |
+| `mcp-entry.ts` | MCP server entry point (`chitragupta-mcp` binary) |
 | `mcp-loader.ts` | MCP server setup: tool exposure, resources, prompts, transport selection |
 | `job-queue.ts` | `JobQueue` (Karya) -- async task execution with priority and status tracking |
 | `agent-api.ts` | Agent tree serialization, stats computation, agent lookup |
@@ -316,20 +316,20 @@ Expose Chitragupta as an MCP server for Claude Code and other MCP clients.
 chitragupta mcp-server
 
 # SSE transport (for HTTP clients)
-LODESTAR_MCP_TRANSPORT=sse LODESTAR_MCP_PORT=3001 chitragupta mcp-server
+CHITRAGUPTA_MCP_TRANSPORT=sse CHITRAGUPTA_MCP_PORT=3001 chitragupta mcp-server
 ```
 
 **Exposed MCP tools:** All 12 yantra tools + `memory_search` + `session_list` + `session_show` + `agent_prompt` (opt-in).
 
-**MCP resource:** `lodestar://memory/project` -- project memory content.
+**MCP resource:** `chitragupta://memory/project` -- project memory content.
 
 **MCP prompt:** `code_review` -- structured review template.
 
 **Environment variables:**
-- `LODESTAR_MCP_TRANSPORT` -- `"stdio"` (default) or `"sse"`
-- `LODESTAR_MCP_PORT` -- SSE port (default 3001)
-- `LODESTAR_MCP_PROJECT` -- project path override
-- `LODESTAR_MCP_AGENT` -- agent profile override
+- `CHITRAGUPTA_MCP_TRANSPORT` -- `"stdio"` (default) or `"sse"`
+- `CHITRAGUPTA_MCP_PORT` -- SSE port (default 3001)
+- `CHITRAGUPTA_MCP_PROJECT` -- project path override
+- `CHITRAGUPTA_MCP_AGENT` -- agent profile override
 
 ## Slash Commands
 

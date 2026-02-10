@@ -649,7 +649,7 @@ atman_report             # Full self-awareness
 ### MCP Resources and Prompts
 
 ```
-Resource: lodestar://memory/project  # Project memory content
+Resource: chitragupta://memory/project  # Project memory content
 Prompt:   code_review                # Structured review template
 ```
 
@@ -806,7 +806,7 @@ Add to your Claude Code MCP config:
       "command": "node",
       "args": ["/path/to/chitragupta/packages/cli/dist/mcp.js"],
       "env": {
-        "LODESTAR_MCP_PROJECT": "/path/to/your/project"
+        "CHITRAGUPTA_MCP_PROJECT": "/path/to/your/project"
       }
     }
   }
@@ -819,13 +819,13 @@ Chitragupta uses cascading configuration: global -> workspace -> project -> sess
 
 ```bash
 # Global config
-~/.lodestar/config.yaml
+~/.chitragupta/config.yaml
 
 # Workspace config
-~/projects/.lodestar/config.yaml
+~/projects/.chitragupta/config.yaml
 
 # Project config
-./project/.lodestar/config.yaml
+./project/.chitragupta/config.yaml
 ```
 
 All limits are configurable with two-tier architecture: user-configurable defaults clamped by system hard ceilings.
