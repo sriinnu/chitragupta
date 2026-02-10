@@ -252,6 +252,7 @@ vi.mock("@chitragupta/core", () => ({
 	BUILT_IN_PROFILES: mocks.mockBuiltInProfiles,
 	DEFAULT_SETTINGS: mocks.mockSettings,
 	DEFAULT_PROVIDER_PRIORITY: ["claude-code", "codex-cli", "gemini-cli", "aider-cli", "ollama", "anthropic", "openai", "google"],
+	DEFAULT_FALLBACK_MODEL: "claude-sonnet-4-5-20250929",
 }));
 
 vi.mock("@chitragupta/swara/provider-registry", () => ({
