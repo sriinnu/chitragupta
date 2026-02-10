@@ -48,14 +48,12 @@ import type { PolicyAction, PolicyContext } from "@chitragupta/dharma";
 import { CommHub } from "@chitragupta/sutra";
 
 import { KaalaBrahma } from "@chitragupta/anina";
-import { SoulManager, ARCHETYPES } from "@chitragupta/anina";
+import { SoulManager } from "@chitragupta/anina";
 import { AgentReflector } from "@chitragupta/anina";
 import { ApprovalGate } from "@chitragupta/dharma";
 import { KarmaTracker } from "@chitragupta/dharma";
 import { CheckpointManager } from "@chitragupta/smriti";
 import { MessageBus } from "@chitragupta/sutra";
-import { AgentRegistry as SutraAgentRegistry } from "@chitragupta/sutra";
-import { AutonomousOrchestrator } from "@chitragupta/niyanta";
 
 import type { ParsedArgs } from "./args.js";
 import { detectProject } from "./project-detector.js";
@@ -79,7 +77,6 @@ import {
 	getBuiltinTools,
 	getActionType,
 	createEmbeddingProviderInstance,
-	ALLOWED_CREDENTIAL_KEYS,
 } from "./bootstrap.js";
 
 const log = createLogger("cli:main");
@@ -132,8 +129,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 	let projectConfig: Record<string, unknown> = {};
 	try {
 		projectConfig = loadProjectConfig(projectPath);
-	} catch {
-		// Silently skip: no project config found or file not parseable — use defaults
+	} catch (e) {
+		log.debug("No project config found", { error: String(e) });
 	}
 
 	// Create merged config layers
@@ -190,8 +187,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 			autoEscalate: true,
 			maxEscalations: 2,
 		});
-	} catch {
-		// Silently skip: MargaPipeline is optional
+	} catch (e) {
+		log.debug("MargaPipeline unavailable", { error: String(e) });
 	}
 
 	// ─── 5a-ii. Wire TuriyaRouter (contextual bandit model routing) ─────
@@ -203,16 +200,16 @@ export async function main(args: ParsedArgs): Promise<void> {
 			turiyaRouter.deserialize(JSON.parse(fs.readFileSync(turiyaStatePath, "utf8")));
 			log.info("Turiya state restored", { plays: turiyaRouter.getStats().totalRequests });
 		}
-	} catch {
-		// Silently skip: TuriyaRouter is optional
+	} catch (e) {
+		log.debug("TuriyaRouter unavailable", { error: String(e) });
 	}
 
 	// ─── 5a-iii. Wire Manas (zero-cost input classifier) ────────────────
 	let manas: Manas | undefined;
 	try {
 		manas = new Manas();
-	} catch {
-		// Silently skip: Manas is optional
+	} catch (e) {
+		log.debug("Manas unavailable", { error: String(e) });
 	}
 
 	// ─── 5b. Handle 'serve' subcommand (HTTP API gateway) ───────────────
@@ -249,7 +246,7 @@ export async function main(args: ParsedArgs): Promise<void> {
 			const { VasanaEngine, VidhiEngine } = await import("@chitragupta/smriti");
 			vasanaEngine = new VasanaEngine();
 			vidhiEngine = new VidhiEngine({ project: projectPath });
-		} catch { /* optional */ }
+		} catch (e) { log.debug("Self-evolution modules unavailable", { error: String(e) }); }
 		try {
 			const { NidraDaemon: NidraCls } = await import("@chitragupta/anina");
 			servNidraDaemon = new NidraCls({
@@ -259,7 +256,7 @@ export async function main(args: ParsedArgs): Promise<void> {
 				project: projectPath,
 			});
 			(servNidraDaemon as { start: () => void }).start();
-		} catch { /* optional */ }
+		} catch (e) { log.debug("NidraDaemon unavailable", { error: String(e) }); }
 
 		// ── Phase 2: Intelligence Layer modules ────────────────────────
 		let servTriguna: unknown;
@@ -269,19 +266,19 @@ export async function main(args: ParsedArgs): Promise<void> {
 		try {
 			const { Triguna } = await import("@chitragupta/anina");
 			servTriguna = new Triguna();
-		} catch { /* optional */ }
+		} catch (e) { log.debug("Triguna unavailable", { error: String(e) }); }
 		try {
 			const { RtaEngine } = await import("@chitragupta/dharma");
 			servRtaEngine = new RtaEngine();
-		} catch { /* optional */ }
+		} catch (e) { log.debug("RtaEngine unavailable", { error: String(e) }); }
 		try {
 			const { Buddhi } = await import("@chitragupta/anina");
 			servBuddhi = new Buddhi();
-		} catch { /* optional */ }
+		} catch (e) { log.debug("Buddhi unavailable", { error: String(e) }); }
 		try {
 			const { DatabaseManager } = await import("@chitragupta/smriti");
 			servDatabase = DatabaseManager.instance();
-		} catch { /* optional */ }
+		} catch (e) { log.debug("DatabaseManager unavailable", { error: String(e) }); }
 
 		// ── Phase 3: Collaboration modules ─────────────────────────────
 		let servSamiti: unknown;
@@ -292,15 +289,15 @@ export async function main(args: ParsedArgs): Promise<void> {
 			const { Samiti, SabhaEngine } = await import("@chitragupta/sutra");
 			servSamiti = new Samiti();
 			servSabhaEngine = new SabhaEngine();
-		} catch { /* optional */ }
+		} catch (e) { log.debug("Collaboration modules unavailable", { error: String(e) }); }
 		try {
 			const { LokapalaController } = await import("@chitragupta/anina");
 			servLokapala = new LokapalaController();
-		} catch { /* optional */ }
+		} catch (e) { log.debug("LokapalaController unavailable", { error: String(e) }); }
 		try {
 			const { AkashaField } = await import("@chitragupta/smriti");
 			servAkasha = new AkashaField();
-		} catch { /* optional */ }
+		} catch (e) { log.debug("AkashaField unavailable", { error: String(e) }); }
 
 		// ── Phase 4: Autonomy modules ──────────────────────────────────
 		let servKartavyaEngine: unknown;
@@ -308,11 +305,11 @@ export async function main(args: ParsedArgs): Promise<void> {
 		try {
 			const { KartavyaEngine } = await import("@chitragupta/niyanta");
 			servKartavyaEngine = new KartavyaEngine();
-		} catch { /* optional */ }
+		} catch (e) { log.debug("KartavyaEngine unavailable", { error: String(e) }); }
 		try {
 			const { KalaChakra } = await import("@chitragupta/smriti");
 			servKalaChakra = new KalaChakra();
-		} catch { /* optional */ }
+		} catch (e) { log.debug("KalaChakra unavailable", { error: String(e) }); }
 
 		// ── Vidya Orchestrator (Skill ecosystem) ───────────────────────
 		let servVidyaOrchestrator: unknown;
@@ -350,7 +347,7 @@ export async function main(args: ParsedArgs): Promise<void> {
 						skillReg.register(skill);
 					}
 				}
-			} catch { /* best-effort */ }
+			} catch (e) { log.debug("Curated skill loading failed", { error: String(e) }); }
 
 			let scanner: InstanceType<typeof SurakshaScanner> | undefined;
 			let shiksha: InstanceType<typeof ShikshaController> | undefined;
@@ -360,7 +357,7 @@ export async function main(args: ParsedArgs): Promise<void> {
 				const staging = new PratikshaManager();
 				const pipeline = new SkillPipeline({ scanner, sandbox, staging, registry: skillReg });
 				shiksha = new ShikshaController({ registry: skillReg, pipeline, scanner });
-			} catch { /* optional */ }
+			} catch (e) { log.debug("Suraksha/Shiksha pipeline unavailable", { error: String(e) }); }
 
 			const stateDir = path.join(projectPath, ".chitragupta");
 			servVidyaOrchestrator = new VidyaOrchestrator(
@@ -368,7 +365,7 @@ export async function main(args: ParsedArgs): Promise<void> {
 				{ persistPath: stateDir + "/vidya-state.json", enableAutoComposition: true },
 			);
 			await (servVidyaOrchestrator as { initialize: () => Promise<void> }).initialize();
-		} catch { /* optional */ }
+		} catch (e) { log.debug("VidyaOrchestrator unavailable", { error: String(e) }); }
 
 		const server = createChitraguptaAPI({
 			getAgent: () => serverAgent,
@@ -624,8 +621,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 
 			skillContext = skillLines.join("\n");
 		}
-	} catch {
-		// Silently skip: vidhya-skills is optional
+	} catch (e) {
+		log.debug("vidhya-skills unavailable", { error: String(e) });
 	}
 
 	// ─── 7c. Wire dharma policy engine ──────────────────────────────────
@@ -697,8 +694,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 				return blocked ? { allowed: false, reason } : { allowed: true };
 			},
 		};
-	} catch {
-		// Silently skip: dharma is optional — @chitragupta/dharma may not be installed
+	} catch (e) {
+		log.debug("Dharma policy engine unavailable", { error: String(e) });
 	}
 
 	// ─── 7d. Wire sutra CommHub (IPC for sub-agent communication) ────────
@@ -707,8 +704,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 	try {
 		commHub = new CommHub({ enableLogging: false });
 		commHubDestroy = () => commHub!.destroy();
-	} catch {
-		// Silently skip: sutra is optional — @chitragupta/sutra may not be installed
+	} catch (e) {
+		log.debug("CommHub unavailable", { error: String(e) });
 	}
 
 	// ─── 7d-ii. Wire SandeshaRouter (Input Routing for sub-agents) ──────
@@ -720,8 +717,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 			maxPendingRequests: 10,
 			commHub,
 		});
-	} catch {
-		// Silently skip: SandeshaRouter is optional — @chitragupta/sutra may not export it yet
+	} catch (e) {
+		log.debug("SandeshaRouter unavailable", { error: String(e) });
 	}
 
 	// ─── 7e. Wire KaalaBrahma (Agent Tree Lifecycle) ─────────────────
@@ -733,8 +730,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 			maxAgentDepth: 5,
 			maxSubAgents: 8,
 		});
-	} catch {
-		// Silently skip: KaalaBrahma is optional
+	} catch (e) {
+		log.debug("KaalaBrahma unavailable", { error: String(e) });
 	}
 
 	// ─── 7e-ii. Wire NidraDaemon (Background Sleep Cycle) ──────────
@@ -791,8 +788,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 				// Deep sleep maintenance is best-effort
 			}
 		});
-	} catch {
-		// Silently skip: NidraDaemon is optional
+	} catch (e) {
+		log.debug("NidraDaemon unavailable", { error: String(e) });
 	}
 
 	// ─── 7f. Wire SoulManager (Agent Identity) ──────────────────────
@@ -815,32 +812,32 @@ export async function main(args: ParsedArgs): Promise<void> {
 			purpose: profile.personality ?? "AI agent orchestration platform",
 		});
 		soulPrompt = soulManager.buildSoulPrompt("root");
-	} catch {
-		// Silently skip: SoulManager is optional
+	} catch (e) {
+		log.debug("SoulManager unavailable", { error: String(e) });
 	}
 
 	// ─── 7f-ii. Wire AgentReflector (post-turn self-evaluation) ──────
 	let reflector: InstanceType<typeof AgentReflector> | undefined;
 	try {
 		reflector = new AgentReflector();
-	} catch {
-		// Silently skip: AgentReflector is optional
+	} catch (e) {
+		log.debug("AgentReflector unavailable", { error: String(e) });
 	}
 
 	// ─── 7g. Wire KarmaTracker (Trust Tracking) ─────────────────────
 	let karmaTracker: InstanceType<typeof KarmaTracker> | undefined;
 	try {
 		karmaTracker = new KarmaTracker();
-	} catch {
-		// Silently skip: KarmaTracker is optional
+	} catch (e) {
+		log.debug("KarmaTracker unavailable", { error: String(e) });
 	}
 
 	// ─── 7h. Wire MessageBus (Sandesh) ──────────────────────────────
 	let messageBus: InstanceType<typeof MessageBus> | undefined;
 	try {
 		messageBus = new MessageBus();
-	} catch {
-		// Silently skip: MessageBus is optional
+	} catch (e) {
+		log.debug("MessageBus unavailable", { error: String(e) });
 	}
 
 	// ─── 7i. Wire CheckpointManager (Sthiti) ────────────────────────
@@ -851,8 +848,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 			fs.mkdirSync(checkpointDir, { recursive: true });
 		}
 		checkpointManager = new CheckpointManager({ checkpointDir });
-	} catch {
-		// Silently skip: CheckpointManager is optional
+	} catch (e) {
+		log.debug("CheckpointManager unavailable", { error: String(e) });
 	}
 
 	// ─── 7j. Wire ApprovalGate (Dvaara) into policy adapter ────────
@@ -861,8 +858,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 		approvalGate = new ApprovalGate({
 			defaultTimeout: 30000,
 		});
-	} catch {
-		// Silently skip: ApprovalGate is optional
+	} catch (e) {
+		log.debug("ApprovalGate unavailable", { error: String(e) });
 	}
 
 	// ─── 8. Build system prompt ─────────────────────────────────────────
