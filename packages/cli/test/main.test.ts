@@ -366,6 +366,7 @@ vi.mock("@chitragupta/core", () => ({
 	resolveProfile: mockResolveProfile,
 	BUILT_IN_PROFILES: mockBuiltInProfiles,
 	DEFAULT_PROVIDER_PRIORITY: ["claude-code", "codex-cli", "gemini-cli", "aider-cli", "ollama", "anthropic", "openai", "google"],
+	DEFAULT_FALLBACK_MODEL: "claude-sonnet-4-5-20250929",
 	createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 

@@ -189,6 +189,12 @@ export interface AgentProfile {
 
 // ─── Common Types ────────────────────────────────────────────────────────────
 
+/**
+ * The default model used when no model is specified via CLI args,
+ * agent profile, or user settings. Single source of truth.
+ */
+export const DEFAULT_FALLBACK_MODEL = "claude-sonnet-4-5-20250929";
+
 /** The reason a model stopped generating output. */
 export type StopReason = "end_turn" | "max_tokens" | "tool_use" | "stop_sequence" | "error";
 

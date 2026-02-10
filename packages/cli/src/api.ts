@@ -22,6 +22,7 @@ import {
 	cascadeConfigs,
 	resolveProfile,
 	BUILT_IN_PROFILES,
+	DEFAULT_FALLBACK_MODEL,
 } from "@chitragupta/core";
 import type { AgentProfile, ThinkingLevel, CostBreakdown } from "@chitragupta/core";
 
@@ -244,7 +245,7 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 		);
 	}
 	const { providerId, provider } = resolved;
-	const modelId = options.model ?? profile.preferredModel ?? settings.defaultModel ?? "claude-sonnet-4-5-20250929";
+	const modelId = options.model ?? profile.preferredModel ?? settings.defaultModel ?? DEFAULT_FALLBACK_MODEL;
 
 	// ─── 6. Load context files and memory ─────────────────────────────
 	const contextFiles = loadContextFiles(projectPath);
