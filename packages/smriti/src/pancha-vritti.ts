@@ -287,7 +287,7 @@ const PRATYAKSHA_TOOLS = new Set([
 /** Tools whose output is from memory/recall. */
 const SMRITI_TOOLS = new Set([
 	"memory_search", "session_list", "session_show", "recall",
-	"search_memory", "get_memory", "lodestar_memory_search",
+	"search_memory", "get_memory", "chitragupta_memory_search",
 ]);
 
 // ─── PanchaVritti Class ─────────────────────────────────────────────────────
