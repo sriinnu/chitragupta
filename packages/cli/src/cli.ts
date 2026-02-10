@@ -7,6 +7,7 @@
  * or launches the main interactive/print mode.
  */
 
+import { ChitraguptaError } from "@chitragupta/core";
 import { parseArgs, printHelp } from "./args.js";
 import { main } from "./main.js";
 import { loadPlugins, listInstalledPlugins, getPluginDir } from "./plugin-loader.js";
@@ -397,7 +398,7 @@ async function run(): Promise<void> {
 		await main(args);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		const code = (error as any)?.code;
+		const code = error instanceof ChitraguptaError ? error.code : undefined;
 
 		// Friendly error messages for common issues
 		if (code === "AUTH_ERROR") {

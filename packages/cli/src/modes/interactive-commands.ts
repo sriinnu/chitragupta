@@ -967,7 +967,7 @@ export async function handleSlashCommand(
     }
 
     case "/chetana": {
-      const chetana = (agent as any).getChetana?.();
+      const chetana = agent.getChetana();
       if (!chetana) {
         stdout.write(yellow("\n  Chetana (consciousness layer) is not enabled.\n"));
         stdout.write(dim("  Enable it with: enableChetana: true in agent config.\n\n"));
@@ -2100,7 +2100,7 @@ export async function handleSlashCommand(
 
       // ─── 2. Consciousness (Chetana) ──────────────────────────────────
       try {
-        const chetana = (ctx.agent as any).getChetana?.();
+        const chetana = ctx.agent.getChetana();
         if (chetana) {
           const report = chetana.getCognitiveReport();
           stdout.write("  " + bold(magenta("2. \u091A\u0947\u0924\u0928\u093E Consciousness")) + "\n");
@@ -2135,7 +2135,7 @@ export async function handleSlashCommand(
 
       // ─── 3. Self-Model (Atma-Darshana) ───────────────────────────────
       try {
-        const chetana = (ctx.agent as any).getChetana?.();
+        const chetana = ctx.agent.getChetana();
         if (chetana) {
           const report = chetana.getCognitiveReport();
           stdout.write("  " + bold(green("3. \u0906\u0924\u094D\u092E\u0926\u0930\u094D\u0936\u0928 Self-Model")) + "\n");

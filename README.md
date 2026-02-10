@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <code>14 packages</code> &middot; <code>7,396 tests</code> &middot; <code>0 failures</code> &middot; <code>30+ research papers</code> &middot; <code>17 Vedic cognitive models</code>
+  <code>14 packages</code> &middot; <code>9,121 tests</code> &middot; <code>0 failures</code> &middot; <code>30+ research papers</code> &middot; <code>17 Vedic cognitive models</code>
 </p>
 
 ---
