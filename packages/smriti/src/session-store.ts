@@ -142,6 +142,7 @@ function sessionMetaToRow(meta: SessionMeta, filePath: string) {
 		file_path: filePath,
 		parent_id: meta.parent,
 		branch: meta.branch,
+		metadata: meta.metadata ? JSON.stringify(meta.metadata) : null,
 	};
 }
 
@@ -159,6 +160,7 @@ function rowToSessionMeta(row: Record<string, unknown>): SessionMeta {
 		tags: JSON.parse((row.tags as string) ?? "[]"),
 		totalCost: (row.cost as number) ?? 0,
 		totalTokens: (row.tokens as number) ?? 0,
+		metadata: row.metadata ? JSON.parse(row.metadata as string) : undefined,
 	};
 }
 
@@ -167,11 +169,11 @@ function upsertSessionToDb(meta: SessionMeta, filePath: string): void {
 		const db = getAgentDb();
 		const row = sessionMetaToRow(meta, filePath);
 		db.prepare(`
-			INSERT INTO sessions (id, project, title, created_at, updated_at, turn_count, model, agent, cost, tokens, tags, file_path, parent_id, branch)
-			VALUES (@id, @project, @title, @created_at, @updated_at, @turn_count, @model, @agent, @cost, @tokens, @tags, @file_path, @parent_id, @branch)
+			INSERT INTO sessions (id, project, title, created_at, updated_at, turn_count, model, agent, cost, tokens, tags, file_path, parent_id, branch, metadata)
+			VALUES (@id, @project, @title, @created_at, @updated_at, @turn_count, @model, @agent, @cost, @tokens, @tags, @file_path, @parent_id, @branch, @metadata)
 			ON CONFLICT(id) DO UPDATE SET
 				title = @title, updated_at = @updated_at, turn_count = @turn_count,
-				model = @model, cost = @cost, tokens = @tokens, tags = @tags
+				model = @model, cost = @cost, tokens = @tokens, tags = @tags, metadata = @metadata
 		`).run(row);
 	} catch {
 		// SQLite write-through is best-effort — .md file is the source of truth
@@ -239,6 +241,7 @@ export function createSession(opts: SessionOpts): Session {
 		tags: opts.tags ?? [],
 		totalCost: 0,
 		totalTokens: 0,
+		metadata: opts.metadata,
 	};
 
 	const session: Session = { meta, turns: [] };
@@ -496,8 +499,8 @@ export function migrateExistingSessions(project?: string): { migrated: number; s
 				.map((e) => path.join(sessionsRoot, e.name));
 
 	const insertSession = db.prepare(`
-		INSERT OR IGNORE INTO sessions (id, project, title, created_at, updated_at, turn_count, model, agent, cost, tokens, tags, file_path, parent_id, branch)
-		VALUES (@id, @project, @title, @created_at, @updated_at, @turn_count, @model, @agent, @cost, @tokens, @tags, @file_path, @parent_id, @branch)
+		INSERT OR IGNORE INTO sessions (id, project, title, created_at, updated_at, turn_count, model, agent, cost, tokens, tags, file_path, parent_id, branch, metadata)
+		VALUES (@id, @project, @title, @created_at, @updated_at, @turn_count, @model, @agent, @cost, @tokens, @tags, @file_path, @parent_id, @branch, @metadata)
 	`);
 
 	const insertTurn = db.prepare(`

@@ -21,6 +21,8 @@ export interface SessionMeta {
 	tags: string[];
 	totalCost: number;
 	totalTokens: number;
+	/** Arbitrary metadata from external systems (e.g. Vaayu session fields). */
+	metadata?: Record<string, unknown>;
 }
 
 /** A single conversation turn (user prompt or assistant response) within a session. */
@@ -77,6 +79,8 @@ export interface SessionOpts {
 	branch?: string;
 	parentSessionId?: string;
 	tags?: string[];
+	/** Arbitrary metadata from external systems (e.g. Vaayu session fields). */
+	metadata?: Record<string, unknown>;
 }
 
 export interface AgentSummary {
