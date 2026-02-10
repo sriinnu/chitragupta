@@ -299,6 +299,20 @@ export type {
 	CrystallizedSkill,
 } from "./crystallization.js";
 
+// ── Agent Skills Loader (SKILL.md open standard) ────────────────────────────
+export {
+	loadAgentSkills,
+	computeSimHash,
+	skillSimilarity,
+	scoreSkillRelevance,
+	fnv1a64,
+} from "./agent-skills-loader.js";
+export type {
+	AgentSkillLoadResult,
+	AgentSkillEntry,
+	ScoredSkill,
+} from "./agent-skills-loader.js";
+
 // ── Matcher V2 (Three-Phase Pipeline) ───────────────────────────────────────
 export { matchSkillsV2 } from "./matcher.js";
 export type { MatchContext } from "./matcher.js";

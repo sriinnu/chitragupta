@@ -112,6 +112,14 @@ export interface InteractiveModeOptions {
 	 * each turn is classified by intent + complexity to select the best model.
 	 */
 	margaPipeline?: MargaPipelineInstance;
+	/** TuriyaRouter for contextual bandit model routing (replaces Marga when available). */
+	turiyaRouter?: TuriyaRouterInstance;
+	/** Manas zero-cost input classifier (feeds Turiya). */
+	manas?: ManasInstance;
+	/** SoulManager for personality-driven confidence and temperature. */
+	soulManager?: SoulManagerInstance;
+	/** AgentReflector for post-turn self-evaluation. */
+	reflector?: ReflectorInstance;
 	/** Provider registry for Marga-driven provider switching. */
 	providerRegistry?: ProviderRegistryInstance;
 	/** True when the user explicitly passed --model on the CLI. Disables Marga routing. */
@@ -193,6 +201,54 @@ interface ShikshaInstance {
 	}>;
 }
 
+/**
+ * Minimal interfaces for Turiya/Manas/Soul/Reflector (avoid hard imports).
+ */
+interface TuriyaRouterInstance {
+	extractContext(
+		messages: Array<{ role: string; content: unknown }>,
+		systemPrompt?: string,
+		tools?: unknown[],
+		memoryHits?: number,
+	): Record<string, number>;
+	classify(context: Record<string, number>): {
+		tier: string;
+		confidence: number;
+		costEstimate: number;
+		context: Record<string, number>;
+		rationale: string;
+		armIndex: number;
+	};
+	recordOutcome(decision: { tier: string; confidence: number; costEstimate: number; context: Record<string, number>; rationale: string; armIndex: number }, reward: number): void;
+	getStats(): { totalRequests: number; savingsPercent: number; totalCost: number };
+}
+
+interface ManasInstance {
+	classify(input: string): {
+		intent: string;
+		route: string;
+		confidence: number;
+		features: { hasCode: boolean; hasErrorStack: boolean; multiStep: boolean; wordCount: number };
+		durationMs: number;
+	};
+}
+
+interface SoulManagerInstance {
+	updateConfidence(agentId: string, domain: string, success: boolean): void;
+	addTrait(agentId: string, trait: string): void;
+	getEffectiveTemperature(agentId: string, baseTemp: number): number;
+}
+
+interface ReflectorInstance {
+	reflect(agentId: string, taskDescription: string, output: string): {
+		score: number;
+		confidence: number;
+		strengths: string[];
+		weaknesses: string[];
+		improvements: string[];
+	};
+}
+
 /** Reason the interactive session ended. */
 export type ExitReason = "quit" | "sigint";
 
@@ -214,6 +270,7 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 	let currentThinking: ThinkingLevel = (agent.getState().thinkingLevel as ThinkingLevel) ?? "medium";
 	let currentModel = agent.getState().model;
 	let budgetBlocked = false;
+	let lastTuriyaDecision: ReturnType<TuriyaRouterInstance["classify"]> | undefined;
 
 	const budgetTracker = new BudgetTracker(options.budgetConfig);
 
@@ -542,15 +599,73 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 			}
 		}
 
-		// ─── Marga: per-turn intelligent model routing ──────────────────
-		if (options.margaPipeline && !options.userExplicitModel) {
+		// ─── Manas + Turiya: intelligent per-turn model routing ─────────
+		lastTuriyaDecision = undefined;
+		if (options.manas && options.turiyaRouter && !options.userExplicitModel) {
+			try {
+				const classification = options.manas.classify(message);
+
+				// Build message array for Turiya context extraction
+				const agentMessages = [...agent.getMessages()].map(m => ({
+					role: (m as { role: string }).role,
+					content: (m as { content: unknown }).content,
+				}));
+				agentMessages.push({ role: "user", content: [{ type: "text", text: message }] });
+
+				const ctx = options.turiyaRouter.extractContext(agentMessages);
+				const decision = options.turiyaRouter.classify(ctx);
+				lastTuriyaDecision = decision;
+
+				// Map tier to model ID — search current provider for a matching model
+				const tierModelHints: Record<string, string[]> = {
+					"haiku": ["haiku", "claude-haiku", "gpt-4o-mini", "gemini-flash"],
+					"sonnet": ["sonnet", "claude-sonnet", "gpt-4o", "gemini-pro"],
+					"opus": ["opus", "claude-opus", "gpt-4", "o1", "gemini-ultra"],
+				};
+				const hints = tierModelHints[decision.tier];
+				if (hints && decision.tier !== "no-llm") {
+					// Try to find a model matching the tier in the current model string
+					const currentLower = currentModel.toLowerCase();
+					const alreadyMatchesTier = hints.some(h => currentLower.includes(h));
+					if (!alreadyMatchesTier) {
+						// Try Marga for actual model resolution if available
+						if (options.margaPipeline) {
+							try {
+								const margaDecision = options.margaPipeline.classify({
+									messages: [{ role: "user", content: [{ type: "text", text: message }] }],
+									systemPrompt: undefined,
+								});
+								if (margaDecision.modelId && margaDecision.modelId !== currentModel) {
+									if (options.providerRegistry) {
+										const newProvider = options.providerRegistry.get(margaDecision.providerId);
+										if (newProvider) {
+											agent.setProvider(newProvider as Parameters<typeof agent.setProvider>[0]);
+										}
+									}
+									agent.setModel(margaDecision.modelId);
+									currentModel = margaDecision.modelId;
+								}
+							} catch {
+								// Marga fallback failed — keep current model
+							}
+						}
+					}
+				}
+
+				stdout.write(
+					dim(`  [${classification.intent} → ${decision.tier} (${(decision.confidence * 100).toFixed(0)}%) ~$${decision.costEstimate.toFixed(4)}]\n`),
+				);
+			} catch {
+				// Manas/Turiya classification failed — continue with current model
+			}
+		} else if (options.margaPipeline && !options.userExplicitModel) {
+			// Fallback: pure Marga routing when Turiya is unavailable
 			try {
 				const decision = options.margaPipeline.classify({
 					messages: [{ role: "user", content: [{ type: "text", text: message }] }],
 					systemPrompt: undefined,
 				});
 				if (decision.modelId && decision.modelId !== currentModel) {
-					// Switch provider if Marga routed to a different one
 					if (options.providerRegistry) {
 						const newProvider = options.providerRegistry.get(decision.providerId);
 						if (newProvider) {
@@ -560,7 +675,7 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 					agent.setModel(decision.modelId);
 					currentModel = decision.modelId;
 					stdout.write(
-						dim(`  [marga: ${decision.taskType}/${decision.complexity} \u2192 ${decision.modelId}]\n`),
+						dim(`  [marga: ${decision.taskType}/${decision.complexity} → ${decision.modelId}]\n`),
 					);
 				}
 			} catch {
@@ -619,6 +734,44 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 
 			// Process follow-ups
 			await agent.processFollowUps();
+
+			// ─── Post-turn: Turiya learning ─────────────────────────────
+			if (options.turiyaRouter && lastTuriyaDecision) {
+				try {
+					// Compute reward: 0.8 baseline, boost for substantive response, penalize for very short
+					let reward = 0.8;
+					if (streamingText.length > 500) reward = 0.9;
+					if (streamingText.length > 2000) reward = 0.95;
+					if (streamingText.length < 20) reward = 0.3;
+					options.turiyaRouter.recordOutcome(lastTuriyaDecision, reward);
+				} catch {
+					// Turiya learning is best-effort
+				}
+			}
+
+			// ─── Post-turn: Soul confidence update ──────────────────────
+			if (options.soulManager && options.manas) {
+				try {
+					const intent = options.manas.classify(message).intent;
+					options.soulManager.updateConfidence("root", intent, streamingText.length > 50);
+				} catch {
+					// Soul update is best-effort
+				}
+			}
+
+			// ─── Post-turn: Self-reflection ─────────────────────────────
+			if (options.reflector && streamingText.length > 0) {
+				try {
+					const reflection = options.reflector.reflect("root", message, streamingText);
+					if (reflection.score < 5 && reflection.weaknesses.length > 0) {
+						stdout.write(
+							dim(`  [reflect: score=${reflection.score.toFixed(1)} — ${reflection.weaknesses[0]}]\n`),
+						);
+					}
+				} catch {
+					// Reflection is best-effort
+				}
+			}
 
 			// Notify caller of completed turn for session persistence
 			if (options.onTurnComplete) {
