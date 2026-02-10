@@ -16,7 +16,7 @@ const VERSION = "0.1.0";
 /**
  * Route subcommands to their respective handlers.
  */
-async function handleSubcommand(command: string, subcommand: string | undefined, rest: string[]): Promise<void> {
+async function handleSubcommand(command: string, subcommand: string | undefined, rest: string[], opts?: { port?: number; host?: string }): Promise<void> {
 	switch (command) {
 		case "provider": {
 			const provider = await import("./commands/provider.js");
@@ -238,20 +238,8 @@ async function handleSubcommand(command: string, subcommand: string | undefined,
 		}
 
 		case "serve": {
-			// Parse --port and --host from subcommand + rest args
-			const serveArgs = [subcommand, ...rest].filter(Boolean) as string[];
-			let port = 3000;
-			let host = "localhost";
-
-			for (let si = 0; si < serveArgs.length; si++) {
-				if (serveArgs[si] === "--port" && si + 1 < serveArgs.length) {
-					port = parseInt(serveArgs[si + 1], 10) || 3000;
-					si++;
-				} else if (serveArgs[si] === "--host" && si + 1 < serveArgs.length) {
-					host = serveArgs[si + 1];
-					si++;
-				}
-			}
+			const port = opts?.port ?? 3000;
+			const host = opts?.host ?? "localhost";
 
 			// Reuse the main() initialization flow to create a fully-wired agent
 			// then hand it to the HTTP server instead of the TUI.
@@ -400,7 +388,7 @@ async function run(): Promise<void> {
 
 	// ─── Subcommands ────────────────────────────────────────────────────
 	if (args.command) {
-		await handleSubcommand(args.command, args.subcommand, args.rest);
+		await handleSubcommand(args.command, args.subcommand, args.rest, { port: args.port, host: args.host });
 		process.exit(0);
 	}
 

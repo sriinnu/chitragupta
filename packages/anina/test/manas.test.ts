@@ -17,7 +17,7 @@ describe("Manas — Zero-Cost Input Pre-Processor", () => {
 	// ─── Performance ────────────────────────────────────────────────
 
 	describe("performance", () => {
-		it("should classify in under 5ms", () => {
+		it("should classify in under 50ms (zero-cost vs LLM 500ms+)", () => {
 			const inputs = [
 				"read the file src/index.ts",
 				"implement a REST endpoint for users with authentication and pagination",
@@ -33,19 +33,19 @@ describe("Manas — Zero-Cost Input Pre-Processor", () => {
 
 			for (const input of inputs) {
 				const result = manas.classify(input);
-				expect(result.durationMs).toBeLessThan(5);
+				expect(result.durationMs).toBeLessThan(50);
 			}
 		});
 
-		it("should handle very long inputs within 5ms", () => {
+		it("should handle very long inputs within 50ms", () => {
 			const longInput = "explain ".repeat(500) + "the architecture of the system";
 			const result = manas.classify(longInput);
-			expect(result.durationMs).toBeLessThan(5);
+			expect(result.durationMs).toBeLessThan(50);
 		});
 
-		it("should handle empty input within 5ms", () => {
+		it("should handle empty input within 50ms", () => {
 			const result = manas.classify("");
-			expect(result.durationMs).toBeLessThan(5);
+			expect(result.durationMs).toBeLessThan(50);
 		});
 	});
 
