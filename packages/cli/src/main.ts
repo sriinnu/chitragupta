@@ -72,9 +72,12 @@ import {
 	loadCustomProfiles,
 	loadCredentials,
 	registerBuiltinProviders,
+	registerCLIProviders,
+	formatProviderSummary,
 	getBuiltinTools,
 	getActionType,
 	createEmbeddingProviderInstance,
+	ALLOWED_CREDENTIAL_KEYS,
 } from "./bootstrap.js";
 
 const log = createLogger("cli:main");
@@ -143,7 +146,36 @@ export async function main(args: ParsedArgs): Promise<void> {
 
 	// ─── 5. Initialize provider registry ────────────────────────────────
 	const registry = createProviderRegistry();
+
+	// 5-i. Register CLI providers first (zero cost — use installed CLIs)
+	const cliResults = await registerCLIProviders(registry);
+	const detectedCLIs = cliResults.filter((c) => c.available);
+
+	// 5-ii. Register API providers (Anthropic, OpenAI, Google, Ollama)
 	registerBuiltinProviders(registry, settings);
+
+	// 5-iii. Check Ollama availability (for embedding + local models)
+	let hasOllama = false;
+	try {
+		const probe = await fetch("http://127.0.0.1:11434/api/tags", { signal: AbortSignal.timeout(2000) });
+		hasOllama = probe.ok;
+	} catch {
+		// Ollama not running
+	}
+
+	// 5-iv. Detect which API keys are set
+	const activeApiKeys = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
+		.filter((k) => !!process.env[k]);
+
+	// 5-v. Print provider summary on first run or when no providers
+	const totalProviders = detectedCLIs.length + (hasOllama ? 1 : 0) + activeApiKeys.length;
+	if (totalProviders === 0) {
+		process.stderr.write("\n" + formatProviderSummary(cliResults, hasOllama, activeApiKeys) + "\n\n");
+	} else if (detectedCLIs.length > 0) {
+		log.info("CLI providers detected", {
+			clis: detectedCLIs.map((c) => `${c.command}${c.version ? ` (${c.version})` : ""}`).join(", "),
+		});
+	}
 
 	// ─── 5a. Wire MargaPipeline (Marga — intelligent model routing) ─────
 	let margaPipeline: MargaPipelineType | undefined;

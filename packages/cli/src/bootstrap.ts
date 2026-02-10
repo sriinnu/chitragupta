@@ -24,8 +24,9 @@ import {
 } from "@chitragupta/swara/providers";
 import {
 	createOllamaEmbeddings,
+	detectAvailableCLIs,
 } from "@chitragupta/swara";
-import type { EmbeddingProvider } from "@chitragupta/swara";
+import type { EmbeddingProvider, CLIAvailability } from "@chitragupta/swara";
 
 import { getAllTools } from "@chitragupta/yantra";
 
@@ -187,6 +188,80 @@ export function registerBuiltinProviders(registry: ProviderRegistry, settings: C
 			registry.register(provider);
 		}
 	}
+}
+
+// ─── CLI Provider Auto-Detection ─────────────────────────────────────────
+
+/** Map from CLI command name to its ProviderDefinition. */
+const CLI_PROVIDER_MAP: Record<string, () => Promise<import("@chitragupta/swara").ProviderDefinition>> = {
+	claude: async () => (await import("@chitragupta/swara/providers")).claudeCodeProvider,
+	gemini: async () => (await import("@chitragupta/swara/providers")).geminiCLIProvider,
+	codex: async () => (await import("@chitragupta/swara/providers")).codexProvider,
+	aider: async () => (await import("@chitragupta/swara/providers")).aiderProvider,
+};
+
+/**
+ * Detect installed CLI tools (claude, gemini, codex, aider) and register
+ * them as providers. CLI providers have zero cost — they use their own
+ * auth/billing. Returns the detection results for display.
+ */
+export async function registerCLIProviders(registry: ProviderRegistry): Promise<CLIAvailability[]> {
+	const results = await detectAvailableCLIs();
+	for (const cli of results) {
+		if (cli.available && CLI_PROVIDER_MAP[cli.command]) {
+			try {
+				const provider = await CLI_PROVIDER_MAP[cli.command]();
+				registry.register(provider);
+			} catch {
+				// Skip: provider registration failed — non-fatal
+			}
+		}
+	}
+	return results;
+}
+
+/**
+ * Format a provider detection summary for the terminal.
+ * Shows what's available and what will be used as primary.
+ */
+export function formatProviderSummary(
+	cliResults: CLIAvailability[],
+	hasOllama: boolean,
+	apiKeys: string[],
+): string {
+	const lines: string[] = ["  Detected providers:"];
+	let hasPrimary = false;
+
+	for (const cli of cliResults) {
+		if (cli.available) {
+			const ver = cli.version ? ` (${cli.version})` : "";
+			const tag = !hasPrimary ? " ← primary" : "";
+			lines.push(`    \x1b[32m✓\x1b[0m ${cli.command} CLI${ver} — zero cost${tag}`);
+			hasPrimary = true;
+		}
+	}
+
+	if (hasOllama) {
+		const tag = !hasPrimary ? " ← primary" : "";
+		lines.push(`    \x1b[32m✓\x1b[0m Ollama (local) — zero cost${tag}`);
+		hasPrimary = true;
+	}
+
+	for (const key of apiKeys) {
+		const name = key.replace(/_API_KEY$/, "").replace(/_/g, " ");
+		const tag = !hasPrimary ? " ← primary" : "";
+		lines.push(`    \x1b[32m✓\x1b[0m ${name} API — paid${tag}`);
+		hasPrimary = true;
+	}
+
+	if (!hasPrimary) {
+		lines.push("    \x1b[31m✗\x1b[0m No providers found");
+		lines.push("");
+		lines.push("  Install a CLI tool (claude, codex, gemini) or set an API key.");
+		lines.push("  Run: chitragupta provider add anthropic");
+	}
+
+	return lines.join("\n");
 }
 
 // ─── Tool Adapter ───────────────────────────────────────────────────────────

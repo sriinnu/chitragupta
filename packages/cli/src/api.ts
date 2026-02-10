@@ -51,6 +51,7 @@ import {
 	loadCustomProfiles,
 	loadCredentials,
 	registerBuiltinProviders,
+	registerCLIProviders,
 	getBuiltinTools,
 	getActionType,
 	createEmbeddingProviderInstance,
@@ -226,6 +227,11 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 
 	// ─── 5. Initialize provider registry ──────────────────────────────
 	const registry = createProviderRegistry();
+
+	// 5-i. Register CLI providers first (zero cost — use installed CLIs)
+	await registerCLIProviders(registry);
+
+	// 5-ii. Register API providers (Anthropic, OpenAI, Google, Ollama)
 	registerBuiltinProviders(registry, settings);
 
 	const providerId = options.provider ?? settings.defaultProvider ?? "anthropic";
