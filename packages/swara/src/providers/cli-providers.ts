@@ -137,8 +137,16 @@ export const claudeCodeProvider: ProviderDefinition = createCLIProvider({
 	command: "claude",
 	models: CLAUDE_CODE_MODELS,
 	buildArgs: (_model, context, _options) => {
-		const prompt = buildFullPrompt(context);
-		return ["--print", prompt];
+		const userText = contextToPrompt(context);
+		const args = ["--print", userText, "--output-format", "text"];
+
+		// Pass system prompt separately — avoids shell arg length limits
+		// and lets Claude Code handle it natively.
+		if (context.systemPrompt) {
+			args.push("--system-prompt", context.systemPrompt);
+		}
+
+		return args;
 	},
 	parseOutput: (stdout) => stdout.trim(),
 });
@@ -157,8 +165,10 @@ export const codexProvider: ProviderDefinition = createCLIProvider({
 	command: "codex",
 	models: CODEX_MODELS,
 	buildArgs: (_model, context, _options) => {
+		// Codex doesn't have --system-prompt — combine into prompt
 		const prompt = buildFullPrompt(context);
-		return ["--quiet", prompt];
+		// Use `codex exec` for non-interactive mode with full-auto
+		return ["exec", "--full-auto", prompt];
 	},
 	parseOutput: (stdout) => stdout.trim(),
 });
