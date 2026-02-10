@@ -111,8 +111,9 @@ const CREDENTIAL_DUMP_PATTERNS: RegExp[] = [
 
 // ─── Protected System Paths ──────────────────────────────────────────────────
 
-/** Paths that must never be written to. */
+/** Paths that must never be written to (Unix + Windows system dirs). */
 const PROTECTED_PATH_PREFIXES: string[] = [
+	// Unix / macOS
 	"/etc/",
 	"/usr/",
 	"/System/",
@@ -122,6 +123,10 @@ const PROTECTED_PATH_PREFIXES: string[] = [
 	"/boot/",
 	"/lib/",
 	"/lib64/",
+	// Windows (case-insensitive check in rule implementation)
+	"C:\\Windows\\",
+	"C:\\Program Files\\",
+	"C:\\Program Files (x86)\\",
 ];
 
 /** Specific files that must never be written to (exact basename or suffix match). */
@@ -237,9 +242,11 @@ export const noDestructiveOverwrite: RtaRule = {
 			return { allowed: true, ruleId: this.id };
 		}
 
-		// Check system path prefixes
+		// Check system path prefixes (case-insensitive for Windows paths)
+		const normalizedTarget = process.platform === "win32" ? targetPath.toLowerCase() : targetPath;
 		for (const prefix of PROTECTED_PATH_PREFIXES) {
-			if (targetPath.startsWith(prefix)) {
+			const normalizedPrefix = process.platform === "win32" ? prefix.toLowerCase() : prefix;
+			if (normalizedTarget.startsWith(normalizedPrefix)) {
 				return {
 					allowed: false,
 					ruleId: this.id,
