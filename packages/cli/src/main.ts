@@ -25,6 +25,7 @@ import {
 	resolveProfile,
 	BUILT_IN_PROFILES,
 	createLogger,
+	DEFAULT_FALLBACK_MODEL,
 } from "@chitragupta/core";
 import type { ThinkingLevel } from "@chitragupta/core";
 import { createProviderRegistry } from "@chitragupta/swara/provider-registry";
@@ -158,7 +159,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 	// 5-iii. Check Ollama availability (for embedding + local models)
 	let hasOllama = false;
 	try {
-		const probe = await fetch("http://127.0.0.1:11434/api/tags", { signal: AbortSignal.timeout(2000) });
+		const ollamaHost = process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434";
+		const probe = await fetch(`${ollamaHost}/api/tags`, { signal: AbortSignal.timeout(2000) });
 		hasOllama = probe.ok;
 	} catch {
 		// Ollama not running
@@ -440,7 +442,7 @@ export async function main(args: ParsedArgs): Promise<void> {
 		process.exit(1);
 	}
 	const { providerId, provider } = resolved;
-	const modelId = args.model ?? profile.preferredModel ?? settings.defaultModel ?? "claude-sonnet-4-5-20250929";
+	const modelId = args.model ?? profile.preferredModel ?? settings.defaultModel ?? DEFAULT_FALLBACK_MODEL;
 
 	log.info("Provider selected", { providerId, modelId, source: args.provider ? "explicit" : "priority" });
 
@@ -1098,7 +1100,7 @@ export async function main(args: ParsedArgs): Promise<void> {
 		// Save print-mode result to session
 		try {
 			await addTurn(session.meta.id, projectPath, {
-				turnNumber: 0,
+				turnNumber: 0, // turnNumber auto-assigned by smriti
 				role: "user",
 				content: prompt,
 				agent: profile.id,
