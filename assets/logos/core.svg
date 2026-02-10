@@ -1,12 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
-  <defs>
-    <radialGradient id="core-bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.08"/>
-      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
   <!-- Outer sacred circle -->
-  <circle cx="64" cy="64" r="58" fill="url(#core-bg)" stroke="#8b5cf6" stroke-width="2.5"/>
+  <circle cx="64" cy="64" r="58" fill="#8b5cf6" fill-opacity="0.05" stroke="#8b5cf6" stroke-width="2.5"/>
   <!-- Inner binding circle -->
   <circle cx="64" cy="64" r="42" fill="none" stroke="#8b5cf6" stroke-width="1" stroke-opacity="0.4"/>
   <!-- Sri Yantra: 4 upward triangles (Shiva) -->

@@ -1,6 +1,6 @@
 # Dependencies
 node_modules/
-.claude/
+
 # Build
 dist/
 *.tsbuildinfo
@@ -13,16 +13,26 @@ dist/
 *.key
 credentials.json
 
-# Runtime state
+# Runtime state & databases
 .chitragupta/
 sessions/
 consolidation/
+*.db
+*.db-wal
+*.db-shm
+mcp-state.json
+
+# Claude Code local config
+.claude/
 
 # Logs
 *.log
 
 # Coverage
 coverage/
+
+# Lock files (pnpm is canonical)
+package-lock.json
 
 # Spec docs (local only — not pushed)
 CHITRAGUPTA_MASTER_SPEC.md
@@ -32,9 +42,15 @@ ARCHITECTURE.md
 TODO.md
 discussion.md
 AUDIT_REPORT.md
+
+# Scratch / generation scripts
 _data.json
 _gen.mjs
 _write_tests.py
 
 # OS
 .DS_Store
+Thumbs.db
+
+# Legacy
+.lodestar

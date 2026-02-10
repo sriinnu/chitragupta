@@ -1,12 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
-  <defs>
-    <radialGradient id="anina-bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#ec4899" stop-opacity="0.08"/>
-      <stop offset="100%" stop-color="#ec4899" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
   <!-- Outer sacred circle -->
-  <circle cx="64" cy="64" r="58" fill="url(#anina-bg)" stroke="#ec4899" stroke-width="2.5"/>
+  <circle cx="64" cy="64" r="58" fill="#f472b6" fill-opacity="0.05" stroke="#ec4899" stroke-width="2.5"/>
   <!-- Ashtadala Padma: 8-petal lotus, petals at 0,45,90,135,180,225,270,315 degrees -->
   <!-- Each petal: elliptical arc from center, radius 28, petal width ~20deg -->
   <!-- Petal 1: 0deg (right) -->

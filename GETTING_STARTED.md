@@ -8,9 +8,10 @@ a programmatic API that other applications can consume.
 
 ## Prerequisites
 
-- **Node.js 20+** and **npm 10+** (the repo enforces `engines.node >= 20.0.0`)
+- **Node.js 20+** (the repo enforces `engines.node >= 20.0.0`)
+- **pnpm 9+** (package manager -- `npm install -g pnpm`)
 - **TypeScript 5.9+** (installed as a dev dependency)
-- At least one AI provider API key (Anthropic, OpenAI, Google, etc.) -- or Ollama for fully local operation
+- At least one AI provider: a CLI tool (Claude Code, Codex, Gemini CLI), Ollama, or an API key
 - **Optional:** [Ollama](https://ollama.ai) for local models and embeddings
 
 ---
@@ -19,14 +20,14 @@ a programmatic API that other applications can consume.
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/chitragupta.git
+git clone https://github.com/sriinnu/chitragupta.git
 cd chitragupta
 
 # Install all workspace dependencies
-npm install
+pnpm install
 
 # Build all 14 packages (in dependency order)
-npm run build
+pnpm run build
 ```
 
 The build compiles packages in this order:
@@ -37,17 +38,23 @@ directly or link it globally:
 
 ```bash
 # Run directly via the workspace script
-npm run chitragupta
+pnpm chitragupta
 
 # Or link globally for the `chitragupta` command
-cd packages/cli && npm link
+cd packages/cli && pnpm link --global
 ```
 
 ---
 
 ## Quick Start (3 minutes)
 
-**1. Set your API key:**
+**1. No API key needed if you have a CLI tool installed:**
+
+Chitragupta auto-detects installed CLI tools (Claude Code, Codex, Gemini CLI, Aider) at
+startup and uses them as zero-cost providers. If you already have `claude` or `codex`
+installed, you're ready to go -- no API key needed.
+
+Otherwise, set an API key:
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
@@ -58,7 +65,7 @@ Or use any supported provider (see [Multi-Provider Support](#multi-provider-supp
 **2. Launch Chitragupta:**
 
 ```bash
-npm run chitragupta
+pnpm chitragupta
 ```
 
 **3. First-run onboarding:**
@@ -361,7 +368,7 @@ to start, check the logs and ensure the dist file exists:
 ```bash
 ls /path/to/chitragupta/packages/cli/dist/mcp-entry.js
 # If missing, rebuild:
-cd /path/to/chitragupta && npm run build -w packages/cli
+cd /path/to/chitragupta && pnpm run build --filter @chitragupta/cli
 ```
 
 ---
@@ -713,19 +720,19 @@ Chitragupta is a monorepo with 14 packages under `packages/`:
 
 ```bash
 # Build all packages
-npm run build
+pnpm run build
 
 # Run all tests
-npm test
+pnpm test
 
 # Watch mode
-npm run test:watch
+pnpm run test:watch
 
 # Lint + format (Biome)
-npm run check
+pnpm run check
 
 # Dev mode (watch all packages)
-npm run dev
+pnpm run dev
 ```
 
 ### Architecture

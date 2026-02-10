@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logos/chitragupta-logo.svg" alt="Chitragupta Logo" width="120" />
+  <img src="assets/logos/chitragupta.svg" alt="Chitragupta Logo" width="120" />
 </p>
 
 <h1 align="center">चित्रगुप्त &nbsp;—&nbsp; Chitragupta</h1>
@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <code>14 packages</code> &middot; <code>7,396 tests</code> &middot; <code>0 failures</code> &middot; <code>30+ research papers</code> &middot; <code>17 Vedic cognitive models</code>
+  <code>14 packages</code> &middot; <code>9,121 tests</code> &middot; <code>0 failures</code> &middot; <code>30+ research papers</code> &middot; <code>17 Vedic cognitive models</code>
 </p>
 
 ---

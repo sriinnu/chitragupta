@@ -167,6 +167,11 @@ export interface DatabaseLike {
 	};
 }
 
+/** Row shape returned by COUNT(*)/SUM(*) aggregate queries. */
+interface CountRow {
+	cnt: number;
+}
+
 // ─── Configuration ──────────────────────────────────────────────────────────
 
 /** Configuration for the Kala Chakra temporal engine. */
@@ -381,10 +386,10 @@ export class KalaChakra {
 			const dayEnd = `${dateStr}T23:59:59`;
 
 			const dayRow = safeGet(db, "SELECT COUNT(*) as cnt FROM sessions WHERE created >= ? AND created <= ?", dayStart, dayEnd);
-			sessionsToday = (dayRow as any)?.cnt ?? 0;
+			sessionsToday = (dayRow as CountRow | undefined)?.cnt ?? 0;
 
 			const dayTurnsRow = safeGet(db, "SELECT SUM(turn_count) as cnt FROM sessions WHERE created >= ? AND created <= ?", dayStart, dayEnd);
-			turnsToday = (dayTurnsRow as any)?.cnt ?? 0;
+			turnsToday = (dayTurnsRow as CountRow | undefined)?.cnt ?? 0;
 
 			// Week counts: compute the Monday of the current ISO week
 			const weekStartDate = mondayOfISOWeek(isoYear, weekNum);
@@ -393,20 +398,20 @@ export class KalaChakra {
 			const weekEnd = weekEndDate.toISOString().slice(0, 19);
 
 			const weekRow = safeGet(db, "SELECT COUNT(*) as cnt FROM sessions WHERE created >= ? AND created <= ?", weekStart, weekEnd);
-			sessionsThisWeek = (weekRow as any)?.cnt ?? 0;
+			sessionsThisWeek = (weekRow as CountRow | undefined)?.cnt ?? 0;
 
 			const weekTurnsRow = safeGet(db, "SELECT SUM(turn_count) as cnt FROM sessions WHERE created >= ? AND created <= ?", weekStart, weekEnd);
-			turnsThisWeek = (weekTurnsRow as any)?.cnt ?? 0;
+			turnsThisWeek = (weekTurnsRow as CountRow | undefined)?.cnt ?? 0;
 
 			// Month counts
 			const monthStart = `${yearNum}-${String(monthNum).padStart(2, "0")}-01T00:00:00`;
 			const monthEnd = `${yearNum}-${String(monthNum).padStart(2, "0")}-31T23:59:59`;
 
 			const monthRow = safeGet(db, "SELECT COUNT(*) as cnt FROM sessions WHERE created >= ? AND created <= ?", monthStart, monthEnd);
-			sessionsThisMonth = (monthRow as any)?.cnt ?? 0;
+			sessionsThisMonth = (monthRow as CountRow | undefined)?.cnt ?? 0;
 
 			const vasanaMonthRow = safeGet(db, "SELECT COUNT(*) as cnt FROM vasanas WHERE created_at >= ? AND created_at <= ?", new Date(`${yearNum}-${String(monthNum).padStart(2, "0")}-01`).getTime(), new Date(`${yearNum}-${String(monthNum).padStart(2, "0")}-31T23:59:59`).getTime());
-			vasanasThisMonth = (vasanaMonthRow as any)?.cnt ?? 0;
+			vasanasThisMonth = (vasanaMonthRow as CountRow | undefined)?.cnt ?? 0;
 
 			// Quarter counts
 			const qtrStartMonth = (qtr - 1) * 3 + 1;
@@ -415,20 +420,20 @@ export class KalaChakra {
 			const qtrEnd = `${yearNum}-${String(qtrEndMonth).padStart(2, "0")}-31T23:59:59`;
 
 			const qtrRow = safeGet(db, "SELECT COUNT(*) as cnt FROM sessions WHERE created >= ? AND created <= ?", qtrStart, qtrEnd);
-			sessionsThisQuarter = (qtrRow as any)?.cnt ?? 0;
+			sessionsThisQuarter = (qtrRow as CountRow | undefined)?.cnt ?? 0;
 
 			// Year counts
 			const yearStart = `${yearNum}-01-01T00:00:00`;
 			const yearEnd = `${yearNum}-12-31T23:59:59`;
 
 			const yearRow = safeGet(db, "SELECT COUNT(*) as cnt FROM sessions WHERE created >= ? AND created <= ?", yearStart, yearEnd);
-			sessionsThisYear = (yearRow as any)?.cnt ?? 0;
+			sessionsThisYear = (yearRow as CountRow | undefined)?.cnt ?? 0;
 
 			const vasanaYearRow = safeGet(db, "SELECT COUNT(*) as cnt FROM vasanas WHERE created_at >= ? AND created_at <= ?", new Date(`${yearNum}-01-01`).getTime(), new Date(`${yearNum}-12-31T23:59:59`).getTime());
-			vasanasThisYear = (vasanaYearRow as any)?.cnt ?? 0;
+			vasanasThisYear = (vasanaYearRow as CountRow | undefined)?.cnt ?? 0;
 
 			const vidhiYearRow = safeGet(db, "SELECT COUNT(*) as cnt FROM vidhis WHERE created_at >= ? AND created_at <= ?", new Date(`${yearNum}-01-01`).getTime(), new Date(`${yearNum}-12-31T23:59:59`).getTime());
-			vidhisThisYear = (vidhiYearRow as any)?.cnt ?? 0;
+			vidhisThisYear = (vidhiYearRow as CountRow | undefined)?.cnt ?? 0;
 		}
 
 		const avgTurns = sessionsThisWeek > 0 ? turnsThisWeek / sessionsThisWeek : 0;

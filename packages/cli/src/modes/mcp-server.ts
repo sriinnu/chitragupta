@@ -21,6 +21,9 @@ import { McpServer, chitraguptaToolToMcp } from "@chitragupta/tantra";
 import type { ChitraguptaToolHandler } from "@chitragupta/tantra";
 import type { ToolHandler } from "@chitragupta/core";
 
+import fs from "fs";
+import path from "path";
+import os from "os";
 import { getBuiltinTools, loadProjectMemory } from "../bootstrap.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -1137,6 +1140,293 @@ function createAtmanReportTool(): McpToolHandler {
 	};
 }
 
+// ─── MCP State File ─────────────────────────────────────────────────────────
+
+/**
+ * Lightweight state file written by the MCP server for external consumers
+ * (e.g., the Claude Code status line script). Located at ~/.chitragupta/mcp-state.json.
+ */
+interface McpState {
+	active: boolean;
+	pid: number;
+	startedAt: string;
+	sessionId?: string;
+	project?: string;
+	turnCount?: number;
+	filesModified?: string[];
+	lastTool?: string;
+	lastUpdate: string;
+}
+
+let _mcpStartedAt = new Date().toISOString();
+
+function getStatePath(): string {
+	return path.join(os.homedir(), ".chitragupta", "mcp-state.json");
+}
+
+function writeChitraguptaState(partial: Partial<McpState>): void {
+	try {
+		const statePath = getStatePath();
+		const dir = path.dirname(statePath);
+		fs.mkdirSync(dir, { recursive: true });
+
+		let existing: Partial<McpState> = {};
+		try {
+			existing = JSON.parse(fs.readFileSync(statePath, "utf-8")) as McpState;
+		} catch { /* first write */ }
+
+		const merged: McpState = {
+			active: true,
+			pid: process.pid,
+			startedAt: _mcpStartedAt,
+			lastUpdate: new Date().toISOString(),
+			...existing,
+			...partial,
+		};
+		fs.writeFileSync(statePath, JSON.stringify(merged, null, 2));
+	} catch {
+		// Best-effort state persistence — never block MCP operations
+	}
+}
+
+function clearChitraguptaState(): void {
+	try {
+		const statePath = getStatePath();
+		if (fs.existsSync(statePath)) {
+			const existing = JSON.parse(fs.readFileSync(statePath, "utf-8")) as McpState;
+			existing.active = false;
+			existing.lastUpdate = new Date().toISOString();
+			fs.writeFileSync(statePath, JSON.stringify(existing, null, 2));
+		}
+	} catch { /* best-effort cleanup */ }
+}
+
+// ─── Handover Tool ──────────────────────────────────────────────────────────
+
+/**
+ * Patterns that indicate a key decision or action statement.
+ * Used by the handover tool to extract decisions from assistant turns.
+ */
+const HANDOVER_DECISION_PATTERNS = [
+	"i'll", "i will", "let's", "the fix is", "the issue is", "the problem is",
+	"we need to", "we should", "the solution is", "i've decided", "i have",
+	"decision:", "plan:", "approach:", "strategy:", "conclusion:",
+	"the root cause", "this means", "therefore",
+];
+
+/**
+ * Create the `chitragupta_handover` tool — structured work-state summary
+ * for context continuity across compaction boundaries.
+ *
+ * Unlike Pratyabhijna (identity: "who am I?"), this is about work state:
+ * "what was I doing, where did I leave off, what's next?"
+ */
+function createHandoverTool(projectPath: string): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_handover",
+			description:
+				"Generate a structured work-state handover summary for context continuity. " +
+				"Call this when approaching context limits to preserve work state across " +
+				"compaction boundaries. Returns: original request, files modified/read, " +
+				"decisions made, errors encountered, commands run, and recent context. " +
+				"This is NOT identity (use atman_report for that) — this is work state.",
+			inputSchema: {
+				type: "object",
+				properties: {
+					sessionId: {
+						type: "string",
+						description: "Session ID to summarize. Default: most recent session.",
+					},
+					turnWindow: {
+						type: "number",
+						description: "Focus on the last N turns only. Default: all turns.",
+					},
+				},
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			try {
+				const { loadSession, listSessions } = await import("@chitragupta/smriti/session-store");
+
+				// Resolve session ID
+				let sessionId = args.sessionId ? String(args.sessionId) : undefined;
+				if (!sessionId) {
+					const sessions = listSessions(projectPath);
+					if (sessions.length === 0) {
+						return {
+							content: [{ type: "text", text: "No sessions found. Nothing to hand over." }],
+						};
+					}
+					sessionId = sessions[0].id;
+				}
+
+				const session = loadSession(sessionId, projectPath);
+				const allTurns = session.turns;
+				const turns = args.turnWindow
+					? allTurns.slice(-Number(args.turnWindow))
+					: allTurns;
+
+				// ── Extract structured work state ─────────────────────────
+				const filesRead = new Set<string>();
+				const filesModified = new Set<string>();
+				const commands: string[] = [];
+				const errors: string[] = [];
+				const decisions: string[] = [];
+				const otherTools = new Map<string, number>();
+
+				for (const turn of turns) {
+					// Extract from structured tool calls
+					if (turn.toolCalls) {
+						for (const tc of turn.toolCalls) {
+							const name = tc.name.toLowerCase();
+							let input: Record<string, unknown> = {};
+							try { input = JSON.parse(tc.input) as Record<string, unknown>; } catch { /* skip */ }
+
+							if (name.includes("read") || name.includes("glob") || name.includes("grep")) {
+								const target = String(input.file_path ?? input.path ?? input.pattern ?? "");
+								if (target) filesRead.add(target);
+							} else if (name.includes("write") || name.includes("edit")) {
+								const target = String(input.file_path ?? input.path ?? "");
+								if (target) filesModified.add(target);
+							} else if (name.includes("bash") || name.includes("exec") || name.includes("command")) {
+								const cmd = String(input.command ?? "");
+								if (cmd) commands.push(cmd.length > 120 ? cmd.slice(0, 120) + "..." : cmd);
+							} else {
+								otherTools.set(tc.name, (otherTools.get(tc.name) ?? 0) + 1);
+							}
+
+							// Capture errors
+							if (tc.isError && tc.result) {
+								errors.push(`${tc.name}: ${tc.result.slice(0, 200)}`);
+							}
+						}
+					}
+
+					// Extract decisions from assistant text
+					if (turn.role === "assistant" && turn.content) {
+						for (const line of turn.content.split("\n")) {
+							const lower = line.trim().toLowerCase();
+							if (lower.length > 10 && HANDOVER_DECISION_PATTERNS.some((p) => lower.startsWith(p))) {
+								const trimmed = line.trim();
+								if (trimmed.length <= 200) {
+									decisions.push(trimmed);
+								} else {
+									decisions.push(trimmed.slice(0, 200) + "...");
+								}
+							}
+						}
+					}
+				}
+
+				// Deduplicate decisions (similar lines from repeated patterns)
+				const uniqueDecisions = [...new Set(decisions)].slice(0, 15);
+
+				// Original request: first user turn in the session
+				const firstUserTurn = allTurns.find((t) => t.role === "user");
+				const userRequest = firstUserTurn?.content
+					? firstUserTurn.content.length > 500
+						? firstUserTurn.content.slice(0, 500) + "..."
+						: firstUserTurn.content
+					: "(unknown)";
+
+				// ── Build handover summary ─────────────────────────────────
+				const sections: string[] = [];
+
+				sections.push("चि Handover Summary");
+				sections.push("━".repeat(40));
+				sections.push(`Session: ${session.meta.id}`);
+				sections.push(`Title: ${session.meta.title}`);
+				sections.push(`Turns: ${allTurns.length} | Model: ${session.meta.model}`);
+				sections.push(`Created: ${session.meta.created}`);
+				sections.push("");
+
+				sections.push("## Original Request");
+				sections.push(userRequest);
+				sections.push("");
+
+				if (filesModified.size > 0) {
+					sections.push("## Files Modified");
+					for (const f of filesModified) sections.push(`  - ${f}`);
+					sections.push("");
+				}
+
+				if (filesRead.size > 0) {
+					sections.push("## Files Read");
+					for (const f of [...filesRead].slice(0, 30)) sections.push(`  - ${f}`);
+					if (filesRead.size > 30) sections.push(`  ... and ${filesRead.size - 30} more`);
+					sections.push("");
+				}
+
+				if (uniqueDecisions.length > 0) {
+					sections.push("## Key Decisions");
+					for (const d of uniqueDecisions) sections.push(`  - ${d}`);
+					sections.push("");
+				}
+
+				if (errors.length > 0) {
+					sections.push("## Errors Encountered");
+					for (const e of errors.slice(0, 10)) sections.push(`  - ${e}`);
+					sections.push("");
+				}
+
+				if (commands.length > 0) {
+					sections.push("## Commands Run");
+					for (const c of commands.slice(0, 10)) sections.push(`  $ ${c}`);
+					if (commands.length > 10) sections.push(`  ... and ${commands.length - 10} more`);
+					sections.push("");
+				}
+
+				if (otherTools.size > 0) {
+					const entries = [...otherTools.entries()].map(([n, c]) => `${n}(x${c})`);
+					sections.push("## Other Tools Used");
+					sections.push(`  ${entries.join(", ")}`);
+					sections.push("");
+				}
+
+				// Last 3 assistant messages for recent context
+				const recentAssistant = turns
+					.filter((t) => t.role === "assistant")
+					.slice(-3);
+				if (recentAssistant.length > 0) {
+					sections.push("## Recent Context (last 3 responses)");
+					for (const t of recentAssistant) {
+						const preview = t.content
+							.slice(0, 300)
+							.replace(/\n/g, " ")
+							.trim();
+						sections.push(
+							`  [Turn ${t.turnNumber}] ${preview}${t.content.length > 300 ? "..." : ""}`,
+						);
+					}
+					sections.push("");
+				}
+
+				// Write state file as side effect
+				writeChitraguptaState({
+					sessionId: session.meta.id,
+					project: projectPath,
+					turnCount: allTurns.length,
+					filesModified: [...filesModified],
+					lastTool: "chitragupta_handover",
+				});
+
+				return {
+					content: [{ type: "text", text: sections.join("\n") }],
+				};
+			} catch (err) {
+				return {
+					content: [{
+						type: "text",
+						text: `Handover failed: ${err instanceof Error ? err.message : String(err)}`,
+					}],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
 // ─── MCP Resources ──────────────────────────────────────────────────────────
 
 /**
@@ -1225,6 +1515,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		mcpTools.push(createAgentPromptTool());
 	}
 
+	// Add handover tool (context continuity across compaction)
+	mcpTools.push(createHandoverTool(projectPath));
+
 	// Add multi-agent & collective intelligence tools (Phase 5.3)
 	mcpTools.push(createSamitiChannelsTool());
 	mcpTools.push(createSamitiBroadcastTool());
@@ -1246,8 +1539,16 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		prompts: [createReviewPrompt()],
 	});
 
-	// ─── 3. Graceful shutdown ────────────────────────────────────────
+	// ─── 3. State file + graceful shutdown ───────────────────────────
+	_mcpStartedAt = new Date().toISOString();
+	writeChitraguptaState({
+		active: true,
+		project: projectPath,
+		lastTool: "(startup)",
+	});
+
 	const shutdown = async () => {
+		clearChitraguptaState();
 		await server.stop();
 		process.exit(0);
 	};
