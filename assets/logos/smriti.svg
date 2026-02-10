@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="smriti-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#22c55e" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#22c55e" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Outer sacred circle -->
+  <circle cx="64" cy="64" r="58" fill="url(#smriti-bg)" stroke="#22c55e" stroke-width="2.5"/>
+  <!-- Fibonacci/Golden Spiral -->
+  <!-- Golden ratio φ = 1.618. Spiral built from quarter-circle arcs in Fibonacci squares -->
+  <!-- The spiral originates near center and expands outward -->
+  <!-- Using logarithmic spiral approximation: r = a * e^(b*θ), b = ln(φ)/(π/2) -->
+  <!-- Approximated with cubic bezier quarter-turns -->
+  <path d="M 66,62
+           C 66,60 64,58 62,58
+           C 58,58 55,61 55,65
+           C 55,72 60,78 68,78
+           C 79,78 88,70 88,59
+           C 88,44 76,32 60,32
+           C 39,32 22,48 22,68
+           C 22,93 42,112 68,112"
+        fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Fibonacci squares (faint guides) -->
+  <!-- 1x1 -->
+  <rect x="62" y="58" width="4" height="4" fill="none" stroke="#22c55e" stroke-width="0.5" stroke-opacity="0.25"/>
+  <!-- 1x1 -->
+  <rect x="58" y="58" width="4" height="4" fill="none" stroke="#22c55e" stroke-width="0.5" stroke-opacity="0.25"/>
+  <!-- 2x2 -->
+  <rect x="58" y="62" width="8" height="8" fill="none" stroke="#22c55e" stroke-width="0.5" stroke-opacity="0.2"/>
+  <!-- 3x3 -->
+  <rect x="55" y="49" width="13" height="13" fill="none" stroke="#22c55e" stroke-width="0.5" stroke-opacity="0.15"/>
+  <!-- 5x5 -->
+  <rect x="55" y="62" width="21" height="21" fill="none" stroke="#22c55e" stroke-width="0.5" stroke-opacity="0.12"/>
+  <!-- Golden ratio dots along spiral -->
+  <circle cx="66" cy="62" r="1.5" fill="#22c55e"/>
+  <circle cx="62" cy="58" r="1.2" fill="#22c55e" fill-opacity="0.8"/>
+  <circle cx="55" cy="65" r="1" fill="#22c55e" fill-opacity="0.6"/>
+</svg>

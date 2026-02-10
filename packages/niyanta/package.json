@@ -1,0 +1,51 @@
+{
+	"name": "@chitragupta/niyanta",
+	"version": "0.1.0",
+	"description": "Orchestrator with multi-armed bandit strategy selection, agent tree management, and deadlock prevention",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/srinivaspendela/chitragupta.git",
+		"directory": "packages/niyanta"
+	},
+	"keywords": [
+		"chitragupta",
+		"niyanta",
+		"orchestrator",
+		"multi-armed-bandit",
+		"agent-tree",
+		"deadlock-prevention",
+		"typescript"
+	],
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./*": {
+			"types": "./dist/*.d.ts",
+			"import": "./dist/*.js"
+		}
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"dev": "tsc -p tsconfig.json --watch",
+		"clean": "rm -rf dist"
+	},
+	"dependencies": {
+		"@chitragupta/core": "workspace:*"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	]
+}

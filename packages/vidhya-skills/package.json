@@ -1,0 +1,47 @@
+{
+	"name": "@chitragupta/vidhya-skills",
+	"version": "0.1.0",
+	"description": "Skill discovery via Trait Vector Matching with 128-dim fingerprinting and skill evolution",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/srinivaspendela/chitragupta.git",
+		"directory": "packages/vidhya-skills"
+	},
+	"keywords": [
+		"chitragupta",
+		"vidhya",
+		"skills",
+		"discovery",
+		"trait-vector-matching",
+		"fingerprinting",
+		"typescript"
+	],
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"dev": "tsc -w -p tsconfig.json",
+		"clean": "rm -rf dist"
+	},
+	"dependencies": {
+		"@chitragupta/core": "workspace:*"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	]
+}

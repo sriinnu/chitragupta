@@ -1,0 +1,63 @@
+{
+	"name": "@chitragupta/cli",
+	"version": "0.1.0",
+	"description": "Bold, opinionated CLI and MCP server for the Chitragupta AI agent platform",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/srinivaspendela/chitragupta.git",
+		"directory": "packages/cli"
+	},
+	"keywords": [
+		"chitragupta",
+		"cli",
+		"ai",
+		"agent",
+		"mcp",
+		"terminal",
+		"assistant",
+		"typescript"
+	],
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"bin": {
+		"chitragupta": "dist/cli.js",
+		"chitragupta-mcp": "dist/mcp-entry.js"
+	},
+	"main": "dist/cli.js",
+	"types": "dist/cli.d.ts",
+	"exports": {
+		".": { "types": "./dist/cli.d.ts", "import": "./dist/cli.js" },
+		"./api": { "types": "./dist/api.d.ts", "import": "./dist/api.js" },
+		"./mcp": { "types": "./dist/modes/mcp-server.d.ts", "import": "./dist/modes/mcp-server.js" }
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"dev": "tsc -p tsconfig.json --watch",
+		"clean": "rm -rf dist",
+		"start": "node dist/cli.js"
+	},
+	"dependencies": {
+		"@chitragupta/core": "workspace:*",
+		"@chitragupta/swara": "workspace:*",
+		"@chitragupta/anina": "workspace:*",
+		"@chitragupta/smriti": "workspace:*",
+		"@chitragupta/ui": "workspace:*",
+		"@chitragupta/yantra": "workspace:*",
+		"@chitragupta/tantra": "workspace:*",
+		"@chitragupta/vidhya-skills": "workspace:*",
+		"@chitragupta/dharma": "workspace:*",
+		"@chitragupta/niyanta": "workspace:*",
+		"@chitragupta/vayu": "workspace:*",
+		"@chitragupta/sutra": "workspace:*"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	]
+}

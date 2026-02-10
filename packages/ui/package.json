@@ -1,0 +1,45 @@
+{
+	"name": "@chitragupta/ui",
+	"version": "0.1.0",
+	"description": "Terminal UI framework with Nakshatram theme, status bar, and streaming output",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/srinivaspendela/chitragupta.git",
+		"directory": "packages/ui"
+	},
+	"keywords": [
+		"chitragupta",
+		"ui",
+		"tui",
+		"terminal",
+		"theme",
+		"nakshatram",
+		"typescript"
+	],
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+		"./*": { "types": "./dist/*.d.ts", "import": "./dist/*.js" }
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"dev": "tsc -p tsconfig.json --watch",
+		"clean": "rm -rf dist"
+	},
+	"dependencies": {
+		"@chitragupta/core": "workspace:*"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	]
+}
