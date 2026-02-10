@@ -6,7 +6,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/srinivaspendela/chitragupta.git",
+		"url": "https://github.com/sriinnu/chitragupta.git",
 		"directory": "packages/yantra"
 	},
 	"keywords": [
@@ -20,7 +20,7 @@
 		"typescript"
 	],
 	"engines": {
-		"node": ">=20.0.0"
+		"node": ">=22"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -28,8 +28,14 @@
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
 	"exports": {
-		".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-		"./*": { "types": "./dist/*.d.ts", "import": "./dist/*.js" }
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./*": {
+			"types": "./dist/*.d.ts",
+			"import": "./dist/*.js"
+		}
 	},
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
@@ -42,5 +48,9 @@
 	"files": [
 		"dist",
 		"README.md"
-	]
+	],
+	"homepage": "https://github.com/sriinnu/chitragupta/tree/main/packages/yantra#readme",
+	"bugs": {
+		"url": "https://github.com/sriinnu/chitragupta/issues"
+	}
 }
