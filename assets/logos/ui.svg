@@ -1,12 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
-  <defs>
-    <radialGradient id="ui-bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.08"/>
-      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
   <!-- Outer sacred circle -->
-  <circle cx="64" cy="64" r="58" fill="url(#ui-bg)" stroke="#a78bfa" stroke-width="2.5"/>
+  <circle cx="64" cy="64" r="58" fill="#ec4899" fill-opacity="0.05" stroke="#a78bfa" stroke-width="2.5"/>
   <!-- Triangle of Shiva (upward pointing, all-seeing) -->
   <polygon points="64,24 96,88 32,88" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linejoin="round"/>
   <!-- Eye of Shiva (Third Eye / Ajna Chakra) -->

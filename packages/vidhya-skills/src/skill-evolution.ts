@@ -73,9 +73,12 @@ export interface SkillHealthReport {
 }
 
 /** Serializable state for persistence. */
+/** Serialized form of SkillTrackingData where Set<string> becomes string[]. */
+type SerializedSkillTrackingData = Omit<SkillTrackingData, "contexts"> & { contexts: string[] };
+
 export interface SkillEvolutionState {
-	/** Per-skill tracking data. */
-	skills: Array<[string, SkillTrackingData]>;
+	/** Per-skill tracking data (contexts serialized as string[]). */
+	skills: Array<[string, SerializedSkillTrackingData]>;
 	/** Co-occurrence matrix for fusion detection. */
 	coOccurrences: Array<[string, Array<[string, number]>]>;
 	/** Session co-use records. */
@@ -460,8 +463,8 @@ export class SkillEvolution {
 		return {
 			skills: skills.map(([name, data]) => [name, {
 				...data,
-				// Serialize Set as string[] for JSON (deserialized back to Set)
-				contexts: [...data.contexts] as any,
+				// Serialize Set as string[] for JSON (deserialized back to Set on restore)
+				contexts: [...data.contexts],
 				// Ensure Thompson params are included
 				thompsonAlpha: data.thompsonAlpha,
 				thompsonBeta: data.thompsonBeta,
@@ -484,12 +487,8 @@ export class SkillEvolution {
 		for (const [name, data] of state.skills) {
 			evo.skills.set(name, {
 				...data,
-				// Deserialize array back to Set
-				contexts: new Set(
-					Array.isArray(data.contexts)
-						? (data.contexts as unknown as string[])
-						: data.contexts,
-				),
+				// Deserialize string[] back to Set<string>
+				contexts: new Set(data.contexts),
 				// Backward compatibility: default Thompson params if not present
 				thompsonAlpha: data.thompsonAlpha ?? 1,
 				thompsonBeta: data.thompsonBeta ?? 1,

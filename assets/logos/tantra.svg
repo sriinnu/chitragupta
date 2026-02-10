@@ -1,12 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
-  <defs>
-    <radialGradient id="tantra-bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#14b8a6" stop-opacity="0.08"/>
-      <stop offset="100%" stop-color="#14b8a6" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
   <!-- Outer sacred circle -->
-  <circle cx="64" cy="64" r="58" fill="url(#tantra-bg)" stroke="#14b8a6" stroke-width="2.5"/>
+  <circle cx="64" cy="64" r="58" fill="#8b5cf6" fill-opacity="0.05" stroke="#14b8a6" stroke-width="2.5"/>
   <!-- Tantra: Woven grid/loom pattern (the root "tan" means to weave/stretch) -->
   <!-- Warp threads (vertical, slightly curved for loom feel) -->
   <path d="M 32,28 C 32,50 32,78 32,100" fill="none" stroke="#14b8a6" stroke-width="1.5" stroke-opacity="0.7"/>

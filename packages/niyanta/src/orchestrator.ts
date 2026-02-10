@@ -4,7 +4,7 @@
  * high-level orchestration patterns.
  */
 
-import { ChitraguptaError } from "@chitragupta/core";
+import { ChitraguptaError, createLogger } from "@chitragupta/core";
 import type {
 	AgentInfo,
 	AgentSlot,
@@ -88,6 +88,8 @@ export class OrchestratorError extends ChitraguptaError {
  * await orch.stop();
  * ```
  */
+const log = createLogger("niyanta:orchestrator");
+
 export class Orchestrator {
 	private readonly plan: OrchestrationPlan;
 	private readonly onEvent: (event: OrchestratorEvent) => void;
@@ -577,7 +579,7 @@ export class Orchestrator {
 
 	private emit(event: OrchestratorEvent): void {
 		try { this.onEvent(event); } catch (err) {
-			console.error("[niyanta:orchestrator] Error in event handler:", err);
+			log.warn("Error in event handler", { error: err instanceof Error ? err.message : String(err) });
 		}
 	}
 }

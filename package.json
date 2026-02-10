@@ -30,6 +30,12 @@
 		"node": ">=22"
 	},
 	"pnpm": {
-		"onlyBuiltDependencies": ["better-sqlite3", "esbuild"]
+		"onlyBuiltDependencies": [
+			"better-sqlite3",
+			"esbuild"
+		]
+	},
+	"dependencies": {
+		"tsx": "^4.21.0"
 	}
 }

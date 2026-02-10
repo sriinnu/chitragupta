@@ -3,19 +3,9 @@
 <!--         keyhole aperture, 4 quadrant sections (JWT, RBAC, OAuth, Multi-Tenant) -->
 <!-- Color: Steel blue #3b82f6 + Dark navy #1e3a5f -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
-  <defs>
-    <radialGradient id="kavach-bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.10"/>
-      <stop offset="100%" stop-color="#1e3a5f" stop-opacity="0.02"/>
-    </radialGradient>
-    <linearGradient id="kavach-shield" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#3b82f6"/>
-      <stop offset="100%" stop-color="#1e40af"/>
-    </linearGradient>
-  </defs>
 
   <!-- Outer sacred circle -->
-  <circle cx="100" cy="100" r="92" fill="url(#kavach-bg)" stroke="#3b82f6" stroke-width="2.5"/>
+  <circle cx="100" cy="100" r="92" fill="#3b82f6" fill-opacity="0.05" stroke="#3b82f6" stroke-width="2.5"/>
 
   <!-- Defense rings -->
   <circle cx="100" cy="100" r="76" fill="none" stroke="#3b82f6" stroke-width="0.7" stroke-opacity="0.15"/>
@@ -23,7 +13,7 @@
 
   <!-- Shield shape — pointed bottom, curved top -->
   <path d="M 100,38 C 130,38 155,48 155,48 L 155,100 C 155,140 130,162 100,172 C 70,162 45,140 45,100 L 45,48 C 45,48 70,38 100,38 Z"
-        fill="#3b82f6" fill-opacity="0.08" stroke="url(#kavach-shield)" stroke-width="1.8" stroke-linejoin="round"/>
+        fill="#3b82f6" fill-opacity="0.08" stroke="#3b82f6" stroke-width="1.8" stroke-linejoin="round"/>
 
   <!-- Shield centerline -->
   <line x1="100" y1="42" x2="100" y2="168" stroke="#1e40af" stroke-width="0.6" stroke-opacity="0.20"/>

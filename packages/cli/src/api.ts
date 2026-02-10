@@ -35,10 +35,9 @@ import {
 	createSession,
 	saveSession,
 	loadSession,
-	listSessions,
 } from "@chitragupta/smriti/session-store";
 import { searchMemory } from "@chitragupta/smriti/search";
-import type { Session, SessionMeta } from "@chitragupta/smriti/types";
+import type { Session } from "@chitragupta/smriti/types";
 
 import { PolicyEngine, STANDARD_PRESET } from "@chitragupta/dharma";
 import type { PolicyAction, PolicyContext } from "@chitragupta/dharma";

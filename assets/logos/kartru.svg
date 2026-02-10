@@ -2,19 +2,9 @@
 <!-- Symbol: Interlocking gears + code brackets, upward triangles for building -->
 <!-- Colors: Electric blue (#3b82f6) + Silver (#94a3b8) -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
-  <defs>
-    <radialGradient id="kartru-bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.10"/>
-      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="kartru-gear" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#3b82f6"/>
-      <stop offset="100%" stop-color="#94a3b8"/>
-    </linearGradient>
-  </defs>
 
   <!-- Outer sacred circle -->
-  <circle cx="100" cy="100" r="92" fill="url(#kartru-bg)" stroke="#3b82f6" stroke-width="2.5"/>
+  <circle cx="100" cy="100" r="92" fill="#3b82f6" fill-opacity="0.05" stroke="#3b82f6" stroke-width="2.5"/>
 
   <!-- Second containment circle -->
   <circle cx="100" cy="100" r="80" fill="none" stroke="#3b82f6" stroke-width="1" stroke-opacity="0.3"/>
@@ -30,7 +20,7 @@
   <!-- Left gear (smaller, offset left) -->
   <g transform="translate(72, 82)">
     <!-- Gear ring -->
-    <circle cx="0" cy="0" r="20" fill="none" stroke="url(#kartru-gear)" stroke-width="1.8"/>
+    <circle cx="0" cy="0" r="20" fill="none" stroke="#3b82f6" stroke-width="1.8"/>
     <!-- 8 gear teeth -->
     <polygon points="0,-23 -3,-20 3,-20" fill="#3b82f6" fill-opacity="0.4" stroke="#3b82f6" stroke-width="0.8"/>
     <polygon points="16.3,-16.3 14.1,-12 18.4,-12" fill="#3b82f6" fill-opacity="0.4" stroke="#3b82f6" stroke-width="0.8"/>

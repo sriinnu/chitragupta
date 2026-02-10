@@ -3,19 +3,9 @@
 <!--         pulse wave (health checks), layered awareness arcs (logging levels) -->
 <!-- Color: Teal #06b6d4 (clarity, monitoring) + Deep teal #0e7490 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
-  <defs>
-    <radialGradient id="drishti-bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.10"/>
-      <stop offset="100%" stop-color="#0e7490" stop-opacity="0.02"/>
-    </radialGradient>
-    <linearGradient id="drishti-iris" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#06b6d4"/>
-      <stop offset="100%" stop-color="#0e7490"/>
-    </linearGradient>
-  </defs>
 
   <!-- Outer sacred circle -->
-  <circle cx="100" cy="100" r="92" fill="url(#drishti-bg)" stroke="#06b6d4" stroke-width="2.5"/>
+  <circle cx="100" cy="100" r="92" fill="#06b6d4" fill-opacity="0.05" stroke="#06b6d4" stroke-width="2.5"/>
 
   <!-- Awareness arcs — 4 logging levels (debug, info, warn, error) -->
   <path d="M 30,100 A 70,70 0 0,1 170,100" fill="none" stroke="#06b6d4" stroke-width="0.6" stroke-opacity="0.12"/>
@@ -25,7 +15,7 @@
 
   <!-- Eye shape — almond/vesica piscis -->
   <path d="M 30,100 Q 65,58 100,55 Q 135,58 170,100 Q 135,142 100,145 Q 65,142 30,100 Z"
-        fill="#06b6d4" fill-opacity="0.06" stroke="url(#drishti-iris)" stroke-width="1.8" stroke-linejoin="round"/>
+        fill="#06b6d4" fill-opacity="0.06" stroke="#06b6d4" stroke-width="1.8" stroke-linejoin="round"/>
 
   <!-- Outer iris ring -->
   <circle cx="100" cy="100" r="28" fill="none" stroke="#06b6d4" stroke-width="1.2" stroke-opacity="0.35"/>

@@ -1,12 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
-  <defs>
-    <radialGradient id="swara-bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.08"/>
-      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
   <!-- Outer sacred circle -->
-  <circle cx="64" cy="64" r="58" fill="url(#swara-bg)" stroke="#06b6d4" stroke-width="2.5"/>
+  <circle cx="64" cy="64" r="58" fill="#3b82f6" fill-opacity="0.05" stroke="#06b6d4" stroke-width="2.5"/>
   <!-- Sound wave: primary sine wave (Nada Brahma — sound is creation) -->
   <!-- Sine wave sampled at 24 points across the circle, amplitude modulated by envelope -->
   <path d="M 18,64
