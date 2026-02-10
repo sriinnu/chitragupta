@@ -66,6 +66,15 @@ export interface Config {
 export interface ChitraguptaSettings {
 	defaultProvider: string;
 	defaultModel: string;
+	/**
+	 * Ordered preference list for provider selection.
+	 * The system picks the first available provider from this list.
+	 * CLIs are zero-cost, Ollama is local, API keys are paid fallback.
+	 *
+	 * Example: ["claude-code", "codex-cli", "ollama", "anthropic"]
+	 * Default: ["claude-code", "codex-cli", "gemini-cli", "ollama", "anthropic", "openai", "google"]
+	 */
+	providerPriority?: string[];
 	thinkingLevel: ThinkingLevel;
 	agentProfile: string;
 	compaction: { enabled: boolean; threshold: number };
@@ -101,10 +110,26 @@ export interface ChitraguptaSettings {
 	};
 }
 
+/**
+ * Default provider priority: CLIs first (zero cost), then local (Ollama),
+ * then cloud APIs (paid). User can reorder in settings.json.
+ */
+export const DEFAULT_PROVIDER_PRIORITY = [
+	"claude-code",    // Claude Code CLI — zero cost
+	"codex-cli",      // Codex CLI — zero cost
+	"gemini-cli",     // Gemini CLI — zero cost
+	"aider-cli",      // Aider CLI — zero cost
+	"ollama",         // Local Ollama — zero cost
+	"anthropic",      // Anthropic API — paid
+	"openai",         // OpenAI API — paid
+	"google",         // Google API — paid
+];
+
 /** Sensible default values for all Chitragupta settings. */
 export const DEFAULT_SETTINGS: ChitraguptaSettings = {
 	defaultProvider: "anthropic",
 	defaultModel: "claude-sonnet-4-5-20250929",
+	providerPriority: DEFAULT_PROVIDER_PRIORITY,
 	thinkingLevel: "medium",
 	agentProfile: "chitragupta",
 	compaction: { enabled: true, threshold: 80 },
