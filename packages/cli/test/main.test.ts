@@ -370,11 +370,19 @@ vi.mock("@chitragupta/swara/provider-registry", () => ({
 vi.mock("@chitragupta/swara/providers", () => ({
 	registerBuiltinProviders: mockRegisterSwaraProviders,
 	createOpenAICompatProvider: mockCreateOpenAICompatProvider,
+	claudeCodeProvider: { id: "claude-code", name: "Claude Code" },
+	geminiCLIProvider: { id: "gemini-cli", name: "Gemini CLI" },
+	codexProvider: { id: "codex-cli", name: "Codex CLI" },
+	aiderProvider: { id: "aider-cli", name: "Aider CLI" },
 }));
 
 vi.mock("@chitragupta/swara", () => ({
 	MargaPipeline: MockMargaPipeline,
 	HYBRID_BINDINGS: { bindings: [] },
+	detectAvailableCLIs: vi.fn().mockResolvedValue([]),
+	createOllamaEmbeddings: vi.fn().mockReturnValue({
+		isConfigured: vi.fn().mockResolvedValue(false),
+	}),
 }));
 
 vi.mock("@chitragupta/anina", () => ({
@@ -593,9 +601,15 @@ describe("main()", () => {
 	let stderrSpy: ReturnType<typeof spyOnStderr>;
 	let stdoutSpy: ReturnType<typeof spyOnStdout>;
 
+	let originalFetch: typeof globalThis.fetch;
+
 	beforeEach(() => {
 		vi.clearAllMocks();
 		restoreDefaults();
+
+		// Mock fetch for Ollama probe (returns failure by default)
+		originalFetch = globalThis.fetch;
+		globalThis.fetch = vi.fn().mockRejectedValue(new Error("no ollama")) as unknown as typeof fetch;
 
 		exitSpy = spyOnExit();
 		stderrSpy = spyOnStderr();
@@ -603,6 +617,7 @@ describe("main()", () => {
 	});
 
 	afterEach(() => {
+		globalThis.fetch = originalFetch;
 		exitSpy.mockRestore();
 		stderrSpy.mockRestore();
 		stdoutSpy.mockRestore();

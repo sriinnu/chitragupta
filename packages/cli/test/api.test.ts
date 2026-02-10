@@ -211,6 +211,17 @@ vi.mock("@chitragupta/swara/provider-registry", () => ({
 vi.mock("@chitragupta/swara/providers", () => ({
 	registerBuiltinProviders: mocks.mockRegisterBuiltinProviders,
 	createOpenAICompatProvider: mocks.mockCreateOpenAICompatProvider,
+	claudeCodeProvider: { id: "claude-code", name: "Claude Code" },
+	geminiCLIProvider: { id: "gemini-cli", name: "Gemini CLI" },
+	codexProvider: { id: "codex-cli", name: "Codex CLI" },
+	aiderProvider: { id: "aider-cli", name: "Aider CLI" },
+}));
+
+vi.mock("@chitragupta/swara", () => ({
+	detectAvailableCLIs: vi.fn().mockResolvedValue([]),
+	createOllamaEmbeddings: vi.fn().mockReturnValue({
+		isConfigured: vi.fn().mockResolvedValue(false),
+	}),
 }));
 
 vi.mock("@chitragupta/anina", () => ({
