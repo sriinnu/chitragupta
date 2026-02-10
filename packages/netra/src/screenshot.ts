@@ -10,6 +10,7 @@ import { readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import type { ScreenshotOptions } from "./types.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -42,10 +43,12 @@ function exec(
 
 /**
  * Check if a command exists in PATH.
+ * Uses `where` on Windows, `which` on Unix/macOS.
  */
 async function commandExists(command: string): Promise<boolean> {
 	try {
-		await exec("which", [command]);
+		const checker = process.platform === "win32" ? "where" : "which";
+		await exec(checker, [command]);
 		return true;
 	} catch {
 		return false;
@@ -114,9 +117,29 @@ export async function captureTerminal(): Promise<Buffer> {
 		);
 	}
 
+	if (process.platform === "win32") {
+		const outPath = tempPath("png");
+
+		try {
+			// Use PowerShell's built-in screen capture via .NET
+			const psScript = `Add-Type -AssemblyName System.Windows.Forms; ` +
+				`[System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { ` +
+				`$bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); ` +
+				`$g = [System.Drawing.Graphics]::FromImage($bmp); ` +
+				`$g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); ` +
+				`$bmp.Save('${outPath.replace(/\\/g, "\\\\")}'); ` +
+				`$g.Dispose(); $bmp.Dispose() }`;
+			await exec("powershell", ["-NoProfile", "-Command", psScript]);
+			const buffer = await readFile(outPath);
+			return buffer;
+		} finally {
+			await unlink(outPath).catch(() => {});
+		}
+	}
+
 	throw new Error(
 		`Screen capture is not supported on ${process.platform}. ` +
-		`Supported platforms: macOS (screencapture), Linux (import/scrot/gnome-screenshot).`
+		`Supported platforms: macOS (screencapture), Windows (PowerShell), Linux (import/scrot/gnome-screenshot).`
 	);
 }
 
@@ -132,7 +155,15 @@ async function findBrowser(): Promise<string | null> {
 		"chromium-browser",
 		"google-chrome",
 		"google-chrome-stable",
-		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		// Platform-specific browser paths
+		...(process.platform === "darwin"
+			? ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
+			: process.platform === "win32"
+				? [
+					"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+					"C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+				]
+				: []),
 		"firefox",
 	];
 
@@ -232,10 +263,10 @@ export async function captureFile(
 	htmlPath: string,
 	options?: ScreenshotOptions,
 ): Promise<Buffer> {
-	// Convert to file:// URL
+	// Convert to file:// URL (cross-platform safe)
 	const { resolve } = await import("node:path");
 	const absolutePath = resolve(htmlPath);
-	const fileUrl = `file://${absolutePath}`;
+	const fileUrl = pathToFileURL(absolutePath).href;
 
 	return captureUrl(fileUrl, options);
 }
