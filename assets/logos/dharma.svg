@@ -1,12 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
-  <defs>
-    <radialGradient id="dharma-bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#ef4444" stop-opacity="0.08"/>
-      <stop offset="100%" stop-color="#ef4444" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
   <!-- Outer sacred circle -->
-  <circle cx="64" cy="64" r="58" fill="url(#dharma-bg)" stroke="#ef4444" stroke-width="2.5"/>
+  <circle cx="64" cy="64" r="58" fill="#ef4444" fill-opacity="0.05" stroke="#ef4444" stroke-width="2.5"/>
   <!-- Dharma Wheel (Ashoka Chakra style) -->
   <!-- Outer rim -->
   <circle cx="64" cy="64" r="38" fill="none" stroke="#ef4444" stroke-width="2.5"/>

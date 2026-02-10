@@ -3,19 +3,9 @@
 <!--         central diamond/gem (crystallized knowledge), connecting threads (recall paths) -->
 <!-- Color: Amber #f59e0b (warm recall, golden knowledge) + Deep amber #d97706 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
-  <defs>
-    <radialGradient id="smaran-bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.10"/>
-      <stop offset="100%" stop-color="#d97706" stop-opacity="0.02"/>
-    </radialGradient>
-    <linearGradient id="smaran-gem" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#f59e0b"/>
-      <stop offset="100%" stop-color="#d97706"/>
-    </linearGradient>
-  </defs>
 
   <!-- Outer sacred circle -->
-  <circle cx="100" cy="100" r="92" fill="url(#smaran-bg)" stroke="#f59e0b" stroke-width="2.5"/>
+  <circle cx="100" cy="100" r="92" fill="#f59e0b" fill-opacity="0.05" stroke="#f59e0b" stroke-width="2.5"/>
 
   <!-- Memory ripples — concentric circles expanding from center (recall waves) -->
   <circle cx="100" cy="100" r="72" fill="none" stroke="#f59e0b" stroke-width="0.7" stroke-opacity="0.15"/>
@@ -40,7 +30,7 @@
 
   <!-- Central gem — crystallized memory (diamond shape) -->
   <path d="M 100,78 L 122,100 L 100,122 L 78,100 Z"
-        fill="#f59e0b" fill-opacity="0.12" stroke="url(#smaran-gem)" stroke-width="1.8" stroke-linejoin="round"/>
+        fill="#f59e0b" fill-opacity="0.12" stroke="#f59e0b" stroke-width="1.8" stroke-linejoin="round"/>
 
   <!-- Inner facets of the gem -->
   <line x1="100" y1="78" x2="100" y2="122" stroke="#d97706" stroke-width="0.6" stroke-opacity="0.25"/>

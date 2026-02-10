@@ -1,12 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
-  <defs>
-    <radialGradient id="smriti-bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#22c55e" stop-opacity="0.08"/>
-      <stop offset="100%" stop-color="#22c55e" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
   <!-- Outer sacred circle -->
-  <circle cx="64" cy="64" r="58" fill="url(#smriti-bg)" stroke="#22c55e" stroke-width="2.5"/>
+  <circle cx="64" cy="64" r="58" fill="#22c55e" fill-opacity="0.05" stroke="#22c55e" stroke-width="2.5"/>
   <!-- Fibonacci/Golden Spiral -->
   <!-- Golden ratio φ = 1.618. Spiral built from quarter-circle arcs in Fibonacci squares -->
   <!-- The spiral originates near center and expands outward -->

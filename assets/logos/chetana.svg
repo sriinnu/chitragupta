@@ -3,19 +3,9 @@
 <!--         central third-eye (Ajna), subtle EEG pulse wave — living consciousness -->
 <!-- Color: Violet #8b5cf6 (Sahasrara/Crown Chakra) + Deep violet #7c3aed -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
-  <defs>
-    <radialGradient id="chetana-bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.10"/>
-      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0.02"/>
-    </radialGradient>
-    <linearGradient id="chetana-petal" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#8b5cf6"/>
-      <stop offset="100%" stop-color="#7c3aed"/>
-    </linearGradient>
-  </defs>
 
   <!-- Outer sacred circle -->
-  <circle cx="100" cy="100" r="92" fill="url(#chetana-bg)" stroke="#8b5cf6" stroke-width="2.5"/>
+  <circle cx="100" cy="100" r="92" fill="#8b5cf6" fill-opacity="0.05" stroke="#8b5cf6" stroke-width="2.5"/>
 
   <!-- Three concentric awareness rings — layers of consciousness -->
   <!-- Outer ring: Bhava (Affect) — the outermost emotional boundary -->
@@ -27,7 +17,7 @@
 
   <!-- 4-petal lotus — Chaturdala Padma — one petal per subsystem -->
   <!-- Each petal is a cubic Bezier teardrop from center outward -->
-  <g fill="#8b5cf6" fill-opacity="0.10" stroke="url(#chetana-petal)" stroke-width="1.6" stroke-linejoin="round">
+  <g fill="#8b5cf6" fill-opacity="0.10" stroke="#8b5cf6" stroke-width="1.6" stroke-linejoin="round">
     <!-- North petal: Sankalpa (Intention) — reaching upward toward goals -->
     <path d="M 100,100 C 88,85 88,52 100,30 C 112,52 112,85 100,100 Z"/>
     <!-- East petal: Dhyana (Attention) — scanning rightward -->
