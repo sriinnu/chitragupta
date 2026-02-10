@@ -29,7 +29,8 @@ import {
 import type { ThinkingLevel } from "@chitragupta/core";
 import { createProviderRegistry } from "@chitragupta/swara/provider-registry";
 import type { MargaPipeline as MargaPipelineType } from "@chitragupta/swara";
-import { Agent, MemoryBridge } from "@chitragupta/anina";
+import { TuriyaRouter } from "@chitragupta/swara";
+import { Agent, MemoryBridge, Manas } from "@chitragupta/anina";
 import type { AgentConfig, AgentMessage, ToolHandler } from "@chitragupta/anina";
 import {
 	createSession,
@@ -158,6 +159,27 @@ export async function main(args: ParsedArgs): Promise<void> {
 		// Silently skip: MargaPipeline is optional
 	}
 
+	// ─── 5a-ii. Wire TuriyaRouter (contextual bandit model routing) ─────
+	let turiyaRouter: TuriyaRouter | undefined;
+	try {
+		turiyaRouter = new TuriyaRouter({ linucbAlpha: 0.5 });
+		const turiyaStatePath = path.join(getChitraguptaHome(), "turiya-state.json");
+		if (fs.existsSync(turiyaStatePath)) {
+			turiyaRouter.deserialize(JSON.parse(fs.readFileSync(turiyaStatePath, "utf8")));
+			log.info("Turiya state restored", { plays: turiyaRouter.getStats().totalRequests });
+		}
+	} catch {
+		// Silently skip: TuriyaRouter is optional
+	}
+
+	// ─── 5a-iii. Wire Manas (zero-cost input classifier) ────────────────
+	let manas: Manas | undefined;
+	try {
+		manas = new Manas();
+	} catch {
+		// Silently skip: Manas is optional
+	}
+
 	// ─── 5b. Handle 'serve' subcommand (HTTP API gateway) ───────────────
 	if (args.command === "serve") {
 		const { createChitraguptaAPI } = await import("./http-server.js");
@@ -178,11 +200,140 @@ export async function main(args: ParsedArgs): Promise<void> {
 			enableLogging: true,
 		};
 
-		// Create the API server with dependency stubs.
+		// Create the API server with all phase modules wired in.
 		// Agent and session are lazily initialized — the server exposes
 		// health, providers, and tools immediately; chat requires a running agent.
 		let serverAgent: unknown = null;
 		let serverSession: unknown = null;
+
+		// ── Phase 1: Self-Evolution modules ────────────────────────────
+		let vasanaEngine: unknown;
+		let vidhiEngine: unknown;
+		let servNidraDaemon: unknown;
+		try {
+			const { VasanaEngine, VidhiEngine } = await import("@chitragupta/smriti");
+			vasanaEngine = new VasanaEngine();
+			vidhiEngine = new VidhiEngine({ project: projectPath });
+		} catch { /* optional */ }
+		try {
+			const { NidraDaemon: NidraCls } = await import("@chitragupta/anina");
+			servNidraDaemon = new NidraCls({
+				idleTimeoutMs: 300_000,
+				dreamDurationMs: 600_000,
+				deepSleepDurationMs: 1_800_000,
+				project: projectPath,
+			});
+			(servNidraDaemon as { start: () => void }).start();
+		} catch { /* optional */ }
+
+		// ── Phase 2: Intelligence Layer modules ────────────────────────
+		let servTriguna: unknown;
+		let servRtaEngine: unknown;
+		let servBuddhi: unknown;
+		let servDatabase: unknown;
+		try {
+			const { Triguna } = await import("@chitragupta/anina");
+			servTriguna = new Triguna();
+		} catch { /* optional */ }
+		try {
+			const { RtaEngine } = await import("@chitragupta/dharma");
+			servRtaEngine = new RtaEngine();
+		} catch { /* optional */ }
+		try {
+			const { Buddhi } = await import("@chitragupta/anina");
+			servBuddhi = new Buddhi();
+		} catch { /* optional */ }
+		try {
+			const { DatabaseManager } = await import("@chitragupta/smriti");
+			servDatabase = DatabaseManager.instance();
+		} catch { /* optional */ }
+
+		// ── Phase 3: Collaboration modules ─────────────────────────────
+		let servSamiti: unknown;
+		let servSabhaEngine: unknown;
+		let servLokapala: unknown;
+		let servAkasha: unknown;
+		try {
+			const { Samiti, SabhaEngine } = await import("@chitragupta/sutra");
+			servSamiti = new Samiti();
+			servSabhaEngine = new SabhaEngine();
+		} catch { /* optional */ }
+		try {
+			const { LokapalaController } = await import("@chitragupta/anina");
+			servLokapala = new LokapalaController();
+		} catch { /* optional */ }
+		try {
+			const { AkashaField } = await import("@chitragupta/smriti");
+			servAkasha = new AkashaField();
+		} catch { /* optional */ }
+
+		// ── Phase 4: Autonomy modules ──────────────────────────────────
+		let servKartavyaEngine: unknown;
+		let servKalaChakra: unknown;
+		try {
+			const { KartavyaEngine } = await import("@chitragupta/niyanta");
+			servKartavyaEngine = new KartavyaEngine();
+		} catch { /* optional */ }
+		try {
+			const { KalaChakra } = await import("@chitragupta/smriti");
+			servKalaChakra = new KalaChakra();
+		} catch { /* optional */ }
+
+		// ── Vidya Orchestrator (Skill ecosystem) ───────────────────────
+		let servVidyaOrchestrator: unknown;
+		try {
+			const {
+				SkillRegistry,
+				VidyaBridge,
+				SurakshaScanner,
+				SkillPipeline,
+				SkillSandbox,
+				PratikshaManager,
+				ShikshaController,
+				VidyaOrchestrator,
+			} = await import("@chitragupta/vidhya-skills");
+
+			const skillReg = new SkillRegistry();
+			const bridge = new VidyaBridge(skillReg);
+			const toolDefs = getAllTools().map((t) => ({
+				name: (t as unknown as Record<string, Record<string, string>>).definition?.name,
+				description: (t as unknown as Record<string, Record<string, string>>).definition?.description,
+				inputSchema: ((t as unknown as Record<string, Record<string, unknown>>).definition?.inputSchema ?? {}) as Record<string, unknown>,
+			}));
+			bridge.registerToolsAsSkills(toolDefs);
+
+			// Load curated Agent Skills from SKILL.md files
+			try {
+				const { loadAgentSkills } = await import("@chitragupta/vidhya-skills");
+				const builtinSkillsDir = path.resolve(
+					path.dirname(new URL(import.meta.url).pathname),
+					"..", "..", "..", "skills", ".curated",
+				);
+				for (const dir of [path.resolve(projectPath, "skills", ".curated"), builtinSkillsDir]) {
+					const loaded = loadAgentSkills(dir);
+					for (const skill of loaded.skills) {
+						skillReg.register(skill);
+					}
+				}
+			} catch { /* best-effort */ }
+
+			let scanner: InstanceType<typeof SurakshaScanner> | undefined;
+			let shiksha: InstanceType<typeof ShikshaController> | undefined;
+			try {
+				scanner = new SurakshaScanner();
+				const sandbox = new SkillSandbox();
+				const staging = new PratikshaManager();
+				const pipeline = new SkillPipeline({ scanner, sandbox, staging, registry: skillReg });
+				shiksha = new ShikshaController({ registry: skillReg, pipeline, scanner });
+			} catch { /* optional */ }
+
+			const stateDir = path.join(projectPath, ".chitragupta");
+			servVidyaOrchestrator = new VidyaOrchestrator(
+				{ registry: skillReg, bridge, scanner: scanner as any, shiksha: shiksha as any },
+				{ persistPath: stateDir + "/vidya-state.json", enableAutoComposition: true },
+			);
+			await (servVidyaOrchestrator as { initialize: () => Promise<void> }).initialize();
+		} catch { /* optional */ }
 
 		const server = createChitraguptaAPI({
 			getAgent: () => serverAgent,
@@ -196,6 +347,27 @@ export async function main(args: ParsedArgs): Promise<void> {
 				name: (t as unknown as Record<string, Record<string, string>>).definition?.name,
 				description: (t as unknown as Record<string, Record<string, string>>).definition?.description,
 			})),
+			// Phase 1: Self-Evolution
+			getVasanaEngine: () => vasanaEngine,
+			getNidraDaemon: () => servNidraDaemon,
+			getVidhiEngine: () => vidhiEngine,
+			// Phase 2: Intelligence Layer
+			getTuriyaRouter: () => turiyaRouter,
+			getTriguna: () => servTriguna,
+			getRtaEngine: () => servRtaEngine,
+			getBuddhi: () => servBuddhi,
+			getDatabase: () => servDatabase,
+			// Phase 3: Collaboration
+			getSamiti: () => servSamiti,
+			getSabhaEngine: () => servSabhaEngine,
+			getLokapala: () => servLokapala,
+			getAkasha: () => servAkasha,
+			// Phase 4: Autonomy
+			getKartavyaEngine: () => servKartavyaEngine,
+			getKalaChakra: () => servKalaChakra,
+			// Vidya Skills
+			getVidyaOrchestrator: () => servVidyaOrchestrator,
+			getProjectPath: () => projectPath,
 		}, serverConfig);
 
 		const actualPort = await server.start();
@@ -210,7 +382,13 @@ export async function main(args: ParsedArgs): Promise<void> {
 		await new Promise<void>((resolve) => {
 			process.on("SIGINT", () => {
 				process.stdout.write(`\n  Shutting down server...\n`);
-				server.stop().then(resolve).catch(resolve);
+				const cleanup = async () => {
+					if (servNidraDaemon) {
+						try { await (servNidraDaemon as { stop: () => Promise<void> }).stop(); } catch { /* best-effort */ }
+					}
+					await server.stop();
+				};
+				cleanup().then(resolve).catch(resolve);
 			});
 		});
 		return;
@@ -307,6 +485,28 @@ export async function main(args: ParsedArgs): Promise<void> {
 			inputSchema: t.definition.inputSchema as Record<string, unknown>,
 		}));
 		bridge.registerToolsAsSkills(toolDefs);
+
+		// Load curated Agent Skills from SKILL.md files
+		try {
+			const { loadAgentSkills } = await import("@chitragupta/vidhya-skills");
+			const curatedDir = path.resolve(projectPath, "skills", ".curated");
+			// Also check the chitragupta package root for skills shipped with the CLI
+			const builtinSkillsDir = path.resolve(
+				path.dirname(new URL(import.meta.url).pathname),
+				"..", "..", "..", "skills", ".curated",
+			);
+			for (const dir of [curatedDir, builtinSkillsDir]) {
+				const loaded = loadAgentSkills(dir);
+				for (const skill of loaded.skills) {
+					skillRegistry.register(skill);
+				}
+				if (loaded.skipped.length > 0) {
+					log.debug("Agent skills skipped", { dir, skipped: loaded.skipped });
+				}
+			}
+		} catch {
+			// Agent skill loading is best-effort
+		}
 
 		// Wire Suraksha + Shiksha for injection into orchestrator
 		let scanner: InstanceType<typeof SurakshaScanner> | undefined;
@@ -559,10 +759,34 @@ export async function main(args: ParsedArgs): Promise<void> {
 
 	// ─── 7f. Wire SoulManager (Agent Identity) ──────────────────────
 	let soulManager: InstanceType<typeof SoulManager> | undefined;
+	let soulPrompt: string | undefined;
 	try {
 		soulManager = new SoulManager();
+		const archetypeMap: Record<string, string> = {
+			kartru: "meticulous-craftsman",
+			parikshaka: "vigilant-guardian",
+			anveshi: "curious-scholar",
+			shodhaka: "curious-scholar",
+			parikartru: "meticulous-craftsman",
+			lekhaka: "creative-explorer",
+		};
+		soulManager.create({
+			id: "root",
+			name: profile.name ?? "Chitragupta",
+			archetype: archetypeMap[profile.id] ?? "wise-mediator",
+			purpose: profile.personality ?? "AI agent orchestration platform",
+		});
+		soulPrompt = soulManager.buildSoulPrompt("root");
 	} catch {
 		// Silently skip: SoulManager is optional
+	}
+
+	// ─── 7f-ii. Wire AgentReflector (post-turn self-evaluation) ──────
+	let reflector: InstanceType<typeof AgentReflector> | undefined;
+	try {
+		reflector = new AgentReflector();
+	} catch {
+		// Silently skip: AgentReflector is optional
 	}
 
 	// ─── 7g. Wire KarmaTracker (Trust Tracking) ─────────────────────
@@ -617,13 +841,21 @@ export async function main(args: ParsedArgs): Promise<void> {
 		}
 	}
 
+	// Merge memory + skill + soul contexts
+	let enrichedContext = memoryContext
+		? (skillContext ? memoryContext + "\n\n" + skillContext : memoryContext)
+		: skillContext;
+	if (soulPrompt) {
+		enrichedContext = enrichedContext
+			? enrichedContext + "\n\n" + soulPrompt
+			: soulPrompt;
+	}
+
 	const systemPrompt = buildSystemPrompt({
 		profile,
 		project,
 		contextFiles,
-		memoryContext: memoryContext
-			? (skillContext ? memoryContext + "\n\n" + skillContext : memoryContext)
-			: skillContext,
+		memoryContext: enrichedContext,
 		identityContext: identityContextStr,
 		tools,
 	});
@@ -870,6 +1102,10 @@ export async function main(args: ParsedArgs): Promise<void> {
 			budgetConfig: settings.budget,
 			session: { id: session.meta.id, project: projectPath },
 			margaPipeline,
+			turiyaRouter: turiyaRouter as any,
+			manas,
+			soulManager,
+			reflector,
 			providerRegistry: registry,
 			userExplicitModel: Boolean(args.model),
 			shiksha: shikshaController,
@@ -950,6 +1186,23 @@ export async function main(args: ParsedArgs): Promise<void> {
 				}
 			},
 		});
+
+		// ─── Post-session: Persist Turiya learned state ──────────────────
+		if (turiyaRouter) {
+			try {
+				const turiyaStatePath = path.join(getChitraguptaHome(), "turiya-state.json");
+				fs.writeFileSync(turiyaStatePath, JSON.stringify(turiyaRouter.serialize()), "utf8");
+				const stats = turiyaRouter.getStats();
+				if (stats.totalRequests > 0) {
+					log.info("Turiya state saved", {
+						requests: stats.totalRequests,
+						savings: `${stats.savingsPercent.toFixed(1)}%`,
+					});
+				}
+			} catch {
+				// Turiya persistence is best-effort
+			}
+		}
 
 		// ─── Post-session: Memory Consolidation (Samskaara) ────────────────
 		// Run consolidation with a 5-second timeout so it never hangs the exit.
