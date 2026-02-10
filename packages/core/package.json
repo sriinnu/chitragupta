@@ -6,7 +6,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/srinivaspendela/chitragupta.git",
+		"url": "https://github.com/sriinnu/chitragupta.git",
 		"directory": "packages/core"
 	},
 	"keywords": [
@@ -20,7 +20,7 @@
 		"errors"
 	],
 	"engines": {
-		"node": ">=20.0.0"
+		"node": ">=22"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -45,5 +45,9 @@
 	"files": [
 		"dist",
 		"README.md"
-	]
+	],
+	"homepage": "https://github.com/sriinnu/chitragupta/tree/main/packages/core#readme",
+	"bugs": {
+		"url": "https://github.com/sriinnu/chitragupta/issues"
+	}
 }

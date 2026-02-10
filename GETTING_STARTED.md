@@ -8,8 +8,8 @@ a programmatic API that other applications can consume.
 
 ## Prerequisites
 
-- **Node.js 20+** (the repo enforces `engines.node >= 20.0.0`)
-- **pnpm 9+** (package manager -- `npm install -g pnpm`)
+- **Node.js >= 22** ([download](https://nodejs.org/)) — required by all packages
+- **pnpm 9+** (package manager — `npm install -g pnpm`)
 - **TypeScript 5.9+** (installed as a dev dependency)
 - At least one AI provider: a CLI tool (Claude Code, Codex, Gemini CLI), Ollama, or an API key
 - **Optional:** [Ollama](https://ollama.ai) for local models and embeddings
@@ -769,3 +769,106 @@ pnpm run dev
 - **Custom agent profiles** -- design specialized agents in `~/.chitragupta/profiles/`.
 - **MCP integration** -- connect Chitragupta to Claude Code, Codex, or any MCP client
   for enhanced tool access.
+
+---
+
+## Troubleshooting
+
+### Node.js version errors
+
+Chitragupta requires Node.js >= 22. Check your version:
+
+```bash
+node --version
+# Must be v22.x or higher
+```
+
+If you're using nvm:
+
+```bash
+nvm install 22
+nvm use 22
+```
+
+### `pnpm install` fails with native modules
+
+`better-sqlite3` requires native compilation. On macOS, ensure Xcode CLI tools are installed:
+
+```bash
+xcode-select --install
+```
+
+On Linux, ensure `build-essential` and `python3` are available:
+
+```bash
+sudo apt install build-essential python3
+```
+
+If native compilation still fails, try clearing the pnpm store:
+
+```bash
+pnpm store prune
+rm -rf node_modules
+pnpm install
+```
+
+### Build fails for a specific package
+
+Packages must build in dependency order. If a single package fails, rebuild from scratch:
+
+```bash
+pnpm run clean
+pnpm run build
+```
+
+To build a single package (after its dependencies are built):
+
+```bash
+pnpm run build --filter @chitragupta/smriti
+```
+
+### MCP server not connecting in Claude Code
+
+1. Ensure the CLI is built: `ls packages/cli/dist/mcp-entry.js`
+2. If missing, rebuild: `pnpm run build --filter @chitragupta/cli`
+3. Check the path in your MCP config is absolute, not relative
+4. Restart Claude Code after changing MCP configuration
+5. Run `/mcp` in Claude Code to verify the server is listed
+
+### Tests failing after a fresh clone
+
+Run the full build before tests — tests depend on compiled output:
+
+```bash
+pnpm install
+pnpm run build
+pnpm test
+```
+
+### Ollama connection refused
+
+Ensure Ollama is running:
+
+```bash
+# Check if Ollama is running
+curl http://localhost:11434/api/tags
+
+# If not, start it
+ollama serve
+```
+
+### "Cannot find module" errors at runtime
+
+This usually means packages need rebuilding:
+
+```bash
+pnpm run clean
+pnpm run build
+```
+
+If the error is about a workspace dependency (e.g., `@chitragupta/core`), ensure `pnpm install` has linked the workspace packages correctly:
+
+```bash
+pnpm install
+pnpm run build
+```
