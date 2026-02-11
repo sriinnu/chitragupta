@@ -1448,34 +1448,102 @@ function createMemoryResource(projectPath: string): McpResourceHandler {
 }
 
 // ─── MCP Prompts ────────────────────────────────────────────────────────────
+// Each prompt = a slash-command shortcut in Claude Code / Codex.
+// Keep them concise — the agent knows how to use the tools.
 
-/**
- * Create a "review" prompt template.
- */
-function createReviewPrompt(): McpPromptHandler {
+function prompt(name: string, description: string, args: { name: string; description: string; required: boolean }[], getText: (a: Record<string, string>) => string): McpPromptHandler {
 	return {
-		definition: {
-			name: "code_review",
-			description: "Review code for issues, security, and quality.",
-			arguments: [
-				{ name: "file", description: "File path to review", required: true },
-				{ name: "focus", description: "Focus area: security, performance, style, all", required: false },
-			],
-		},
-		async get(args: Record<string, string>): Promise<McpContent[]> {
-			const file = args.file ?? "";
-			const focus = args.focus ?? "all";
-			return [{
-				type: "text",
-				text: `Please review the file "${file}" with focus on: ${focus}.\n\n` +
-					"Provide structured feedback with:\n" +
-					"1. Critical issues (must fix)\n" +
-					"2. Suggestions (should consider)\n" +
-					"3. Positive patterns (good practices found)\n",
-			}];
+		definition: { name, description, arguments: args },
+		async get(a: Record<string, string>): Promise<McpContent[]> {
+			return [{ type: "text", text: getText(a) }];
 		},
 	};
 }
+
+const createSavePrompt = () => prompt(
+	"save", "Save decisions, patterns, or solutions to memory.", [
+		{ name: "what", description: "What to remember", required: false },
+		{ name: "type", description: "solution | pattern | warning | shortcut | correction | preference", required: false },
+	],
+	(a) => {
+		const what = a.what || "";
+		const t = a.type || "solution";
+		return what
+			? `Save to memory: "${what}"\nCall akasha_deposit with type="${t}" and relevant topic tags. Confirm what was saved.`
+			: "Review this conversation for key decisions, solutions, patterns, and warnings. Save each one via akasha_deposit with the appropriate type. Summarize what was saved.";
+	},
+);
+
+const createLastSessionPrompt = () => prompt(
+	"last_session", "Recall the last session — what was worked on, decisions, and unfinished tasks.", [],
+	() => "Call chitragupta_session_list (limit 1), then chitragupta_session_show to load it. Summarize: what was worked on, key decisions, files modified, unfinished work.",
+);
+
+const createReviewPrompt = () => prompt(
+	"code_review", "Review code for issues, security, and quality.", [
+		{ name: "file", description: "File path to review", required: true },
+		{ name: "focus", description: "security | performance | style | all", required: false },
+	],
+	(a) => `Review "${a.file || ""}" (focus: ${a.focus || "all"}). Report: critical issues, suggestions, and good patterns found.`,
+);
+
+const createMemorySearchPrompt = () => prompt(
+	"memory_search", "Search project memory for past decisions and context.", [
+		{ name: "query", description: "What to search for", required: true },
+	],
+	(a) => `Call chitragupta_memory_search for "${a.query || ""}". Also check chitragupta_session_list for related sessions. Summarize what was found.`,
+);
+
+const createSessionPrompt = () => prompt(
+	"session", "Browse or restore past sessions.", [
+		{ name: "session_id", description: "Session ID to load (omit to list recent)", required: false },
+	],
+	(a) => a.session_id
+		? `Load session ${a.session_id} via chitragupta_session_show. Summarize: what was worked on, decisions, unfinished work.`
+		: "Call chitragupta_session_list. Present the list with dates and titles.",
+);
+
+const createHandoverPrompt = () => prompt(
+	"handover", "Save work state before session ends — files, decisions, errors, next steps.", [
+		{ name: "summary", description: "Brief summary of current work (optional)", required: false },
+	],
+	(a) => (a.summary ? `Context: ${a.summary}\n` : "") + "Call chitragupta_handover to generate a structured work-state summary. Save key outcomes via akasha_deposit.",
+);
+
+const createDebugPrompt = () => prompt(
+	"debug", "Investigate an error — reproduce, trace, isolate, fix.", [
+		{ name: "issue", description: "The error or unexpected behavior", required: true },
+		{ name: "file", description: "Suspected file (optional)", required: false },
+	],
+	(a) => `Debug: "${a.issue || ""}"${a.file ? ` in ${a.file}` : ""}. Check chitragupta memory first. Then: reproduce → hypothesize → trace → isolate → fix & verify.`,
+);
+
+const createResearchPrompt = () => prompt(
+	"research", "Deep-dive into codebase architecture — read-only analysis.", [
+		{ name: "topic", description: "What to research", required: true },
+	],
+	(a) => `Research: "${a.topic || ""}". Search memory for prior analysis. Find relevant files, read them, trace data flow. Output: architecture overview, key files, patterns, dependencies. Read-only — do not modify files.`,
+);
+
+const createRefactorPrompt = () => prompt(
+	"refactor", "Plan-then-execute refactoring with validation.", [
+		{ name: "target", description: "What to refactor (file, module, pattern)", required: true },
+		{ name: "goal", description: "Desired outcome", required: false },
+	],
+	(a) => `Refactor: "${a.target || ""}"${a.goal ? ` — goal: ${a.goal}` : ""}. Analyze → present plan before changes → execute incrementally → validate after each step → deposit pattern in Akasha.`,
+);
+
+const createStatusPrompt = () => prompt(
+	"status", "Chitragupta system health — memory, sessions, knowledge traces.", [],
+	() => "Call health_status for Triguna state. Call chitragupta_session_list (limit 5) for recent activity. Call akasha_traces with query 'recent' for knowledge state. Present a concise dashboard.",
+);
+
+const createRecallPrompt = () => prompt(
+	"recall", "Remember what we decided about a topic.", [
+		{ name: "topic", description: "What to recall (e.g. 'auth', 'database', 'deployment')", required: true },
+	],
+	(a) => `Recall everything about "${a.topic || ""}": call chitragupta_memory_search, akasha_traces, and check recent sessions. Present a timeline of decisions and current state.`,
+);
 
 // ─── Server Entry Point ─────────────────────────────────────────────────────
 
@@ -1536,7 +1604,19 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		ssePort: port,
 		tools: mcpTools,
 		resources: [createMemoryResource(projectPath)],
-		prompts: [createReviewPrompt()],
+		prompts: [
+			createSavePrompt(),
+			createLastSessionPrompt(),
+			createRecallPrompt(),
+			createStatusPrompt(),
+			createHandoverPrompt(),
+			createReviewPrompt(),
+			createDebugPrompt(),
+			createResearchPrompt(),
+			createRefactorPrompt(),
+			createMemorySearchPrompt(),
+			createSessionPrompt(),
+		],
 	});
 
 	// ─── 3. State file + graceful shutdown ───────────────────────────

@@ -312,7 +312,7 @@ See [SECURITY.md](SECURITY.md) for vulnerability reporting and security features
 
 ## License
 
-MIT
+MIT © 2026 Srinivas Pendela
 
 ---
 

@@ -401,15 +401,16 @@ export class McpServer {
 		const args = (params.arguments as Record<string, string>) ?? {};
 
 		try {
-			const content = await handler.get(args);
+			const contentItems = await handler.get(args);
+			// MCP spec: each message.content is a single object, not an array.
+			// Map each content item to its own message.
+			const messages = contentItems.map((item) => ({
+				role: "user" as const,
+				content: item,
+			}));
 			return createResponse(id, {
 				description: handler.definition.description,
-				messages: [
-					{
-						role: "user",
-						content,
-					},
-				],
+				messages,
 			});
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
