@@ -476,6 +476,75 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 	return next;
 }
 
+/**
+ * List turns for a session with their SQLite timestamps.
+ * Returns turn data + created_at for each turn from the database.
+ * Falls back to loadSession() with synthetic timestamps if SQLite is unavailable.
+ */
+export function listTurnsWithTimestamps(
+	sessionId: string,
+	project: string,
+): Array<SessionTurn & { createdAt: number }> {
+	try {
+		const db = getAgentDb();
+		const rows = db
+			.prepare(
+				"SELECT turn_number, role, content, agent, model, tool_calls, created_at FROM turns WHERE session_id = ? ORDER BY turn_number ASC",
+			)
+			.all(sessionId) as Array<Record<string, unknown>>;
+
+		if (rows.length > 0) {
+			return rows.map((row) => ({
+				turnNumber: row.turn_number as number,
+				role: row.role as "user" | "assistant",
+				content: row.content as string,
+				agent: (row.agent as string) ?? undefined,
+				model: (row.model as string) ?? undefined,
+				toolCalls: row.tool_calls ? JSON.parse(row.tool_calls as string) : undefined,
+				createdAt: row.created_at as number,
+			}));
+		}
+	} catch {
+		// SQLite unavailable — fall through
+	}
+
+	// Fallback: load from markdown and synthesize timestamps
+	try {
+		const session = loadSession(sessionId, project);
+		const baseTime = new Date(session.meta.created).getTime();
+		return session.turns.map((turn, i) => ({
+			...turn,
+			createdAt: baseTime + i * 1000, // 1-second spacing
+		}));
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Find a session by metadata field (e.g. vaayuSessionId).
+ * Scans the sessions table metadata JSON column.
+ */
+export function findSessionByMetadata(
+	key: string,
+	value: string,
+	project?: string,
+): SessionMeta | undefined {
+	try {
+		const db = getAgentDb();
+		const sql = project
+			? "SELECT * FROM sessions WHERE project = ? AND json_extract(metadata, ?) = ? LIMIT 1"
+			: "SELECT * FROM sessions WHERE json_extract(metadata, ?) = ? LIMIT 1";
+		const params = project
+			? [project, `$.${key}`, value]
+			: [`$.${key}`, value];
+		const row = db.prepare(sql).get(...params) as Record<string, unknown> | undefined;
+		return row ? rowToSessionMeta(row) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 // ─── Migration ──────────────────────────────────────────────────────────────
 
 /**
