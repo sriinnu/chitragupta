@@ -88,8 +88,8 @@ pnpm run build
 ### Run
 
 ```bash
-# Set an API key (or use Ollama for fully local)
-export ANTHROPIC_API_KEY="sk-ant-..."
+# Set your API key (or use Ollama for fully local)
+# See: https://console.anthropic.com/settings/keys
 
 # Interactive mode
 pnpm chitragupta
