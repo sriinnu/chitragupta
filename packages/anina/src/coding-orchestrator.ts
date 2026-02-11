@@ -167,6 +167,8 @@ export interface CodingOrchestratorConfig {
 	commHub?: AgentConfig["commHub"];
 	/** Policy engine adapter. */
 	policyEngine?: AgentConfig["policyEngine"];
+	/** Provider instance. Set by the caller (e.g. MCP tool) to enable LLM execution. */
+	provider?: unknown;
 }
 
 // ─── CodingOrchestrator ──────────────────────────────────────────────────────
@@ -783,6 +785,12 @@ export class CodingOrchestrator {
 		};
 
 		this.codingAgent = new CodingAgent(agentConfig);
+
+		// Inject provider if the caller supplied one (e.g. MCP tool wrapper)
+		if (this.config.provider) {
+			this.codingAgent.getAgent().setProvider(this.config.provider as import("@chitragupta/swara").ProviderDefinition);
+		}
+
 		return this.codingAgent;
 	}
 
