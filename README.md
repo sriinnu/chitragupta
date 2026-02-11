@@ -4,7 +4,7 @@
 
 <h1 align="center">Chitragupta</h1>
 
-<p align="center"><strong>The Autonomous AI Agent Platform</strong></p>
+<p align="center"><strong>The Timekeeper (चित्रगुप्त) — The Autonomous AI Agent Platform</strong></p>
 
 <p align="center">
   <a href="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml"><img src="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
