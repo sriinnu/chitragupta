@@ -76,6 +76,7 @@ export function chitraguptaToolToMcp(toolHandler: ChitraguptaToolHandler): McpTo
 				return {
 					content: [{ type: "text", text: result.content }],
 					isError: result.isError,
+					_metadata: result.metadata,
 				};
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);

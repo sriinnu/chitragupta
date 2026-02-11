@@ -1,0 +1,15 @@
+{
+	"mcpServers": {
+		"chitragupta": {
+			"command": "node",
+			"args": [
+				"<path-to-repo>/packages/cli/dist/mcp-entry.js",
+				"--agent"
+			],
+			"env": {
+				"CHITRAGUPTA_MCP_AGENT": "true",
+				"CHITRAGUPTA_MCP_PROJECT": "<path-to-your-project>"
+			}
+		}
+	}
+}

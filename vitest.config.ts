@@ -20,6 +20,7 @@ export default defineConfig({
 			"@chitragupta/smriti/search": resolve(__dirname, "packages/smriti/src/search.ts"),
 			"@chitragupta/smriti/types": resolve(__dirname, "packages/smriti/src/types.ts"),
 			"@chitragupta/smriti": resolve(__dirname, "packages/smriti/src/index.ts"),
+			"@chitragupta/ui/tool-formatter": resolve(__dirname, "packages/ui/src/tool-formatter.ts"),
 			"@chitragupta/ui/ansi": resolve(__dirname, "packages/ui/src/ansi.ts"),
 			"@chitragupta/ui": resolve(__dirname, "packages/ui/src/index.ts"),
 			"@chitragupta/yantra": resolve(__dirname, "packages/yantra/src/index.ts"),

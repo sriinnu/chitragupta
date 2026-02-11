@@ -81,3 +81,7 @@ export { Breadcrumb } from "./components/breadcrumb.js";
 export type { BreadcrumbItem } from "./components/breadcrumb.js";
 export { HeartbeatMonitor } from "./components/heartbeat-monitor.js";
 export type { HeartbeatEntry, HeartbeatMonitorConfig } from "./components/heartbeat-monitor.js";
+
+// ─── Tool Formatter ─────────────────────────────────────────────────────────
+export { formatToolFooter, formatBytes, estimateTokens, formatTokens } from "./tool-formatter.js";
+export type { ToolFooterOpts } from "./tool-formatter.js";
