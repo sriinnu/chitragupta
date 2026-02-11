@@ -522,6 +522,63 @@ export function listTurnsWithTimestamps(
 }
 
 /**
+ * Update session metadata fields in SQLite.
+ * Only updates the fields provided — does not touch other columns.
+ * Also bumps the updated_at timestamp.
+ */
+export function updateSessionMeta(
+	sessionId: string,
+	updates: Partial<Pick<SessionMeta, "title" | "model" | "metadata" | "tags">>,
+): void {
+	try {
+		const db = getAgentDb();
+		const sets: string[] = [];
+		const params: Record<string, unknown> = { id: sessionId };
+
+		if (updates.title !== undefined) {
+			sets.push("title = @title");
+			params.title = updates.title;
+		}
+		if (updates.model !== undefined) {
+			sets.push("model = @model");
+			params.model = updates.model;
+		}
+		if (updates.metadata !== undefined) {
+			sets.push("metadata = @metadata");
+			params.metadata = JSON.stringify(updates.metadata);
+		}
+		if (updates.tags !== undefined) {
+			sets.push("tags = @tags");
+			params.tags = JSON.stringify(updates.tags);
+		}
+
+		if (sets.length === 0) return;
+		sets.push("updated_at = @updated_at");
+		params.updated_at = Date.now();
+
+		db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = @id`).run(params);
+	} catch {
+		// Best-effort
+	}
+}
+
+/**
+ * Get the maximum turn number for a session from SQLite.
+ * Returns 0 if no turns exist or SQLite is unavailable.
+ */
+export function getMaxTurnNumber(sessionId: string): number {
+	try {
+		const db = getAgentDb();
+		const row = db
+			.prepare("SELECT MAX(turn_number) as max_turn FROM turns WHERE session_id = ?")
+			.get(sessionId) as Record<string, unknown> | undefined;
+		return (row?.max_turn as number) ?? 0;
+	} catch {
+		return 0;
+	}
+}
+
+/**
  * Find a session by metadata field (e.g. vaayuSessionId).
  * Scans the sessions table metadata JSON column.
  */
