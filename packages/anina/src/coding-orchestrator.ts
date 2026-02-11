@@ -169,6 +169,10 @@ export interface CodingOrchestratorConfig {
 	policyEngine?: AgentConfig["policyEngine"];
 	/** Provider instance. Set by the caller (e.g. MCP tool) to enable LLM execution. */
 	provider?: unknown;
+	/** Additional context appended to every task prompt (project instructions, memory, etc.). */
+	additionalContext?: string;
+	/** Maximum time in milliseconds before aborting. Default: no timeout. */
+	timeoutMs?: number;
 }
 
 // ─── CodingOrchestrator ──────────────────────────────────────────────────────
@@ -242,6 +246,18 @@ export class CodingOrchestrator {
 			elapsedMs: 0,
 			progressLog: this.progressLog,
 		};
+
+		// Timeout guard: abort if timeoutMs exceeded
+		const timeoutMs = this.config.timeoutMs;
+		let timeoutId: ReturnType<typeof setTimeout> | undefined;
+		if (timeoutMs && timeoutMs > 0) {
+			timeoutId = setTimeout(() => {
+				// Abort the coding agent if it's running
+				if (this.codingAgent) {
+					this.codingAgent.getAgent().abort();
+				}
+			}, timeoutMs);
+		}
 
 		try {
 			// ── Phase 1: Plan ──
@@ -318,6 +334,8 @@ export class CodingOrchestrator {
 			if (this.gitState.stashRef) {
 				this.rollback();
 			}
+		} finally {
+			if (timeoutId) clearTimeout(timeoutId);
 		}
 
 		return this.finalize(result);
@@ -782,6 +800,7 @@ export class CodingOrchestrator {
 			tools: this.config.tools,
 			policyEngine: this.config.policyEngine,
 			commHub: this.config.commHub,
+			additionalContext: this.config.additionalContext,
 		};
 
 		this.codingAgent = new CodingAgent(agentConfig);

@@ -1292,7 +1292,10 @@ function createCodingAgentTool(projectPath: string): McpToolHandler {
 					registerCLIProviders,
 					resolvePreferredProvider,
 					getBuiltinTools: getTools,
+					loadProjectMemory: loadMemory,
+					getActionType,
 				} = await import("../bootstrap.js");
+				const { loadContextFiles, buildContextString } = await import("../context-files.js");
 
 				// ── Provider setup ─────────────────────────────────────
 				loadCredentials();
@@ -1313,6 +1316,82 @@ function createCodingAgentTool(projectPath: string): McpToolHandler {
 				// ── Tools ──────────────────────────────────────────────
 				const tools = getTools();
 
+				// ── Project context & memory ───────────────────────────
+				const contextParts: string[] = [];
+
+				const contextFiles = loadContextFiles(projectPath);
+				const contextString = buildContextString(contextFiles);
+				if (contextString) contextParts.push(contextString);
+
+				const memory = loadMemory(projectPath);
+				if (memory) contextParts.push(`--- Project Memory ---\n${memory}`);
+
+				const additionalContext = contextParts.length > 0
+					? contextParts.join("\n\n")
+					: undefined;
+
+				// ── Policy engine (dharma) ─────────────────────────────
+				let policyEngine: { check(toolName: string, args: Record<string, unknown>): { allowed: boolean; reason?: string } } | undefined;
+				try {
+					const { PolicyEngine, STANDARD_PRESET } = await import("@chitragupta/dharma");
+					const preset = STANDARD_PRESET;
+					const engine = new PolicyEngine(preset.config);
+					for (const ps of preset.policySets) {
+						engine.addPolicySet(ps);
+					}
+
+					policyEngine = {
+						check(toolName: string, toolArgs: Record<string, unknown>): { allowed: boolean; reason?: string } {
+							const actionType = getActionType(toolName);
+							const action = {
+								type: actionType,
+								tool: toolName,
+								args: toolArgs,
+								filePath: (toolArgs.path ?? toolArgs.file_path ?? toolArgs.filePath) as string | undefined,
+								command: (toolArgs.command ?? toolArgs.cmd) as string | undefined,
+								content: (toolArgs.content ?? toolArgs.text) as string | undefined,
+								url: (toolArgs.url ?? toolArgs.uri) as string | undefined,
+							};
+							const context = {
+								sessionId: "coding-agent",
+								agentId: "kartru",
+								agentDepth: 0,
+								projectPath,
+								totalCostSoFar: 0,
+								costBudget: preset.config.costBudget,
+								filesModified: [] as string[],
+								commandsRun: [] as string[],
+								timestamp: Date.now(),
+							};
+
+							try {
+								for (const ps of preset.policySets) {
+									for (const rule of ps.rules) {
+										const verdict = rule.evaluate(action, context);
+										if (verdict && typeof verdict === "object" && "status" in verdict && !("then" in verdict)) {
+											const v = verdict as { status: string; reason: string };
+											if (v.status === "deny") {
+												return { allowed: false, reason: v.reason };
+											}
+										}
+									}
+								}
+							} catch {
+								// Rule evaluation failed — allow by default
+							}
+							return { allowed: true };
+						},
+					};
+				} catch {
+					// dharma is optional — continue without policy engine
+				}
+
+				// ── Progress tracking ──────────────────────────────────
+				const progressMessages: string[] = [];
+				const onProgress = (progress: { phase: string; message: string }) => {
+					progressMessages.push(`[${progress.phase}] ${progress.message}`);
+				};
+
 				// ── Mode and options ───────────────────────────────────
 				const mode = (args.mode as "full" | "execute" | "plan-only") ?? "full";
 				const modelId = args.model ? String(args.model) : undefined;
@@ -1325,6 +1404,10 @@ function createCodingAgentTool(projectPath: string): McpToolHandler {
 					modelId,
 					tools,
 					provider: resolved.provider,
+					policyEngine,
+					additionalContext,
+					timeoutMs: 5 * 60 * 1000, // 5 minute timeout
+					onProgress,
 					createBranch: args.createBranch != null ? Boolean(args.createBranch) : undefined,
 					autoCommit: args.autoCommit != null ? Boolean(args.autoCommit) : undefined,
 					selfReview: args.selfReview != null ? Boolean(args.selfReview) : undefined,
@@ -1336,8 +1419,13 @@ function createCodingAgentTool(projectPath: string): McpToolHandler {
 				// ── Format result ──────────────────────────────────────
 				const text = formatOrchestratorResult(result);
 
+				// Append progress log if there are entries beyond the formatted result
+				const progressSuffix = progressMessages.length > 0
+					? `\n\n── Progress Log ──\n${progressMessages.join("\n")}`
+					: "";
+
 				return {
-					content: [{ type: "text", text }],
+					content: [{ type: "text", text: text + progressSuffix }],
 				};
 			} catch (err) {
 				return {
