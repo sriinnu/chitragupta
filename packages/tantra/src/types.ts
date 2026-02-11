@@ -63,6 +63,8 @@ export interface McpToolCall {
 export interface McpToolResult {
 	content: McpContent[];
 	isError?: boolean;
+	/** Internal — tool metadata for formatting. Stripped before sending over wire. */
+	_metadata?: Record<string, unknown>;
 }
 
 export type McpContent =

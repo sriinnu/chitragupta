@@ -13,7 +13,7 @@
 import type { DatabaseManager } from "./database.js";
 
 // Current schema versions — bump when adding migrations
-const AGENT_SCHEMA_VERSION = 2;
+const AGENT_SCHEMA_VERSION = 3;
 const GRAPH_SCHEMA_VERSION = 1;
 const VECTORS_SCHEMA_VERSION = 1;
 
@@ -237,6 +237,14 @@ export function initAgentSchema(dbm: DatabaseManager): void {
 			);
 
 			CREATE INDEX IF NOT EXISTS idx_pratyabhijna_project ON pratyabhijna_context(project);
+		`);
+	}
+
+	// ─── Phase 3 migration: Metadata column for external system fields ──
+	if (currentVersion < 3) {
+		db.exec(`
+			-- Add metadata column for storing external system fields (e.g. Vaayu session data)
+			ALTER TABLE sessions ADD COLUMN metadata TEXT;
 		`);
 	}
 
