@@ -93,6 +93,19 @@ export type { ReflectionResult, PeerReview, ReflectorConfig } from "./agent-refl
 export { CodingAgent, CODE_TOOL_NAMES } from "./coding-agent.js";
 export type { CodingAgentConfig, CodingResult, ProjectConventions } from "./coding-agent.js";
 
+// ─── Coding Orchestrator (Sanyojaka) ────────────────────────────────────────
+export { CodingOrchestrator } from "./coding-orchestrator.js";
+export type {
+	CodingOrchestratorConfig,
+	OrchestratorResult,
+	OrchestratorProgress,
+	OrchestratorMode,
+	TaskPlan,
+	TaskStep,
+	GitState,
+	ReviewIssueCompact,
+} from "./coding-orchestrator.js";
+
 // ─── Review Agent (Parikshaka) ──────────────────────────────────────────────
 export { ReviewAgent, REVIEW_TOOL_NAMES } from "./review-agent.js";
 export type { ReviewAgentConfig, ReviewResult, ReviewIssue, ReviewFocus, ReviewSeverity } from "./review-agent.js";
