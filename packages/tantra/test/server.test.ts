@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { stripAnsi } from "@chitragupta/ui/ansi";
 import { McpServer } from "../src/server.js";
 import {
   createRequest,
@@ -132,9 +133,13 @@ describe("McpServer", () => {
       const res = await handleRequest(server, req);
 
       expect(res.error).toBeUndefined();
-      const result = res.result as { content: Array<{ type: string; text: string }> };
+      const result = res.result as { content: Array<{ type: string; text: string }>; _metadata?: unknown };
       expect(result.content[0].text).toContain("Hello, Alice!");
-      expect(result.content[0].text).toMatch(/⏱ [\d.]+ms/);
+      const plain = stripAnsi(result.content[0].text);
+      expect(plain).toMatch(/═══ greet ═/);
+      expect(plain).toMatch(/⏱ [\d.]+ms/);
+      // _metadata must not leak to wire
+      expect(result._metadata).toBeUndefined();
     });
 
     it("should return error for unknown tool", async () => {
@@ -171,7 +176,9 @@ describe("McpServer", () => {
       const result = res.result as { isError: boolean; content: Array<{ text: string }> };
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("tool broke");
-      expect(result.content[0].text).toMatch(/⏱ [\d.]+ms/);
+      const plain = stripAnsi(result.content[0].text);
+      expect(plain).toMatch(/═══ fail ═/);
+      expect(plain).toMatch(/⏱ [\d.]+ms/);
     });
   });
 
