@@ -117,6 +117,8 @@ export interface McpServerConfig {
 	tools?: McpToolHandler[];
 	resources?: McpResourceHandler[];
 	prompts?: McpPromptHandler[];
+	/** Hook called after every tool execution. Use for session recording, analytics, etc. */
+	onToolCall?: (info: { tool: string; args: Record<string, unknown>; result: McpToolResult; elapsedMs: number }) => void;
 }
 
 export interface McpToolHandler {
