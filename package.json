@@ -37,6 +37,8 @@
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",
 		"chitragupta": "tsx packages/cli/src/cli.ts",
+		"start:serve": "tsx packages/cli/src/cli.ts serve --port 3141",
+		"start:mcp": "tsx packages/cli/src/cli.ts mcp-server --transport sse --port 3001",
 		"publish:dry": "bash scripts/publish.sh",
 		"publish:real": "bash scripts/publish.sh --real"
 	},

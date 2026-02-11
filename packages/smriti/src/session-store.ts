@@ -142,6 +142,7 @@ function sessionMetaToRow(meta: SessionMeta, filePath: string) {
 		file_path: filePath,
 		parent_id: meta.parent,
 		branch: meta.branch,
+		metadata: meta.metadata ? JSON.stringify(meta.metadata) : null,
 	};
 }
 
@@ -159,6 +160,7 @@ function rowToSessionMeta(row: Record<string, unknown>): SessionMeta {
 		tags: JSON.parse((row.tags as string) ?? "[]"),
 		totalCost: (row.cost as number) ?? 0,
 		totalTokens: (row.tokens as number) ?? 0,
+		metadata: row.metadata ? JSON.parse(row.metadata as string) : undefined,
 	};
 }
 
@@ -167,11 +169,11 @@ function upsertSessionToDb(meta: SessionMeta, filePath: string): void {
 		const db = getAgentDb();
 		const row = sessionMetaToRow(meta, filePath);
 		db.prepare(`
-			INSERT INTO sessions (id, project, title, created_at, updated_at, turn_count, model, agent, cost, tokens, tags, file_path, parent_id, branch)
-			VALUES (@id, @project, @title, @created_at, @updated_at, @turn_count, @model, @agent, @cost, @tokens, @tags, @file_path, @parent_id, @branch)
+			INSERT INTO sessions (id, project, title, created_at, updated_at, turn_count, model, agent, cost, tokens, tags, file_path, parent_id, branch, metadata)
+			VALUES (@id, @project, @title, @created_at, @updated_at, @turn_count, @model, @agent, @cost, @tokens, @tags, @file_path, @parent_id, @branch, @metadata)
 			ON CONFLICT(id) DO UPDATE SET
 				title = @title, updated_at = @updated_at, turn_count = @turn_count,
-				model = @model, cost = @cost, tokens = @tokens, tags = @tags
+				model = @model, cost = @cost, tokens = @tokens, tags = @tags, metadata = @metadata
 		`).run(row);
 	} catch {
 		// SQLite write-through is best-effort — .md file is the source of truth
@@ -239,6 +241,7 @@ export function createSession(opts: SessionOpts): Session {
 		tags: opts.tags ?? [],
 		totalCost: 0,
 		totalTokens: 0,
+		metadata: opts.metadata,
 	};
 
 	const session: Session = { meta, turns: [] };
@@ -473,6 +476,132 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 	return next;
 }
 
+/**
+ * List turns for a session with their SQLite timestamps.
+ * Returns turn data + created_at for each turn from the database.
+ * Falls back to loadSession() with synthetic timestamps if SQLite is unavailable.
+ */
+export function listTurnsWithTimestamps(
+	sessionId: string,
+	project: string,
+): Array<SessionTurn & { createdAt: number }> {
+	try {
+		const db = getAgentDb();
+		const rows = db
+			.prepare(
+				"SELECT turn_number, role, content, agent, model, tool_calls, created_at FROM turns WHERE session_id = ? ORDER BY turn_number ASC",
+			)
+			.all(sessionId) as Array<Record<string, unknown>>;
+
+		if (rows.length > 0) {
+			return rows.map((row) => ({
+				turnNumber: row.turn_number as number,
+				role: row.role as "user" | "assistant",
+				content: row.content as string,
+				agent: (row.agent as string) ?? undefined,
+				model: (row.model as string) ?? undefined,
+				toolCalls: row.tool_calls ? JSON.parse(row.tool_calls as string) : undefined,
+				createdAt: row.created_at as number,
+			}));
+		}
+	} catch {
+		// SQLite unavailable — fall through
+	}
+
+	// Fallback: load from markdown and synthesize timestamps
+	try {
+		const session = loadSession(sessionId, project);
+		const baseTime = new Date(session.meta.created).getTime();
+		return session.turns.map((turn, i) => ({
+			...turn,
+			createdAt: baseTime + i * 1000, // 1-second spacing
+		}));
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Update session metadata fields in SQLite.
+ * Only updates the fields provided — does not touch other columns.
+ * Also bumps the updated_at timestamp.
+ */
+export function updateSessionMeta(
+	sessionId: string,
+	updates: Partial<Pick<SessionMeta, "title" | "model" | "metadata" | "tags">>,
+): void {
+	try {
+		const db = getAgentDb();
+		const sets: string[] = [];
+		const params: Record<string, unknown> = { id: sessionId };
+
+		if (updates.title !== undefined) {
+			sets.push("title = @title");
+			params.title = updates.title;
+		}
+		if (updates.model !== undefined) {
+			sets.push("model = @model");
+			params.model = updates.model;
+		}
+		if (updates.metadata !== undefined) {
+			sets.push("metadata = @metadata");
+			params.metadata = JSON.stringify(updates.metadata);
+		}
+		if (updates.tags !== undefined) {
+			sets.push("tags = @tags");
+			params.tags = JSON.stringify(updates.tags);
+		}
+
+		if (sets.length === 0) return;
+		sets.push("updated_at = @updated_at");
+		params.updated_at = Date.now();
+
+		db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = @id`).run(params);
+	} catch {
+		// Best-effort
+	}
+}
+
+/**
+ * Get the maximum turn number for a session from SQLite.
+ * Returns 0 if no turns exist or SQLite is unavailable.
+ */
+export function getMaxTurnNumber(sessionId: string): number {
+	try {
+		const db = getAgentDb();
+		const row = db
+			.prepare("SELECT MAX(turn_number) as max_turn FROM turns WHERE session_id = ?")
+			.get(sessionId) as Record<string, unknown> | undefined;
+		return (row?.max_turn as number) ?? 0;
+	} catch {
+		return 0;
+	}
+}
+
+/**
+ * Find a session by metadata field (e.g. vaayuSessionId).
+ * Scans the sessions table metadata JSON column.
+ */
+export function findSessionByMetadata(
+	key: string,
+	value: string,
+	project?: string,
+): SessionMeta | undefined {
+	try {
+		const db = getAgentDb();
+		const sql = project
+			? "SELECT * FROM sessions WHERE project = ? AND json_extract(metadata, ?) = ? LIMIT 1"
+			: "SELECT * FROM sessions WHERE json_extract(metadata, ?) = ? LIMIT 1";
+		const params = project
+			? [project, `$.${key}`, value]
+			: [`$.${key}`, value];
+		const row = db.prepare(sql).get(...params) as Record<string, unknown> | undefined;
+		return row ? rowToSessionMeta(row) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 // ─── Migration ──────────────────────────────────────────────────────────────
 
 /**
@@ -496,8 +625,8 @@ export function migrateExistingSessions(project?: string): { migrated: number; s
 				.map((e) => path.join(sessionsRoot, e.name));
 
 	const insertSession = db.prepare(`
-		INSERT OR IGNORE INTO sessions (id, project, title, created_at, updated_at, turn_count, model, agent, cost, tokens, tags, file_path, parent_id, branch)
-		VALUES (@id, @project, @title, @created_at, @updated_at, @turn_count, @model, @agent, @cost, @tokens, @tags, @file_path, @parent_id, @branch)
+		INSERT OR IGNORE INTO sessions (id, project, title, created_at, updated_at, turn_count, model, agent, cost, tokens, tags, file_path, parent_id, branch, metadata)
+		VALUES (@id, @project, @title, @created_at, @updated_at, @turn_count, @model, @agent, @cost, @tokens, @tags, @file_path, @parent_id, @branch, @metadata)
 	`);
 
 	const insertTurn = db.prepare(`

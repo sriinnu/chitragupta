@@ -51,6 +51,10 @@ export {
 	deleteSession,
 	addTurn,
 	migrateExistingSessions,
+	listTurnsWithTimestamps,
+	findSessionByMetadata,
+	updateSessionMeta,
+	getMaxTurnNumber,
 } from "./session-store.js";
 
 // Memory store
