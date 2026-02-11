@@ -317,5 +317,3 @@ MIT
 ---
 
 <p align="center"><em>"The Vedic traditions spent millennia building a complete model of mind. We are completing a circle that was drawn three thousand years ago."</em></p>
-
-<p align="center"><em>Organization: Kaala-Brahma (काल-ब्रह्म) | Symbol: चि | Colors: Saffron/Gold, Ink Blue, White</em></p>
