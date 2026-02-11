@@ -28,7 +28,7 @@ export interface ParsedArgs {
 /**
  * Known subcommands that take a second-level command.
  */
-const SUBCOMMANDS = new Set(["provider", "session", "memory", "agent", "config", "plugin", "mcp", "serve", "mcp-server", "init"]);
+const SUBCOMMANDS = new Set(["provider", "session", "memory", "agent", "config", "plugin", "mcp", "serve", "mcp-server", "init", "code", "orchestrate", "workflow", "skill"]);
 
 /**
  * Parse process.argv (or a custom argv array) into structured arguments.
@@ -198,6 +198,7 @@ Options:
   -h, --help                    Show this help
 
 Subcommands:
+  code "task" [--mode M] [--plan]  Run coding agent (plan, code, validate, review)
   init [--client <name>]        Set up MCP + agent instructions (claude|codex|gemini|copilot)
   provider list|add|test        Manage AI providers
   session list|show|search|export|import  Manage sessions
