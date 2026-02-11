@@ -129,6 +129,9 @@ importers:
       '@chitragupta/core':
         specifier: workspace:*
         version: link:../core
+      '@chitragupta/ui':
+        specifier: workspace:*
+        version: link:../ui
 
   packages/ui:
     dependencies:

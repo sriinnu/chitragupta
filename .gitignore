@@ -25,6 +25,16 @@ mcp-state.json
 # Claude Code local config
 .claude/
 
+# Local machine-specific config
+.mcp.json
+settings.local.json
+
+# Compiled output in src/ (should only be in dist/)
+packages/*/src/**/*.js
+packages/*/src/**/*.js.map
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.d.ts.map
+
 # Logs
 *.log
 

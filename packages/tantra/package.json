@@ -38,7 +38,8 @@
 		"clean": "rm -rf dist"
 	},
 	"dependencies": {
-		"@chitragupta/core": "workspace:*"
+		"@chitragupta/core": "workspace:*",
+		"@chitragupta/ui": "workspace:*"
 	},
 	"files": [
 		"dist",

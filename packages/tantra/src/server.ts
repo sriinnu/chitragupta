@@ -26,6 +26,7 @@ import {
 } from "./jsonrpc.js";
 import { StdioServerTransport } from "./transport/stdio.js";
 import { SSEServerTransport } from "./transport/sse.js";
+import { formatToolFooter } from "@chitragupta/ui/tool-formatter";
 
 type AnyMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
 
@@ -279,20 +280,41 @@ export class McpServer {
 		const t0 = performance.now();
 		try {
 			const result = await handler.execute(args);
-			const elapsedMs = (performance.now() - t0).toFixed(1);
-			// Append timing to the last text content block
+			const elapsed = performance.now() - t0;
+
+			// Append rich formatted footer to the last text content block
 			if (result.content && Array.isArray(result.content) && result.content.length > 0) {
 				const last = result.content[result.content.length - 1];
 				if (last && last.type === "text") {
-					last.text += `\n\n---\n⏱ ${elapsedMs}ms`;
+					const outputBytes = new TextEncoder().encode(last.text).length;
+					const footer = formatToolFooter({
+						toolName,
+						elapsedMs: elapsed,
+						outputBytes,
+						metadata: result._metadata,
+						isError: result.isError,
+					});
+					last.text += `\n\n${footer}`;
 				}
 			}
+
+			// Strip internal metadata before sending over wire
+			delete result._metadata;
+
 			return createResponse(id, result);
 		} catch (err) {
-			const elapsedMs = (performance.now() - t0).toFixed(1);
+			const elapsed = performance.now() - t0;
 			const message = err instanceof Error ? err.message : String(err);
+			const errorText = message;
+			const outputBytes = new TextEncoder().encode(errorText).length;
+			const footer = formatToolFooter({
+				toolName,
+				elapsedMs: elapsed,
+				outputBytes,
+				isError: true,
+			});
 			return createResponse(id, {
-				content: [{ type: "text", text: `${message}\n\n---\n⏱ ${elapsedMs}ms` }],
+				content: [{ type: "text", text: `${errorText}\n\n${footer}` }],
 				isError: true,
 			});
 		}
