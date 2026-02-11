@@ -1596,7 +1596,78 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	mcpTools.push(createHealthStatusTool());
 	mcpTools.push(createAtmanReportTool());
 
-	// ─── 2. Create MCP server ────────────────────────────────────────
+	// ─── 2. Session recording ───────────────────────────────────────
+	// Lazy-init: create a session on the first tool call, record every
+	// tool invocation as a turn. This gives /last_session and /recall
+	// something to work with.
+	let mcpSessionId: string | null = null;
+	let turnCounter = 0;
+
+	const ensureSession = () => {
+		if (mcpSessionId) return mcpSessionId;
+		try {
+			const { createSession } = require("@chitragupta/smriti/session-store") as typeof import("@chitragupta/smriti/session-store");
+			const session = createSession({
+				project: projectPath,
+				agent: "mcp",
+				model: "mcp-client",
+				title: `MCP session`,
+			});
+			mcpSessionId = session.meta.id;
+		} catch {
+			// Session recording is best-effort — don't break MCP if smriti fails
+		}
+		return mcpSessionId;
+	};
+
+	const recordToolCall = (info: { tool: string; args: Record<string, unknown>; result: import("@chitragupta/tantra").McpToolResult; elapsedMs: number }) => {
+		const sid = ensureSession();
+		if (!sid) return;
+
+		try {
+			const { addTurn } = require("@chitragupta/smriti/session-store") as typeof import("@chitragupta/smriti/session-store");
+
+			// Record tool call as a user turn (the request)
+			const argSummary = Object.keys(info.args).length > 0
+				? JSON.stringify(info.args).slice(0, 500)
+				: "(no args)";
+			addTurn(sid, projectPath, {
+				turnNumber: 0,
+				role: "user",
+				content: `[tool:${info.tool}] ${argSummary}`,
+				agent: "mcp-client",
+				model: "mcp",
+			}).catch(() => {});
+
+			// Record tool result as an assistant turn (the response)
+			const resultText = info.result.content
+				?.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.map((c) => c.text)
+				.join("\n")
+				.slice(0, 2000) ?? "(no output)";
+			addTurn(sid, projectPath, {
+				turnNumber: 0,
+				role: "assistant",
+				content: `[${info.tool} → ${info.elapsedMs.toFixed(0)}ms] ${resultText}`,
+				agent: "mcp",
+				model: "mcp",
+			}).catch(() => {});
+
+			turnCounter += 2;
+
+			// Update state file with session info
+			writeChitraguptaState({
+				sessionId: sid,
+				project: projectPath,
+				turnCount: turnCounter,
+				lastTool: info.tool,
+			});
+		} catch {
+			// best-effort
+		}
+	};
+
+	// ─── 3. Create MCP server ────────────────────────────────────────
 	const server = new McpServer({
 		name,
 		version: "0.1.0",
@@ -1617,9 +1688,10 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			createMemorySearchPrompt(),
 			createSessionPrompt(),
 		],
+		onToolCall: recordToolCall,
 	});
 
-	// ─── 3. State file + graceful shutdown ───────────────────────────
+	// ─── 4. State file + graceful shutdown ───────────────────────────
 	_mcpStartedAt = new Date().toISOString();
 	writeChitraguptaState({
 		active: true,

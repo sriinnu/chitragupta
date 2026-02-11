@@ -301,6 +301,11 @@ export class McpServer {
 			// Strip internal metadata before sending over wire
 			delete result._metadata;
 
+			// Fire onToolCall hook (session recording, analytics, etc.)
+			if (this._config.onToolCall) {
+				try { this._config.onToolCall({ tool: toolName, args, result, elapsedMs: elapsed }); } catch { /* best-effort */ }
+			}
+
 			return createResponse(id, result);
 		} catch (err) {
 			const elapsed = performance.now() - t0;
