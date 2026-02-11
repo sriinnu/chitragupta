@@ -932,6 +932,83 @@ export async function main(args: ParsedArgs): Promise<void> {
 		// Silently skip: plugin loading is best-effort
 	}
 
+	// ─── 10a-ii. Register coding_agent tool ─────────────────────────────
+	// Allows the TUI agent to autonomously delegate coding tasks to the
+	// CodingOrchestrator (Sanyojaka) — full Plan → Branch → Execute →
+	// Validate → Review → Commit pipeline as a single tool call.
+	agent.registerTool({
+		definition: {
+			name: "coding_agent",
+			description:
+				"Delegate a coding task to the CodingOrchestrator (Kartru). " +
+				"Runs a full autonomous pipeline: Plan → Branch → Execute → Validate → Review → Commit. " +
+				"Use this for substantial coding tasks that benefit from structured execution, " +
+				"git safety nets, validation, and self-review. Returns a detailed result with " +
+				"files modified, validation status, review issues, and usage stats.",
+			inputSchema: {
+				type: "object",
+				properties: {
+					task: { type: "string", description: "The coding task to accomplish." },
+					mode: { type: "string", enum: ["full", "execute", "plan-only"], description: "Execution mode. Default: full" },
+					createBranch: { type: "boolean", description: "Create a git feature branch. Default: true" },
+					autoCommit: { type: "boolean", description: "Auto-commit on success. Default: true" },
+					selfReview: { type: "boolean", description: "Run self-review after coding. Default: true" },
+				},
+				required: ["task"],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<import("@chitragupta/core").ToolResult> {
+			const task = String(args.task ?? "");
+			if (!task) return { content: "Error: task is required", isError: true };
+
+			try {
+				const { CodingOrchestrator } = await import("@chitragupta/anina");
+
+				const parentProvider = agent.getProvider();
+				if (!parentProvider) return { content: "Error: No provider available", isError: true };
+
+				const agentState = agent.getState();
+
+				// Get tools from yantra
+				const codeTools = getBuiltinTools();
+
+				// Project context
+				const ctxParts: string[] = [];
+				try {
+					const { loadContextFiles, buildContextString } = await import("./context-files.js");
+					const ctxFiles = loadContextFiles(projectPath);
+					const ctxString = buildContextString(ctxFiles);
+					if (ctxString) ctxParts.push(ctxString);
+				} catch { /* optional */ }
+
+				const mem = loadProjectMemory(projectPath);
+				if (mem) ctxParts.push(`--- Project Memory ---\n${mem}`);
+
+				const orchestrator = new CodingOrchestrator({
+					workingDirectory: projectPath,
+					mode: (args.mode as "full" | "execute" | "plan-only") ?? "full",
+					providerId: agentState.providerId,
+					modelId: agentState.model,
+					tools: codeTools,
+					provider: parentProvider,
+					additionalContext: ctxParts.length > 0 ? ctxParts.join("\n\n") : undefined,
+					timeoutMs: 5 * 60 * 1000,
+					createBranch: args.createBranch != null ? Boolean(args.createBranch) : undefined,
+					autoCommit: args.autoCommit != null ? Boolean(args.autoCommit) : undefined,
+					selfReview: args.selfReview != null ? Boolean(args.selfReview) : undefined,
+				});
+
+				const result = await orchestrator.run(task);
+
+				// Format result as structured text
+				const { formatOrchestratorResult } = await import("./modes/mcp-server.js");
+				return { content: formatOrchestratorResult(result) };
+			} catch (err) {
+				return { content: `coding_agent failed: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+			}
+		},
+	});
+
 	// ─── 10b. Register agent with KaalaBrahma lifecycle manager ──────
 	if (kaala) {
 		try {

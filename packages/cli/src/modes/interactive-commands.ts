@@ -462,66 +462,230 @@ export async function handleSlashCommand(
 
     case "/code": {
       const rest = parts.slice(1).join(" ").trim();
-      if (!rest) {
-        stdout.write(yellow("\n  Usage: /code <task description>\n"));
-        stdout.write(dim("  Spawns a focused coding agent (Kartru) for the task.\n\n"));
+
+      // Parse flags: --plan, --no-branch, --no-commit, --no-review
+      let codeTask = "";
+      let codeMode: "full" | "execute" | "plan-only" = "full";
+      let codeBranch: boolean | undefined;
+      let codeCommit: boolean | undefined;
+      let codeReview: boolean | undefined;
+
+      if (rest) {
+        const codeParts = rest.split(/\s+/);
+        const taskParts: string[] = [];
+        for (let ci = 0; ci < codeParts.length; ci++) {
+          if (codeParts[ci] === "--plan") codeMode = "plan-only";
+          else if (codeParts[ci] === "--execute") codeMode = "execute";
+          else if (codeParts[ci] === "--no-branch") codeBranch = false;
+          else if (codeParts[ci] === "--no-commit") codeCommit = false;
+          else if (codeParts[ci] === "--no-review") codeReview = false;
+          else taskParts.push(codeParts[ci]);
+        }
+        codeTask = taskParts.join(" ");
+      }
+
+      if (!codeTask) {
+        stdout.write(yellow("\n  Usage: /code <task description> [--plan] [--no-branch] [--no-commit] [--no-review]\n"));
+        stdout.write(dim("  Runs the full coding pipeline: Plan → Branch → Execute → Validate → Review → Commit\n"));
+        stdout.write(dim("  Shows token usage, tool usage, cost breakdown, and timing.\n\n"));
         return { handled: true };
       }
 
-      stdout.write(dim("\n  Spawning Kartru coding agent...\n"));
+      stdout.write(dim(`\n  ═══ Coding Agent (Kartru) ═══════════════════\n`));
+      stdout.write(dim(`  Task: ${codeTask}\n`));
+      stdout.write(dim(`  Mode: ${codeMode}\n`));
+
       try {
-        const { CodingAgent, CODE_TOOL_NAMES } = await import("@chitragupta/anina");
+        const { CodingOrchestrator } = await import("@chitragupta/anina");
         const { getAllTools } = await import("@chitragupta/yantra");
 
-        // Filter to code-relevant tools
-        const codeTools = getAllTools().filter((t) => CODE_TOOL_NAMES.has(t.definition.name));
-
-        const coder = new CodingAgent({
-          workingDirectory: process.cwd(),
-          autoValidate: true,
-          maxValidationRetries: 3,
-          tools: codeTools,
-        });
-
-        // Detect project conventions first
-        const conventions = await coder.detectConventions();
-        if (conventions.testCommand) {
-          stdout.write(dim(`  Test: ${conventions.testCommand}\n`));
-        }
-        if (conventions.buildCommand) {
-          stdout.write(dim(`  Build: ${conventions.buildCommand}\n`));
-        }
-        if (conventions.lintCommand) {
-          stdout.write(dim(`  Lint: ${conventions.lintCommand}\n`));
-        }
-
-        // The coding agent needs a provider — borrow from the parent agent
+        // Borrow provider from the parent TUI agent
         const parentProvider = agent.getProvider();
-        if (parentProvider) {
-          coder.getAgent().setProvider(parentProvider);
-        } else {
+        if (!parentProvider) {
           stdout.write(red("  Error: No provider available. Set a provider first.\n\n"));
           return { handled: true };
         }
 
-        const result = await coder.execute(rest);
+        const agentState = agent.getState();
+        const projectPath = ctx.projectPath ?? process.cwd();
+
+        // Tools from yantra
+        const tools = getAllTools().map((t) => ({
+          definition: t.definition as import("@chitragupta/anina").ToolHandler["definition"],
+          execute: t.execute as import("@chitragupta/anina").ToolHandler["execute"],
+        }));
+
+        // Project context & memory
+        const contextParts: string[] = [];
+        try {
+          const { loadContextFiles, buildContextString } = await import("../context-files.js");
+          const ctxFiles = loadContextFiles(projectPath);
+          const ctxString = buildContextString(ctxFiles);
+          if (ctxString) contextParts.push(ctxString);
+        } catch { /* optional */ }
+
+        try {
+          const { loadProjectMemory } = await import("../bootstrap.js");
+          const memory = loadProjectMemory(projectPath);
+          if (memory) contextParts.push(`--- Project Memory ---\n${memory}`);
+        } catch { /* optional */ }
+
+        const additionalContext = contextParts.length > 0 ? contextParts.join("\n\n") : undefined;
+
+        // Policy engine
+        let policyEngine: { check(toolName: string, args: Record<string, unknown>): { allowed: boolean; reason?: string } } | undefined;
+        try {
+          const { PolicyEngine, STANDARD_PRESET } = await import("@chitragupta/dharma");
+          const { getActionType } = await import("../bootstrap.js");
+          const preset = STANDARD_PRESET;
+          const engine = new PolicyEngine(preset.config);
+          for (const ps of preset.policySets) engine.addPolicySet(ps);
+
+          policyEngine = {
+            check(toolName: string, toolArgs: Record<string, unknown>) {
+              const actionType = getActionType(toolName);
+              const action = {
+                type: actionType, tool: toolName, args: toolArgs,
+                filePath: (toolArgs.path ?? toolArgs.file_path ?? toolArgs.filePath) as string | undefined,
+                command: (toolArgs.command ?? toolArgs.cmd) as string | undefined,
+                content: (toolArgs.content ?? toolArgs.text) as string | undefined,
+                url: (toolArgs.url ?? toolArgs.uri) as string | undefined,
+              };
+              const context = {
+                sessionId: "coding-tui", agentId: "kartru", agentDepth: 0, projectPath,
+                totalCostSoFar: 0, costBudget: preset.config.costBudget,
+                filesModified: [] as string[], commandsRun: [] as string[], timestamp: Date.now(),
+              };
+              try {
+                for (const ps of preset.policySets) {
+                  for (const rule of ps.rules) {
+                    const verdict = rule.evaluate(action, context);
+                    if (verdict && typeof verdict === "object" && "status" in verdict && !("then" in verdict)) {
+                      const v = verdict as { status: string; reason: string };
+                      if (v.status === "deny") return { allowed: false, reason: v.reason };
+                    }
+                  }
+                }
+              } catch { /* allow by default */ }
+              return { allowed: true };
+            },
+          };
+        } catch { /* dharma is optional */ }
+
+        // Progress streaming to TUI
+        const onProgress = (progress: { phase: string; message: string; elapsedMs: number }) => {
+          const mark = progress.phase === "error" ? red("✗") : progress.phase === "done" ? green("✓") : yellow("⧖");
+          const ms = progress.elapsedMs < 1000 ? `${progress.elapsedMs}ms` : `${(progress.elapsedMs / 1000).toFixed(1)}s`;
+          stdout.write(`  ${mark} ${bold(progress.phase.padEnd(12))} ${dim(ms.padStart(8))}\n`);
+        };
+
+        // Create orchestrator
+        const orchestrator = new CodingOrchestrator({
+          workingDirectory: projectPath,
+          mode: codeMode,
+          providerId: agentState.providerId,
+          modelId: agentState.model,
+          tools,
+          provider: parentProvider,
+          policyEngine,
+          additionalContext,
+          timeoutMs: 5 * 60 * 1000,
+          onProgress,
+          createBranch: codeBranch,
+          autoCommit: codeCommit,
+          selfReview: codeReview,
+        });
 
         stdout.write("\n");
-        stdout.write(result.success ? green("  Task completed") : red("  Task failed"));
-        stdout.write("\n");
-        if (result.filesModified.length > 0) {
-          stdout.write(dim(`  Modified: ${result.filesModified.join(", ")}\n`));
-        }
-        if (result.filesCreated.length > 0) {
-          stdout.write(dim(`  Created: ${result.filesCreated.join(", ")}\n`));
-        }
-        if (result.validationOutput !== undefined) {
-          stdout.write(dim(`  Validation: ${result.validationPassed ? "passed" : "failed"}\n`));
-          if (result.validationRetries > 0) {
-            stdout.write(dim(`  Retries: ${result.validationRetries}\n`));
+        const result = await orchestrator.run(codeTask);
+
+        // ── Compute usage stats from agent messages ──
+        const codingAgent = orchestrator.getCodingAgent();
+        let totalCost = 0;
+        let totalToolCalls = 0;
+        const toolCallMap = new Map<string, number>();
+        let turns = 0;
+
+        if (codingAgent) {
+          const messages = codingAgent.getAgent().getMessages();
+          for (const msg of messages) {
+            if (msg.role === "assistant") {
+              turns++;
+              if (msg.cost) totalCost += msg.cost.total;
+            }
+            for (const part of msg.content) {
+              if (part.type === "tool_call" && "name" in part) {
+                const name = (part as { name: string }).name;
+                toolCallMap.set(name, (toolCallMap.get(name) ?? 0) + 1);
+                totalToolCalls++;
+              }
+            }
           }
         }
-        stdout.write(dim(`  Summary: ${result.summary}\n`));
+
+        // ── Render result ──
+        stdout.write("\n");
+        const status = result.success ? green("✓ Success") : red("✗ Failed");
+        const complexity = result.plan?.complexity ?? "unknown";
+        stdout.write(`  Status: ${status} | Complexity: ${complexity}\n`);
+
+        // Plan
+        if (result.plan && result.plan.steps.length > 0) {
+          stdout.write(dim("\n  ── Plan ──\n"));
+          for (const step of result.plan.steps) {
+            const mark = step.completed ? green("✓") : gray("○");
+            stdout.write(`  ${step.index}. [${mark}] ${step.description}\n`);
+          }
+        }
+
+        // Files
+        if (result.filesModified.length > 0 || result.filesCreated.length > 0) {
+          stdout.write(dim("\n  ── Files ──\n"));
+          if (result.filesModified.length > 0) stdout.write(`  ${yellow("Modified:")} ${result.filesModified.join(", ")}\n`);
+          if (result.filesCreated.length > 0) stdout.write(`  ${green("Created:")}  ${result.filesCreated.join(", ")}\n`);
+        }
+
+        // Git
+        if (result.git.featureBranch || result.git.commits.length > 0) {
+          stdout.write(dim("\n  ── Git ──\n"));
+          if (result.git.featureBranch) stdout.write(`  Branch:  ${cyan(result.git.featureBranch)}\n`);
+          if (result.git.commits.length > 0) stdout.write(`  Commits: ${dim(result.git.commits.join(", "))}\n`);
+        }
+
+        // Validation
+        stdout.write(dim("\n  ── Validation ──\n"));
+        stdout.write(`  Result: ${result.validationPassed ? green("✓ passed") : red("✗ failed")}\n`);
+
+        // Review
+        if (result.reviewIssues.length > 0) {
+          stdout.write(dim("\n  ── Review ──\n"));
+          stdout.write(`  ${result.reviewIssues.length} issue(s) found\n`);
+          for (const issue of result.reviewIssues.slice(0, 10)) {
+            const sev = issue.severity === "error" ? red(issue.severity) : yellow(issue.severity);
+            stdout.write(`    ${sev} ${issue.file}${issue.line ? `:${issue.line}` : ""} — ${issue.message}\n`);
+          }
+        }
+
+        // ── Token/Tool Usage Stats ──
+        if (totalToolCalls > 0 || totalCost > 0) {
+          stdout.write(dim("\n  ══ Tool Usage ═════════════════════════\n"));
+          const sorted = [...toolCallMap.entries()].sort((a, b) => b[1] - a[1]);
+          for (const [name, count] of sorted) {
+            const pct = totalToolCalls > 0 ? ((count / totalToolCalls) * 100).toFixed(1) : "0.0";
+            stdout.write(`  ${magenta("▸")} ${dim(name.padEnd(10))}${String(count).padStart(4)} calls  ${gray(`(${pct}%)`.padStart(8))}\n`);
+          }
+          stdout.write(dim("  ─────────────────────────────────\n"));
+          stdout.write(`  ${bold("Total:")}  ${totalToolCalls} calls | ${turns} turns\n`);
+        }
+
+        if (totalCost > 0) {
+          stdout.write(dim("\n  ══ Cost ══════════════════════════════\n"));
+          stdout.write(`  ${yellow(`$${totalCost.toFixed(4)}`)}\n`);
+        }
+
+        // Timing
+        const elapsed = result.elapsedMs < 1000 ? `${result.elapsedMs}ms` : result.elapsedMs < 60000 ? `${(result.elapsedMs / 1000).toFixed(1)}s` : `${Math.floor(result.elapsedMs / 60000)}m ${((result.elapsedMs % 60000) / 1000).toFixed(0)}s`;
+        stdout.write(`\n  ${bold(dim(`⏱ ${elapsed}`))}\n`);
         stdout.write("\n");
       } catch (err) {
         stdout.write(red(`  Error: ${err instanceof Error ? err.message : String(err)}\n\n`));
