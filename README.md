@@ -104,14 +104,56 @@ pnpm chitragupta -- serve
 pnpm chitragupta -- mcp
 ```
 
-### Claude Code Integration
+See [GETTING_STARTED.md](GETTING_STARTED.md) for the full setup guide — providers, config, MCP, profiles, memory.
+
+---
+
+## MCP Integration
+
+Chitragupta's killer feature: **persistent memory for AI agents**. Your AI coding assistant (Claude Code, Codex, etc.) forgets everything between sessions. Chitragupta fixes that.
+
+### One-Command Setup
+
+```bash
+cd your-project
+chitragupta init
+```
+
+That's it. This does two things:
+
+1. **Creates `.mcp.json`** — configures Chitragupta as an MCP server for your AI client
+2. **Updates `CLAUDE.md`** (or `.codex/instructions.md`) — teaches the agent *when* to call Chitragupta's tools
+
+### What the Agent Gets
+
+Once initialized, your AI agent automatically:
+
+- **Searches past sessions** at the start of every conversation for relevant context
+- **Remembers decisions** — "we chose factory pattern" persists across sessions
+- **Preserves work state** — when context compacts, the handover tool saves what you were doing
+- **Learns your patterns** — coding style, preferred approaches, recurring workflows
+
+### 25 MCP Tools
+
+| Category | Tools | What They Do |
+|----------|-------|-------------|
+| **Memory** | `chitragupta_memory_search`, `chitragupta_session_list`, `chitragupta_session_show` | Search & browse past sessions |
+| **Continuity** | `chitragupta_handover`, `chitragupta_prompt` | Context handover, agent delegation |
+| **Collective** | `akasha_traces`, `akasha_deposit`, `samiti_channels`, `samiti_broadcast`, `sabha_deliberate` | Shared knowledge, multi-agent deliberation |
+| **Self-Awareness** | `vasana_tendencies`, `health_status`, `atman_report` | Learned patterns, health, identity |
+| **File & Shell** | `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `diff`, `watch`, `memory`, `session`, `project_analysis` | Full development toolkit |
+
+### Manual Setup (if you prefer)
+
+<details>
+<summary>Claude Code — .mcp.json</summary>
 
 ```json
 {
   "mcpServers": {
     "chitragupta": {
-      "command": "node",
-      "args": ["/path/to/chitragupta/packages/cli/dist/mcp-entry.js", "--agent"],
+      "command": "npx",
+      "args": ["-y", "chitragupta-mcp", "--stdio"],
       "env": {
         "CHITRAGUPTA_MCP_PROJECT": "/path/to/your/project"
       }
@@ -120,7 +162,71 @@ pnpm chitragupta -- mcp
 }
 ```
 
-See [GETTING_STARTED.md](GETTING_STARTED.md) for the full setup guide — providers, config, MCP, profiles, memory.
+Then add to your project's `CLAUDE.md`:
+
+```markdown
+# Chitragupta MCP
+
+## Session Start
+- At the START of every session, call `chitragupta_memory_search` with the current task.
+- Call `chitragupta_session_list` to see recent sessions.
+
+## During Work
+- Search past sessions before making architectural decisions.
+- Call `akasha_deposit` after completing significant work.
+
+## Context Limits
+- Call `chitragupta_handover` when approaching context limits.
+```
+
+</details>
+
+<details>
+<summary>Codex CLI — .codex/config.json</summary>
+
+```json
+{
+  "mcpServers": {
+    "chitragupta": {
+      "command": "npx",
+      "args": ["-y", "chitragupta-mcp", "--stdio"],
+      "env": {
+        "CHITRAGUPTA_MCP_PROJECT": "/path/to/your/project"
+      }
+    }
+  }
+}
+```
+
+Add the same instructions to `.codex/instructions.md`.
+
+</details>
+
+<details>
+<summary>SSE Transport (multi-client)</summary>
+
+If you want multiple clients sharing one memory server:
+
+```bash
+# Start the SSE server
+chitragupta mcp-server --sse --port 3001
+
+# Point clients to http://localhost:3001
+```
+
+</details>
+
+### How It Works
+
+```
+chitragupta init          ← one-time setup (creates .mcp.json + CLAUDE.md)
+         ↓
+claude / codex            ← agent auto-discovers Chitragupta via MCP
+         ↓
+agent calls tools         ← memory_search at start, handover at end, akasha during work
+         ↓
+context persists          ← next session picks up where you left off
+```
 
 ---
 

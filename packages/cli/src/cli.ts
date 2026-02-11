@@ -361,6 +361,12 @@ async function handleSubcommand(command: string, subcommand: string | undefined,
 			break;
 		}
 
+		case "init": {
+			const init = await import("./commands/init.js");
+			await init.run(rest);
+			break;
+		}
+
 		default:
 			process.stderr.write(
 				`\nUnknown command: ${command}\n` +

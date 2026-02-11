@@ -162,14 +162,29 @@ export const bashTool: ToolHandler = {
 			const proc = spawn(command, [], {
 				shell: true,
 				cwd,
+				detached: true,
 				stdio: ["ignore", "pipe", "pipe"],
 				env: buildSafeEnv(),
 			});
 
+			/**
+			 * Kill the entire process group (shell + children like `sleep`).
+			 * On Linux/WSL, `shell: true` spawns a child under /bin/sh.
+			 * SIGTERM to the shell alone does NOT propagate to children,
+			 * so we kill the process group via negative pid.
+			 */
+			const killGroup = (sig: NodeJS.Signals) => {
+				try {
+					if (proc.pid) process.kill(-proc.pid, sig);
+				} catch {
+					try { proc.kill(sig); } catch { /* already dead */ }
+				}
+			};
+
 			// Handle abort signal from context
 			const abortHandler = () => {
 				killed = true;
-				proc.kill("SIGTERM");
+				killGroup("SIGTERM");
 			};
 			if (context.signal) {
 				context.signal.addEventListener("abort", abortHandler, { once: true });
@@ -179,15 +194,8 @@ export const bashTool: ToolHandler = {
 			const timer = setTimeout(() => {
 				timedOut = true;
 				killed = true;
-				proc.kill("SIGTERM");
-				// Give it a moment, then SIGKILL
-				setTimeout(() => {
-					try {
-						proc.kill("SIGKILL");
-					} catch {
-						// Process may already be dead
-					}
-				}, 1000);
+				killGroup("SIGTERM");
+				setTimeout(() => killGroup("SIGKILL"), 500);
 			}, timeout);
 
 			const collectOutput = (data: Buffer) => {
