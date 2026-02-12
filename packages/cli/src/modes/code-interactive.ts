@@ -195,6 +195,7 @@ function printHelp(): void {
 	stdout.write("\n");
 	stdout.write(bold("  Commands:\n"));
 	stdout.write(`  ${cyan("/plan")} ${dim("<task>")}     Plan only, don't execute\n`);
+	stdout.write(`  ${cyan("/ask")} ${dim("<question>")}  Ask about the codebase (reads files, no edits)\n`);
 	stdout.write(`  ${cyan("/chat")} ${dim("<msg>")}      Chat with the AI (no code execution)\n`);
 	stdout.write(`  ${cyan("/mode")} ${dim("<mode>")}     Switch mode (full, execute, plan-only)\n`);
 	stdout.write(`  ${cyan("/diff")}             Show last diff\n`);
@@ -624,6 +625,17 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 						return;
 					}
 
+					case "/ask": {
+						if (!arg) {
+							stdout.write(yellow("\n  Usage: /ask <question about the codebase>\n\n"));
+							rl.prompt();
+							return;
+						}
+						await askCodebase(arg);
+						rl.prompt();
+						return;
+					}
+
 					case "/chat": {
 						if (!arg) {
 							stdout.write(yellow("\n  Usage: /chat <message>\n\n"));
@@ -726,6 +738,72 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 					stdout.write(red(`\n  Error: ${msg}\n\n`));
 				}
 			}
+		}
+
+		/**
+		 * Ask a question about the codebase using read-only tools.
+		 * The agent can read, grep, find, and ls files but cannot edit or write.
+		 */
+		async function askCodebase(question: string): Promise<void> {
+			stdout.write("\n");
+			stdout.write(dim("  ── Exploring codebase ──\n\n"));
+
+			try {
+				const { KARTRU_PROFILE } = await import("@chitragupta/core");
+				const { Agent } = await import("@chitragupta/anina");
+				const { CODE_TOOL_NAMES } = await import("@chitragupta/anina");
+
+				// Filter to read-only tools only
+				const readOnlyNames = new Set(["read", "grep", "find", "ls", "bash", "diff"]);
+				const readOnlyTools = (codingSetup.tools ?? []).filter(
+					(t) => readOnlyNames.has(t.definition.name),
+				);
+
+				const agent = new Agent({
+					profile: { ...KARTRU_PROFILE, id: "code-explorer", name: "Kartru Explorer" },
+					providerId: codingSetup.providerId,
+					model: options.model ?? KARTRU_PROFILE.preferredModel ?? "claude-sonnet-4-5-20250929",
+					tools: readOnlyTools,
+					thinkingLevel: "medium",
+					workingDirectory: projectPath,
+					maxTurns: 8,
+					enableChetana: false,
+					enableLearning: false,
+					enableAutonomy: false,
+					onEvent: (event, data) => {
+						// Show tool calls during exploration
+						if (event === "stream:tool_call") {
+							const d = data as Record<string, unknown>;
+							const name = (d.name as string) ?? "?";
+							const icon = name === "read" ? "📖" : name === "grep" ? "🔎" : name === "find" ? "📂" : name === "ls" ? "📁" : "🔧";
+							stdout.write(`    ${icon} ${gray(name)}\n`);
+						}
+					},
+				});
+				agent.setProvider(codingSetup.provider as import("@chitragupta/swara").ProviderDefinition);
+
+				const response = await agent.prompt(
+					`You are a code exploration assistant. Answer this question about the codebase at ${projectPath}:\n\n${question}\n\nUse the available tools to read files, search code, and explore the project structure. Be thorough but concise in your answer.`,
+				);
+				const text = response.content
+					.filter((p) => p.type === "text")
+					.map((p) => (p as { type: "text"; text: string }).text)
+					.join("\n");
+
+				stdout.write("\n");
+				if (text) {
+					for (const line of text.split("\n")) {
+						stdout.write(`  ${line}\n`);
+					}
+				} else {
+					stdout.write(dim("  (no response)\n"));
+				}
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				stdout.write(red(`  Exploration error: ${msg}\n`));
+			}
+
+			stdout.write("\n");
 		}
 
 		/**
