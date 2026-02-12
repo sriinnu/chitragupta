@@ -596,7 +596,7 @@ describe("VidyaOrchestrator", () => {
 				orch.onSkillRejected("dynamic-tool");
 
 				// 5. Session end
-				orch.onSessionEnd("int-session", ["lifecycle-skill", "dynamic-tool"]);
+				await orch.onSessionEnd("int-session", ["lifecycle-skill", "dynamic-tool"]);
 
 				// 6. Evaluate lifecycles
 				const report = orch.evaluateLifecycles();

@@ -154,7 +154,8 @@ export class RecallEngine {
       const db = this.getVectorsDb();
       const rows = db.prepare("SELECT * FROM embeddings").all() as EmbeddingRow[];
       this.entries = rows.map((row) => {
-        const metadata = JSON.parse(row.metadata ?? "{}");
+        let metadata: { title?: string; summary?: string; tags?: string[]; date?: string; deviceId?: string } = {};
+        try { metadata = JSON.parse(row.metadata ?? "{}"); } catch { /* corrupted metadata */ }
         return {
           id: row.id,
           vector: blobToVector(row.vector),

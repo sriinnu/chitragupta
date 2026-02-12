@@ -13,14 +13,15 @@ import type {
 /**
  * Compute Jaccard similarity coefficient between two string arrays.
  *
- * Comparison is case-insensitive. Returns 1 if both arrays are empty.
+ * Comparison is case-insensitive. Returns 0 if both arrays are empty
+ * (no capabilities = no match for routing purposes).
  *
  * @param a - First string array.
  * @param b - Second string array.
  * @returns A value between 0 (no overlap) and 1 (identical sets).
  */
 export function jaccardSimilarity(a: string[], b: string[]): number {
-	if (a.length === 0 && b.length === 0) return 1;
+	if (a.length === 0 && b.length === 0) return 0;
 	const setA = new Set(a.map((s) => s.toLowerCase()));
 	const setB = new Set(b.map((s) => s.toLowerCase()));
 	let intersection = 0;

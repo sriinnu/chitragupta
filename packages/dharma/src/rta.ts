@@ -373,7 +373,7 @@ export const noCostExplosion: RtaRule = {
 		}
 
 		// Check if the next operation would exceed the budget
-		if (estimatedCost > 0 && totalCostSoFar + estimatedCost > effectiveBudget) {
+		if (totalCostSoFar + estimatedCost > effectiveBudget) {
 			return {
 				allowed: false,
 				ruleId: this.id,

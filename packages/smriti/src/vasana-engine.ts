@@ -23,9 +23,9 @@ function fnv1a(input: string): string {
 	let hash = FNV_OFFSET;
 	for (let i = 0; i < input.length; i++) {
 		hash ^= input.charCodeAt(i);
-		hash = Math.imul(hash, FNV_PRIME);
+		hash = (Math.imul(hash, FNV_PRIME)) >>> 0;
 	}
-	return (hash >>> 0).toString(16).padStart(8, "0");
+	return hash.toString(16).padStart(8, "0");
 }
 
 // ─── Configuration ──────────────────────────────────────────────────────────

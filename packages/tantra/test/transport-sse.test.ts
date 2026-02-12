@@ -66,7 +66,7 @@ describe("SSEServerTransport", () => {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(rpcMessage),
 		});
-		expect(response.status).toBe(202);
+		expect(response.status).toBe(200);
 
 		// Wait a tick for the handler to be invoked
 		await new Promise((r) => setTimeout(r, 50));

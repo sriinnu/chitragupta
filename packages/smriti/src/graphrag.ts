@@ -607,7 +607,7 @@ export class GraphRAGEngine {
             type: row.type as GraphNode["type"],
             label: row.label as string,
             content: (row.content as string) ?? "",
-            metadata: JSON.parse((row.metadata as string) ?? "{}"),
+            metadata: (() => { try { return JSON.parse((row.metadata as string) ?? "{}"); } catch { return {}; } })(),
             // Note: embedding not stored in nodes table — it's in vectors.db (Phase 0.6)
           }));
 

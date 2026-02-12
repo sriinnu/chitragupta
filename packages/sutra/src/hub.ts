@@ -423,7 +423,7 @@ export class CommHub {
 		const handler = topicHandlers.get(envelope.to);
 		if (handler) {
 			try { handler(envelope); } catch (err) {
-				this.log(`[deliver:error] Failed to deliver to ${envelope.to}: ${err}`);
+				if (typeof process !== "undefined") process.stderr?.write?.(`[hub:deliver:error] ${envelope.to}: ${err}\n`);
 			}
 		}
 	}
@@ -434,7 +434,7 @@ export class CommHub {
 		for (const [agentId, handler] of topicHandlers) {
 			if (agentId === envelope.from) continue;
 			try { handler(envelope); } catch (err) {
-				this.log(`[broadcast:error] Failed to deliver to ${agentId}: ${err}`);
+				if (typeof process !== "undefined") process.stderr?.write?.(`[hub:broadcast:error] ${agentId}: ${err}\n`);
 			}
 		}
 	}

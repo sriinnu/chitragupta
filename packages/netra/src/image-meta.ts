@@ -84,9 +84,10 @@ function parsePng(buffer: Buffer): { width: number; height: number } {
 	if (buffer.length < 24) {
 		throw new Error("PNG buffer too short to contain IHDR chunk");
 	}
+	const chunkLength = buffer.readUInt32BE(8);
 	const chunkType = buffer.subarray(12, 16).toString("ascii");
-	if (chunkType !== "IHDR") {
-		throw new Error(`Expected IHDR chunk, got "${chunkType}"`);
+	if (chunkType !== "IHDR" || chunkLength !== 13) {
+		throw new Error(`Invalid PNG: expected IHDR chunk (length 13), got "${chunkType}" (length ${chunkLength})`);
 	}
 	const width = buffer.readUInt32BE(16);
 	const height = buffer.readUInt32BE(20);
