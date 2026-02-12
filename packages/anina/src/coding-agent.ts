@@ -120,6 +120,20 @@ export interface ProjectConventions {
 	hasTypeScript: boolean;
 	/** Detected framework (e.g. "react", "next.js"). */
 	framework?: string;
+	/** Whether this is a monorepo. */
+	isMonorepo?: boolean;
+	/** Package manager in use (npm, pnpm, yarn, bun). */
+	packageManager?: string;
+	/** Detected test framework (vitest, jest, mocha, ava, tap). */
+	testFramework?: string;
+	/** Detected formatter (prettier, biome). */
+	formatter?: string;
+	/** TypeScript strictness level (strict, moderate, loose). */
+	tsStrictness?: "strict" | "moderate" | "loose";
+	/** TypeScript compilation target. */
+	tsTarget?: string;
+	/** Test directory pattern (e.g. "__tests__", "test", "*.test.ts"). */
+	testPattern?: string;
 }
 
 // ─── CodingAgent ─────────────────────────────────────────────────────────────
@@ -314,6 +328,29 @@ export class CodingAgent {
 			hasTypeScript: false,
 		};
 
+		// ─── Package manager detection ──────────────────────────────────
+		if (existsSync(join(dir, "pnpm-lock.yaml")) || existsSync(join(dir, "pnpm-workspace.yaml")))
+			conventions.packageManager = "pnpm";
+		else if (existsSync(join(dir, "yarn.lock")))
+			conventions.packageManager = "yarn";
+		else if (existsSync(join(dir, "bun.lockb")) || existsSync(join(dir, "bun.lock")))
+			conventions.packageManager = "bun";
+		else if (existsSync(join(dir, "package-lock.json")))
+			conventions.packageManager = "npm";
+
+		const runPrefix = conventions.packageManager === "pnpm" ? "pnpm" :
+			conventions.packageManager === "yarn" ? "yarn" :
+			conventions.packageManager === "bun" ? "bun" : "npm";
+
+		// ─── Monorepo detection ─────────────────────────────────────────
+		if (
+			existsSync(join(dir, "pnpm-workspace.yaml")) ||
+			existsSync(join(dir, "lerna.json")) ||
+			existsSync(join(dir, "nx.json"))
+		) {
+			conventions.isMonorepo = true;
+		}
+
 		// ─── package.json detection ──────────────────────────────────────
 		const pkgPath = join(dir, "package.json");
 		if (existsSync(pkgPath)) {
@@ -328,39 +365,89 @@ export class CodingAgent {
 				const typeField = pkg.type as string | undefined;
 				conventions.moduleSystem = typeField === "module" ? "esm" : typeField === "commonjs" ? "commonjs" : "unknown";
 
+				// Yarn workspaces monorepo
+				if (pkg.workspaces && !conventions.isMonorepo) {
+					conventions.isMonorepo = true;
+				}
+
 				// Scripts
 				const scripts = pkg.scripts as Record<string, string> | undefined;
 				if (scripts) {
 					if (scripts.test && scripts.test !== "echo \"Error: no test specified\" && exit 1") {
-						conventions.testCommand = `npm test`;
+						conventions.testCommand = `${runPrefix} test`;
 					}
 					if (scripts.build) {
-						conventions.buildCommand = `npm run build`;
+						conventions.buildCommand = `${runPrefix} run build`;
 					}
 					if (scripts.lint) {
-						conventions.lintCommand = `npm run lint`;
+						conventions.lintCommand = `${runPrefix} run lint`;
 					}
 				}
 
-				// Framework detection
+				// Framework detection (expanded)
 				const deps = { ...(pkg.dependencies as Record<string, string> ?? {}), ...(pkg.devDependencies as Record<string, string> ?? {}) };
 				if (deps.next) conventions.framework = "next.js";
+				else if (deps.nuxt) conventions.framework = "nuxt";
+				else if (deps.remix || deps["@remix-run/node"]) conventions.framework = "remix";
+				else if (deps.astro) conventions.framework = "astro";
+				else if (deps["@angular/core"]) conventions.framework = "angular";
 				else if (deps.react) conventions.framework = "react";
 				else if (deps.vue) conventions.framework = "vue";
 				else if (deps.svelte) conventions.framework = "svelte";
+				else if (deps["@nestjs/core"]) conventions.framework = "nest.js";
+				else if (deps.hono) conventions.framework = "hono";
 				else if (deps.express) conventions.framework = "express";
 				else if (deps.fastify) conventions.framework = "fastify";
+				else if (deps.koa) conventions.framework = "koa";
+				else if (deps.elysia) conventions.framework = "elysia";
+
+				// Test framework detection
+				if (deps.vitest) conventions.testFramework = "vitest";
+				else if (deps.jest || deps["@jest/core"]) conventions.testFramework = "jest";
+				else if (deps.mocha) conventions.testFramework = "mocha";
+				else if (deps.ava) conventions.testFramework = "ava";
+				else if (deps.tap || deps["@tapjs/core"]) conventions.testFramework = "tap";
+
+				// Formatter detection
+				if (deps.prettier) conventions.formatter = "prettier";
+				else if (deps["@biomejs/biome"]) conventions.formatter = "biome";
 			} catch {
 				// Malformed package.json — continue with defaults
 			}
 		}
 
-		// ─── TypeScript detection ────────────────────────────────────────
+		// ─── TypeScript detection + tsconfig parsing ────────────────────
 		const tsconfigPath = join(dir, "tsconfig.json");
 		if (existsSync(tsconfigPath)) {
 			conventions.hasTypeScript = true;
 			if (conventions.language === "javascript" || conventions.language === "unknown") {
 				conventions.language = "typescript";
+			}
+
+			try {
+				// Strip comments from tsconfig (JSON with comments)
+				const raw = readFileSync(tsconfigPath, "utf-8")
+					.replace(/\/\/.*$/gm, "")
+					.replace(/\/\*[\s\S]*?\*\//g, "")
+					.replace(/,(\s*[}\]])/g, "$1"); // trailing commas
+				const tsconfig = JSON.parse(raw) as Record<string, unknown>;
+				const compilerOptions = tsconfig.compilerOptions as Record<string, unknown> | undefined;
+				if (compilerOptions) {
+					// Strictness detection
+					if (compilerOptions.strict === true) {
+						conventions.tsStrictness = "strict";
+					} else if (compilerOptions.noImplicitAny === true || compilerOptions.strictNullChecks === true) {
+						conventions.tsStrictness = "moderate";
+					} else {
+						conventions.tsStrictness = "loose";
+					}
+					// Target
+					if (typeof compilerOptions.target === "string") {
+						conventions.tsTarget = compilerOptions.target;
+					}
+				}
+			} catch {
+				// tsconfig parse error — continue with defaults
 			}
 		}
 
@@ -404,16 +491,41 @@ export class CodingAgent {
 
 		// ─── Linter detection ────────────────────────────────────────────
 		if (existsSync(join(dir, "biome.json")) || existsSync(join(dir, "biome.jsonc"))) {
-			if (!conventions.lintCommand) conventions.lintCommand = "npx biome check .";
+			if (!conventions.lintCommand) conventions.lintCommand = `${runPrefix === "npm" ? "npx" : runPrefix} biome check .`;
 		} else if (
 			existsSync(join(dir, ".eslintrc")) ||
 			existsSync(join(dir, ".eslintrc.js")) ||
 			existsSync(join(dir, ".eslintrc.json")) ||
 			existsSync(join(dir, ".eslintrc.yml")) ||
 			existsSync(join(dir, "eslint.config.js")) ||
-			existsSync(join(dir, "eslint.config.mjs"))
+			existsSync(join(dir, "eslint.config.mjs")) ||
+			existsSync(join(dir, "eslint.config.ts"))
 		) {
-			if (!conventions.lintCommand) conventions.lintCommand = "npx eslint .";
+			if (!conventions.lintCommand) conventions.lintCommand = `${runPrefix === "npm" ? "npx" : runPrefix} eslint .`;
+		}
+
+		// ─── Formatter detection (file-based) ───────────────────────────
+		if (!conventions.formatter) {
+			if (existsSync(join(dir, ".prettierrc")) || existsSync(join(dir, ".prettierrc.json")) ||
+				existsSync(join(dir, ".prettierrc.js")) || existsSync(join(dir, "prettier.config.js"))) {
+				conventions.formatter = "prettier";
+			}
+		}
+
+		// ─── Test pattern detection ─────────────────────────────────────
+		if (existsSync(join(dir, "__tests__"))) {
+			conventions.testPattern = "__tests__";
+		} else if (existsSync(join(dir, "test"))) {
+			conventions.testPattern = "test";
+		} else if (existsSync(join(dir, "tests"))) {
+			conventions.testPattern = "tests";
+		} else if (existsSync(join(dir, "src", "__tests__"))) {
+			conventions.testPattern = "src/__tests__";
+		} else {
+			// Infer from test framework config
+			if (conventions.testFramework === "vitest" || conventions.testFramework === "jest") {
+				conventions.testPattern = "**/*.test.{ts,tsx,js,jsx}";
+			}
 		}
 
 		// Apply config overrides
@@ -499,8 +611,15 @@ export class CodingAgent {
 			ctx.push(`Module system: ${this.conventions.moduleSystem}`);
 			ctx.push(`Indentation: ${this.conventions.indentation}${this.conventions.indentation === "spaces" ? ` (width ${this.conventions.indentWidth})` : ""}`);
 
-			if (this.conventions.hasTypeScript) ctx.push("TypeScript: yes");
+			if (this.conventions.hasTypeScript) {
+				ctx.push(`TypeScript: yes${this.conventions.tsStrictness ? ` (${this.conventions.tsStrictness})` : ""}${this.conventions.tsTarget ? `, target: ${this.conventions.tsTarget}` : ""}`);
+			}
 			if (this.conventions.framework) ctx.push(`Framework: ${this.conventions.framework}`);
+			if (this.conventions.isMonorepo) ctx.push(`Monorepo: yes (${this.conventions.packageManager ?? "unknown"})`);
+			else if (this.conventions.packageManager) ctx.push(`Package manager: ${this.conventions.packageManager}`);
+			if (this.conventions.testFramework) ctx.push(`Test framework: ${this.conventions.testFramework}`);
+			if (this.conventions.testPattern) ctx.push(`Test location: ${this.conventions.testPattern}`);
+			if (this.conventions.formatter) ctx.push(`Formatter: ${this.conventions.formatter}`);
 			if (this.conventions.buildCommand) ctx.push(`Build: ${this.conventions.buildCommand}`);
 			if (this.conventions.testCommand) ctx.push(`Test: ${this.conventions.testCommand}`);
 			if (this.conventions.lintCommand) ctx.push(`Lint: ${this.conventions.lintCommand}`);
