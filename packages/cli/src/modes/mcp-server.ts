@@ -1862,10 +1862,10 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	let mcpSessionId: string | null = null;
 	let turnCounter = 0;
 
-	const ensureSession = () => {
+	const ensureSession = async () => {
 		if (mcpSessionId) return mcpSessionId;
 		try {
-			const { createSession } = require("@chitragupta/smriti/session-store") as typeof import("@chitragupta/smriti/session-store");
+			const { createSession } = await import("@chitragupta/smriti/session-store");
 			const session = createSession({
 				project: projectPath,
 				agent: "mcp",
@@ -1873,30 +1873,31 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 				title: `MCP session`,
 			});
 			mcpSessionId = session.meta.id;
-		} catch {
+		} catch (err) {
 			// Session recording is best-effort — don't break MCP if smriti fails
+			process.stderr.write(`[chitragupta] session init failed: ${err}\n`);
 		}
 		return mcpSessionId;
 	};
 
-	const recordToolCall = (info: { tool: string; args: Record<string, unknown>; result: import("@chitragupta/tantra").McpToolResult; elapsedMs: number }) => {
-		const sid = ensureSession();
+	const recordToolCall = async (info: { tool: string; args: Record<string, unknown>; result: import("@chitragupta/tantra").McpToolResult; elapsedMs: number }) => {
+		const sid = await ensureSession();
 		if (!sid) return;
 
 		try {
-			const { addTurn } = require("@chitragupta/smriti/session-store") as typeof import("@chitragupta/smriti/session-store");
+			const { addTurn } = await import("@chitragupta/smriti/session-store");
 
 			// Record tool call as a user turn (the request)
 			const argSummary = Object.keys(info.args).length > 0
 				? JSON.stringify(info.args).slice(0, 500)
 				: "(no args)";
-			addTurn(sid, projectPath, {
+			await addTurn(sid, projectPath, {
 				turnNumber: 0,
 				role: "user",
 				content: `[tool:${info.tool}] ${argSummary}`,
 				agent: "mcp-client",
 				model: "mcp",
-			}).catch(() => {});
+			});
 
 			// Record tool result as an assistant turn (the response)
 			const resultText = info.result.content
@@ -1904,13 +1905,13 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 				.map((c) => c.text)
 				.join("\n")
 				.slice(0, 2000) ?? "(no output)";
-			addTurn(sid, projectPath, {
+			await addTurn(sid, projectPath, {
 				turnNumber: 0,
 				role: "assistant",
 				content: `[${info.tool} → ${info.elapsedMs.toFixed(0)}ms] ${resultText}`,
 				agent: "mcp",
 				model: "mcp",
-			}).catch(() => {});
+			});
 
 			turnCounter += 2;
 
@@ -1921,8 +1922,8 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 				turnCount: turnCounter,
 				lastTool: info.tool,
 			});
-		} catch {
-			// best-effort
+		} catch (err) {
+			process.stderr.write(`[chitragupta] record failed: ${err}\n`);
 		}
 	};
 
