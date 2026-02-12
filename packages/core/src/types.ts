@@ -108,6 +108,25 @@ export interface ChitraguptaSettings {
 		selfModelPersistence?: boolean;
 		goalAbandonmentThreshold?: number;
 	};
+	/** Coding agent (Kartru / Sanyojaka) defaults. */
+	coding?: {
+		/** Default execution mode. Default: "full" */
+		mode?: "full" | "execute" | "plan-only";
+		/** Create a git feature branch. Default: true */
+		createBranch?: boolean;
+		/** Auto-commit on success. Default: true */
+		autoCommit?: boolean;
+		/** Run self-review after coding. Default: true */
+		selfReview?: boolean;
+		/** Timeout in seconds. Default: 300 */
+		timeout?: number;
+		/** Git branch prefix. Default: "feat/" */
+		branchPrefix?: string;
+		/** Provider override for coding agent (uses default if unset). */
+		provider?: string;
+		/** Model override for coding agent (uses default if unset). */
+		model?: string;
+	};
 }
 
 /**
@@ -158,6 +177,14 @@ export const DEFAULT_SETTINGS: ChitraguptaSettings = {
 			suspectTimeoutMs: 15_000,
 			deadTimeoutMs: 30_000,
 		},
+	},
+	coding: {
+		mode: "full",
+		createBranch: true,
+		autoCommit: true,
+		selfReview: true,
+		timeout: 300,
+		branchPrefix: "feat/",
 	},
 };
 

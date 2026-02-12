@@ -1140,6 +1140,262 @@ function createAtmanReportTool(): McpToolHandler {
 	};
 }
 
+// ─── Coding Agent MCP Tool ───────────────────────────────────────────────────
+
+/**
+ * Format an OrchestratorResult into a readable text summary.
+ * Exported for testing.
+ */
+export function formatOrchestratorResult(result: {
+	success: boolean;
+	plan: { task: string; steps: { index: number; description: string; completed: boolean }[]; complexity: string } | null;
+	codingResults: { filesModified: string[]; filesCreated: string[] }[];
+	git: { featureBranch: string | null; commits: string[] };
+	reviewIssues: { severity: string; file: string; line?: number; message: string }[];
+	validationPassed: boolean;
+	filesModified: string[];
+	filesCreated: string[];
+	summary: string;
+	elapsedMs: number;
+	diffPreview?: string;
+	phaseTimings?: Array<{ phase: string; startMs: number; endMs: number; durationMs: number }>;
+	diffStats?: { filesChanged: number; insertions: number; deletions: number };
+	errors?: Array<{ phase: string; message: string; recoverable: boolean }>;
+	stats?: {
+		totalCost: number; currency: string;
+		inputCost: number; outputCost: number; cacheReadCost: number; cacheWriteCost: number;
+		toolCalls: Record<string, number>; totalToolCalls: number; turns: number;
+	};
+}): string {
+	const lines: string[] = [];
+	const status = result.success ? "Success" : "Failed";
+	const complexity = result.plan?.complexity ?? "unknown";
+
+	lines.push("═══ Coding Agent ═══════════════════════");
+	lines.push(`Task: ${result.plan?.task ?? "(unknown)"}`);
+	lines.push(`Mode: ${result.plan ? "planned" : "direct"} | Complexity: ${complexity}`);
+	lines.push(`Status: ${result.success ? "✓" : "✗"} ${status}`);
+
+	// Plan
+	if (result.plan && result.plan.steps.length > 0) {
+		lines.push("");
+		lines.push("── Plan ──");
+		for (const step of result.plan.steps) {
+			const mark = step.completed ? "✓" : "○";
+			lines.push(`${step.index}. [${mark}] ${step.description}`);
+		}
+	}
+
+	// Files
+	if (result.filesModified.length > 0 || result.filesCreated.length > 0) {
+		lines.push("");
+		lines.push("── Files ──");
+		if (result.filesModified.length > 0) {
+			lines.push(`Modified: ${result.filesModified.join(", ")}`);
+		}
+		if (result.filesCreated.length > 0) {
+			lines.push(`Created: ${result.filesCreated.join(", ")}`);
+		}
+	}
+
+	// Git
+	if (result.git.featureBranch || result.git.commits.length > 0) {
+		lines.push("");
+		lines.push("── Git ──");
+		if (result.git.featureBranch) lines.push(`Branch: ${result.git.featureBranch}`);
+		if (result.git.commits.length > 0) lines.push(`Commits: ${result.git.commits.join(", ")}`);
+	}
+
+	// Validation
+	lines.push("");
+	lines.push("── Validation ──");
+	lines.push(`Result: ${result.validationPassed ? "✓ passed" : "✗ failed"}`);
+
+	// Review
+	if (result.reviewIssues.length > 0) {
+		lines.push("");
+		lines.push("── Review ──");
+		lines.push(`${result.reviewIssues.length} issue(s) found`);
+		for (const issue of result.reviewIssues.slice(0, 10)) {
+			lines.push(`  ${issue.severity} ${issue.file}${issue.line ? `:${issue.line}` : ""} ${issue.message}`);
+		}
+	} else {
+		lines.push("");
+		lines.push("── Review ──");
+		lines.push("0 issues found");
+	}
+
+	// Diff preview
+	if (result.diffPreview) {
+		lines.push("");
+		lines.push("── Diff Preview ──");
+		const diffLines = result.diffPreview.split("\n");
+		if (diffLines.length > 60) {
+			lines.push(...diffLines.slice(0, 60));
+			lines.push(`... (${diffLines.length - 60} more lines)`);
+		} else {
+			lines.push(...diffLines);
+		}
+	}
+
+	// Stats
+	if (result.stats && (result.stats.totalToolCalls > 0 || result.stats.totalCost > 0)) {
+		lines.push("");
+		lines.push("── Usage ──");
+		if (result.stats.totalToolCalls > 0) {
+			const sorted = Object.entries(result.stats.toolCalls).sort((a, b) => b[1] - a[1]);
+			for (const [name, count] of sorted) {
+				const pct = ((count / result.stats.totalToolCalls) * 100).toFixed(1);
+				lines.push(`  ${name}: ${count} calls (${pct}%)`);
+			}
+			lines.push(`  Total: ${result.stats.totalToolCalls} calls | ${result.stats.turns} turns`);
+		}
+		if (result.stats.totalCost > 0) {
+			lines.push(`  Cost: $${result.stats.totalCost.toFixed(4)} ${result.stats.currency}`);
+		}
+	}
+
+	// Phase timings
+	if (result.phaseTimings && result.phaseTimings.length > 0) {
+		lines.push("");
+		lines.push("── Timing ──");
+		for (const pt of result.phaseTimings) {
+			const dur = pt.durationMs < 1000 ? `${pt.durationMs}ms` : `${(pt.durationMs / 1000).toFixed(1)}s`;
+			lines.push(`  ${pt.phase}: ${dur}`);
+		}
+	}
+
+	// Diff stats
+	if (result.diffStats) {
+		lines.push(`  Diff: +${result.diffStats.insertions}/-${result.diffStats.deletions} in ${result.diffStats.filesChanged} file(s)`);
+	}
+
+	// Errors
+	if (result.errors && result.errors.length > 0) {
+		lines.push("");
+		lines.push("── Errors ──");
+		for (const err of result.errors) {
+			lines.push(`  [${err.phase}] ${err.message}${err.recoverable ? " (recovered)" : ""}`);
+		}
+	}
+
+	// Total timing
+	lines.push("");
+	lines.push(`⏱ ${(result.elapsedMs / 1000).toFixed(1)}s`);
+
+	return lines.join("\n");
+}
+
+/**
+ * Create the `coding_agent` tool — delegate a coding task to
+ * Chitragupta's CodingOrchestrator (Sanyojaka).
+ *
+ * Plans, codes, validates, reviews, and commits autonomously.
+ */
+function createCodingAgentTool(projectPath: string): McpToolHandler {
+	return {
+		definition: {
+			name: "coding_agent",
+			description:
+				"Delegate a coding task to Chitragupta's coding agent (Kartru). " +
+				"Plans, codes, validates, reviews, and commits autonomously.",
+			inputSchema: {
+				type: "object",
+				properties: {
+					task: {
+						type: "string",
+						description: "The coding task to accomplish.",
+					},
+					mode: {
+						type: "string",
+						enum: ["full", "execute", "plan-only"],
+						description: "Execution mode. Default: full",
+					},
+					provider: {
+						type: "string",
+						description: "AI provider ID. Default: from config",
+					},
+					model: {
+						type: "string",
+						description: "Model ID. Default: from config",
+					},
+					createBranch: {
+						type: "boolean",
+						description: "Create a git feature branch. Default: true",
+					},
+					autoCommit: {
+						type: "boolean",
+						description: "Auto-commit on success. Default: true",
+					},
+					selfReview: {
+						type: "boolean",
+						description: "Run self-review after coding. Default: true",
+					},
+				},
+				required: ["task"],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const task = String(args.task ?? "");
+			if (!task) {
+				return {
+					content: [{ type: "text", text: "Error: task is required" }],
+					isError: true,
+				};
+			}
+
+			try {
+				const { setupCodingEnvironment, createCodingOrchestrator } = await import("../coding-setup.js");
+
+				const setup = await setupCodingEnvironment({
+					projectPath,
+					explicitProvider: args.provider ? String(args.provider) : undefined,
+					sessionId: "coding-mcp",
+				});
+				if (!setup) {
+					return {
+						content: [{ type: "text", text: "Error: No AI provider available. Set an API key or install a CLI (claude, codex, gemini)." }],
+						isError: true,
+					};
+				}
+
+				// Progress tracking
+				const progressMessages: string[] = [];
+				const onProgress = (progress: { phase: string; message: string }) => {
+					progressMessages.push(`[${progress.phase}] ${progress.message}`);
+				};
+
+				const orchestrator = await createCodingOrchestrator({
+					setup,
+					projectPath,
+					mode: (args.mode as "full" | "execute" | "plan-only") ?? "full",
+					modelId: args.model ? String(args.model) : undefined,
+					createBranch: args.createBranch != null ? Boolean(args.createBranch) : undefined,
+					autoCommit: args.autoCommit != null ? Boolean(args.autoCommit) : undefined,
+					selfReview: args.selfReview != null ? Boolean(args.selfReview) : undefined,
+					onProgress,
+				});
+
+				const result = await orchestrator.run(task);
+				const text = formatOrchestratorResult(result);
+
+				const progressSuffix = progressMessages.length > 0
+					? `\n\n── Progress Log ──\n${progressMessages.join("\n")}`
+					: "";
+
+				return {
+					content: [{ type: "text", text: text + progressSuffix }],
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `coding_agent failed: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
 // ─── MCP State File ─────────────────────────────────────────────────────────
 
 /**
@@ -1585,6 +1841,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 
 	// Add handover tool (context continuity across compaction)
 	mcpTools.push(createHandoverTool(projectPath));
+
+	// Add coding agent tool (CodingOrchestrator / Sanyojaka)
+	mcpTools.push(createCodingAgentTool(projectPath));
 
 	// Add multi-agent & collective intelligence tools (Phase 5.3)
 	mcpTools.push(createSamitiChannelsTool());
