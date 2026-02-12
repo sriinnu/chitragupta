@@ -13,7 +13,8 @@ import type {
 /**
  * Compute Jaccard similarity coefficient between two string arrays.
  *
- * Comparison is case-insensitive. Returns 1 if both arrays are empty.
+ * Comparison is case-insensitive. Returns 0 if both arrays are empty
+ * (no capabilities = no match for routing purposes).
  *
  * @param a - First string array.
  * @param b - Second string array.

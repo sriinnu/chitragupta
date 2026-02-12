@@ -73,7 +73,8 @@ function tokenize(text: string): string[] {
 
 /**
  * Compute Jaccard similarity between two token sets.
- * Returns |intersection| / |union|, or 0 if both sets are empty.
+ * Returns |intersection| / |union|, or 1 if both sets are empty
+ * (identity: two empty token sets are maximally similar for knowledge matching).
  */
 function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 	if (a.size === 0 && b.size === 0) return 1;

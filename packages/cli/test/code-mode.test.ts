@@ -1,44 +1,17 @@
 /**
  * Tests for the code mode formatting helpers.
  *
- * These functions are defined inside code.ts as module-private helpers.
- * Since they are not exported, we re-implement the pure functions here
- * and validate the logic. If the implementation changes, these tests
- * serve as a specification for the expected behavior.
+ * Tests the actual exported helper functions from code.ts.
  */
 
 import { describe, it, expect } from "vitest";
-
-// ─── Re-implement pure helpers to test logic ────────────────────────────────
-// These mirror the implementations in packages/cli/src/modes/code.ts
-
-function formatTokens(n: number): string {
-	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-	return String(n);
-}
-
-function formatCost(n: number): string {
-	if (n < 0.001) return `$${n.toFixed(6)}`;
-	if (n < 0.01) return `$${n.toFixed(4)}`;
-	return `$${n.toFixed(4)}`;
-}
-
-function formatMs(ms: number): string {
-	if (ms < 1000) return `${ms}ms`;
-	if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-	const mins = Math.floor(ms / 60_000);
-	const secs = ((ms % 60_000) / 1000).toFixed(0);
-	return `${mins}m ${secs}s`;
-}
-
-function padRight(s: string, len: number): string {
-	return s.length >= len ? s : s + " ".repeat(len - s.length);
-}
-
-function padLeft(s: string, len: number): string {
-	return s.length >= len ? s : " ".repeat(len - s.length) + s;
-}
+import {
+	formatTokens,
+	formatCost,
+	formatMs,
+	padRight,
+	padLeft,
+} from "../src/modes/code.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // formatTokens
@@ -139,25 +112,5 @@ describe("padLeft", () => {
 
 	it("should return exact string when length matches", () => {
 		expect(padLeft("abc", 3)).toBe("abc");
-	});
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CodeModeOptions (type coverage via import)
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe("CodeModeOptions defaults", () => {
-	it("should have sensible defaults documented", () => {
-		// This test validates that the expected defaults are documented:
-		// mode: "full", createBranch: true, autoCommit: true, selfReview: true, timeout: 300
-		const defaults = {
-			mode: "full",
-			createBranch: true,
-			autoCommit: true,
-			selfReview: true,
-			timeout: 300,
-		};
-		expect(defaults.mode).toBe("full");
-		expect(defaults.timeout).toBe(300);
 	});
 });
