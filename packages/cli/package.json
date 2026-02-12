@@ -27,7 +27,8 @@
 	},
 	"bin": {
 		"chitragupta": "dist/cli.js",
-		"chitragupta-mcp": "dist/mcp-entry.js"
+		"chitragupta-mcp": "dist/mcp-entry.js",
+		"chitragupta-code": "dist/code-entry.js"
 	},
 	"main": "dist/cli.js",
 	"types": "dist/cli.d.ts",

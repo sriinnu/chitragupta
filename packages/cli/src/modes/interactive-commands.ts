@@ -462,66 +462,179 @@ export async function handleSlashCommand(
 
     case "/code": {
       const rest = parts.slice(1).join(" ").trim();
-      if (!rest) {
-        stdout.write(yellow("\n  Usage: /code <task description>\n"));
-        stdout.write(dim("  Spawns a focused coding agent (Kartru) for the task.\n\n"));
+
+      // Parse flags: --plan, --no-branch, --no-commit, --no-review
+      let codeTask = "";
+      let codeMode: "full" | "execute" | "plan-only" = "full";
+      let codeBranch: boolean | undefined;
+      let codeCommit: boolean | undefined;
+      let codeReview: boolean | undefined;
+
+      if (rest) {
+        const codeParts = rest.split(/\s+/);
+        const taskParts: string[] = [];
+        for (let ci = 0; ci < codeParts.length; ci++) {
+          if (codeParts[ci] === "--plan") codeMode = "plan-only";
+          else if (codeParts[ci] === "--execute") codeMode = "execute";
+          else if (codeParts[ci] === "--no-branch") codeBranch = false;
+          else if (codeParts[ci] === "--no-commit") codeCommit = false;
+          else if (codeParts[ci] === "--no-review") codeReview = false;
+          else taskParts.push(codeParts[ci]);
+        }
+        codeTask = taskParts.join(" ");
+      }
+
+      if (!codeTask) {
+        stdout.write(yellow("\n  Usage: /code <task description> [--plan] [--no-branch] [--no-commit] [--no-review]\n"));
+        stdout.write(dim("  Runs the full coding pipeline: Plan → Branch → Execute → Validate → Review → Commit\n"));
+        stdout.write(dim("  Shows token usage, tool usage, cost breakdown, and timing.\n\n"));
         return { handled: true };
       }
 
-      stdout.write(dim("\n  Spawning Kartru coding agent...\n"));
+      stdout.write(dim(`\n  ═══ Coding Agent (Kartru) ═══════════════════\n`));
+      stdout.write(dim(`  Task: ${codeTask}\n`));
+      stdout.write(dim(`  Mode: ${codeMode}\n`));
+
       try {
-        const { CodingAgent, CODE_TOOL_NAMES } = await import("@chitragupta/anina");
-        const { getAllTools } = await import("@chitragupta/yantra");
+        const { setupFromAgent, createCodingOrchestrator } = await import("../coding-setup.js");
 
-        // Filter to code-relevant tools
-        const codeTools = getAllTools().filter((t) => CODE_TOOL_NAMES.has(t.definition.name));
+        const projectPath = ctx.projectPath ?? process.cwd();
 
-        const coder = new CodingAgent({
-          workingDirectory: process.cwd(),
-          autoValidate: true,
-          maxValidationRetries: 3,
-          tools: codeTools,
-        });
-
-        // Detect project conventions first
-        const conventions = await coder.detectConventions();
-        if (conventions.testCommand) {
-          stdout.write(dim(`  Test: ${conventions.testCommand}\n`));
-        }
-        if (conventions.buildCommand) {
-          stdout.write(dim(`  Build: ${conventions.buildCommand}\n`));
-        }
-        if (conventions.lintCommand) {
-          stdout.write(dim(`  Lint: ${conventions.lintCommand}\n`));
-        }
-
-        // The coding agent needs a provider — borrow from the parent agent
-        const parentProvider = agent.getProvider();
-        if (parentProvider) {
-          coder.getAgent().setProvider(parentProvider);
-        } else {
+        const setup = await setupFromAgent(agent, projectPath);
+        if (!setup) {
           stdout.write(red("  Error: No provider available. Set a provider first.\n\n"));
           return { handled: true };
         }
 
-        const result = await coder.execute(rest);
+        // Progress streaming to TUI
+        const onProgress = (progress: { phase: string; message: string; elapsedMs: number }) => {
+          const mark = progress.phase === "error" ? red("✗") : progress.phase === "done" ? green("✓") : yellow("⧖");
+          const ms = progress.elapsedMs < 1000 ? `${progress.elapsedMs}ms` : `${(progress.elapsedMs / 1000).toFixed(1)}s`;
+          stdout.write(`  ${mark} ${bold(progress.phase.padEnd(12))} ${dim(ms.padStart(8))}\n`);
+        };
+
+        const orchestrator = await createCodingOrchestrator({
+          setup,
+          projectPath,
+          mode: codeMode,
+          modelId: agent.getState().model,
+          createBranch: codeBranch,
+          autoCommit: codeCommit,
+          selfReview: codeReview,
+          onProgress,
+        });
 
         stdout.write("\n");
-        stdout.write(result.success ? green("  Task completed") : red("  Task failed"));
+        const result = await orchestrator.run(codeTask);
+
+        // ── Stats from result (computed by orchestrator) ──
+        const { stats } = result;
+        const totalCost = stats.totalCost;
+        const totalToolCalls = stats.totalToolCalls;
+        const toolCallMap = new Map(Object.entries(stats.toolCalls));
+        const turns = stats.turns;
+
+        // ── Render result ──
         stdout.write("\n");
-        if (result.filesModified.length > 0) {
-          stdout.write(dim(`  Modified: ${result.filesModified.join(", ")}\n`));
-        }
-        if (result.filesCreated.length > 0) {
-          stdout.write(dim(`  Created: ${result.filesCreated.join(", ")}\n`));
-        }
-        if (result.validationOutput !== undefined) {
-          stdout.write(dim(`  Validation: ${result.validationPassed ? "passed" : "failed"}\n`));
-          if (result.validationRetries > 0) {
-            stdout.write(dim(`  Retries: ${result.validationRetries}\n`));
+        const status = result.success ? green("✓ Success") : red("✗ Failed");
+        const complexity = result.plan?.complexity ?? "unknown";
+        stdout.write(`  Status: ${status} | Complexity: ${complexity}\n`);
+
+        // Plan
+        if (result.plan && result.plan.steps.length > 0) {
+          stdout.write(dim("\n  ── Plan ──\n"));
+          for (const step of result.plan.steps) {
+            const mark = step.completed ? green("✓") : gray("○");
+            stdout.write(`  ${step.index}. [${mark}] ${step.description}\n`);
           }
         }
-        stdout.write(dim(`  Summary: ${result.summary}\n`));
+
+        // Files
+        if (result.filesModified.length > 0 || result.filesCreated.length > 0) {
+          stdout.write(dim("\n  ── Files ──\n"));
+          if (result.filesModified.length > 0) stdout.write(`  ${yellow("Modified:")} ${result.filesModified.join(", ")}\n`);
+          if (result.filesCreated.length > 0) stdout.write(`  ${green("Created:")}  ${result.filesCreated.join(", ")}\n`);
+        }
+
+        // Git
+        if (result.git.featureBranch || result.git.commits.length > 0) {
+          stdout.write(dim("\n  ── Git ──\n"));
+          if (result.git.featureBranch) stdout.write(`  Branch:  ${cyan(result.git.featureBranch)}\n`);
+          if (result.git.commits.length > 0) stdout.write(`  Commits: ${dim(result.git.commits.join(", "))}\n`);
+        }
+
+        // Validation
+        stdout.write(dim("\n  ── Validation ──\n"));
+        stdout.write(`  Result: ${result.validationPassed ? green("✓ passed") : red("✗ failed")}\n`);
+
+        // Review
+        if (result.reviewIssues.length > 0) {
+          stdout.write(dim("\n  ── Review ──\n"));
+          stdout.write(`  ${result.reviewIssues.length} issue(s) found\n`);
+          for (const issue of result.reviewIssues.slice(0, 10)) {
+            const sev = issue.severity === "error" ? red(issue.severity) : yellow(issue.severity);
+            stdout.write(`    ${sev} ${issue.file}${issue.line ? `:${issue.line}` : ""} — ${issue.message}\n`);
+          }
+        }
+
+        // Diff preview
+        if (result.diffPreview) {
+          stdout.write(dim("\n  ── Diff Preview ──\n"));
+          const diffLines = result.diffPreview.split("\n");
+          const show = diffLines.length > 30 ? diffLines.slice(0, 30) : diffLines;
+          for (const line of show) {
+            if (line.startsWith("+") && !line.startsWith("+++")) stdout.write(`  ${green(line)}\n`);
+            else if (line.startsWith("-") && !line.startsWith("---")) stdout.write(`  ${red(line)}\n`);
+            else if (line.startsWith("@@")) stdout.write(`  ${cyan(line)}\n`);
+            else stdout.write(`  ${dim(line)}\n`);
+          }
+          if (diffLines.length > 30) {
+            stdout.write(dim(`  ... (${diffLines.length - 30} more lines)\n`));
+          }
+        }
+
+        // ── Token/Tool Usage Stats ──
+        if (totalToolCalls > 0 || totalCost > 0) {
+          stdout.write(dim("\n  ══ Tool Usage ═════════════════════════\n"));
+          const sorted = [...toolCallMap.entries()].sort((a, b) => b[1] - a[1]);
+          for (const [name, count] of sorted) {
+            const pct = totalToolCalls > 0 ? ((count / totalToolCalls) * 100).toFixed(1) : "0.0";
+            stdout.write(`  ${magenta("▸")} ${dim(name.padEnd(10))}${String(count).padStart(4)} calls  ${gray(`(${pct}%)`.padStart(8))}\n`);
+          }
+          stdout.write(dim("  ─────────────────────────────────\n"));
+          stdout.write(`  ${bold("Total:")}  ${totalToolCalls} calls | ${turns} turns\n`);
+        }
+
+        if (totalCost > 0) {
+          stdout.write(dim("\n  ══ Cost ══════════════════════════════\n"));
+          stdout.write(`  ${yellow(`$${totalCost.toFixed(4)}`)}\n`);
+        }
+
+        // Phase timings
+        if (result.phaseTimings && result.phaseTimings.length > 0) {
+          stdout.write(dim("\n  ── Phase Timings ──\n"));
+          for (const pt of result.phaseTimings) {
+            const dur = pt.durationMs < 1000 ? `${pt.durationMs}ms` : `${(pt.durationMs / 1000).toFixed(1)}s`;
+            stdout.write(`  ${dim(pt.phase.padEnd(12))} ${dur}\n`);
+          }
+        }
+
+        // Diff stats
+        if (result.diffStats) {
+          stdout.write(`  ${green(`+${result.diffStats.insertions}`)} ${red(`-${result.diffStats.deletions}`)} in ${result.diffStats.filesChanged} file(s)\n`);
+        }
+
+        // Errors
+        if (result.errors && result.errors.length > 0) {
+          stdout.write(dim("\n  ── Errors ──\n"));
+          for (const err of result.errors) {
+            stdout.write(`  ${red(`[${err.phase}]`)} ${err.message}${err.recoverable ? dim(" (recovered)") : ""}\n`);
+          }
+        }
+
+        // Total timing
+        const elapsed = result.elapsedMs < 1000 ? `${result.elapsedMs}ms` : result.elapsedMs < 60000 ? `${(result.elapsedMs / 1000).toFixed(1)}s` : `${Math.floor(result.elapsedMs / 60000)}m ${((result.elapsedMs % 60000) / 1000).toFixed(0)}s`;
+        stdout.write(`\n  ${bold(dim(`⏱ ${elapsed}`))}\n`);
         stdout.write("\n");
       } catch (err) {
         stdout.write(red(`  Error: ${err instanceof Error ? err.message : String(err)}\n\n`));

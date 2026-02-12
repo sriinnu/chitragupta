@@ -361,6 +361,62 @@ async function handleSubcommand(command: string, subcommand: string | undefined,
 			break;
 		}
 
+		case "code": {
+			// Parse flags from subcommand + rest args
+			const codeArgs = [subcommand, ...rest].filter(Boolean) as string[];
+			let codeTask = "";
+			let codeMode: "full" | "execute" | "plan-only" | undefined;
+			let codeProvider: string | undefined;
+			let codeModel: string | undefined;
+			let codeBranch: boolean | undefined;
+			let codeCommit: boolean | undefined;
+			let codeReview: boolean | undefined;
+			let codeProject = process.cwd();
+			let codeTimeout: number | undefined;
+
+			const codeTaskParts: string[] = [];
+			for (let ci = 0; ci < codeArgs.length; ci++) {
+				if (codeArgs[ci] === "--mode" && ci + 1 < codeArgs.length) {
+					const m = codeArgs[++ci];
+					if (m === "full" || m === "execute" || m === "plan-only") codeMode = m;
+				} else if (codeArgs[ci] === "--plan") {
+					codeMode = "plan-only";
+				} else if (codeArgs[ci] === "--provider" && ci + 1 < codeArgs.length) {
+					codeProvider = codeArgs[++ci];
+				} else if ((codeArgs[ci] === "-m" || codeArgs[ci] === "--model") && ci + 1 < codeArgs.length) {
+					codeModel = codeArgs[++ci];
+				} else if (codeArgs[ci] === "--project" && ci + 1 < codeArgs.length) {
+					codeProject = codeArgs[++ci];
+				} else if (codeArgs[ci] === "--timeout" && ci + 1 < codeArgs.length) {
+					codeTimeout = parseInt(codeArgs[++ci], 10) || undefined;
+				} else if (codeArgs[ci] === "--no-branch") codeBranch = false;
+				else if (codeArgs[ci] === "--branch") codeBranch = true;
+				else if (codeArgs[ci] === "--no-commit") codeCommit = false;
+				else if (codeArgs[ci] === "--commit") codeCommit = true;
+				else if (codeArgs[ci] === "--no-review") codeReview = false;
+				else if (codeArgs[ci] === "--review") codeReview = true;
+				else if (!codeArgs[ci].startsWith("-")) codeTaskParts.push(codeArgs[ci]);
+			}
+
+			codeTask = codeTaskParts.join(" ");
+			// No task → opens interactive coding REPL
+
+			const { runCodeMode } = await import("./modes/code.js");
+			const codeExitCode = await runCodeMode({
+				task: codeTask,
+				mode: codeMode,
+				provider: codeProvider,
+				model: codeModel,
+				createBranch: codeBranch,
+				autoCommit: codeCommit,
+				selfReview: codeReview,
+				project: codeProject,
+				timeout: codeTimeout,
+			});
+			process.exit(codeExitCode);
+			break; // unreachable but satisfies TS
+		}
+
 		case "init": {
 			const init = await import("./commands/init.js");
 			await init.run(rest);
