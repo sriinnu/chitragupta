@@ -386,7 +386,7 @@ export class CodingOrchestrator {
 	 * Uses a lightweight agent prompt to decompose the task.
 	 */
 	private async planTask(task: string): Promise<TaskPlan> {
-		// For simple tasks, skip the LLM planning and use heuristics
+		// For simple tasks, skip LLM planning entirely
 		const simpleKeywords = ["fix typo", "rename", "add comment", "remove unused", "update import"];
 		const isSimple = simpleKeywords.some((kw) => task.toLowerCase().includes(kw));
 
@@ -400,71 +400,168 @@ export class CodingOrchestrator {
 			};
 		}
 
-		// Use the coding agent's convention detection to understand the project
+		// Try LLM-based planning when a provider is available
+		if (this.config.provider) {
+			try {
+				const plan = await this.llmPlan(task);
+				if (plan) return plan;
+			} catch (err) {
+				log.warn("LLM planning failed, falling back to heuristic:", { error: String(err) });
+			}
+		}
+
+		return this.heuristicPlan(task);
+	}
+
+	/**
+	 * LLM-based planning: create a lightweight read-only agent that explores
+	 * the project and returns a structured JSON plan.
+	 */
+	private async llmPlan(task: string): Promise<TaskPlan | null> {
+		const { KARTRU_PROFILE } = await import("@chitragupta/core");
+
+		// Filter to read-only tools only
+		const readOnlyNames = new Set(["read", "ls", "find", "grep", "bash"]);
+		const readOnlyTools = (this.config.tools ?? []).filter(
+			(t) => readOnlyNames.has(t.definition.name),
+		);
+
+		const planningConfig: AgentConfig = {
+			profile: { ...KARTRU_PROFILE, id: "sanyojaka-planner", name: "Sanyojaka Planner" },
+			providerId: this.config.providerId,
+			model: this.config.modelId ?? KARTRU_PROFILE.preferredModel ?? "claude-sonnet-4-5-20250929",
+			tools: readOnlyTools,
+			thinkingLevel: "medium",
+			workingDirectory: this.config.workingDirectory,
+			maxTurns: 8,
+			enableChetana: false,
+			enableLearning: false,
+			enableAutonomy: false,
+		};
+
+		this.planningAgent = new Agent(planningConfig);
+		this.planningAgent.setProvider(this.config.provider as import("@chitragupta/swara").ProviderDefinition);
+
+		const contextNote = this.config.additionalContext
+			? `\n\nProject context:\n${this.config.additionalContext}`
+			: "";
+
+		const planPrompt = `You are a coding task planner. Analyze the following coding task and the project structure, then produce a detailed plan.
+
+Task: ${task}
+
+Working directory: ${this.config.workingDirectory}
+${contextNote}
+
+Instructions:
+1. Use the available tools (read, ls, find, grep) to explore the project structure and understand the codebase.
+2. Identify which files are relevant to the task.
+3. Determine what changes need to be made.
+4. Create a step-by-step plan.
+
+After exploring, respond with ONLY a JSON object (no markdown fences, no explanation) in this exact format:
+{
+  "steps": [
+    { "index": 1, "description": "Short description of step", "affectedFiles": ["path/to/file.ts"] }
+  ],
+  "relevantFiles": ["path/to/file1.ts", "path/to/file2.ts"],
+  "complexity": "small" | "medium" | "large",
+  "requiresNewFiles": true | false
+}
+
+Where complexity is:
+- "small": 1-2 files changed, simple fix
+- "medium": 3-5 files, moderate changes
+- "large": 6+ files or significant structural changes
+
+Keep steps focused and actionable. Each step should describe a single coherent change.`;
+
+		const response = await this.planningAgent.prompt(planPrompt);
+
+		// Extract JSON from the last assistant message
+		const textContent = response.content
+			.filter((p): p is { type: "text"; text: string } => p.type === "text")
+			.map((p) => p.text)
+			.join("");
+
+		// Try to parse JSON — look for { ... } in the response
+		const jsonMatch = textContent.match(/\{[\s\S]*"steps"[\s\S]*\}/);
+		if (!jsonMatch) {
+			log.warn("LLM plan response did not contain valid JSON");
+			return null;
+		}
+
+		try {
+			const parsed = JSON.parse(jsonMatch[0]) as {
+				steps?: Array<{ index?: number; description?: string; affectedFiles?: string[] }>;
+				relevantFiles?: string[];
+				complexity?: string;
+				requiresNewFiles?: boolean;
+			};
+
+			if (!parsed.steps || !Array.isArray(parsed.steps) || parsed.steps.length === 0) {
+				log.warn("LLM plan has no steps");
+				return null;
+			}
+
+			const steps: TaskStep[] = parsed.steps.map((s, i) => ({
+				index: s.index ?? i + 1,
+				description: s.description ?? `Step ${i + 1}`,
+				affectedFiles: Array.isArray(s.affectedFiles) ? s.affectedFiles : [],
+				completed: false,
+			}));
+
+			const complexity = (["small", "medium", "large"] as const).includes(
+				parsed.complexity as "small" | "medium" | "large",
+			)
+				? (parsed.complexity as TaskPlan["complexity"])
+				: steps.length <= 2 ? "small" : steps.length <= 4 ? "medium" : "large";
+
+			return {
+				task,
+				steps,
+				relevantFiles: Array.isArray(parsed.relevantFiles) ? parsed.relevantFiles : [],
+				complexity,
+				requiresNewFiles: parsed.requiresNewFiles ?? false,
+			};
+		} catch (parseErr) {
+			log.warn("Failed to parse LLM plan JSON:", { error: String(parseErr) });
+			return null;
+		}
+	}
+
+	/** Heuristic-only planning fallback (no LLM needed). */
+	private async heuristicPlan(task: string): Promise<TaskPlan> {
 		const agent = this.getOrCreateCodingAgent();
 		const conventions = await agent.detectConventions();
 
-		// Heuristic plan based on task keywords
 		const steps: TaskStep[] = [];
-		const relevantFiles: string[] = [];
 		let requiresNewFiles = false;
 
-		// Detect if task mentions creating new files
 		if (/\b(create|add|new|implement)\b.*\b(files?|components?|modules?|class(?:es)?|functions?|endpoints?|routes?|tests?)\b/i.test(task)) {
 			requiresNewFiles = true;
 		}
 
-		// Detect if task mentions tests
 		const mentionsTests = /\b(tests?|specs?|testing)\b/i.test(task);
 
-		// Build steps based on task analysis
-		steps.push({
-			index: 1,
-			description: "Understand the codebase: read relevant files and identify patterns",
-			affectedFiles: [],
-			completed: false,
-		});
+		steps.push({ index: 1, description: "Understand the codebase: read relevant files and identify patterns", affectedFiles: [], completed: false });
 
 		if (requiresNewFiles) {
-			steps.push({
-				index: steps.length + 1,
-				description: "Create new file(s) following project conventions",
-				affectedFiles: [],
-				completed: false,
-			});
+			steps.push({ index: steps.length + 1, description: "Create new file(s) following project conventions", affectedFiles: [], completed: false });
 		}
 
-		steps.push({
-			index: steps.length + 1,
-			description: "Implement the changes",
-			affectedFiles: [],
-			completed: false,
-		});
+		steps.push({ index: steps.length + 1, description: "Implement the changes", affectedFiles: [], completed: false });
 
 		if (mentionsTests || conventions.testCommand) {
-			steps.push({
-				index: steps.length + 1,
-				description: "Write or update tests",
-				affectedFiles: [],
-				completed: false,
-			});
+			steps.push({ index: steps.length + 1, description: "Write or update tests", affectedFiles: [], completed: false });
 		}
 
-		// Estimate complexity from step count and keywords
 		const complexityKeywords = /\b(refactor|redesign|rewrite|migrate|architecture|system)\b/i;
 		const complexity: TaskPlan["complexity"] = complexityKeywords.test(task)
 			? "large"
-			: steps.length > 3
-				? "medium"
-				: "small";
+			: steps.length > 3 ? "medium" : "small";
 
-		return {
-			task,
-			steps,
-			relevantFiles,
-			complexity,
-			requiresNewFiles,
-		};
+		return { task, steps, relevantFiles: [], complexity, requiresNewFiles };
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
