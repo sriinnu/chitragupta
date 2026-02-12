@@ -57,11 +57,11 @@ That's it. No API keys, no config file, no setup.
 
 ```bash
 # Set any API key(s) you have (overrides CLI credentials)
-export OPENAI_API_KEY=sk-...
+export OPENAI_API_KEY=<your-openai-key>
 # and/or
-export GEMINI_API_KEY=AIza...
+export GEMINI_API_KEY=<your-gemini-key>
 # and/or
-export GROQ_API_KEY=gsk_...
+export GROQ_API_KEY=<your-groq-key>
 
 # Start proxy — auto-detects all providers from env
 pnpm proxy
