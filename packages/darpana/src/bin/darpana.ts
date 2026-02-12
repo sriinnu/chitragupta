@@ -4,7 +4,7 @@
  *
  * Usage:
  *   darpana [--port 8082] [--host 127.0.0.1] [--config ./darpana.json]
- *   OPENAI_API_KEY=<key> darpana --port 8082
+ *   env OPENAI_API_KEY darpana --port 8082
  */
 import { loadConfig, detectCredentialSources } from "../config.js";
 import { createServer } from "../server.js";
