@@ -97,6 +97,25 @@ export interface OrchestratorProgress {
 	elapsedMs: number;
 }
 
+/** Aggregated usage statistics from an orchestrator run. */
+export interface OrchestratorStats {
+	/** Total cost across all LLM calls. */
+	totalCost: number;
+	/** Currency for cost (e.g. "USD"). */
+	currency: string;
+	/** Per-category cost breakdown. */
+	inputCost: number;
+	outputCost: number;
+	cacheReadCost: number;
+	cacheWriteCost: number;
+	/** Tool call breakdown: tool name → call count. */
+	toolCalls: Record<string, number>;
+	/** Total number of tool calls. */
+	totalToolCalls: number;
+	/** Number of LLM turns (assistant messages). */
+	turns: number;
+}
+
 /** Full result of an orchestrated coding task. */
 export interface OrchestratorResult {
 	/** Whether the entire workflow succeeded. */
@@ -121,6 +140,8 @@ export interface OrchestratorResult {
 	elapsedMs: number;
 	/** Progress log. */
 	progressLog: OrchestratorProgress[];
+	/** Aggregated usage stats (tokens, cost, tool calls). */
+	stats: OrchestratorStats;
 }
 
 /** Compact review issue for the orchestrator result. */
@@ -245,6 +266,11 @@ export class CodingOrchestrator {
 			summary: "",
 			elapsedMs: 0,
 			progressLog: this.progressLog,
+			stats: {
+				totalCost: 0, currency: "USD",
+				inputCost: 0, outputCost: 0, cacheReadCost: 0, cacheWriteCost: 0,
+				toolCalls: {}, totalToolCalls: 0, turns: 0,
+			},
 		};
 
 		// Timeout guard: abort if timeoutMs exceeded
@@ -691,16 +717,32 @@ export class CodingOrchestrator {
 			// Generate commit message
 			const commitMsg = this.generateCommitMessage(task, result);
 
-			// Commit — use git commit with the message file to avoid shell escaping issues
-			this.gitExec(`git commit -m "${this.escapeForShell(commitMsg)}"`);
+			// Write commit message to a temp file to avoid all shell escaping issues
+			const { writeFileSync, unlinkSync } = await import("node:fs");
+			const msgFile = join(this.config.workingDirectory, ".git", "CHITRAGUPTA_COMMIT_MSG");
+			try {
+				writeFileSync(msgFile, commitMsg, "utf-8");
+				this.gitExec(`git commit --file="${msgFile}"`);
+			} finally {
+				// Clean up temp file
+				try { unlinkSync(msgFile); } catch { /* ignore */ }
+			}
 
-			// Record the commit hash
+			// Verify commit succeeded by checking the hash
 			const commitHash = this.gitExec("git rev-parse --short HEAD").trim();
-			this.gitState.commits.push(commitHash);
-
-			log.debug("committed changes", { hash: commitHash });
+			if (commitHash) {
+				this.gitState.commits.push(commitHash);
+				log.debug("committed changes", { hash: commitHash });
+			}
 		} catch (err) {
-			log.debug("commit failed", { error: String(err) });
+			const errMsg = err instanceof Error ? err.message : String(err);
+			// Check if pre-commit hook blocked the commit
+			if (errMsg.includes("hook")) {
+				log.debug("commit blocked by git hook", { error: errMsg });
+				this.emitProgress("committing", `Commit blocked by git hook: ${errMsg.slice(0, 100)}`);
+			} else {
+				log.debug("commit failed", { error: errMsg });
+			}
 			// Non-fatal — the code changes are still there
 		}
 	}
@@ -755,10 +797,23 @@ export class CodingOrchestrator {
 			const status = this.gitExec("git status --porcelain").trim();
 			if (!status) return;
 
+			// Stash changes — keep them as a safety net (do NOT pop immediately)
 			this.gitExec(`git stash push -m "${STASH_PREFIX}: ${label}"`);
 			this.gitState.stashRef = label;
-			// Immediately pop — we only wanted the stash as a safety net
-			this.gitExec("git stash pop");
+
+			// Pop the stash so work continues with the files in place
+			// but now we have a stash entry to fall back to
+			try {
+				this.gitExec("git stash pop");
+			} catch {
+				// Pop conflict — stash is preserved, apply instead
+				try {
+					this.gitExec("git stash apply");
+				} catch {
+					// If apply also fails, the stash is still there for manual recovery
+					log.debug("stash pop/apply failed — stash preserved for manual recovery", { label });
+				}
+			}
 		} catch {
 			// Non-fatal — checkpoint is best-effort
 		}
@@ -768,10 +823,33 @@ export class CodingOrchestrator {
 		if (!this.gitState.isGitRepo) return;
 
 		try {
-			// If we're on a feature branch, just checkout the original branch
-			if (this.gitState.featureBranch && this.gitState.originalBranch) {
-				this.gitExec(`git checkout ${this.gitState.originalBranch}`);
-				log.debug("rolled back to original branch", { branch: this.gitState.originalBranch });
+			// First, discard uncommitted changes on the feature branch
+			if (this.gitState.featureBranch) {
+				try {
+					this.gitExec("git reset --hard HEAD");
+				} catch { /* ignore */ }
+			}
+
+			// Checkout the original branch
+			if (this.gitState.originalBranch) {
+				try {
+					this.gitExec(`git checkout ${this.gitState.originalBranch}`);
+					log.debug("rolled back to original branch", { branch: this.gitState.originalBranch });
+				} catch (err) {
+					log.debug("failed to checkout original branch", { error: String(err) });
+					return; // Don't delete branch if we can't switch away
+				}
+
+				// Delete the feature branch (it was created by us)
+				if (this.gitState.featureBranch) {
+					try {
+						this.gitExec(`git branch -D ${this.gitState.featureBranch}`);
+						log.debug("deleted feature branch", { branch: this.gitState.featureBranch });
+						this.gitState.featureBranch = null;
+					} catch {
+						log.debug("failed to delete feature branch (manual cleanup needed)");
+					}
+				}
 			}
 		} catch (err) {
 			log.debug("rollback failed", { error: String(err) });
@@ -885,6 +963,43 @@ export class CodingOrchestrator {
 		// Deduplicate file lists
 		result.filesModified = [...new Set(result.filesModified)];
 		result.filesCreated = [...new Set(result.filesCreated)];
+		// Compute usage stats from agent messages
+		result.stats = this.computeStats();
 		return result;
+	}
+
+	/** Aggregate cost and tool usage from the coding agent's message history. */
+	private computeStats(): OrchestratorStats {
+		const stats: OrchestratorStats = {
+			totalCost: 0, currency: "USD",
+			inputCost: 0, outputCost: 0, cacheReadCost: 0, cacheWriteCost: 0,
+			toolCalls: {}, totalToolCalls: 0, turns: 0,
+		};
+
+		if (!this.codingAgent) return stats;
+
+		const messages = this.codingAgent.getAgent().getMessages();
+		for (const msg of messages) {
+			if (msg.role === "assistant") {
+				stats.turns++;
+				if (msg.cost) {
+					stats.inputCost += msg.cost.input;
+					stats.outputCost += msg.cost.output;
+					stats.cacheReadCost += msg.cost.cacheRead ?? 0;
+					stats.cacheWriteCost += msg.cost.cacheWrite ?? 0;
+					stats.totalCost += msg.cost.total;
+					stats.currency = msg.cost.currency;
+				}
+			}
+			for (const part of msg.content) {
+				if (part.type === "tool_call" && "name" in part) {
+					const name = (part as { name: string }).name;
+					stats.toolCalls[name] = (stats.toolCalls[name] ?? 0) + 1;
+					stats.totalToolCalls++;
+				}
+			}
+		}
+
+		return stats;
 	}
 }

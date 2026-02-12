@@ -962,37 +962,16 @@ export async function main(args: ParsedArgs): Promise<void> {
 			if (!task) return { content: "Error: task is required", isError: true };
 
 			try {
-				const { CodingOrchestrator } = await import("@chitragupta/anina");
+				const { setupFromAgent, createCodingOrchestrator } = await import("./coding-setup.js");
 
-				const parentProvider = agent.getProvider();
-				if (!parentProvider) return { content: "Error: No provider available", isError: true };
+				const setup = await setupFromAgent(agent, projectPath);
+				if (!setup) return { content: "Error: No provider available", isError: true };
 
-				const agentState = agent.getState();
-
-				// Get tools from yantra
-				const codeTools = getBuiltinTools();
-
-				// Project context
-				const ctxParts: string[] = [];
-				try {
-					const { loadContextFiles, buildContextString } = await import("./context-files.js");
-					const ctxFiles = loadContextFiles(projectPath);
-					const ctxString = buildContextString(ctxFiles);
-					if (ctxString) ctxParts.push(ctxString);
-				} catch { /* optional */ }
-
-				const mem = loadProjectMemory(projectPath);
-				if (mem) ctxParts.push(`--- Project Memory ---\n${mem}`);
-
-				const orchestrator = new CodingOrchestrator({
-					workingDirectory: projectPath,
+				const orchestrator = await createCodingOrchestrator({
+					setup,
+					projectPath,
 					mode: (args.mode as "full" | "execute" | "plan-only") ?? "full",
-					providerId: agentState.providerId,
-					modelId: agentState.model,
-					tools: codeTools,
-					provider: parentProvider,
-					additionalContext: ctxParts.length > 0 ? ctxParts.join("\n\n") : undefined,
-					timeoutMs: 5 * 60 * 1000,
+					modelId: agent.getState().model,
 					createBranch: args.createBranch != null ? Boolean(args.createBranch) : undefined,
 					autoCommit: args.autoCommit != null ? Boolean(args.autoCommit) : undefined,
 					selfReview: args.selfReview != null ? Boolean(args.selfReview) : undefined,
@@ -1000,7 +979,6 @@ export async function main(args: ParsedArgs): Promise<void> {
 
 				const result = await orchestrator.run(task);
 
-				// Format result as structured text
 				const { formatOrchestratorResult } = await import("./modes/mcp-server.js");
 				return { content: formatOrchestratorResult(result) };
 			} catch (err) {

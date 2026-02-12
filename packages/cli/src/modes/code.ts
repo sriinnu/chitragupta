@@ -428,30 +428,15 @@ export async function runCodeMode(options: CodeModeOptions): Promise<number> {
 	process.stderr.write(`  Mode: ${mode}\n\n`);
 
 	try {
-		// ── Lazy imports ────────────────────────────────────────────
-		const { CodingOrchestrator } = await import("@chitragupta/anina");
-		const { loadGlobalSettings } = await import("@chitragupta/core");
-		const { createProviderRegistry } = await import("@chitragupta/swara/provider-registry");
-		const {
-			loadCredentials,
-			registerBuiltinProviders,
-			registerCLIProviders,
-			resolvePreferredProvider,
-			getBuiltinTools: getTools,
-			loadProjectMemory: loadMemory,
-			getActionType,
-		} = await import("../bootstrap.js");
-		const { loadContextFiles, buildContextString } = await import("../context-files.js");
+		// ── Shared setup ────────────────────────────────────────────
+		const { setupCodingEnvironment, createCodingOrchestrator } = await import("../coding-setup.js");
 
-		// ── Provider setup ──────────────────────────────────────────
-		loadCredentials();
-		const settings = loadGlobalSettings();
-		const registry = createProviderRegistry();
-		await registerCLIProviders(registry);
-		registerBuiltinProviders(registry, settings);
-
-		const resolved = resolvePreferredProvider(options.provider, settings, registry);
-		if (!resolved) {
+		const setup = await setupCodingEnvironment({
+			projectPath: project,
+			explicitProvider: options.provider,
+			sessionId: "coding-cli",
+		});
+		if (!setup) {
 			const msg = "No AI provider available. Set an API key or install a CLI provider.";
 			process.stderr.write(useColor ? red(`\n  Error: ${msg}\n\n`) : `\n  Error: ${msg}\n\n`);
 			process.stderr.write("  Run `chitragupta provider list` to see available providers.\n");
@@ -459,82 +444,12 @@ export async function runCodeMode(options: CodeModeOptions): Promise<number> {
 			return 1;
 		}
 
-		const providerId = resolved.providerId;
+		const providerId = setup.providerId;
 		const modelId = options.model;
 
 		process.stderr.write(`  Provider: ${useColor ? cyan(providerId) : providerId}`);
 		if (modelId) process.stderr.write(` | Model: ${useColor ? cyan(modelId) : modelId}`);
 		process.stderr.write("\n\n");
-
-		// ── Tools ───────────────────────────────────────────────────
-		const tools = getTools();
-
-		// ── Project context & memory ────────────────────────────────
-		const contextParts: string[] = [];
-		const contextFiles = loadContextFiles(project);
-		const contextString = buildContextString(contextFiles);
-		if (contextString) contextParts.push(contextString);
-
-		const memory = loadMemory(project);
-		if (memory) contextParts.push(`--- Project Memory ---\n${memory}`);
-
-		const additionalContext = contextParts.length > 0 ? contextParts.join("\n\n") : undefined;
-
-		// ── Policy engine (dharma) ──────────────────────────────────
-		let policyEngine: { check(toolName: string, args: Record<string, unknown>): { allowed: boolean; reason?: string } } | undefined;
-		try {
-			const { PolicyEngine, STANDARD_PRESET } = await import("@chitragupta/dharma");
-			const preset = STANDARD_PRESET;
-			const engine = new PolicyEngine(preset.config);
-			for (const ps of preset.policySets) {
-				engine.addPolicySet(ps);
-			}
-
-			policyEngine = {
-				check(toolName: string, toolArgs: Record<string, unknown>): { allowed: boolean; reason?: string } {
-					const actionType = getActionType(toolName);
-					const action = {
-						type: actionType,
-						tool: toolName,
-						args: toolArgs,
-						filePath: (toolArgs.path ?? toolArgs.file_path ?? toolArgs.filePath) as string | undefined,
-						command: (toolArgs.command ?? toolArgs.cmd) as string | undefined,
-						content: (toolArgs.content ?? toolArgs.text) as string | undefined,
-						url: (toolArgs.url ?? toolArgs.uri) as string | undefined,
-					};
-					const context = {
-						sessionId: "coding-cli",
-						agentId: "kartru",
-						agentDepth: 0,
-						projectPath: project,
-						totalCostSoFar: 0,
-						costBudget: preset.config.costBudget,
-						filesModified: [] as string[],
-						commandsRun: [] as string[],
-						timestamp: Date.now(),
-					};
-
-					try {
-						for (const ps of preset.policySets) {
-							for (const rule of ps.rules) {
-								const verdict = rule.evaluate(action, context);
-								if (verdict && typeof verdict === "object" && "status" in verdict && !("then" in verdict)) {
-									const v = verdict as { status: string; reason: string };
-									if (v.status === "deny") {
-										return { allowed: false, reason: v.reason };
-									}
-								}
-							}
-						}
-					} catch {
-						// Rule evaluation failed — allow by default
-					}
-					return { allowed: true };
-				},
-			};
-		} catch {
-			// dharma is optional — continue without policy engine
-		}
 
 		// ── Progress streaming to stderr ────────────────────────────
 		const onProgress = (progress: { phase: string; message: string; elapsedMs: number }) => {
@@ -549,20 +464,16 @@ export async function runCodeMode(options: CodeModeOptions): Promise<number> {
 		};
 
 		// ── Create orchestrator ─────────────────────────────────────
-		const orchestrator = new CodingOrchestrator({
-			workingDirectory: project,
+		const orchestrator = await createCodingOrchestrator({
+			setup,
+			projectPath: project,
 			mode,
-			providerId,
 			modelId,
-			tools,
-			provider: resolved.provider,
-			policyEngine,
-			additionalContext,
-			timeoutMs: timeout * 1000,
-			onProgress,
 			createBranch: options.createBranch,
 			autoCommit: options.autoCommit,
 			selfReview: options.selfReview,
+			timeoutMs: timeout * 1000,
+			onProgress,
 		});
 
 		// ── Run ─────────────────────────────────────────────────────

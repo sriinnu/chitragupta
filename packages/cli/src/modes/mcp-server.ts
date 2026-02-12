@@ -1157,6 +1157,11 @@ export function formatOrchestratorResult(result: {
 	filesCreated: string[];
 	summary: string;
 	elapsedMs: number;
+	stats?: {
+		totalCost: number; currency: string;
+		inputCost: number; outputCost: number; cacheReadCost: number; cacheWriteCost: number;
+		toolCalls: Record<string, number>; totalToolCalls: number; turns: number;
+	};
 }): string {
 	const lines: string[] = [];
 	const status = result.success ? "Success" : "Failed";
@@ -1214,6 +1219,23 @@ export function formatOrchestratorResult(result: {
 		lines.push("");
 		lines.push("── Review ──");
 		lines.push("0 issues found");
+	}
+
+	// Stats
+	if (result.stats && (result.stats.totalToolCalls > 0 || result.stats.totalCost > 0)) {
+		lines.push("");
+		lines.push("── Usage ──");
+		if (result.stats.totalToolCalls > 0) {
+			const sorted = Object.entries(result.stats.toolCalls).sort((a, b) => b[1] - a[1]);
+			for (const [name, count] of sorted) {
+				const pct = ((count / result.stats.totalToolCalls) * 100).toFixed(1);
+				lines.push(`  ${name}: ${count} calls (${pct}%)`);
+			}
+			lines.push(`  Total: ${result.stats.totalToolCalls} calls | ${result.stats.turns} turns`);
+		}
+		if (result.stats.totalCost > 0) {
+			lines.push(`  Cost: $${result.stats.totalCost.toFixed(4)} ${result.stats.currency}`);
+		}
 	}
 
 	// Timing
@@ -1282,144 +1304,40 @@ function createCodingAgentTool(projectPath: string): McpToolHandler {
 			}
 
 			try {
-				// ── Lazy imports ────────────────────────────────────────
-				const { CodingOrchestrator } = await import("@chitragupta/anina");
-				const { loadGlobalSettings } = await import("@chitragupta/core");
-				const { createProviderRegistry } = await import("@chitragupta/swara/provider-registry");
-				const {
-					loadCredentials,
-					registerBuiltinProviders,
-					registerCLIProviders,
-					resolvePreferredProvider,
-					getBuiltinTools: getTools,
-					loadProjectMemory: loadMemory,
-					getActionType,
-				} = await import("../bootstrap.js");
-				const { loadContextFiles, buildContextString } = await import("../context-files.js");
+				const { setupCodingEnvironment, createCodingOrchestrator } = await import("../coding-setup.js");
 
-				// ── Provider setup ─────────────────────────────────────
-				loadCredentials();
-				const settings = loadGlobalSettings();
-				const registry = createProviderRegistry();
-				await registerCLIProviders(registry);
-				registerBuiltinProviders(registry, settings);
-
-				const explicitProvider = args.provider ? String(args.provider) : undefined;
-				const resolved = resolvePreferredProvider(explicitProvider, settings, registry);
-				if (!resolved) {
+				const setup = await setupCodingEnvironment({
+					projectPath,
+					explicitProvider: args.provider ? String(args.provider) : undefined,
+					sessionId: "coding-mcp",
+				});
+				if (!setup) {
 					return {
 						content: [{ type: "text", text: "Error: No AI provider available. Set an API key or install a CLI (claude, codex, gemini)." }],
 						isError: true,
 					};
 				}
 
-				// ── Tools ──────────────────────────────────────────────
-				const tools = getTools();
-
-				// ── Project context & memory ───────────────────────────
-				const contextParts: string[] = [];
-
-				const contextFiles = loadContextFiles(projectPath);
-				const contextString = buildContextString(contextFiles);
-				if (contextString) contextParts.push(contextString);
-
-				const memory = loadMemory(projectPath);
-				if (memory) contextParts.push(`--- Project Memory ---\n${memory}`);
-
-				const additionalContext = contextParts.length > 0
-					? contextParts.join("\n\n")
-					: undefined;
-
-				// ── Policy engine (dharma) ─────────────────────────────
-				let policyEngine: { check(toolName: string, args: Record<string, unknown>): { allowed: boolean; reason?: string } } | undefined;
-				try {
-					const { PolicyEngine, STANDARD_PRESET } = await import("@chitragupta/dharma");
-					const preset = STANDARD_PRESET;
-					const engine = new PolicyEngine(preset.config);
-					for (const ps of preset.policySets) {
-						engine.addPolicySet(ps);
-					}
-
-					policyEngine = {
-						check(toolName: string, toolArgs: Record<string, unknown>): { allowed: boolean; reason?: string } {
-							const actionType = getActionType(toolName);
-							const action = {
-								type: actionType,
-								tool: toolName,
-								args: toolArgs,
-								filePath: (toolArgs.path ?? toolArgs.file_path ?? toolArgs.filePath) as string | undefined,
-								command: (toolArgs.command ?? toolArgs.cmd) as string | undefined,
-								content: (toolArgs.content ?? toolArgs.text) as string | undefined,
-								url: (toolArgs.url ?? toolArgs.uri) as string | undefined,
-							};
-							const context = {
-								sessionId: "coding-agent",
-								agentId: "kartru",
-								agentDepth: 0,
-								projectPath,
-								totalCostSoFar: 0,
-								costBudget: preset.config.costBudget,
-								filesModified: [] as string[],
-								commandsRun: [] as string[],
-								timestamp: Date.now(),
-							};
-
-							try {
-								for (const ps of preset.policySets) {
-									for (const rule of ps.rules) {
-										const verdict = rule.evaluate(action, context);
-										if (verdict && typeof verdict === "object" && "status" in verdict && !("then" in verdict)) {
-											const v = verdict as { status: string; reason: string };
-											if (v.status === "deny") {
-												return { allowed: false, reason: v.reason };
-											}
-										}
-									}
-								}
-							} catch {
-								// Rule evaluation failed — allow by default
-							}
-							return { allowed: true };
-						},
-					};
-				} catch {
-					// dharma is optional — continue without policy engine
-				}
-
-				// ── Progress tracking ──────────────────────────────────
+				// Progress tracking
 				const progressMessages: string[] = [];
 				const onProgress = (progress: { phase: string; message: string }) => {
 					progressMessages.push(`[${progress.phase}] ${progress.message}`);
 				};
 
-				// ── Mode and options ───────────────────────────────────
-				const mode = (args.mode as "full" | "execute" | "plan-only") ?? "full";
-				const modelId = args.model ? String(args.model) : undefined;
-
-				// ── Create orchestrator ────────────────────────────────
-				const orchestrator = new CodingOrchestrator({
-					workingDirectory: projectPath,
-					mode,
-					providerId: resolved.providerId,
-					modelId,
-					tools,
-					provider: resolved.provider,
-					policyEngine,
-					additionalContext,
-					timeoutMs: 5 * 60 * 1000, // 5 minute timeout
-					onProgress,
+				const orchestrator = await createCodingOrchestrator({
+					setup,
+					projectPath,
+					mode: (args.mode as "full" | "execute" | "plan-only") ?? "full",
+					modelId: args.model ? String(args.model) : undefined,
 					createBranch: args.createBranch != null ? Boolean(args.createBranch) : undefined,
 					autoCommit: args.autoCommit != null ? Boolean(args.autoCommit) : undefined,
 					selfReview: args.selfReview != null ? Boolean(args.selfReview) : undefined,
+					onProgress,
 				});
 
-				// ── Run ────────────────────────────────────────────────
 				const result = await orchestrator.run(task);
-
-				// ── Format result ──────────────────────────────────────
 				const text = formatOrchestratorResult(result);
 
-				// Append progress log if there are entries beyond the formatted result
 				const progressSuffix = progressMessages.length > 0
 					? `\n\n── Progress Log ──\n${progressMessages.join("\n")}`
 					: "";

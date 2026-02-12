@@ -496,81 +496,15 @@ export async function handleSlashCommand(
       stdout.write(dim(`  Mode: ${codeMode}\n`));
 
       try {
-        const { CodingOrchestrator } = await import("@chitragupta/anina");
-        const { getAllTools } = await import("@chitragupta/yantra");
+        const { setupFromAgent, createCodingOrchestrator } = await import("../coding-setup.js");
 
-        // Borrow provider from the parent TUI agent
-        const parentProvider = agent.getProvider();
-        if (!parentProvider) {
+        const projectPath = ctx.projectPath ?? process.cwd();
+
+        const setup = await setupFromAgent(agent, projectPath);
+        if (!setup) {
           stdout.write(red("  Error: No provider available. Set a provider first.\n\n"));
           return { handled: true };
         }
-
-        const agentState = agent.getState();
-        const projectPath = ctx.projectPath ?? process.cwd();
-
-        // Tools from yantra
-        const tools = getAllTools().map((t) => ({
-          definition: t.definition as import("@chitragupta/anina").ToolHandler["definition"],
-          execute: t.execute as import("@chitragupta/anina").ToolHandler["execute"],
-        }));
-
-        // Project context & memory
-        const contextParts: string[] = [];
-        try {
-          const { loadContextFiles, buildContextString } = await import("../context-files.js");
-          const ctxFiles = loadContextFiles(projectPath);
-          const ctxString = buildContextString(ctxFiles);
-          if (ctxString) contextParts.push(ctxString);
-        } catch { /* optional */ }
-
-        try {
-          const { loadProjectMemory } = await import("../bootstrap.js");
-          const memory = loadProjectMemory(projectPath);
-          if (memory) contextParts.push(`--- Project Memory ---\n${memory}`);
-        } catch { /* optional */ }
-
-        const additionalContext = contextParts.length > 0 ? contextParts.join("\n\n") : undefined;
-
-        // Policy engine
-        let policyEngine: { check(toolName: string, args: Record<string, unknown>): { allowed: boolean; reason?: string } } | undefined;
-        try {
-          const { PolicyEngine, STANDARD_PRESET } = await import("@chitragupta/dharma");
-          const { getActionType } = await import("../bootstrap.js");
-          const preset = STANDARD_PRESET;
-          const engine = new PolicyEngine(preset.config);
-          for (const ps of preset.policySets) engine.addPolicySet(ps);
-
-          policyEngine = {
-            check(toolName: string, toolArgs: Record<string, unknown>) {
-              const actionType = getActionType(toolName);
-              const action = {
-                type: actionType, tool: toolName, args: toolArgs,
-                filePath: (toolArgs.path ?? toolArgs.file_path ?? toolArgs.filePath) as string | undefined,
-                command: (toolArgs.command ?? toolArgs.cmd) as string | undefined,
-                content: (toolArgs.content ?? toolArgs.text) as string | undefined,
-                url: (toolArgs.url ?? toolArgs.uri) as string | undefined,
-              };
-              const context = {
-                sessionId: "coding-tui", agentId: "kartru", agentDepth: 0, projectPath,
-                totalCostSoFar: 0, costBudget: preset.config.costBudget,
-                filesModified: [] as string[], commandsRun: [] as string[], timestamp: Date.now(),
-              };
-              try {
-                for (const ps of preset.policySets) {
-                  for (const rule of ps.rules) {
-                    const verdict = rule.evaluate(action, context);
-                    if (verdict && typeof verdict === "object" && "status" in verdict && !("then" in verdict)) {
-                      const v = verdict as { status: string; reason: string };
-                      if (v.status === "deny") return { allowed: false, reason: v.reason };
-                    }
-                  }
-                }
-              } catch { /* allow by default */ }
-              return { allowed: true };
-            },
-          };
-        } catch { /* dharma is optional */ }
 
         // Progress streaming to TUI
         const onProgress = (progress: { phase: string; message: string; elapsedMs: number }) => {
@@ -579,49 +513,26 @@ export async function handleSlashCommand(
           stdout.write(`  ${mark} ${bold(progress.phase.padEnd(12))} ${dim(ms.padStart(8))}\n`);
         };
 
-        // Create orchestrator
-        const orchestrator = new CodingOrchestrator({
-          workingDirectory: projectPath,
+        const orchestrator = await createCodingOrchestrator({
+          setup,
+          projectPath,
           mode: codeMode,
-          providerId: agentState.providerId,
-          modelId: agentState.model,
-          tools,
-          provider: parentProvider,
-          policyEngine,
-          additionalContext,
-          timeoutMs: 5 * 60 * 1000,
-          onProgress,
+          modelId: agent.getState().model,
           createBranch: codeBranch,
           autoCommit: codeCommit,
           selfReview: codeReview,
+          onProgress,
         });
 
         stdout.write("\n");
         const result = await orchestrator.run(codeTask);
 
-        // ── Compute usage stats from agent messages ──
-        const codingAgent = orchestrator.getCodingAgent();
-        let totalCost = 0;
-        let totalToolCalls = 0;
-        const toolCallMap = new Map<string, number>();
-        let turns = 0;
-
-        if (codingAgent) {
-          const messages = codingAgent.getAgent().getMessages();
-          for (const msg of messages) {
-            if (msg.role === "assistant") {
-              turns++;
-              if (msg.cost) totalCost += msg.cost.total;
-            }
-            for (const part of msg.content) {
-              if (part.type === "tool_call" && "name" in part) {
-                const name = (part as { name: string }).name;
-                toolCallMap.set(name, (toolCallMap.get(name) ?? 0) + 1);
-                totalToolCalls++;
-              }
-            }
-          }
-        }
+        // ── Stats from result (computed by orchestrator) ──
+        const { stats } = result;
+        const totalCost = stats.totalCost;
+        const totalToolCalls = stats.totalToolCalls;
+        const toolCallMap = new Map(Object.entries(stats.toolCalls));
+        const turns = stats.turns;
 
         // ── Render result ──
         stdout.write("\n");

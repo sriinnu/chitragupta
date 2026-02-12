@@ -100,6 +100,7 @@ export type {
 	OrchestratorResult,
 	OrchestratorProgress,
 	OrchestratorMode,
+	OrchestratorStats,
 	TaskPlan,
 	TaskStep,
 	GitState,
