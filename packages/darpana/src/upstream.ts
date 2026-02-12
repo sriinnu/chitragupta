@@ -128,6 +128,10 @@ export function buildUpstreamUrl(provider: ProviderConfig, path: string): string
 	return `${base.replace(/\/$/, "")}/chat/completions`;
 }
 
+/** Headers safe to forward from client to upstream in passthrough mode. */
+const PASSTHROUGH_HEADER_PREFIXES = ["anthropic-", "x-stainless-"];
+const PASSTHROUGH_HEADER_EXACT = new Set(["x-request-id"]);
+
 /**
  * Build headers for upstream request.
  */
@@ -135,22 +139,41 @@ export function buildUpstreamHeaders(
 	provider: ProviderConfig,
 	contentLength: number,
 	isStream: boolean,
+	clientHeaders?: Record<string, string | string[] | undefined>,
+	requestId?: string,
 ): Record<string, string> {
 	const headers: Record<string, string> = {
 		"content-type": "application/json",
 		"content-length": String(contentLength),
 		accept: isStream ? "text/event-stream" : "application/json",
+		"user-agent": "darpana/0.1.0",
 	};
+
+	if (requestId) {
+		headers["x-request-id"] = requestId;
+	}
 
 	if (provider.type === "passthrough") {
 		if (provider.apiKey) headers["x-api-key"] = provider.apiKey;
 		headers["anthropic-version"] = "2023-06-01";
+
+		// Forward safe client headers (anthropic-beta, etc.)
+		if (clientHeaders) {
+			for (const [key, val] of Object.entries(clientHeaders)) {
+				const lower = key.toLowerCase();
+				const shouldForward = PASSTHROUGH_HEADER_EXACT.has(lower)
+					|| PASSTHROUGH_HEADER_PREFIXES.some((p) => lower.startsWith(p));
+				if (shouldForward && val) {
+					headers[lower] = Array.isArray(val) ? val[0] : val;
+				}
+			}
+		}
 	} else if (provider.type === "openai-compat") {
 		if (provider.apiKey) headers.authorization = `Bearer ${provider.apiKey}`;
 	}
 	// Google uses ?key= query param, not a header
 
-	// Merge any custom headers
+	// Merge any custom headers (highest priority — overrides everything)
 	if (provider.headers) {
 		Object.assign(headers, provider.headers);
 	}

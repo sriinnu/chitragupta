@@ -65,25 +65,26 @@ function startMockUpstream(): Promise<void> {
 function makeRequest(
 	port: number,
 	path: string,
-	body: Record<string, unknown>,
-): Promise<{ status: number; body: any }> {
+	body: Record<string, unknown> | string,
+	extraHeaders?: Record<string, string>,
+): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: any }> {
 	return new Promise((resolve, reject) => {
-		const data = JSON.stringify(body);
+		const data = typeof body === "string" ? body : JSON.stringify(body);
 		const req = http.request({
 			hostname: "127.0.0.1",
 			port,
 			path,
 			method: "POST",
-			headers: { "content-type": "application/json", "content-length": Buffer.byteLength(data) },
+			headers: { "content-type": "application/json", "content-length": Buffer.byteLength(data), ...extraHeaders },
 		}, (res) => {
 			const chunks: Buffer[] = [];
 			res.on("data", (c: Buffer) => chunks.push(c));
 			res.on("end", () => {
 				const raw = Buffer.concat(chunks).toString();
 				try {
-					resolve({ status: res.statusCode ?? 500, body: JSON.parse(raw) });
+					resolve({ status: res.statusCode ?? 500, headers: res.headers, body: JSON.parse(raw) });
 				} catch {
-					resolve({ status: res.statusCode ?? 500, body: raw });
+					resolve({ status: res.statusCode ?? 500, headers: res.headers, body: raw });
 				}
 			});
 		});
@@ -234,6 +235,110 @@ describe("Darpana server integration", () => {
 
 		expect(res.status).toBe(204);
 		expect(res.headers["access-control-allow-origin"]).toBe("*");
+	});
+});
+
+describe("Darpana server error handling", () => {
+	let server: DarpanaServer;
+	let serverPort: number;
+
+	beforeAll(async () => {
+		await startMockUpstream();
+
+		const config: DarpanaConfig = {
+			port: 20000 + Math.floor(Math.random() * 1000),
+			host: "127.0.0.1",
+			providers: {
+				mock: {
+					type: "openai-compat",
+					endpoint: `http://127.0.0.1:${mockPort}/v1`,
+					models: { "gpt-4.1": {} },
+				},
+			},
+			aliases: { sonnet: "mock/gpt-4.1" },
+		};
+
+		serverPort = config.port;
+		server = createServer(config);
+		await server.listen();
+	});
+
+	afterAll(async () => {
+		await server?.close();
+	});
+
+	it("rejects malformed JSON with 400", async () => {
+		const res = await makeRequest(serverPort, "/v1/messages", "not valid json{{{");
+		expect(res.status).toBe(400);
+		expect(res.body.error.type).toBe("invalid_request_body");
+	});
+
+	it("rejects missing model field with 400", async () => {
+		const res = await makeRequest(serverPort, "/v1/messages", {
+			messages: [{ role: "user", content: "Hi" }],
+			max_tokens: 256,
+		});
+		expect(res.status).toBe(400);
+		expect(res.body.error.type).toBe("invalid_request");
+		expect(res.body.error.message).toContain("model");
+	});
+
+	it("rejects missing messages field with 400", async () => {
+		const res = await makeRequest(serverPort, "/v1/messages", {
+			model: "sonnet",
+			max_tokens: 256,
+		});
+		expect(res.status).toBe(400);
+		expect(res.body.error.type).toBe("invalid_request");
+		expect(res.body.error.message).toContain("messages");
+	});
+
+	it("rejects missing max_tokens with 400", async () => {
+		const res = await makeRequest(serverPort, "/v1/messages", {
+			model: "sonnet",
+			messages: [{ role: "user", content: "Hi" }],
+		});
+		expect(res.status).toBe(400);
+		expect(res.body.error.type).toBe("invalid_request");
+		expect(res.body.error.message).toContain("max_tokens");
+	});
+
+	it("allows count_tokens without max_tokens", async () => {
+		const res = await makeRequest(serverPort, "/v1/messages/count_tokens", {
+			model: "sonnet",
+			messages: [{ role: "user", content: "Hi" }],
+		});
+		// Should not be 400 for missing max_tokens (count_tokens doesn't require it)
+		expect(res.status).not.toBe(400);
+	});
+
+	it("returns x-request-id on every response", async () => {
+		const res = await makeRequest(serverPort, "/v1/messages", {
+			model: "sonnet",
+			messages: [{ role: "user", content: "Hi" }],
+			max_tokens: 256,
+		});
+		expect(res.headers["x-request-id"]).toBeDefined();
+		expect(typeof res.headers["x-request-id"]).toBe("string");
+	});
+
+	it("propagates client x-request-id", async () => {
+		const res = await makeRequest(serverPort, "/v1/messages", {
+			model: "sonnet",
+			messages: [{ role: "user", content: "Hi" }],
+			max_tokens: 256,
+		}, { "x-request-id": "my-custom-id-123" });
+		expect(res.headers["x-request-id"]).toBe("my-custom-id-123");
+	});
+
+	it("rejects unknown model with 400", async () => {
+		const res = await makeRequest(serverPort, "/v1/messages", {
+			model: "nonexistent-model-xyz",
+			messages: [{ role: "user", content: "Hi" }],
+			max_tokens: 256,
+		});
+		expect(res.status).toBe(400);
+		expect(res.body.error.type).toBe("invalid_request");
 	});
 });
 

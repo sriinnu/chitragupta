@@ -7,6 +7,7 @@
  *   GET  /                        — health check
  */
 import http from "node:http";
+import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { DarpanaConfig, AnthropicRequest, AnthropicResponse } from "./types.js";
 import { resolveRoute } from "./router.js";
@@ -17,6 +18,7 @@ import { sendUpstream, buildUpstreamUrl, buildUpstreamHeaders } from "./upstream
 import { pipeStream } from "./stream.js";
 
 const MAX_REQUEST_BODY = 10 * 1024 * 1024; // 10MB
+const GRACEFUL_SHUTDOWN_TIMEOUT = 30_000; // 30s
 
 export interface DarpanaServer {
 	listen(): Promise<void>;
@@ -28,21 +30,29 @@ export function createServer(config: DarpanaConfig): DarpanaServer {
 	let server: http.Server | null = null;
 	let addr: { host: string; port: number } | null = null;
 
+	let activeRequests = 0;
+
 	const httpServer = http.createServer(async (req, res) => {
+		activeRequests++;
+
+		// Generate or propagate request ID
+		const requestId = (req.headers["x-request-id"] as string) ?? crypto.randomUUID();
+		res.setHeader("x-request-id", requestId);
+
 		// CORS
 		if (config.cors !== false) {
 			res.setHeader("access-control-allow-origin", "*");
 			res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
-			res.setHeader("access-control-allow-headers", "content-type, x-api-key, authorization, anthropic-version, anthropic-beta");
-		}
-
-		if (req.method === "OPTIONS") {
-			res.writeHead(204);
-			res.end();
-			return;
+			res.setHeader("access-control-allow-headers", "content-type, x-api-key, authorization, anthropic-version, anthropic-beta, x-request-id");
 		}
 
 		try {
+			if (req.method === "OPTIONS") {
+				res.writeHead(204);
+				res.end();
+				return;
+			}
+
 			const url = req.url ?? "/";
 
 			if (req.method === "GET" && url === "/") {
@@ -61,14 +71,16 @@ export function createServer(config: DarpanaConfig): DarpanaServer {
 			}
 
 			if (req.method === "POST" && (url === "/v1/messages" || url === "/v1/messages/count_tokens")) {
-				await handleMessages(req, res, config, url);
+				await handleMessages(req, res, config, url, requestId);
 				return;
 			}
 
 			sendError(res, 404, "not_found", `Route not found: ${req.method} ${url}`);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : "Internal server error";
-			sendError(res, 500, "internal_error", message);
+			sendError(res, 500, "internal_error", sanitizeError(message));
+		} finally {
+			activeRequests--;
 		}
 	});
 
@@ -90,11 +102,25 @@ export function createServer(config: DarpanaConfig): DarpanaServer {
 		async close() {
 			if (server) {
 				return new Promise<void>((resolve) => {
+					// Stop accepting new connections
 					server!.close(() => {
 						addr = null;
 						server = null;
 						resolve();
 					});
+
+					// Wait for in-flight requests to drain (up to timeout)
+					if (activeRequests > 0) {
+						const check = setInterval(() => {
+							if (activeRequests <= 0) {
+								clearInterval(check);
+							}
+						}, 100);
+						setTimeout(() => {
+							clearInterval(check);
+							server?.closeAllConnections?.();
+						}, GRACEFUL_SHUTDOWN_TIMEOUT);
+					}
 				});
 			}
 		},
@@ -126,6 +152,7 @@ async function handleMessages(
 	res: ServerResponse,
 	config: DarpanaConfig,
 	url: string,
+	requestId: string,
 ): Promise<void> {
 	// Read + validate request body
 	const body = await readBody(req, MAX_REQUEST_BODY);
@@ -201,7 +228,7 @@ async function handleMessages(
 			return;
 	}
 
-	const headers = buildUpstreamHeaders(provider, upstreamBody.length, isStream);
+	const headers = buildUpstreamHeaders(provider, upstreamBody.length, isStream, req.headers, requestId);
 
 	let upstreamRes;
 	try {
@@ -211,7 +238,7 @@ async function handleMessages(
 		);
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : "Upstream connection failed";
-		sendError(res, 502, "upstream_connection_error", `Failed to connect to ${providerName}: ${msg}`);
+		sendError(res, 502, "upstream_connection_error", `Failed to connect to ${providerName}: ${sanitizeError(msg)}`);
 		return;
 	}
 
@@ -306,6 +333,19 @@ function sendError(res: ServerResponse, status: number, type: string, message: s
 		res.writeHead(status, { "content-type": "application/json" });
 	}
 	res.end(JSON.stringify({ type: "error", error: { type, message } }));
+}
+
+/**
+ * Sanitize error messages to prevent credential leakage.
+ * Redacts common API key patterns.
+ */
+function sanitizeError(message: string): string {
+	return message
+		.replace(/sk-[a-zA-Z0-9_-]{20,}/g, "sk-***")
+		.replace(/AIza[a-zA-Z0-9_-]{30,}/g, "AIza***")
+		.replace(/gsk_[a-zA-Z0-9_-]{20,}/g, "gsk_***")
+		.replace(/Bearer\s+[a-zA-Z0-9._-]{20,}/gi, "Bearer ***")
+		.replace(/key=[a-zA-Z0-9_-]{20,}/g, "key=***");
 }
 
 /**

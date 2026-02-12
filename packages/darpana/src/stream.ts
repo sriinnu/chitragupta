@@ -6,6 +6,9 @@ import type { AnthropicSSEEvent, OpenAIStreamChunk, GeminiResponse, ConverterTyp
 import { createStreamState, processOpenAIChunk } from "./converters/openai.js";
 import { createGeminiStreamState, processGeminiChunk } from "./converters/google.js";
 
+/** Max SSE line buffer size (1MB). Prevents unbounded memory growth from malformed upstream. */
+const MAX_BUFFER_SIZE = 1024 * 1024;
+
 /**
  * Extract the data payload from an SSE line.
  * Handles both "data: value" and "data:value" per SSE spec.
@@ -20,7 +23,9 @@ function extractSSEData(line: string): string | null {
  * Write an Anthropic SSE event to the client response.
  */
 function writeSSE(res: ServerResponse, event: AnthropicSSEEvent): void {
-	res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+	if (!res.destroyed) {
+		res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+	}
 }
 
 /**
@@ -39,9 +44,15 @@ export function pipeStream(
 		"x-accel-buffering": "no",
 	});
 
+	// Destroy upstream if client disconnects mid-stream
+	const onClientClose = () => upstream.destroy();
+	clientRes.on("close", onClientClose);
+
 	if (converterType === "passthrough") {
 		// Zero transformation — pipe raw bytes
-		upstream.on("data", (chunk: Buffer) => clientRes.write(chunk));
+		upstream.on("data", (chunk: Buffer) => {
+			if (!clientRes.destroyed) clientRes.write(chunk);
+		});
 		upstream.on("end", () => clientRes.end());
 		upstream.on("error", () => clientRes.end());
 		return;
@@ -60,6 +71,19 @@ function pipeOpenAIStream(upstream: IncomingMessage, clientRes: ServerResponse, 
 
 	upstream.on("data", (chunk: Buffer) => {
 		buffer += chunk.toString();
+
+		// Guard against unbounded buffer growth from malformed SSE
+		if (buffer.length > MAX_BUFFER_SIZE) {
+			buffer = "";
+			upstream.destroy();
+			writeSSE(clientRes, {
+				type: "error",
+				error: { type: "upstream_error", message: "SSE buffer overflow — malformed upstream response" },
+			});
+			clientRes.end();
+			return;
+		}
+
 		const lines = buffer.split("\n");
 		// Keep last partial line in buffer
 		buffer = lines.pop() ?? "";
@@ -112,6 +136,18 @@ function pipeGeminiStream(upstream: IncomingMessage, clientRes: ServerResponse, 
 
 	upstream.on("data", (chunk: Buffer) => {
 		buffer += chunk.toString();
+
+		if (buffer.length > MAX_BUFFER_SIZE) {
+			buffer = "";
+			upstream.destroy();
+			writeSSE(clientRes, {
+				type: "error",
+				error: { type: "upstream_error", message: "SSE buffer overflow — malformed upstream response" },
+			});
+			clientRes.end();
+			return;
+		}
+
 		const lines = buffer.split("\n");
 		buffer = lines.pop() ?? "";
 

@@ -327,7 +327,46 @@ export function loadConfig(opts: LoadConfigOptions = {}): DarpanaConfig {
 	if (opts.port) config.port = opts.port;
 	if (opts.host) config.host = opts.host;
 
+	// Validate
+	validateConfig(config);
+
 	return config;
+}
+
+/**
+ * Validate a loaded config — catch misconfigurations before the server starts.
+ */
+function validateConfig(config: DarpanaConfig): void {
+	const errors: string[] = [];
+
+	// Port
+	if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535) {
+		errors.push(`Invalid port: ${config.port} (must be 1-65535)`);
+	}
+
+	// Providers
+	for (const [name, p] of Object.entries(config.providers)) {
+		if (p.type === "openai-compat" && !p.endpoint) {
+			errors.push(`Provider "${name}" (openai-compat) requires an endpoint`);
+		}
+		if (p.type === "google" && !p.apiKey) {
+			errors.push(`Provider "${name}" (google) requires an apiKey`);
+		}
+	}
+
+	// Aliases — check that target providers exist
+	for (const [alias, target] of Object.entries(config.aliases)) {
+		if (target.includes("/")) {
+			const providerName = target.split("/")[0];
+			if (!config.providers[providerName]) {
+				errors.push(`Alias "${alias}" targets provider "${providerName}" which does not exist`);
+			}
+		}
+	}
+
+	if (errors.length > 0) {
+		throw new Error(`Darpana config validation failed:\n  - ${errors.join("\n  - ")}`);
+	}
 }
 
 function findConfigFile(): string | undefined {

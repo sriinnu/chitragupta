@@ -164,6 +164,30 @@ describe("OpenAI converter", () => {
 			expect(result.max_tokens).toBe(16384);
 		});
 
+		it("uses max_completion_tokens for o-series models", () => {
+			const req: AnthropicRequest = {
+				model: "claude-sonnet-4-20250514",
+				messages: [{ role: "user", content: "Hi" }],
+				max_tokens: 4096,
+			};
+
+			const result = toOpenAI(req, "o3-mini");
+			expect(result.max_completion_tokens).toBe(4096);
+			expect(result.max_tokens).toBeUndefined();
+		});
+
+		it("uses max_tokens for non-o-series models", () => {
+			const req: AnthropicRequest = {
+				model: "claude-sonnet-4-20250514",
+				messages: [{ role: "user", content: "Hi" }],
+				max_tokens: 4096,
+			};
+
+			const result = toOpenAI(req, "gpt-4.1");
+			expect(result.max_tokens).toBe(4096);
+			expect(result.max_completion_tokens).toBeUndefined();
+		});
+
 		it("includes stream_options when streaming", () => {
 			const req: AnthropicRequest = {
 				model: "claude-sonnet-4-20250514",

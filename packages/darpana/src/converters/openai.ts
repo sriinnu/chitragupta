@@ -49,12 +49,20 @@ export function toOpenAI(req: AnthropicRequest, upstreamModel: string, overrides
 		? Math.min(req.max_tokens, overrides.maxTokensCap)
 		: req.max_tokens;
 
+	// o-series models use max_completion_tokens instead of max_tokens
+	const isOSeries = /^o[0-9]/.test(upstreamModel);
+
 	const result: OpenAIRequest = {
 		model: upstreamModel,
 		messages,
-		max_tokens: maxTokens,
 		stream: req.stream ?? false,
 	};
+
+	if (isOSeries) {
+		result.max_completion_tokens = maxTokens;
+	} else {
+		result.max_tokens = maxTokens;
+	}
 
 	if (req.stream) {
 		result.stream_options = { include_usage: true };
