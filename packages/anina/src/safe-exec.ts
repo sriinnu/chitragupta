@@ -20,8 +20,25 @@ import { basename } from "node:path";
  * Only these binaries are permitted for execution.
  */
 const SAFE_COMMAND_PREFIXES = new Set([
-	"npm", "node", "npx", "git", "tsc", "eslint", "prettier",
-	"vitest", "jest", "make", "cargo", "python", "pip", "go", "rustc",
+	// JS/TS ecosystem
+	"npm", "node", "npx", "pnpm", "yarn", "bun", "deno", "tsx",
+	"tsc", "eslint", "prettier", "biome",
+	// Test runners
+	"vitest", "jest", "mocha", "playwright", "cypress",
+	// Build tools
+	"make", "cmake", "ninja",
+	// Languages
+	"cargo", "rustc", "python", "python3", "pip", "pip3", "uv",
+	"go", "ruby", "java", "javac", "swift", "swiftc", "dotnet",
+	// Version control
+	"git",
+	// Common utilities (read-only / low-risk)
+	"ls", "cat", "echo", "which", "env", "pwd", "basename", "dirname",
+	"head", "tail", "wc", "sort", "uniq", "diff", "find", "grep", "rg",
+	"mkdir", "cp", "mv", "touch", "chmod", "rm",
+	"curl", "wget",
+	// Docker
+	"docker", "docker-compose",
 ]);
 
 /**
