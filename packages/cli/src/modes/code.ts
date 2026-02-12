@@ -448,11 +448,16 @@ function renderResult(
  * @returns Process exit code (0 for success, 1 for error).
  */
 export async function runCodeMode(options: CodeModeOptions): Promise<number> {
+	// Load coding defaults from settings — CLI flags take priority
+	const { loadGlobalSettings } = await import("@chitragupta/core");
+	const settings = loadGlobalSettings();
+	const cd = settings.coding ?? {};
+
 	const {
 		task,
-		mode = "full",
+		mode = cd.mode ?? "full",
 		project = process.cwd(),
-		timeout = 300,
+		timeout = cd.timeout ?? 300,
 	} = options;
 	const useColor = options.color ?? process.stdout.isTTY ?? false;
 

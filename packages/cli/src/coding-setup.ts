@@ -29,6 +29,17 @@ export interface CodingSetup {
 	tools: ToolHandler[];
 	additionalContext?: string;
 	policyEngine?: CodingPolicyEngine;
+	/** Coding defaults from settings.json. */
+	codingDefaults?: {
+		mode?: "full" | "execute" | "plan-only";
+		createBranch?: boolean;
+		autoCommit?: boolean;
+		selfReview?: boolean;
+		timeout?: number;
+		branchPrefix?: string;
+		provider?: string;
+		model?: string;
+	};
 }
 
 /** Options for setupCodingEnvironment(). */
@@ -167,6 +178,7 @@ export async function setupCodingEnvironment(
 		tools,
 		additionalContext,
 		policyEngine,
+		codingDefaults: settings.coding,
 	};
 }
 
@@ -181,20 +193,24 @@ export async function createCodingOrchestrator(
 ): Promise<import("@chitragupta/anina").CodingOrchestrator> {
 	const { CodingOrchestrator } = await import("@chitragupta/anina");
 
+	// Merge: explicit options → settings.coding → hardcoded defaults
+	const cd = options.setup.codingDefaults ?? {};
+
 	const orchestrator = new CodingOrchestrator({
 		workingDirectory: options.projectPath,
-		mode: options.mode ?? "full",
+		mode: options.mode ?? cd.mode ?? "full",
 		providerId: options.setup.providerId,
-		modelId: options.modelId,
+		modelId: options.modelId ?? cd.model,
 		tools: options.setup.tools,
 		provider: options.setup.provider,
 		policyEngine: options.setup.policyEngine,
 		additionalContext: options.setup.additionalContext,
-		timeoutMs: options.timeoutMs ?? 5 * 60 * 1000,
+		timeoutMs: options.timeoutMs ?? (cd.timeout ? cd.timeout * 1000 : 5 * 60 * 1000),
 		onProgress: options.onProgress,
-		createBranch: options.createBranch,
-		autoCommit: options.autoCommit,
-		selfReview: options.selfReview,
+		createBranch: options.createBranch ?? cd.createBranch,
+		autoCommit: options.autoCommit ?? cd.autoCommit,
+		selfReview: options.selfReview ?? cd.selfReview,
+		branchPrefix: cd.branchPrefix,
 	});
 
 	return orchestrator;
@@ -268,11 +284,16 @@ export async function setupFromAgent(
 		};
 	} catch { /* dharma optional */ }
 
+	// Load coding defaults from settings
+	const { loadGlobalSettings } = await import("@chitragupta/core");
+	const settings = loadGlobalSettings();
+
 	return {
 		providerId: agent.getState().providerId,
 		provider,
 		tools,
 		additionalContext: contextParts.length > 0 ? contextParts.join("\n\n") : undefined,
 		policyEngine,
+		codingDefaults: settings.coding,
 	};
 }

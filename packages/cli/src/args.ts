@@ -199,8 +199,8 @@ Options:
 
 Subcommands:
   code "task" [--mode M] [--plan]  Run coding agent (plan, code, validate, review)
-  init [--client <name>]        Set up MCP + agent instructions (claude|codex|gemini|copilot)
-  provider list|add|test        Manage AI providers
+  init [--client <name>]        Set up MCP + instructions (claude|codex|gemini|copilot)
+  provider list|add|test        Manage AI providers (anthropic,openai,google,ollama,...)
   session list|show|search|export|import  Manage sessions
   memory show|edit|search       Manage project memory
   agent list|create|use         Manage agent profiles

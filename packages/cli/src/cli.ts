@@ -365,14 +365,14 @@ async function handleSubcommand(command: string, subcommand: string | undefined,
 			// Parse flags from subcommand + rest args
 			const codeArgs = [subcommand, ...rest].filter(Boolean) as string[];
 			let codeTask = "";
-			let codeMode: "full" | "execute" | "plan-only" = "full";
+			let codeMode: "full" | "execute" | "plan-only" | undefined;
 			let codeProvider: string | undefined;
 			let codeModel: string | undefined;
 			let codeBranch: boolean | undefined;
 			let codeCommit: boolean | undefined;
 			let codeReview: boolean | undefined;
 			let codeProject = process.cwd();
-			let codeTimeout = 300;
+			let codeTimeout: number | undefined;
 
 			const codeTaskParts: string[] = [];
 			for (let ci = 0; ci < codeArgs.length; ci++) {
@@ -388,7 +388,7 @@ async function handleSubcommand(command: string, subcommand: string | undefined,
 				} else if (codeArgs[ci] === "--project" && ci + 1 < codeArgs.length) {
 					codeProject = codeArgs[++ci];
 				} else if (codeArgs[ci] === "--timeout" && ci + 1 < codeArgs.length) {
-					codeTimeout = parseInt(codeArgs[++ci], 10) || 300;
+					codeTimeout = parseInt(codeArgs[++ci], 10) || undefined;
 				} else if (codeArgs[ci] === "--no-branch") codeBranch = false;
 				else if (codeArgs[ci] === "--branch") codeBranch = true;
 				else if (codeArgs[ci] === "--no-commit") codeCommit = false;

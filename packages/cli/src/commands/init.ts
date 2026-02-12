@@ -142,19 +142,29 @@ const MEMORY_INSTRUCTIONS = `${CHITRAGUPTA_MARKER}
   to record the approach for future sessions.
 - When you discover a recurring pattern, call \`akasha_deposit\` with type "pattern".
 
+## Coding Agent
+- For substantial coding tasks, use the \`coding_agent\` tool — it runs a full
+  autonomous pipeline: Plan → Branch → Execute → Validate → Review → Commit.
+- Call it with \`{ "task": "your task", "mode": "full" }\` for end-to-end execution.
+- Use \`"mode": "plan-only"\` to plan without executing.
+- The coding agent creates git branches, runs tests, and self-reviews its work.
+
 ## Context Limits
 - When approaching context limits, call \`chitragupta_handover\` to preserve
   work state (files modified, decisions made, errors encountered).
 - On session resume, call \`chitragupta_session_show\` with the last session ID
   to restore context.
 
-## Available Tools (25)
+## Key Tools
+- \`coding_agent\` — delegate coding tasks (Plan → Branch → Code → Test → Review → Commit)
 - \`chitragupta_memory_search\` — search project memory (GraphRAG-backed)
 - \`chitragupta_session_list\` — list recent sessions
 - \`chitragupta_session_show\` — show session by ID
 - \`chitragupta_handover\` — work-state handover for context continuity
+- \`chitragupta_prompt\` — delegate a task to Chitragupta's agent
 - \`akasha_traces\` — query collective knowledge traces
 - \`akasha_deposit\` — record solutions, patterns, warnings
+- \`sabha_deliberate\` — multi-agent deliberation on proposals
 - \`vasana_tendencies\` — learned behavioral patterns
 - \`health_status\` — system health (Triguna)
 - \`atman_report\` — full self-report
@@ -433,6 +443,18 @@ export async function run(args: string[] = []): Promise<void> {
 	process.stdout.write(`    1. ${dim("Restart")} ${bold(clientDef.name)} in this project\n`);
 	process.stdout.write(`    2. The agent will automatically use Chitragupta's memory\n`);
 	process.stdout.write(`    3. Past sessions, decisions, and patterns carry forward\n`);
+	process.stdout.write("\n");
+
+	process.stdout.write(gray("  Coding agent:\n"));
+	process.stdout.write(`    ${cyan("chitragupta code")} ${dim('"fix the bug in login.ts"')}        ${dim("— CLI")}\n`);
+	process.stdout.write(`    ${cyan("chitragupta-code")} ${dim('"add input validation" --plan')}    ${dim("— standalone")}\n`);
+	process.stdout.write(`    ${dim("Or use the")} ${cyan("coding_agent")} ${dim("tool from")} ${bold(clientDef.name)}\n`);
+	process.stdout.write("\n");
+
+	process.stdout.write(gray("  Configuration:\n"));
+	process.stdout.write(`    ${cyan("chitragupta provider list")}                         ${dim("— see providers")}\n`);
+	process.stdout.write(`    ${cyan("chitragupta provider add anthropic")}                ${dim("— configure API key")}\n`);
+	process.stdout.write(`    ${cyan("chitragupta config set coding.mode plan-only")}      ${dim("— set defaults")}\n`);
 	process.stdout.write("\n");
 
 	if (entryPoint.startsWith("npx:")) {

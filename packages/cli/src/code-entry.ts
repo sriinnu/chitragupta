@@ -22,26 +22,26 @@ import { loadCredentials } from "./bootstrap.js";
 
 function parseArgs(argv: string[]): {
 	task: string;
-	mode: "full" | "execute" | "plan-only";
+	mode?: "full" | "execute" | "plan-only";
 	provider?: string;
 	model?: string;
 	createBranch?: boolean;
 	autoCommit?: boolean;
 	selfReview?: boolean;
 	project: string;
-	timeout: number;
+	timeout?: number;
 	help: boolean;
 	version: boolean;
 } {
 	let task = "";
-	let mode: "full" | "execute" | "plan-only" = "full";
+	let mode: "full" | "execute" | "plan-only" | undefined;
 	let provider: string | undefined;
 	let model: string | undefined;
 	let createBranch: boolean | undefined;
 	let autoCommit: boolean | undefined;
 	let selfReview: boolean | undefined;
 	let project = process.env.CHITRAGUPTA_PROJECT ?? process.cwd();
-	let timeout = 300;
+	let timeout: number | undefined;
 	let help = false;
 	let version = false;
 
@@ -66,7 +66,7 @@ function parseArgs(argv: string[]): {
 		} else if (arg === "--project" && i + 1 < argv.length) {
 			project = argv[++i];
 		} else if (arg === "--timeout" && i + 1 < argv.length) {
-			timeout = parseInt(argv[++i], 10) || 300;
+			timeout = parseInt(argv[++i], 10) || undefined;
 		} else if (arg === "--no-branch") {
 			createBranch = false;
 		} else if (arg === "--branch") {
@@ -86,7 +86,10 @@ function parseArgs(argv: string[]): {
 
 	task = taskParts.join(" ");
 
-	return { task, mode, provider, model, createBranch, autoCommit, selfReview, project, timeout, help, version };
+	return {
+		task, mode, provider, model, createBranch, autoCommit,
+		selfReview, project, timeout, help, version,
+	};
 }
 
 // ─── Help Text ──────────────────────────────────────────────────────────────
@@ -126,6 +129,20 @@ Output:
     - Tool usage breakdown (per-tool call counts with percentages)
     - Timing per phase
 
+Configuration:
+  Settings are read from ~/.chitragupta/config/settings.json (coding section).
+  CLI flags override settings. Set defaults with:
+    chitragupta config set coding.mode plan-only
+    chitragupta config set coding.createBranch false
+    chitragupta config set coding.autoCommit false
+    chitragupta config set coding.timeout 600
+    chitragupta config set coding.branchPrefix fix/
+
+Getting Started:
+  1. chitragupta provider add anthropic    # Configure an AI provider
+  2. chitragupta init                      # Set up MCP + instructions
+  3. chitragupta-code "your task here"     # Run the coding agent
+
 Examples:
   chitragupta-code "fix the failing test in auth.test.ts"
   chitragupta-code "add rate limiting to the API endpoints" --no-branch
@@ -138,6 +155,11 @@ Examples:
 
 async function main(): Promise<void> {
 	loadCredentials();
+
+	// Load coding defaults from settings — CLI flags override these
+	const { loadGlobalSettings } = await import("@chitragupta/core");
+	const settings = loadGlobalSettings();
+	const codingDefaults = settings.coding ?? {};
 
 	const args = parseArgs(process.argv.slice(2));
 
@@ -162,14 +184,14 @@ async function main(): Promise<void> {
 
 	const exitCode = await runCodeMode({
 		task: args.task,
-		mode: args.mode,
-		provider: args.provider,
-		model: args.model,
-		createBranch: args.createBranch,
-		autoCommit: args.autoCommit,
-		selfReview: args.selfReview,
+		mode: args.mode ?? codingDefaults.mode,
+		provider: args.provider ?? codingDefaults.provider,
+		model: args.model ?? codingDefaults.model,
+		createBranch: args.createBranch ?? codingDefaults.createBranch,
+		autoCommit: args.autoCommit ?? codingDefaults.autoCommit,
+		selfReview: args.selfReview ?? codingDefaults.selfReview,
 		project: args.project,
-		timeout: args.timeout,
+		timeout: args.timeout ?? codingDefaults.timeout,
 	});
 
 	process.exit(exitCode);
