@@ -45,6 +45,18 @@ export const CODE_TOOL_NAMES = new Set([
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+/** Event types emitted by the coding agent during execution. */
+export type CodingAgentEvent =
+	| { type: "tool_call"; name: string; args: Record<string, unknown> }
+	| { type: "tool_done"; name: string; durationMs: number }
+	| { type: "thinking"; text: string }
+	| { type: "text"; text: string }
+	| { type: "file_modified"; path: string }
+	| { type: "file_created"; path: string }
+	| { type: "validation_start" }
+	| { type: "validation_result"; passed: boolean; output: string }
+	| { type: "retry"; attempt: number; maxRetries: number };
+
 /** Configuration for creating a coding agent. */
 export interface CodingAgentConfig {
 	/** Provider ID to use. Default: "anthropic". */
@@ -80,6 +92,11 @@ export interface CodingAgentConfig {
 	 * Use CODE_TOOL_NAMES to filter a full tool set to coding-relevant tools.
 	 */
 	tools?: ToolHandler[];
+	/**
+	 * Event callback for streaming execution progress.
+	 * Called with tool calls, thinking, file operations, and validation results.
+	 */
+	onEvent?: (event: CodingAgentEvent) => void;
 }
 
 /** Result of a coding task. */
@@ -184,7 +201,10 @@ export class CodingAgent {
 			tools,
 			thinkingLevel: KARTRU_PROFILE.preferredThinking ?? "high",
 			workingDirectory: config.workingDirectory,
-			onEvent: (event, data) => this.trackFileOperations(event, data),
+			onEvent: (event, data) => {
+				this.trackFileOperations(event, data);
+				this.forwardEvent(event, data);
+			},
 			policyEngine: config.policyEngine,
 			commHub: config.commHub,
 		};
@@ -224,12 +244,15 @@ export class CodingAgent {
 
 			// Auto-validate loop
 			if (this.config.autoValidate && this.hasValidationCommands()) {
+				this.config.onEvent?.({ type: "validation_start" });
 				const result = await this.validate();
 				validationPassed = result.passed;
 				validationOutput = result.output;
+				this.config.onEvent?.({ type: "validation_result", passed: result.passed, output: result.output });
 
 				while (!validationPassed && validationRetries < this.config.maxValidationRetries) {
 					validationRetries++;
+					this.config.onEvent?.({ type: "retry", attempt: validationRetries, maxRetries: this.config.maxValidationRetries });
 
 					// Send validation errors back to the agent for fixing
 					const fixPrompt = [
@@ -245,6 +268,7 @@ export class CodingAgent {
 					const retryResult = await this.validate();
 					validationPassed = retryResult.passed;
 					validationOutput = retryResult.output;
+					this.config.onEvent?.({ type: "validation_result", passed: retryResult.passed, output: retryResult.output });
 
 					if (validationPassed) break;
 				}
@@ -558,6 +582,45 @@ export class CodingAgent {
 	}
 
 	// ─── Private Helpers ─────────────────────────────────────────────────────
+
+	/**
+	 * Forward agent events to the caller's onEvent callback.
+	 * Maps raw agent event types to typed CodingAgentEvent objects.
+	 */
+	private forwardEvent(event: string, data: unknown): void {
+		const cb = this.config.onEvent;
+		if (!cb) return;
+
+		const d = data as Record<string, unknown>;
+
+		switch (event) {
+			case "stream:tool_call": {
+				const name = (d.name as string) ?? "unknown";
+				let args: Record<string, unknown> = {};
+				try {
+					args = JSON.parse((d.arguments as string) ?? "{}") as Record<string, unknown>;
+				} catch { /* skip */ }
+				cb({ type: "tool_call", name, args });
+				break;
+			}
+			case "tool:done": {
+				const name = (d.name as string) ?? "unknown";
+				const durationMs = (d.durationMs as number) ?? 0;
+				cb({ type: "tool_done", name, durationMs });
+				break;
+			}
+			case "stream:thinking": {
+				const text = (d.text as string) ?? "";
+				if (text) cb({ type: "thinking", text });
+				break;
+			}
+			case "stream:text": {
+				const text = (d.text as string) ?? "";
+				if (text) cb({ type: "text", text });
+				break;
+			}
+		}
+	}
 
 	/**
 	 * Track file operations from agent events.

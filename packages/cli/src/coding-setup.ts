@@ -13,7 +13,7 @@
 
 import type { ToolHandler, ToolResult } from "@chitragupta/core";
 import type { ProviderDefinition } from "@chitragupta/swara";
-import type { CodingOrchestratorConfig, OrchestratorResult, OrchestratorProgress } from "@chitragupta/anina";
+import type { CodingOrchestratorConfig, CodingAgentEvent, OrchestratorResult, OrchestratorProgress } from "@chitragupta/anina";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -63,6 +63,8 @@ export interface CreateOrchestratorOptions {
 	selfReview?: boolean;
 	timeoutMs?: number;
 	onProgress?: (progress: OrchestratorProgress) => void;
+	/** Coding agent event callback for streaming tool calls, thinking, etc. */
+	onCodingEvent?: (event: CodingAgentEvent) => void;
 }
 
 // ─── Provider Setup ─────────────────────────────────────────────────────────
@@ -207,6 +209,7 @@ export async function createCodingOrchestrator(
 		additionalContext: options.setup.additionalContext,
 		timeoutMs: options.timeoutMs ?? (cd.timeout ? cd.timeout * 1000 : 5 * 60 * 1000),
 		onProgress: options.onProgress,
+		onCodingEvent: options.onCodingEvent,
 		createBranch: options.createBranch ?? cd.createBranch,
 		autoCommit: options.autoCommit ?? cd.autoCommit,
 		selfReview: options.selfReview ?? cd.selfReview,
