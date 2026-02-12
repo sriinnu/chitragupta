@@ -24,28 +24,33 @@ const SAFE_COMMAND_PREFIXES = new Set([
 	"npm", "node", "npx", "pnpm", "yarn", "bun", "deno", "tsx",
 	"tsc", "eslint", "prettier", "biome",
 	// Test runners
-	"vitest", "jest", "mocha", "playwright", "cypress",
+	"vitest", "jest", "mocha", "playwright", "cypress", "pytest",
 	// Build tools
-	"make", "cmake", "ninja",
+	"make", "cmake", "ninja", "gradle", "mvn", "just", "task",
 	// Languages
-	"cargo", "rustc", "python", "python3", "pip", "pip3", "uv",
-	"go", "ruby", "java", "javac", "swift", "swiftc", "dotnet",
+	"cargo", "rustc", "rustfmt", "python", "python3", "pip", "pip3", "uv",
+	"go", "gofmt", "ruby", "gem", "java", "javac", "swift", "swiftc", "dotnet",
+	// Python tooling
+	"black", "isort", "ruff", "mypy", "pylint", "flake8",
 	// Version control
 	"git",
 	// Common utilities (read-only / low-risk)
 	"ls", "cat", "echo", "which", "env", "pwd", "basename", "dirname",
 	"head", "tail", "wc", "sort", "uniq", "diff", "find", "grep", "rg",
 	"mkdir", "cp", "mv", "touch", "chmod", "rm",
+	"sed", "awk", "tr", "cut", "xargs", "tee",
+	"tar", "zip", "unzip", "gzip", "gunzip",
 	"curl", "wget",
-	// Docker
-	"docker", "docker-compose",
+	// Docker / containers
+	"docker", "docker-compose", "podman",
 ]);
 
 /**
  * Characters that indicate shell meta-operations (injection vectors).
  * Any command containing these is rejected outright.
+ * Includes newlines (\n, \r) to prevent multi-line injection.
  */
-const DANGEROUS_CHARS = /[;|&$`><]/;
+const DANGEROUS_CHARS = /[;|&$`><\n\r]/;
 
 // ─── Parsing ─────────────────────────────────────────────────────────────────
 
