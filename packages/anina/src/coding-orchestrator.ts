@@ -349,6 +349,15 @@ export class CodingOrchestrator {
 				return this.finalize(result);
 			}
 
+			// ── Early exit: non-coding query (empty plan) ──
+			if (plan.steps.length === 0) {
+				result.success = false;
+				result.summary = "This doesn't look like a coding task. Try describing a code change, bug fix, or feature to implement.";
+				this.emitProgress("done", result.summary);
+				result.errors.push({ phase: "planning", message: result.summary, recoverable: true });
+				return this.finalize(result);
+			}
+
 			// ── Phase 2: Branch ──
 			if (this.config.mode === "full" && this.shouldCreateBranch()) {
 				const branchStart = Date.now();
@@ -465,7 +474,46 @@ export class CodingOrchestrator {
 	 * Analyze a task and produce a structured plan.
 	 * Uses a lightweight agent prompt to decompose the task.
 	 */
+	/**
+	 * Detect whether user input is a conversational/non-coding query.
+	 * These should not trigger the full coding pipeline.
+	 *
+	 * Conservative: only catches obvious greetings and questions about identity.
+	 * When in doubt, treat input as a coding task (let the LLM decide).
+	 */
+	private isConversationalQuery(task: string): boolean {
+		const lower = task.toLowerCase().trim();
+
+		// Greeting-only inputs
+		if (/^(hi|hello|hey|sup|yo|thanks|thank you|bye|goodbye|ok|okay)\s*[!?.]*$/i.test(lower)) {
+			return true;
+		}
+
+		// Identity / meta questions ("who are you", "what are you", "how are you")
+		if (/^(who|what|how)\s+(are|r)\s+(you|u|ya)\s*[?!.]*$/i.test(lower)) {
+			return true;
+		}
+
+		// Pleasantries / time-of-day greetings
+		if (/^(good\s+(morning|evening|night|afternoon)|what'?s?\s*up|how'?s?\s*it\s*going)\s*[?!.]*$/i.test(lower)) {
+			return true;
+		}
+
+		return false;
+	}
+
 	private async planTask(task: string): Promise<TaskPlan> {
+		// Detect non-coding queries early — don't create branches or execute
+		if (this.isConversationalQuery(task)) {
+			return {
+				task,
+				steps: [],
+				relevantFiles: [],
+				complexity: "small",
+				requiresNewFiles: false,
+			};
+		}
+
 		// For simple tasks, skip LLM planning entirely
 		const simpleKeywords = ["fix typo", "rename", "add comment", "remove unused", "update import"];
 		const isSimple = simpleKeywords.some((kw) => task.toLowerCase().includes(kw));
