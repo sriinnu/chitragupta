@@ -77,7 +77,13 @@ export class SkillRegistry {
 
 		// Remove old entry if re-registering (keeps indices clean)
 		if (this.skills.has(name)) {
-			this.unregister(name);
+			try {
+				this.unregister(name);
+			} catch {
+				// Force-clean the primary index on unregister failure
+				this.skills.delete(name);
+				this.vectors.delete(name);
+			}
 		}
 
 		// Compute trait vector if not present

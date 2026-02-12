@@ -276,8 +276,8 @@ describe("McpServer", () => {
       const res = await handleRequest(server, req);
 
       expect(res.error).toBeUndefined();
-      const result = res.result as { messages: Array<{ content: Array<{ text: string }> }> };
-      expect(result.messages[0].content[0].text).toBe("Review this TypeScript code.");
+      const result = res.result as { messages: Array<{ content: { type: string; text: string } }> };
+      expect(result.messages[0].content.text).toBe("Review this TypeScript code.");
     });
 
     it("should return error for unknown prompt", async () => {

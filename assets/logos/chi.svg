@@ -1,0 +1,29 @@
+<!-- चि — The Chitragupta Symbol -->
+<!-- Standalone Devanagari चि mark for favicons, status bars, and compact branding -->
+<!-- Colors: Saffron (#FF9933), Gold (#FFD700), Ink Blue (#1A1A4E) -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+
+  <!-- Ink blue circle background -->
+  <circle cx="32" cy="32" r="30" fill="#1A1A4E"/>
+
+  <!-- Outer saffron ring -->
+  <circle cx="32" cy="32" r="30" fill="none" stroke="#FF9933" stroke-width="2"/>
+
+  <!-- Inner gold ring (yantra accent) -->
+  <circle cx="32" cy="32" r="22" fill="none" stroke="#FFD700" stroke-width="0.6" stroke-opacity="0.30"/>
+
+  <!-- Cardinal tick marks -->
+  <line x1="32" y1="4" x2="32" y2="10" stroke="#FFD700" stroke-width="0.6" stroke-opacity="0.35"/>
+  <line x1="32" y1="54" x2="32" y2="60" stroke="#FFD700" stroke-width="0.6" stroke-opacity="0.35"/>
+  <line x1="4" y1="32" x2="10" y2="32" stroke="#FFD700" stroke-width="0.6" stroke-opacity="0.35"/>
+  <line x1="54" y1="32" x2="60" y2="32" stroke="#FFD700" stroke-width="0.6" stroke-opacity="0.35"/>
+
+  <!-- Subtle glow -->
+  <circle cx="32" cy="32" r="14" fill="#FF9933" fill-opacity="0.06"/>
+
+  <!-- चि character -->
+  <text x="32" y="40" text-anchor="middle"
+        font-family="'Noto Sans Devanagari', 'Devanagari MT', 'Mangal', sans-serif"
+        font-size="28" font-weight="600"
+        fill="#FF9933" fill-opacity="0.95">चि</text>
+</svg>

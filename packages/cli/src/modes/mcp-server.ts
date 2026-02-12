@@ -71,7 +71,7 @@ function createMemorySearchTool(projectPath: string): McpToolHandler {
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const query = String(args.query ?? "");
-			const limit = Number(args.limit ?? 10);
+			const limit = Number(args.limit ?? 10) || 10;
 
 			if (!query) {
 				return {
@@ -136,7 +136,7 @@ function createSessionListTool(projectPath: string): McpToolHandler {
 			},
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
-			const limit = Number(args.limit ?? 20);
+			const limit = Number(args.limit ?? 20) || 20;
 
 			try {
 				const { listSessions } = await import("@chitragupta/smriti/session-store");
@@ -193,7 +193,7 @@ function createSessionShowTool(projectPath: string): McpToolHandler {
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const sessionId = String(args.sessionId ?? "");
-			const turnLimit = args.turnLimit != null ? Number(args.turnLimit) : undefined;
+			const turnLimit = args.turnLimit != null ? (Number(args.turnLimit) || undefined) : undefined;
 
 			if (!sessionId) {
 				return {
@@ -504,7 +504,7 @@ function createSamitiChannelsTool(): McpToolHandler {
 			try {
 				const samiti = await getSamiti();
 				const channel = args.channel != null ? String(args.channel) : undefined;
-				const limit = Number(args.limit ?? 20);
+				const limit = Number(args.limit ?? 20) || 20;
 
 				if (channel) {
 					const messages = samiti.listen(channel, { limit });
@@ -761,7 +761,7 @@ function createAkashaTracesTool(): McpToolHandler {
 			}
 
 			const type = args.type != null ? String(args.type) : undefined;
-			const limit = Number(args.limit ?? 10);
+			const limit = Number(args.limit ?? 10) || 10;
 
 			try {
 				const akasha = await getAkasha();
@@ -899,7 +899,7 @@ function createVasanaTendenciesTool(projectPath: string): McpToolHandler {
 			},
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
-			const limit = Number(args.limit ?? 20);
+			const limit = Number(args.limit ?? 20) || 20;
 
 			try {
 				const vasana = await getVasana();
@@ -1519,8 +1519,9 @@ function createHandoverTool(projectPath: string): McpToolHandler {
 
 				const session = loadSession(sessionId, projectPath);
 				const allTurns = session.turns;
-				const turns = args.turnWindow
-					? allTurns.slice(-Number(args.turnWindow))
+				const turnWindow = args.turnWindow ? (Number(args.turnWindow) || 0) : 0;
+				const turns = turnWindow > 0
+					? allTurns.slice(-turnWindow)
 					: allTurns;
 
 				// ── Extract structured work state ─────────────────────────
@@ -1862,10 +1863,10 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	let mcpSessionId: string | null = null;
 	let turnCounter = 0;
 
-	const ensureSession = () => {
+	const ensureSession = async () => {
 		if (mcpSessionId) return mcpSessionId;
 		try {
-			const { createSession } = require("@chitragupta/smriti/session-store") as typeof import("@chitragupta/smriti/session-store");
+			const { createSession } = await import("@chitragupta/smriti/session-store");
 			const session = createSession({
 				project: projectPath,
 				agent: "mcp",
@@ -1873,30 +1874,31 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 				title: `MCP session`,
 			});
 			mcpSessionId = session.meta.id;
-		} catch {
+		} catch (err) {
 			// Session recording is best-effort — don't break MCP if smriti fails
+			process.stderr.write(`[chitragupta] session init failed: ${err}\n`);
 		}
 		return mcpSessionId;
 	};
 
-	const recordToolCall = (info: { tool: string; args: Record<string, unknown>; result: import("@chitragupta/tantra").McpToolResult; elapsedMs: number }) => {
-		const sid = ensureSession();
+	const recordToolCall = async (info: { tool: string; args: Record<string, unknown>; result: import("@chitragupta/tantra").McpToolResult; elapsedMs: number }) => {
+		const sid = await ensureSession();
 		if (!sid) return;
 
 		try {
-			const { addTurn } = require("@chitragupta/smriti/session-store") as typeof import("@chitragupta/smriti/session-store");
+			const { addTurn } = await import("@chitragupta/smriti/session-store");
 
 			// Record tool call as a user turn (the request)
 			const argSummary = Object.keys(info.args).length > 0
 				? JSON.stringify(info.args).slice(0, 500)
 				: "(no args)";
-			addTurn(sid, projectPath, {
+			await addTurn(sid, projectPath, {
 				turnNumber: 0,
 				role: "user",
 				content: `[tool:${info.tool}] ${argSummary}`,
 				agent: "mcp-client",
 				model: "mcp",
-			}).catch(() => {});
+			});
 
 			// Record tool result as an assistant turn (the response)
 			const resultText = info.result.content
@@ -1904,13 +1906,13 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 				.map((c) => c.text)
 				.join("\n")
 				.slice(0, 2000) ?? "(no output)";
-			addTurn(sid, projectPath, {
+			await addTurn(sid, projectPath, {
 				turnNumber: 0,
 				role: "assistant",
 				content: `[${info.tool} → ${info.elapsedMs.toFixed(0)}ms] ${resultText}`,
 				agent: "mcp",
 				model: "mcp",
-			}).catch(() => {});
+			});
 
 			turnCounter += 2;
 
@@ -1921,8 +1923,8 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 				turnCount: turnCounter,
 				lastTool: info.tool,
 			});
-		} catch {
-			// best-effort
+		} catch (err) {
+			process.stderr.write(`[chitragupta] record failed: ${err}\n`);
 		}
 	};
 

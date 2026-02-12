@@ -164,7 +164,7 @@ export const editTool: ToolHandler = {
 			for (let i = 0; i < edits.length; i++) {
 				const edit = edits[i];
 
-				if (!edit.oldText && edit.oldText !== "") {
+				if (edit.oldText === undefined || edit.oldText === null) {
 					return {
 						content: `Error: Edit ${i + 1} is missing 'oldText'.`,
 						isError: true,

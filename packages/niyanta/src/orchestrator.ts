@@ -306,14 +306,15 @@ export class Orchestrator {
 				case "assigned": case "running": case "retrying": running++; break;
 				case "completed": completed++; break;
 				case "failed": case "cancelled": failed++; break;
+				default: pending++; break; // Unknown status counts as pending
 			}
 		}
 
 		const avgLatency = this.completionTimes.length > 0
 			? this.completionTimes.reduce((a, b) => a + b, 0) / this.completionTimes.length : 0;
-		const elapsed = this.completionTimes.length > 0
-			? (Math.max(...this.completionTimes) - Math.min(...this.completionTimes)) / 60000 : 1;
-		const throughput = elapsed > 0 ? completed / Math.max(elapsed, 1 / 60) : 0;
+		const elapsed = this.completionTimes.length > 1
+			? (Math.max(...this.completionTimes) - Math.min(...this.completionTimes)) / 60000 : 0;
+		const throughput = elapsed > 0 ? completed / elapsed : 0;
 
 		return {
 			totalTasks: this.tasks.size, pendingTasks: pending, runningTasks: running,
