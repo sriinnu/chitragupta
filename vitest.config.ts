@@ -32,6 +32,7 @@ export default defineConfig({
 			"@chitragupta/niyanta": resolve(__dirname, "packages/niyanta/src/index.ts"),
 			"@chitragupta/cli": resolve(__dirname, "packages/cli/src/index.ts"),
 			"@chitragupta/vidhya-skills": resolve(__dirname, "packages/vidhya-skills/src/index.ts"),
+			"@chitragupta/darpana": resolve(__dirname, "packages/darpana/src/index.ts"),
 		},
 		coverage: {
 			provider: "v8",

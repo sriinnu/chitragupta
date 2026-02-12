@@ -52,9 +52,9 @@ function fnv1a(input: string): string {
 	let hash = FNV_OFFSET;
 	for (let i = 0; i < input.length; i++) {
 		hash ^= input.charCodeAt(i);
-		hash = Math.imul(hash, FNV_PRIME);
+		hash = (Math.imul(hash, FNV_PRIME)) >>> 0;
 	}
-	return (hash >>> 0).toString(16).padStart(8, "0");
+	return hash.toString(16).padStart(8, "0");
 }
 
 // ─── Tokenization ────────────────────────────────────────────────────────────
@@ -73,10 +73,11 @@ function tokenize(text: string): string[] {
 
 /**
  * Compute Jaccard similarity between two token sets.
- * Returns |intersection| / |union|, or 0 if both sets are empty.
+ * Returns |intersection| / |union|, or 1 if both sets are empty
+ * (identity: two empty token sets are maximally similar for knowledge matching).
  */
 function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
-	if (a.size === 0 && b.size === 0) return 0;
+	if (a.size === 0 && b.size === 0) return 1;
 	let intersection = 0;
 	for (const token of a) {
 		if (b.has(token)) intersection++;

@@ -120,7 +120,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
 		}
 
 		// ─── Subcommands ────────────────────────────────────────────────
-		if (!arg.startsWith("-") && !result.command && SUBCOMMANDS.has(arg)) {
+		if (!arg.startsWith("-") && !result.command && !result.prompt && SUBCOMMANDS.has(arg)) {
 			result.command = arg;
 			i++;
 			// Next non-flag argument is the subcommand

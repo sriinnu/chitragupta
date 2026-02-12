@@ -24,6 +24,52 @@ import { writeSessionMarkdown, writeTurnMarkdown } from "./markdown-writer.js";
 import { DatabaseManager } from "./db/database.js";
 import { initAgentSchema } from "./db/schema.js";
 
+// ─── L1 Session Cache (LRU) ─────────────────────────────────────────────────
+
+/** Max sessions to cache in-process. ~25 MB budget per PERFORMANCE_SPEC. */
+const SESSION_CACHE_MAX = 500;
+
+/**
+ * Simple LRU cache backed by Map insertion order.
+ * On access, delete + re-insert to move entry to tail (most recent).
+ */
+const sessionCache = new Map<string, Session>();
+
+function cacheKey(id: string, project: string): string {
+	return `${id}:${project}`;
+}
+
+function cacheGet(id: string, project: string): Session | undefined {
+	const key = cacheKey(id, project);
+	const entry = sessionCache.get(key);
+	if (!entry) return undefined;
+	// Move to tail (most recent)
+	sessionCache.delete(key);
+	sessionCache.set(key, entry);
+	return entry;
+}
+
+function cachePut(id: string, project: string, session: Session): void {
+	const key = cacheKey(id, project);
+	// Delete first to refresh position
+	sessionCache.delete(key);
+	// Evict oldest if at capacity
+	if (sessionCache.size >= SESSION_CACHE_MAX) {
+		const oldest = sessionCache.keys().next().value;
+		if (oldest !== undefined) sessionCache.delete(oldest);
+	}
+	sessionCache.set(key, session);
+}
+
+function cacheInvalidate(id: string, project: string): void {
+	sessionCache.delete(cacheKey(id, project));
+}
+
+/** Reset L1 session cache (for testing). */
+export function _resetSessionCache(): void {
+	sessionCache.clear();
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function hashProject(project: string): string {
@@ -33,7 +79,7 @@ function hashProject(project: string): string {
 /**
  * Generate a date-based session ID: session-YYYY-MM-DD-<projhash>[-N]
  *
- * Includes a short project hash (4 chars) to ensure global uniqueness
+ * Includes a project hash (8 chars) to ensure global uniqueness
  * across projects in the shared SQLite table.
  * Handles multiple sessions per day by appending a counter.
  */
@@ -43,7 +89,7 @@ function generateSessionId(project: string): { id: string; filePath: string } {
 	const mm = (now.getMonth() + 1).toString().padStart(2, "0");
 	const dd = now.getDate().toString().padStart(2, "0");
 	const dateStr = `${yyyy}-${mm}-${dd}`;
-	const projHash = hashProject(project).slice(0, 4);
+	const projHash = hashProject(project).slice(0, 8);
 	const baseId = `session-${dateStr}-${projHash}`;
 
 	const projectDir = getProjectSessionDir(project);
@@ -147,20 +193,29 @@ function sessionMetaToRow(meta: SessionMeta, filePath: string) {
 }
 
 function rowToSessionMeta(row: Record<string, unknown>): SessionMeta {
+	let tags: string[] = [];
+	try { tags = JSON.parse((row.tags as string) ?? "[]"); } catch { /* corrupted JSON — use empty */ }
+
+	let metadata: Record<string, unknown> | undefined;
+	try { metadata = row.metadata ? JSON.parse(row.metadata as string) : undefined; } catch { /* corrupted */ }
+
+	const createdAt = row.created_at as number | string | null;
+	const updatedAt = row.updated_at as number | string | null;
+
 	return {
 		id: row.id as string,
 		title: row.title as string,
-		created: new Date(row.created_at as number).toISOString(),
-		updated: new Date(row.updated_at as number).toISOString(),
+		created: createdAt ? new Date(createdAt).toISOString() : new Date().toISOString(),
+		updated: updatedAt ? new Date(updatedAt).toISOString() : new Date().toISOString(),
 		agent: (row.agent as string) ?? "chitragupta",
 		model: (row.model as string) ?? "unknown",
 		project: row.project as string,
 		parent: (row.parent_id as string) ?? null,
 		branch: (row.branch as string) ?? null,
-		tags: JSON.parse((row.tags as string) ?? "[]"),
+		tags,
 		totalCost: (row.cost as number) ?? 0,
 		totalTokens: (row.tokens as number) ?? 0,
-		metadata: row.metadata ? JSON.parse(row.metadata as string) : undefined,
+		metadata,
 	};
 }
 
@@ -185,32 +240,36 @@ function insertTurnToDb(sessionId: string, turn: SessionTurn): void {
 		const db = getAgentDb();
 		const now = Date.now();
 
-		const result = db.prepare(`
-			INSERT OR IGNORE INTO turns (session_id, turn_number, role, content, agent, model, tool_calls, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`).run(
-			sessionId,
-			turn.turnNumber,
-			turn.role,
-			turn.content,
-			turn.agent ?? null,
-			turn.model ?? null,
-			turn.toolCalls ? JSON.stringify(turn.toolCalls) : null,
-			now,
-		);
-
-		// Index into FTS5
-		if (result.changes > 0) {
-			db.prepare("INSERT INTO turns_fts (rowid, content) VALUES (?, ?)").run(
-				result.lastInsertRowid,
+		// Wrap turn insert + FTS5 index + session update in a transaction
+		const insertTurn = db.transaction(() => {
+			const result = db.prepare(`
+				INSERT OR IGNORE INTO turns (session_id, turn_number, role, content, agent, model, tool_calls, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			`).run(
+				sessionId,
+				turn.turnNumber,
+				turn.role,
 				turn.content,
+				turn.agent ?? null,
+				turn.model ?? null,
+				turn.toolCalls ? JSON.stringify(turn.toolCalls) : null,
+				now,
 			);
-		}
 
-		// Update session turn count + timestamp
-		db.prepare(
-			"UPDATE sessions SET turn_count = turn_count + 1, updated_at = ? WHERE id = ?",
-		).run(now, sessionId);
+			// Index into FTS5
+			if (result.changes > 0) {
+				db.prepare("INSERT INTO turns_fts (rowid, content) VALUES (?, ?)").run(
+					result.lastInsertRowid,
+					turn.content,
+				);
+			}
+
+			// Update session turn count + timestamp
+			db.prepare(
+				"UPDATE sessions SET turn_count = turn_count + 1, updated_at = ? WHERE id = ?",
+			).run(now, sessionId);
+		});
+		insertTurn();
 	} catch {
 		// Best-effort write-through
 	}
@@ -269,6 +328,8 @@ export function saveSession(session: Session): void {
 		session.meta.updated = new Date().toISOString();
 		const markdown = writeSessionMarkdown(session);
 		fs.writeFileSync(filePath, markdown, "utf-8");
+		// Write-through: update L1 cache
+		cachePut(session.meta.id, session.meta.project, session);
 	} catch (err) {
 		throw new SessionError(
 			`Failed to save session ${session.meta.id} at ${filePath}: ${(err as Error).message}`,
@@ -278,8 +339,15 @@ export function saveSession(session: Session): void {
 
 /**
  * Load a session from disk by ID and project.
+ *
+ * Uses an L1 in-process LRU cache (up to 500 entries, ~25 MB).
+ * Cache hits return in <0.01ms; misses read from .md file and populate cache.
  */
 export function loadSession(id: string, project: string): Session {
+	// L1 cache check
+	const cached = cacheGet(id, project);
+	if (cached) return cached;
+
 	const filePath = resolveSessionPath(id, project);
 
 	if (!fs.existsSync(filePath)) {
@@ -288,7 +356,9 @@ export function loadSession(id: string, project: string): Session {
 
 	try {
 		const content = fs.readFileSync(filePath, "utf-8");
-		return parseSessionMarkdown(content);
+		const session = parseSessionMarkdown(content);
+		cachePut(id, project, session);
+		return session;
 	} catch (err) {
 		if (err instanceof SessionError) throw err;
 		throw new SessionError(
@@ -396,6 +466,7 @@ export function deleteSession(id: string, project: string): void {
 	}
 
 	fs.unlinkSync(filePath);
+	cacheInvalidate(id, project);
 
 	// Clean up empty parent directories
 	let dir = path.dirname(filePath);
@@ -462,6 +533,9 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 		// Append turn to .md file (no full rewrite!)
 		const turnMd = writeTurnMarkdown(turn);
 		fs.appendFileSync(filePath, `\n${turnMd}\n`, "utf-8");
+
+		// Invalidate L1 cache — file content changed
+		cacheInvalidate(sessionId, project);
 
 		// Write-through to SQLite
 		insertTurnToDb(sessionId, turn);

@@ -1,0 +1,60 @@
+{
+	"name": "@chitragupta/darpana",
+	"version": "0.1.0",
+	"description": "High-performance LLM API proxy — mirrors Anthropic API to any provider",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/sriinnu/chitragupta.git",
+		"directory": "packages/darpana"
+	},
+	"keywords": [
+		"chitragupta",
+		"darpana",
+		"proxy",
+		"llm",
+		"anthropic",
+		"openai",
+		"gemini",
+		"ollama"
+	],
+	"engines": {
+		"node": ">=22"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"bin": {
+		"darpana": "dist/bin/darpana.js"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./*": {
+			"types": "./dist/*.d.ts",
+			"import": "./dist/*.js"
+		}
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"dev": "tsc -p tsconfig.json --watch",
+		"clean": "rm -rf dist",
+		"start": "node dist/bin/darpana.js"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"dependencies": {
+		"@chitragupta/core": "workspace:*"
+	},
+	"homepage": "https://github.com/sriinnu/chitragupta/tree/main/packages/darpana#readme",
+	"bugs": {
+		"url": "https://github.com/sriinnu/chitragupta/issues"
+	}
+}

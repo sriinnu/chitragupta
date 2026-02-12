@@ -120,7 +120,7 @@ function hasResponseShape(msg: Record<string, unknown>): msg is Record<string, u
 	return (
 		"id" in msg &&
 		(typeof msg.id === "string" || typeof msg.id === "number") &&
-		("result" in msg || "error" in msg)
+		(("result" in msg) !== ("error" in msg))
 	);
 }
 
