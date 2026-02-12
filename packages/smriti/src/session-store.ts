@@ -33,7 +33,7 @@ function hashProject(project: string): string {
 /**
  * Generate a date-based session ID: session-YYYY-MM-DD-<projhash>[-N]
  *
- * Includes a short project hash (4 chars) to ensure global uniqueness
+ * Includes a project hash (8 chars) to ensure global uniqueness
  * across projects in the shared SQLite table.
  * Handles multiple sessions per day by appending a counter.
  */
@@ -43,7 +43,7 @@ function generateSessionId(project: string): { id: string; filePath: string } {
 	const mm = (now.getMonth() + 1).toString().padStart(2, "0");
 	const dd = now.getDate().toString().padStart(2, "0");
 	const dateStr = `${yyyy}-${mm}-${dd}`;
-	const projHash = hashProject(project).slice(0, 4);
+	const projHash = hashProject(project).slice(0, 8);
 	const baseId = `session-${dateStr}-${projHash}`;
 
 	const projectDir = getProjectSessionDir(project);
@@ -147,20 +147,29 @@ function sessionMetaToRow(meta: SessionMeta, filePath: string) {
 }
 
 function rowToSessionMeta(row: Record<string, unknown>): SessionMeta {
+	let tags: string[] = [];
+	try { tags = JSON.parse((row.tags as string) ?? "[]"); } catch { /* corrupted JSON — use empty */ }
+
+	let metadata: Record<string, unknown> | undefined;
+	try { metadata = row.metadata ? JSON.parse(row.metadata as string) : undefined; } catch { /* corrupted */ }
+
+	const createdAt = row.created_at as number | string | null;
+	const updatedAt = row.updated_at as number | string | null;
+
 	return {
 		id: row.id as string,
 		title: row.title as string,
-		created: new Date(row.created_at as number).toISOString(),
-		updated: new Date(row.updated_at as number).toISOString(),
+		created: createdAt ? new Date(createdAt).toISOString() : new Date().toISOString(),
+		updated: updatedAt ? new Date(updatedAt).toISOString() : new Date().toISOString(),
 		agent: (row.agent as string) ?? "chitragupta",
 		model: (row.model as string) ?? "unknown",
 		project: row.project as string,
 		parent: (row.parent_id as string) ?? null,
 		branch: (row.branch as string) ?? null,
-		tags: JSON.parse((row.tags as string) ?? "[]"),
+		tags,
 		totalCost: (row.cost as number) ?? 0,
 		totalTokens: (row.tokens as number) ?? 0,
-		metadata: row.metadata ? JSON.parse(row.metadata as string) : undefined,
+		metadata,
 	};
 }
 
@@ -185,32 +194,36 @@ function insertTurnToDb(sessionId: string, turn: SessionTurn): void {
 		const db = getAgentDb();
 		const now = Date.now();
 
-		const result = db.prepare(`
-			INSERT OR IGNORE INTO turns (session_id, turn_number, role, content, agent, model, tool_calls, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`).run(
-			sessionId,
-			turn.turnNumber,
-			turn.role,
-			turn.content,
-			turn.agent ?? null,
-			turn.model ?? null,
-			turn.toolCalls ? JSON.stringify(turn.toolCalls) : null,
-			now,
-		);
-
-		// Index into FTS5
-		if (result.changes > 0) {
-			db.prepare("INSERT INTO turns_fts (rowid, content) VALUES (?, ?)").run(
-				result.lastInsertRowid,
+		// Wrap turn insert + FTS5 index + session update in a transaction
+		const insertTurn = db.transaction(() => {
+			const result = db.prepare(`
+				INSERT OR IGNORE INTO turns (session_id, turn_number, role, content, agent, model, tool_calls, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			`).run(
+				sessionId,
+				turn.turnNumber,
+				turn.role,
 				turn.content,
+				turn.agent ?? null,
+				turn.model ?? null,
+				turn.toolCalls ? JSON.stringify(turn.toolCalls) : null,
+				now,
 			);
-		}
 
-		// Update session turn count + timestamp
-		db.prepare(
-			"UPDATE sessions SET turn_count = turn_count + 1, updated_at = ? WHERE id = ?",
-		).run(now, sessionId);
+			// Index into FTS5
+			if (result.changes > 0) {
+				db.prepare("INSERT INTO turns_fts (rowid, content) VALUES (?, ?)").run(
+					result.lastInsertRowid,
+					turn.content,
+				);
+			}
+
+			// Update session turn count + timestamp
+			db.prepare(
+				"UPDATE sessions SET turn_count = turn_count + 1, updated_at = ? WHERE id = ?",
+			).run(now, sessionId);
+		});
+		insertTurn();
 	} catch {
 		// Best-effort write-through
 	}

@@ -60,7 +60,7 @@ describe("SessionStore v2", () => {
 			});
 
 			// Format: session-YYYY-MM-DD-<projhash>[-N]
-			expect(session.meta.id).toMatch(/^session-\d{4}-\d{2}-\d{2}-[a-f0-9]{4}/);
+			expect(session.meta.id).toMatch(/^session-\d{4}-\d{2}-\d{2}-[a-f0-9]{8}/);
 			expect(session.meta.title).toBe("My Session");
 			expect(session.meta.agent).toBe("chitragupta");
 			expect(session.meta.model).toBe("claude-sonnet-4-5-20250929");
@@ -109,9 +109,9 @@ describe("SessionStore v2", () => {
 			const s2 = createSession({ project: "/test" });
 			const s3 = createSession({ project: "/test" });
 
-			expect(s1.meta.id).toMatch(/^session-\d{4}-\d{2}-\d{2}-[a-f0-9]{4}$/);
-			expect(s2.meta.id).toMatch(/^session-\d{4}-\d{2}-\d{2}-[a-f0-9]{4}-2$/);
-			expect(s3.meta.id).toMatch(/^session-\d{4}-\d{2}-\d{2}-[a-f0-9]{4}-3$/);
+			expect(s1.meta.id).toMatch(/^session-\d{4}-\d{2}-\d{2}-[a-f0-9]{8}$/);
+			expect(s2.meta.id).toMatch(/^session-\d{4}-\d{2}-\d{2}-[a-f0-9]{8}-2$/);
+			expect(s3.meta.id).toMatch(/^session-\d{4}-\d{2}-\d{2}-[a-f0-9]{8}-3$/);
 		});
 
 		it("should write-through to SQLite", () => {

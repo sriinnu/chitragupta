@@ -290,7 +290,7 @@ function searchSessionsFts5(query: string, project?: string): SessionMeta[] {
 		project: row.project,
 		parent: row.parent_id ?? null,
 		branch: row.branch ?? null,
-		tags: JSON.parse(row.tags ?? "[]"),
+		tags: (() => { try { return JSON.parse(row.tags ?? "[]"); } catch { return []; } })(),
 		totalCost: row.cost ?? 0,
 		totalTokens: row.tokens ?? 0,
 	}));

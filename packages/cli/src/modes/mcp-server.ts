@@ -71,7 +71,7 @@ function createMemorySearchTool(projectPath: string): McpToolHandler {
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const query = String(args.query ?? "");
-			const limit = Number(args.limit ?? 10);
+			const limit = Number(args.limit ?? 10) || 10;
 
 			if (!query) {
 				return {
@@ -136,7 +136,7 @@ function createSessionListTool(projectPath: string): McpToolHandler {
 			},
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
-			const limit = Number(args.limit ?? 20);
+			const limit = Number(args.limit ?? 20) || 20;
 
 			try {
 				const { listSessions } = await import("@chitragupta/smriti/session-store");
@@ -193,7 +193,7 @@ function createSessionShowTool(projectPath: string): McpToolHandler {
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const sessionId = String(args.sessionId ?? "");
-			const turnLimit = args.turnLimit != null ? Number(args.turnLimit) : undefined;
+			const turnLimit = args.turnLimit != null ? (Number(args.turnLimit) || undefined) : undefined;
 
 			if (!sessionId) {
 				return {
@@ -504,7 +504,7 @@ function createSamitiChannelsTool(): McpToolHandler {
 			try {
 				const samiti = await getSamiti();
 				const channel = args.channel != null ? String(args.channel) : undefined;
-				const limit = Number(args.limit ?? 20);
+				const limit = Number(args.limit ?? 20) || 20;
 
 				if (channel) {
 					const messages = samiti.listen(channel, { limit });
@@ -761,7 +761,7 @@ function createAkashaTracesTool(): McpToolHandler {
 			}
 
 			const type = args.type != null ? String(args.type) : undefined;
-			const limit = Number(args.limit ?? 10);
+			const limit = Number(args.limit ?? 10) || 10;
 
 			try {
 				const akasha = await getAkasha();
@@ -899,7 +899,7 @@ function createVasanaTendenciesTool(projectPath: string): McpToolHandler {
 			},
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
-			const limit = Number(args.limit ?? 20);
+			const limit = Number(args.limit ?? 20) || 20;
 
 			try {
 				const vasana = await getVasana();
@@ -1519,8 +1519,9 @@ function createHandoverTool(projectPath: string): McpToolHandler {
 
 				const session = loadSession(sessionId, projectPath);
 				const allTurns = session.turns;
-				const turns = args.turnWindow
-					? allTurns.slice(-Number(args.turnWindow))
+				const turnWindow = args.turnWindow ? (Number(args.turnWindow) || 0) : 0;
+				const turns = turnWindow > 0
+					? allTurns.slice(-turnWindow)
 					: allTurns;
 
 				// ── Extract structured work state ─────────────────────────
