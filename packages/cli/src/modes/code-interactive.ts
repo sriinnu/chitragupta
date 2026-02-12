@@ -8,7 +8,7 @@
  *   - Live phase streaming during orchestrator execution
  *   - Colored diff preview after each task
  *   - Session continuity (same provider across tasks)
- *   - Slash commands: /plan, /undo, /diff, /mode, /quit
+ *   - Slash commands: /plan, /ask, /chat, /undo, /diff, /mode, /status, /git, /branch, /config, /quit
  */
 
 import * as readline from "node:readline";
@@ -23,8 +23,6 @@ import {
 	yellow,
 	green,
 	red,
-	magenta,
-	white,
 	reset,
 	rgb,
 } from "@chitragupta/ui/ansi";
