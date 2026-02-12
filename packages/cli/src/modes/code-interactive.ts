@@ -195,6 +195,7 @@ function printHelp(): void {
 	stdout.write("\n");
 	stdout.write(bold("  Commands:\n"));
 	stdout.write(`  ${cyan("/plan")} ${dim("<task>")}     Plan only, don't execute\n`);
+	stdout.write(`  ${cyan("/chat")} ${dim("<msg>")}      Chat with the AI (no code execution)\n`);
 	stdout.write(`  ${cyan("/mode")} ${dim("<mode>")}     Switch mode (full, execute, plan-only)\n`);
 	stdout.write(`  ${cyan("/diff")}             Show last diff\n`);
 	stdout.write(`  ${cyan("/history")}          Show task history\n`);
@@ -623,6 +624,17 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 						return;
 					}
 
+					case "/chat": {
+						if (!arg) {
+							stdout.write(yellow("\n  Usage: /chat <message>\n\n"));
+							rl.prompt();
+							return;
+						}
+						await chatResponse(arg);
+						rl.prompt();
+						return;
+					}
+
 					case "/config": {
 						stdout.write("\n");
 						stdout.write(`  ${dim("Mode:")}        ${bold(mode)}\n`);
@@ -682,14 +694,10 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 
 				const result = await orchestrator.run(task);
 
-				// Detect non-coding query (empty plan, no files changed)
+				// Detect non-coding query (empty plan, no files changed) — route to chat
 				if (!result.success && result.plan && result.plan.steps.length === 0) {
-					stdout.write("\n");
-					stdout.write(yellow("  This doesn't look like a coding task.\n"));
-					stdout.write(dim("  Try describing a code change:\n"));
-					stdout.write(dim("    - fix the failing test in auth.test.ts\n"));
-					stdout.write(dim("    - add input validation to the login form\n"));
-					stdout.write(dim("    - refactor the database module to use async/await\n\n"));
+					stdout.write(dim("  Not a coding task — routing to chat...\n"));
+					await chatResponse(task);
 				} else {
 					displayResult(result);
 				}
@@ -718,6 +726,54 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 					stdout.write(red(`\n  Error: ${msg}\n\n`));
 				}
 			}
+		}
+
+		/**
+		 * Send a non-coding message to the AI and display the response.
+		 * Uses a lightweight one-shot agent call — no orchestrator, no git, no tools.
+		 */
+		async function chatResponse(message: string): Promise<void> {
+			stdout.write("\n");
+			stdout.write(dim("  ── Chat ──\n\n"));
+
+			try {
+				const { KARTRU_PROFILE } = await import("@chitragupta/core");
+				const { Agent } = await import("@chitragupta/anina");
+
+				const agent = new Agent({
+					profile: { ...KARTRU_PROFILE, id: "code-chat", name: "Kartru Chat" },
+					providerId: codingSetup.providerId,
+					model: options.model ?? KARTRU_PROFILE.preferredModel ?? "claude-sonnet-4-5-20250929",
+					tools: [],
+					thinkingLevel: "low",
+					workingDirectory: projectPath,
+					maxTurns: 1,
+					enableChetana: false,
+					enableLearning: false,
+					enableAutonomy: false,
+				});
+				agent.setProvider(codingSetup.provider as import("@chitragupta/swara").ProviderDefinition);
+
+				const response = await agent.prompt(message);
+				const text = response.content
+					.filter((p) => p.type === "text")
+					.map((p) => (p as { type: "text"; text: string }).text)
+					.join("\n");
+
+				if (text) {
+					// Wrap text at 80 chars with indent
+					for (const line of text.split("\n")) {
+						stdout.write(`  ${line}\n`);
+					}
+				} else {
+					stdout.write(dim("  (no response)\n"));
+				}
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				stdout.write(red(`  Chat error: ${msg}\n`));
+			}
+
+			stdout.write("\n");
 		}
 	});
 }
