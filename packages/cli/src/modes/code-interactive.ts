@@ -303,6 +303,16 @@ function displayResult(result: {
 	const complexity = result.plan?.complexity ?? "—";
 	stdout.write(`  ${bold(status)}  ${dim("complexity:")} ${complexity}  ${dim("in")} ${formatMs(result.elapsedMs)}\n`);
 
+	// Plan steps (important for /plan command and full mode)
+	if (result.plan && result.plan.steps.length > 0) {
+		stdout.write("\n");
+		stdout.write(`  ${bold("Plan")} ${dim(`(${result.plan.steps.length} step${result.plan.steps.length > 1 ? "s" : ""})`)}\n`);
+		for (const step of result.plan.steps) {
+			const mark = step.completed ? green("✓") : dim("○");
+			stdout.write(`  ${mark} ${dim(`${step.index}.`)} ${step.description}\n`);
+		}
+	}
+
 	// Files
 	if (result.filesModified.length > 0 || result.filesCreated.length > 0) {
 		stdout.write("\n");
@@ -396,8 +406,11 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 	});
 
 	if (!setup) {
-		stderr.write(red("\n  No AI provider available.\n"));
-		stderr.write(dim("  Run: chitragupta provider add anthropic\n\n"));
+		stderr.write(red("\n  No AI provider available.\n\n"));
+		stderr.write(dim("  Quick fix:\n"));
+		stderr.write(dim("    1. Set your provider API key as an environment variable\n"));
+		stderr.write(dim("    2. Or register:  ") + cyan("chitragupta provider add anthropic") + "\n");
+		stderr.write(dim("    3. List providers: ") + cyan("chitragupta provider list") + "\n\n");
 		return 1;
 	}
 
@@ -642,6 +655,12 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 
 		async function runTask(task: string, taskMode: "full" | "execute" | "plan-only"): Promise<void> {
 			stdout.write("\n");
+
+			// Warn on very long tasks
+			if (task.length > 5000) {
+				stdout.write(yellow(`  Warning: Task is very long (${task.length} chars). Consider splitting into smaller tasks.\n\n`));
+			}
+
 			stdout.write(dim(`  ── ${taskMode === "plan-only" ? "Planning" : "Running"}: `) + task.slice(0, 60) + (task.length > 60 ? "..." : "") + "\n\n");
 
 			const onProgress = createProgressRenderer();
@@ -663,7 +682,17 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 
 				const result = await orchestrator.run(task);
 
-				displayResult(result);
+				// Detect non-coding query (empty plan, no files changed)
+				if (!result.success && result.plan && result.plan.steps.length === 0) {
+					stdout.write("\n");
+					stdout.write(yellow("  This doesn't look like a coding task.\n"));
+					stdout.write(dim("  Try describing a code change:\n"));
+					stdout.write(dim("    - fix the failing test in auth.test.ts\n"));
+					stdout.write(dim("    - add input validation to the login form\n"));
+					stdout.write(dim("    - refactor the database module to use async/await\n\n"));
+				} else {
+					displayResult(result);
+				}
 
 				// Save to history
 				lastDiff = result.diffPreview;
@@ -679,7 +708,15 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 				});
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
-				stdout.write(red(`\n  Error: ${msg}\n\n`));
+				if (msg.includes("timeout") || msg.includes("TIMEOUT")) {
+					stdout.write(red(`\n  Task timed out after ${timeout}s.\n`));
+					stdout.write(dim("  Try: /mode execute (skip git), or increase timeout with --timeout\n\n"));
+				} else if (msg.includes("provider") || msg.includes("API") || msg.includes("401") || msg.includes("403")) {
+					stdout.write(red(`\n  Provider error: ${msg}\n`));
+					stdout.write(dim("  Check your API key and provider configuration.\n\n"));
+				} else {
+					stdout.write(red(`\n  Error: ${msg}\n\n`));
+				}
 			}
 		}
 	});
