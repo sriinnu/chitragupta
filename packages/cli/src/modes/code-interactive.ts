@@ -12,6 +12,9 @@
  */
 
 import * as readline from "node:readline";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { execSync } from "node:child_process";
 import {
 	bold,
 	dim,
@@ -110,9 +113,6 @@ interface ProjectSnapshot {
 }
 
 function detectProject(projectPath: string): ProjectSnapshot {
-	const fs = require("fs");
-	const path = require("path");
-	const { execSync } = require("child_process");
 
 	let branch = "";
 	try {
@@ -163,7 +163,6 @@ function detectProject(projectPath: string): ProjectSnapshot {
 
 function printProjectInfo(project: ProjectSnapshot, projectPath: string, providerId: string, model: string | undefined, mode: string): void {
 	const { stdout } = process;
-	const path = require("path");
 	const dirName = path.basename(projectPath);
 
 	stdout.write(dim("  ─────────────────────────────────────\n"));
@@ -485,7 +484,6 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 						}
 						const last = history[history.length - 1];
 						try {
-							const { execSync } = require("child_process");
 							execSync("git reset --soft HEAD~1", { cwd: projectPath, encoding: "utf-8" });
 							stdout.write(green(`\n  Undid commit: ${last.commits[last.commits.length - 1]}\n`));
 							stdout.write(dim("  Changes are staged. Use git restore/reset to discard.\n\n"));
