@@ -218,24 +218,63 @@ function createProgressRenderer(): (progress: { phase: string; message: string; 
 		const isNew = !phases.has(progress.phase);
 		phases.set(progress.phase, true);
 
-		if (!isNew) return; // Only print first occurrence of each phase
+		if (!isNew) return;
 
 		const icons: Record<string, string> = {
-			plan: "📋",
-			branch: "🌿",
-			execute: "⚡",
-			validate: "🧪",
-			review: "🔍",
-			commit: "💾",
+			planning: "📋",
+			branching: "🌿",
+			executing: "⚡",
+			validating: "🧪",
+			reviewing: "🔍",
+			committing: "💾",
 			done: "✅",
 			error: "❌",
 		};
 
 		const icon = icons[progress.phase] ?? "⧖";
-		const phase = progress.phase.padEnd(10);
+		const phase = progress.phase.padEnd(12);
 		const time = formatMs(progress.elapsedMs).padStart(8);
 
 		stdout.write(`  ${icon} ${bold(phase)} ${dim(time)}\n`);
+	};
+}
+
+/** Stream coding agent events to terminal — tool calls, validation, retries. */
+function createCodingEventRenderer(): (event: { type: string; name?: string; args?: Record<string, unknown>; text?: string; passed?: boolean; output?: string; attempt?: number; maxRetries?: number; durationMs?: number; path?: string }) => void {
+	const { stdout } = process;
+	const toolIcons: Record<string, string> = {
+		read: "📖", write: "📝", edit: "✏️", bash: "🔧",
+		grep: "🔎", find: "📂", ls: "📁", diff: "📊",
+	};
+
+	return (event) => {
+		switch (event.type) {
+			case "tool_call": {
+				const icon = toolIcons[event.name ?? ""] ?? "🔨";
+				const name = (event.name ?? "?").padEnd(6);
+				const args = event.args ?? {};
+				let detail = "";
+				if (args.path || args.file_path) {
+					const p = (args.path ?? args.file_path) as string;
+					detail = dim(` ${p.split("/").pop()}`);
+				} else if (args.command) {
+					detail = dim(` ${(args.command as string).slice(0, 50)}`);
+				} else if (args.pattern) {
+					detail = dim(` /${args.pattern as string}/`);
+				}
+				stdout.write(`    ${icon} ${gray(name)}${detail}\n`);
+				break;
+			}
+			case "validation_start":
+				stdout.write(`    🧪 ${dim("running validation...")}\n`);
+				break;
+			case "validation_result":
+				stdout.write(`    🧪 ${event.passed ? green("✓ pass") : red("✗ fail")}\n`);
+				break;
+			case "retry":
+				stdout.write(`    🔄 ${yellow(`retry ${event.attempt}/${event.maxRetries}`)}\n`);
+				break;
+		}
 	};
 }
 
@@ -606,6 +645,7 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 			stdout.write(dim(`  ── ${taskMode === "plan-only" ? "Planning" : "Running"}: `) + task.slice(0, 60) + (task.length > 60 ? "..." : "") + "\n\n");
 
 			const onProgress = createProgressRenderer();
+			const onCodingEvent = createCodingEventRenderer();
 
 			try {
 				const orchestrator = await createCodingOrchestrator({
@@ -618,6 +658,7 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 					selfReview: options.selfReview ?? cd.selfReview,
 					timeoutMs: timeout * 1000,
 					onProgress,
+					onCodingEvent,
 				});
 
 				const result = await orchestrator.run(task);

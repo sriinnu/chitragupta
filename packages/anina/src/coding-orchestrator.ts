@@ -22,7 +22,11 @@ import { createLogger } from "@chitragupta/core";
 
 import { Agent } from "./agent.js";
 import { CodingAgent, CODE_TOOL_NAMES } from "./coding-agent.js";
-import type { CodingAgentConfig, CodingResult, ProjectConventions } from "./coding-agent.js";
+import type { CodingAgentConfig, CodingAgentEvent, CodingResult, ProjectConventions } from "./coding-agent.js";
+import { DebugAgent } from "./debug-agent.js";
+import type { DebugAgentConfig } from "./debug-agent.js";
+import { ReviewAgent } from "./review-agent.js";
+import type { ReviewAgentConfig } from "./review-agent.js";
 import { safeExecSync } from "./safe-exec.js";
 import type { AgentConfig, AgentMessage, ToolHandler } from "./types.js";
 
@@ -221,6 +225,11 @@ export interface CodingOrchestratorConfig {
 	additionalContext?: string;
 	/** Maximum time in milliseconds before aborting. Default: no timeout. */
 	timeoutMs?: number;
+	/**
+	 * Coding agent event callback for streaming execution details.
+	 * Receives tool calls, thinking, validation results, etc. from the coding agent.
+	 */
+	onCodingEvent?: (event: CodingAgentEvent) => void;
 	/** Optional session ID. When set, records the orchestration to smriti. */
 	sessionId?: string;
 	/**
@@ -851,7 +860,7 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 			return { passed: true, extraResults };
 		}
 
-		// Validation failed — retry with debug-fix cycles
+		// Validation failed — use DebugAgent (Anveshi) for structured investigation + fix
 		let debugCycles = 0;
 		let lastValidation = validation;
 
@@ -859,23 +868,53 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 			debugCycles++;
 			this.emitProgress(
 				"validating",
-				`Validation failed, debug-fix cycle ${debugCycles}/${this.config.maxDebugCycles}...`,
+				`Validation failed, debug investigation ${debugCycles}/${this.config.maxDebugCycles}...`,
 			);
 
-			// Send the validation errors to the coding agent for fixing
-			const fixPrompt = [
-				`Validation failed (attempt ${debugCycles}/${this.config.maxDebugCycles}). Fix these errors:`,
-				"",
-				"```",
-				lastValidation.output,
-				"```",
-				"",
-				"Analyze the errors carefully, fix the root cause (not just the symptoms),",
-				"and ensure the code compiles and all tests pass.",
-			].join("\n");
+			try {
+				// Use DebugAgent for structured root cause analysis + auto-fix
+				const debugAgent = this.createDebugAgent();
+				const debugResult = await debugAgent.quickFix({
+					error: lastValidation.output.slice(0, 2000),
+					reproduction: `Validation command failed in ${this.config.workingDirectory}`,
+				});
 
-			const fixResult = await agent.execute(fixPrompt);
-			extraResults.push(fixResult);
+				log.debug("debug agent result", {
+					rootCause: debugResult.rootCause.slice(0, 100),
+					fixApplied: debugResult.fixApplied,
+					confidence: debugResult.confidence,
+				});
+
+				// If the debug agent applied a fix, track it
+				if (debugResult.fixApplied) {
+					extraResults.push({
+						success: true,
+						filesModified: debugResult.filesInvestigated,
+						filesCreated: [],
+						validationPassed: debugResult.validationPassed ?? false,
+						validationOutput: debugResult.rootCause,
+						summary: debugResult.proposedFix,
+						validationRetries: 0,
+					});
+				}
+			} catch (debugErr) {
+				log.debug("debug agent failed, falling back to coding agent", { error: String(debugErr) });
+
+				// Fallback: send errors directly to coding agent
+				const fixPrompt = [
+					`Validation failed (attempt ${debugCycles}/${this.config.maxDebugCycles}). Fix these errors:`,
+					"",
+					"```",
+					lastValidation.output,
+					"```",
+					"",
+					"Analyze the errors carefully, fix the root cause (not just the symptoms),",
+					"and ensure the code compiles and all tests pass.",
+				].join("\n");
+
+				const fixResult = await agent.execute(fixPrompt);
+				extraResults.push(fixResult);
+			}
 
 			// Re-validate
 			lastValidation = await agent.validate();
@@ -921,19 +960,59 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 		}
 
 		try {
-			// Get the diff of all changes
-			const diff = this.gitExec("git diff HEAD").trim();
-			if (!diff) {
-				return { issues: [], hasCritical: false, fixPrompt: null };
+			// Use the dedicated ReviewAgent (Parikshaka) for proper structured review
+			const reviewer = this.createReviewAgent();
+			const reviewResult = await reviewer.reviewDiff("HEAD");
+
+			// Map ReviewIssue → ReviewIssueCompact
+			const issues: ReviewIssueCompact[] = reviewResult.issues.map((i) => ({
+				severity: i.severity.toUpperCase(),
+				file: i.file,
+				line: i.line,
+				message: i.suggestion ? `${i.message} — ${i.suggestion}` : i.message,
+			}));
+
+			const hasCritical = issues.some((i) => i.severity === "CRITICAL" || i.severity === "ERROR");
+
+			let fixPrompt: string | null = null;
+			if (hasCritical) {
+				const criticalIssues = issues
+					.filter((i) => i.severity === "CRITICAL" || i.severity === "ERROR")
+					.map((i) => `- ${i.severity}: ${i.file}${i.line ? `:${i.line}` : ""} ${i.message}`)
+					.join("\n");
+
+				fixPrompt = [
+					"Code review found critical issues that must be fixed:",
+					"",
+					criticalIssues,
+					"",
+					"Fix these issues now.",
+				].join("\n");
 			}
 
-			// Use the coding agent to do a self-review
+			return { issues, hasCritical, fixPrompt };
+		} catch (err) {
+			log.debug("self-review failed, falling back to inline review", { error: String(err) });
+			// Fallback: if ReviewAgent fails, use inline review
+			return this.inlineSelfReview();
+		}
+	}
+
+	/** Fallback inline self-review (used when ReviewAgent is unavailable). */
+	private async inlineSelfReview(): Promise<{
+		issues: ReviewIssueCompact[];
+		hasCritical: boolean;
+		fixPrompt: string | null;
+	}> {
+		try {
+			const diff = this.gitExec("git diff HEAD").trim();
+			if (!diff) return { issues: [], hasCritical: false, fixPrompt: null };
+
 			const agent = this.getOrCreateCodingAgent();
 			const reviewPrompt = [
 				"Review the following changes you just made. Look for:",
 				"- Bugs: null checks, off-by-one, race conditions, unhandled errors",
 				"- Security: injection, XSS, secrets in code, unsafe permissions",
-				"- Style: naming, consistency, dead code, missing types",
 				"",
 				"```diff",
 				diff.length > 8000 ? diff.slice(0, 8000) + "\n... (truncated)" : diff,
@@ -952,29 +1031,18 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 				.map((p) => (p as { type: "text"; text: string }).text)
 				.join("\n");
 
-			// Parse review issues
 			const issues = this.parseReviewIssues(text);
 			const hasCritical = issues.some((i) => i.severity === "CRITICAL" || i.severity === "ERROR");
-
 			let fixPrompt: string | null = null;
 			if (hasCritical) {
-				const criticalIssues = issues
-					.filter((i) => i.severity === "CRITICAL" || i.severity === "ERROR")
-					.map((i) => `- ${i.severity}: ${i.file}${i.line ? `:${i.line}` : ""} ${i.message}`)
-					.join("\n");
-
-				fixPrompt = [
-					"Self-review found critical issues that must be fixed:",
-					"",
-					criticalIssues,
-					"",
-					"Fix these issues now.",
-				].join("\n");
+				fixPrompt = "Self-review found critical issues that must be fixed:\n\n" +
+					issues
+						.filter((i) => i.severity === "CRITICAL" || i.severity === "ERROR")
+						.map((i) => `- ${i.severity}: ${i.file}${i.line ? `:${i.line}` : ""} ${i.message}`)
+						.join("\n") + "\n\nFix these issues now.";
 			}
-
 			return { issues, hasCritical, fixPrompt };
-		} catch (err) {
-			log.debug("self-review failed", { error: String(err) });
+		} catch {
 			return { issues: [], hasCritical: false, fixPrompt: null };
 		}
 	}
@@ -1341,6 +1409,7 @@ Rules:
 			policyEngine: this.config.policyEngine,
 			commHub: this.config.commHub,
 			additionalContext: this.config.additionalContext,
+			onEvent: this.config.onCodingEvent,
 		};
 
 		this.codingAgent = new CodingAgent(agentConfig);
@@ -1351,6 +1420,58 @@ Rules:
 		}
 
 		return this.codingAgent;
+	}
+
+	/**
+	 * Create a DebugAgent for investigating validation failures.
+	 * Uses the same provider and tools as the coding agent.
+	 */
+	private createDebugAgent(): DebugAgent {
+		const config: DebugAgentConfig = {
+			workingDirectory: this.config.workingDirectory,
+			providerId: this.config.providerId,
+			modelId: this.config.modelId,
+			autoFix: true,
+			testCommand: this.config.testCommand,
+			buildCommand: this.config.buildCommand,
+			tools: this.config.tools,
+			policyEngine: this.config.policyEngine,
+			commHub: this.config.commHub,
+		};
+
+		const agent = new DebugAgent(config);
+
+		if (this.config.provider) {
+			agent.getAgent().setProvider(this.config.provider as import("@chitragupta/swara").ProviderDefinition);
+		}
+
+		return agent;
+	}
+
+	/**
+	 * Create a ReviewAgent for self-reviewing changes.
+	 * Uses the same provider but read-only tools.
+	 */
+	private createReviewAgent(): ReviewAgent {
+		const config: ReviewAgentConfig = {
+			workingDirectory: this.config.workingDirectory,
+			providerId: this.config.providerId,
+			modelId: this.config.modelId,
+			focus: ["bugs", "security"],
+			minSeverity: "warning",
+			maxIssues: 10,
+			tools: this.config.tools,
+			policyEngine: this.config.policyEngine,
+			commHub: this.config.commHub,
+		};
+
+		const agent = new ReviewAgent(config);
+
+		if (this.config.provider) {
+			agent.getAgent().setProvider(this.config.provider as import("@chitragupta/swara").ProviderDefinition);
+		}
+
+		return agent;
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
