@@ -188,16 +188,24 @@ function printProjectInfo(project: ProjectSnapshot, projectPath: string, provide
 function printHelp(): void {
 	const { stdout } = process;
 	stdout.write("\n");
+	stdout.write(bold("  Tasks:\n"));
+	stdout.write(`  ${dim("  Type a coding task and press Enter to run it.")}\n`);
+	stdout.write(`  ${dim("  Example:")} fix the failing test in auth.test.ts\n`);
+	stdout.write(`  ${dim("  Example:")} add input validation to the login form\n`);
+	stdout.write("\n");
 	stdout.write(bold("  Commands:\n"));
-	stdout.write(`  ${cyan("/plan")} ${dim("<task>")}     Plan only (don't execute)\n`);
+	stdout.write(`  ${cyan("/plan")} ${dim("<task>")}     Plan only, don't execute\n`);
 	stdout.write(`  ${cyan("/mode")} ${dim("<mode>")}     Switch mode (full, execute, plan-only)\n`);
 	stdout.write(`  ${cyan("/diff")}             Show last diff\n`);
 	stdout.write(`  ${cyan("/history")}          Show task history\n`);
-	stdout.write(`  ${cyan("/undo")}             Undo last commit (git reset)\n`);
+	stdout.write(`  ${cyan("/undo")}             Undo last commit (git reset --soft)\n`);
+	stdout.write(`  ${cyan("/status")}           Show git status\n`);
+	stdout.write(`  ${cyan("/git")} ${dim("<cmd>")}       Run a git command (e.g. /git log --oneline -5)\n`);
+	stdout.write(`  ${cyan("/branch")}           Show/switch branches\n`);
+	stdout.write(`  ${cyan("/config")}           Show current coding configuration\n`);
 	stdout.write(`  ${cyan("/clear")}            Clear screen\n`);
 	stdout.write(`  ${cyan("/quit")}             Exit\n`);
 	stdout.write("\n");
-	stdout.write(dim("  Type a coding task and press Enter to run it.\n\n"));
 }
 
 // ─── Phase Streaming ────────────────────────────────────────────────────────
@@ -490,6 +498,89 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 						} catch (err) {
 							stdout.write(red(`\n  Undo failed: ${err instanceof Error ? err.message : String(err)}\n\n`));
 						}
+						rl.prompt();
+						return;
+					}
+
+					case "/status":
+					case "/st": {
+						try {
+							const status = execSync("git status --short", { cwd: projectPath, encoding: "utf-8" }).trim();
+							const branch = execSync("git branch --show-current", { cwd: projectPath, encoding: "utf-8" }).trim();
+							stdout.write(`\n  ${dim("Branch:")} ${cyan(branch)}\n`);
+							if (status) {
+								stdout.write("\n");
+								for (const line of status.split("\n").slice(0, 20)) {
+									const code = line.slice(0, 2);
+									const file = line.slice(3);
+									if (code.includes("M")) stdout.write(`  ${yellow("M")} ${file}\n`);
+									else if (code.includes("A") || code.includes("?")) stdout.write(`  ${green("A")} ${file}\n`);
+									else if (code.includes("D")) stdout.write(`  ${red("D")} ${file}\n`);
+									else stdout.write(`  ${dim(code)} ${file}\n`);
+								}
+								const total = status.split("\n").length;
+								if (total > 20) stdout.write(dim(`  ... and ${total - 20} more\n`));
+							} else {
+								stdout.write(dim("  Working tree clean.\n"));
+							}
+							stdout.write("\n");
+						} catch {
+							stdout.write(yellow("\n  Not a git repository.\n\n"));
+						}
+						rl.prompt();
+						return;
+					}
+
+					case "/git": {
+						if (!arg) {
+							stdout.write(yellow("\n  Usage: /git <command>  (e.g. /git log --oneline -5)\n\n"));
+							rl.prompt();
+							return;
+						}
+						try {
+							const out = execSync(`git ${arg}`, { cwd: projectPath, encoding: "utf-8", timeout: 10_000 }).trim();
+							if (out) stdout.write(`\n${out}\n\n`);
+							else stdout.write(dim("\n  (no output)\n\n"));
+						} catch (err) {
+							stdout.write(red(`\n  git ${arg}: ${err instanceof Error ? err.message : String(err)}\n\n`));
+						}
+						rl.prompt();
+						return;
+					}
+
+					case "/branch": {
+						try {
+							if (arg) {
+								// Switch branch
+								execSync(`git checkout ${arg}`, { cwd: projectPath, encoding: "utf-8" });
+								stdout.write(green(`\n  Switched to branch: ${arg}\n\n`));
+							} else {
+								// List branches
+								const branches = execSync("git branch", { cwd: projectPath, encoding: "utf-8" }).trim();
+								stdout.write("\n");
+								for (const b of branches.split("\n")) {
+									if (b.startsWith("*")) stdout.write(`  ${green(b.trim())}\n`);
+									else stdout.write(`  ${dim(b.trim())}\n`);
+								}
+								stdout.write("\n");
+							}
+						} catch (err) {
+							stdout.write(red(`\n  ${err instanceof Error ? err.message : String(err)}\n\n`));
+						}
+						rl.prompt();
+						return;
+					}
+
+					case "/config": {
+						stdout.write("\n");
+						stdout.write(`  ${dim("Mode:")}        ${bold(mode)}\n`);
+						stdout.write(`  ${dim("Provider:")}    ${cyan(codingSetup.providerId)}${options.model ? dim(` / ${options.model}`) : ""}\n`);
+						stdout.write(`  ${dim("Branch:")}      ${options.createBranch !== false ? green("on") : red("off")}\n`);
+						stdout.write(`  ${dim("Auto-commit:")} ${options.autoCommit !== false ? green("on") : red("off")}\n`);
+						stdout.write(`  ${dim("Self-review:")} ${options.selfReview !== false ? green("on") : red("off")}\n`);
+						stdout.write(`  ${dim("Timeout:")}     ${timeout}s\n`);
+						stdout.write(`  ${dim("Project:")}     ${projectPath}\n`);
+						stdout.write("\n");
 						rl.prompt();
 						return;
 					}
