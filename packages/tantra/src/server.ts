@@ -303,7 +303,7 @@ export class McpServer {
 
 			// Fire onToolCall hook (session recording, analytics, etc.)
 			if (this._config.onToolCall) {
-				try { this._config.onToolCall({ tool: toolName, args, result, elapsedMs: elapsed }); } catch { /* best-effort */ }
+				try { await this._config.onToolCall({ tool: toolName, args, result, elapsedMs: elapsed }); } catch { /* best-effort */ }
 			}
 
 			return createResponse(id, result);

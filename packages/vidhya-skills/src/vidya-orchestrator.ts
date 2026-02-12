@@ -366,7 +366,7 @@ export class VidyaOrchestrator {
 
 	// ─── 6. onSessionEnd ────────────────────────────────────────────────────
 
-	onSessionEnd(sessionId: string, skillsUsed: string[]): void {
+	async onSessionEnd(sessionId: string, skillsUsed: string[]): Promise<void> {
 		// Flush Samskara session co-occurrences
 		this.samskara.flushSession(sessionId);
 
@@ -380,7 +380,7 @@ export class VidyaOrchestrator {
 
 		// Auto-persist if configured
 		if (this.config.persistPath) {
-			this.persist().catch((e) => { log.debug("state persistence failed", { error: String(e) }); });
+			await this.persist().catch((e) => { log.debug("state persistence failed", { error: String(e) }); });
 		}
 	}
 

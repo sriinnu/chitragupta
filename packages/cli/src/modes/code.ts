@@ -76,19 +76,22 @@ interface UsageStats {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function formatTokens(n: number): string {
+/** @internal — exported for testing */
+export function formatTokens(n: number): string {
 	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
 	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
 	return String(n);
 }
 
-function formatCost(n: number): string {
+/** @internal — exported for testing */
+export function formatCost(n: number): string {
 	if (n < 0.001) return `$${n.toFixed(6)}`;
 	if (n < 0.01) return `$${n.toFixed(4)}`;
 	return `$${n.toFixed(4)}`;
 }
 
-function formatMs(ms: number): string {
+/** @internal — exported for testing */
+export function formatMs(ms: number): string {
 	if (ms < 1000) return `${ms}ms`;
 	if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
 	const mins = Math.floor(ms / 60_000);
@@ -96,11 +99,13 @@ function formatMs(ms: number): string {
 	return `${mins}m ${secs}s`;
 }
 
-function padRight(s: string, len: number): string {
+/** @internal — exported for testing */
+export function padRight(s: string, len: number): string {
 	return s.length >= len ? s : s + " ".repeat(len - s.length);
 }
 
-function padLeft(s: string, len: number): string {
+/** @internal — exported for testing */
+export function padLeft(s: string, len: number): string {
 	return s.length >= len ? s : " ".repeat(len - s.length) + s;
 }
 

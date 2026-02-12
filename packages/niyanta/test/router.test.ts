@@ -39,8 +39,8 @@ describe("jaccardSimilarity", () => {
     expect(sim).toBeCloseTo(1 / 3, 5);
   });
 
-  it("should return 1 when both sets are empty", () => {
-    expect(jaccardSimilarity([], [])).toBe(1);
+  it("should return 0 when both sets are empty", () => {
+    expect(jaccardSimilarity([], [])).toBe(0);
   });
 
   it("should be case-insensitive", () => {

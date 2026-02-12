@@ -142,9 +142,9 @@ export const rateLimitGuard: PolicyRule = {
 
 		// Prune old timestamps
 		const recent = timestamps.filter((t) => t > oneMinuteAgo);
-		callTimestamps.set(key, recent);
 
 		if (recent.length >= MAX_CALLS_PER_MINUTE) {
+			callTimestamps.set(key, recent);
 			return {
 				status: "deny",
 				ruleId: this.id,
@@ -153,8 +153,9 @@ export const rateLimitGuard: PolicyRule = {
 			};
 		}
 
-		// Record this call
+		// Record this call, then persist the updated list
 		recent.push(now);
+		callTimestamps.set(key, recent);
 
 		return { status: "allow", ruleId: this.id, reason: "Within rate limit" };
 	},

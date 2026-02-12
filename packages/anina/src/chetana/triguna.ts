@@ -691,23 +691,24 @@ function computeTrendDirection(
 	const n = snapshots.length;
 	if (n < 2) return "stable";
 
-	let sumX = 0;
-	let sumY = 0;
-	let sumXY = 0;
-	let sumX2 = 0;
+	// Use centered X coordinates for numerical stability at large n
+	const meanX = (n - 1) / 2;
+	let meanY = 0;
+	for (let i = 0; i < n; i++) meanY += snapshots[i].state[guna];
+	meanY /= n;
 
+	let slopeNum = 0;
+	let slopeDen = 0;
 	for (let i = 0; i < n; i++) {
-		const y = snapshots[i].state[guna];
-		sumX += i;
-		sumY += y;
-		sumXY += i * y;
-		sumX2 += i * i;
+		const dx = i - meanX;
+		const dy = snapshots[i].state[guna] - meanY;
+		slopeNum += dx * dy;
+		slopeDen += dx * dx;
 	}
 
-	const denominator = n * sumX2 - sumX * sumX;
-	if (Math.abs(denominator) < 1e-15) return "stable";
+	if (Math.abs(slopeDen) < 1e-15) return "stable";
 
-	const slope = (n * sumXY - sumX * sumY) / denominator;
+	const slope = slopeNum / slopeDen;
 
 	// Scale slope by window size to get total change over window
 	const totalChange = slope * (n - 1);

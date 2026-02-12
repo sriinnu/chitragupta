@@ -197,7 +197,7 @@ export class SSEServerTransport {
 				this._handler(msg);
 			}
 
-			res.writeHead(202, { "Content-Type": "application/json" });
+			res.writeHead(200, { "Content-Type": "application/json" });
 			res.end(JSON.stringify({ ok: true }));
 		});
 	}
@@ -269,6 +269,9 @@ export class SSEClientTransport {
 			);
 
 			req.on("error", reject);
+			req.setTimeout(30_000, () => {
+				req.destroy(new Error("SSEClientTransport: POST timed out after 30s"));
+			});
 			req.write(body);
 			req.end();
 		});
@@ -379,7 +382,7 @@ export class SSEClientTransport {
 			if (line.startsWith("event:")) {
 				eventType = line.slice(6).trim();
 			} else if (line.startsWith("data:")) {
-				data += line.slice(5).trim();
+				data += (data ? "\n" : "") + line.slice(5).trim();
 			}
 		}
 

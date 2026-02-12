@@ -51,9 +51,9 @@ function fnv1a(input: string): string {
 	let hash = FNV_OFFSET;
 	for (let i = 0; i < input.length; i++) {
 		hash ^= input.charCodeAt(i);
-		hash = Math.imul(hash, FNV_PRIME);
+		hash = (Math.imul(hash, FNV_PRIME)) >>> 0;
 	}
-	return (hash >>> 0).toString(16).padStart(8, "0");
+	return hash.toString(16).padStart(8, "0");
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -1084,13 +1084,17 @@ export class SvapnaConsolidation {
 
 				const { template, params } = antiUnify(posArgs);
 
-				// Merge params into the global schema
+				// Merge params into the global schema and update template references
 				for (const [pName, pDef] of Object.entries(params)) {
 					const qualifiedName = `step${pos}_${pName}`;
 					allParams[qualifiedName] = { ...pDef, name: qualifiedName };
-					// Update template references
-					if (template[pDef.name.replace("param_", "")] === `\${${pName}}`) {
-						template[pDef.name.replace("param_", "")] = `\${${qualifiedName}}`;
+					// Replace all template values referencing the unqualified param
+					const oldRef = `\${${pName}}`;
+					const newRef = `\${${qualifiedName}}`;
+					for (const key of Object.keys(template)) {
+						if (template[key] === oldRef) {
+							template[key] = newRef;
+						}
 					}
 				}
 

@@ -116,6 +116,10 @@ export class LockManager {
 			const newLock = this.createLock(resource, next.agentId, this.defaultTimeout);
 			newLock.waitQueue = lock.waitQueue;
 			next.resolve(newLock);
+			// Clean up empty waiter list
+			if (waiters.length === 0) {
+				this.lockWaiters.delete(resource);
+			}
 		} else {
 			this.locks.delete(resource);
 			this.lockWaiters.delete(resource);
@@ -258,9 +262,13 @@ export class BarrierManager {
 		barrier.arrived.add(agentId);
 		this.logFn(`[barrier:arrive] ${agentId} at ${barrierName} (${barrier.arrived.size}/${barrier.required})`);
 
-		if (barrier.arrived.size >= barrier.required) {
-			for (const resolver of barrier.resolvers) resolver();
+		if (barrier.arrived.size >= barrier.required && barrier.resolvers.length > 0) {
+			const resolvers = barrier.resolvers;
 			barrier.resolvers = [];
+			for (const resolver of resolvers) resolver();
+			return Promise.resolve();
+		}
+		if (barrier.arrived.size >= barrier.required) {
 			return Promise.resolve();
 		}
 

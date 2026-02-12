@@ -293,6 +293,8 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		if (client?.isRunning) {
 			await client.stop();
 		}
+		// Reset request ID counter so each test starts fresh
+		globalRequestId = 1;
 	});
 
 	/**
@@ -662,12 +664,11 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 			expect(messages.length).toBeGreaterThan(0);
 			expect(messages[0].role).toBe("user");
 
-			// Content should reference the file and focus
-			const content = messages[0].content as Array<Record<string, unknown>>;
-			expect(Array.isArray(content)).toBe(true);
-			expect(content.length).toBeGreaterThan(0);
-			expect((content[0].text as string)).toContain("src/index.ts");
-			expect((content[0].text as string)).toContain("security");
+			// Content should reference the file and focus (MCP spec: content is a single object per message)
+			const content = messages[0].content as Record<string, unknown>;
+			expect(content).toBeDefined();
+			expect((content.text as string)).toContain("src/index.ts");
+			expect((content.text as string)).toContain("security");
 		}, 15_000);
 
 		it("should return error for unknown prompt", async () => {
