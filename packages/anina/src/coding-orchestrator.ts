@@ -71,6 +71,10 @@ export interface TaskPlan {
 	complexity: "small" | "medium" | "large";
 	/** Whether the task requires new files or only modifications. */
 	requiresNewFiles: boolean;
+	/** Test suggestion: whether tests should be written and where. */
+	testSuggestion?: string;
+	/** Dependency hints: files that import/use the affected files. */
+	dependencyHints?: string[];
 }
 
 /** Git workflow state tracked by the orchestrator. */
@@ -226,6 +230,13 @@ export interface CodingOrchestratorConfig {
 	 * If not set, all operations proceed automatically.
 	 */
 	onApproval?: (action: string, detail: string) => Promise<boolean>;
+	/**
+	 * Stream callback for real-time output from validation commands.
+	 * Called with validation output chunks (build, test, lint results).
+	 */
+	onStream?: (chunk: string, source: "build" | "test" | "lint" | "review" | "agent") => void;
+	/** Git branch name template. Default: "{prefix}{slug}" */
+	branchTemplate?: string;
 }
 
 // ─── CodingOrchestrator ──────────────────────────────────────────────────────
@@ -630,7 +641,18 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 			? "large"
 			: steps.length > 3 ? "medium" : "small";
 
-		return { task, steps, relevantFiles: [], complexity, requiresNewFiles };
+		// Test suggestion: recommend tests for new files/APIs
+		let testSuggestion: string | undefined;
+		if (requiresNewFiles && !mentionsTests) {
+			testSuggestion = conventions.testPattern
+				? `Consider adding tests in ${conventions.testPattern}/ for new files`
+				: "Consider adding tests for newly created functions/modules";
+		}
+
+		// Dependency hints: scan for imports of files mentioned in task
+		const dependencyHints = this.scanDependencyHints(task);
+
+		return { task, steps, relevantFiles: [], complexity, requiresNewFiles, testSuggestion, dependencyHints };
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -644,27 +666,62 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 			// Save current branch
 			this.gitState.originalBranch = this.gitExec("git rev-parse --abbrev-ref HEAD").trim();
 
+			// Check for dirty working tree — warn but don't block
+			const dirtyCheck = this.gitExec("git status --porcelain").trim();
+			if (dirtyCheck) {
+				this.emitProgress("branching", `Warning: working tree has ${dirtyCheck.split("\n").length} uncommitted change(s)`);
+				this.errors.push({ phase: "branching", message: "Working tree has uncommitted changes", recoverable: true });
+			}
+
 			// Generate branch name from task
 			const branchName = this.generateBranchName(task);
-			this.gitExec(`git checkout -b ${branchName}`);
-			this.gitState.featureBranch = branchName;
 
-			log.debug("created feature branch", { branch: branchName });
+			// Check if branch already exists
+			try {
+				this.gitExec(`git rev-parse --verify ${branchName}`);
+				// Branch exists — append timestamp
+				const ts = Date.now().toString(36);
+				const uniqueName = `${branchName}-${ts}`;
+				this.gitExec(`git checkout -b ${uniqueName}`);
+				this.gitState.featureBranch = uniqueName;
+			} catch {
+				// Branch doesn't exist — create it
+				this.gitExec(`git checkout -b ${branchName}`);
+				this.gitState.featureBranch = branchName;
+			}
+
+			log.debug("created feature branch", { branch: this.gitState.featureBranch });
 		} catch (err) {
 			log.debug("failed to create feature branch", { error: String(err) });
+			this.errors.push({ phase: "branching", message: String(err instanceof Error ? err.message : err), recoverable: true });
 			// Non-fatal — continue without branching
 		}
 	}
 
 	private generateBranchName(task: string): string {
+		// Detect scope from task keywords
+		const lower = task.toLowerCase();
+		let scope = this.config.branchPrefix ?? "feat/";
+		if (/\b(fix|bug|error|crash|broken|issue)\b/.test(lower)) scope = "fix/";
+		else if (/\b(refactor|cleanup|clean up|reorganize)\b/.test(lower)) scope = "refactor/";
+		else if (/\b(docs?|documentation|readme)\b/.test(lower)) scope = "docs/";
+		else if (/\b(test|spec|coverage)\b/.test(lower)) scope = "test/";
+		else if (/\b(chore|config|setup|update dep)\b/.test(lower)) scope = "chore/";
+
+		// Extract issue IDs (GitHub, JIRA-style)
+		const issueMatch = task.match(/#(\d+)|([A-Z]+-\d+)/);
+		const issueSlug = issueMatch ? `${issueMatch[0].replace("#", "")}-` : "";
+
 		const slug = task
 			.toLowerCase()
+			.replace(/#\d+|[A-Z]+-\d+/g, "") // Remove issue IDs from slug
 			.replace(/[^a-z0-9\s-]/g, "")
 			.replace(/\s+/g, "-")
+			.replace(/-+/g, "-")
 			.slice(0, 40)
-			.replace(/-+$/, "");
+			.replace(/^-|-$/g, "");
 
-		return `${this.config.branchPrefix}${slug || "task"}`;
+		return `${scope}${issueSlug}${slug || "task"}`;
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -691,13 +748,13 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 	}
 
 	private enrichTaskWithPlan(task: string, plan: TaskPlan): string {
-		if (plan.steps.length <= 1) return task;
+		if (plan.steps.length <= 1 && !plan.testSuggestion && !plan.dependencyHints?.length) return task;
 
 		const planStr = plan.steps
 			.map((s) => `${s.index}. ${s.description}`)
 			.join("\n");
 
-		return [
+		const sections = [
 			task,
 			"",
 			"--- Execution Plan ---",
@@ -705,7 +762,23 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 			"",
 			`Complexity: ${plan.complexity}`,
 			plan.requiresNewFiles ? "Note: This task requires creating new files." : "",
-		].filter(Boolean).join("\n");
+		];
+
+		if (plan.testSuggestion) {
+			sections.push("");
+			sections.push(`Testing: ${plan.testSuggestion}`);
+		}
+
+		if (plan.dependencyHints && plan.dependencyHints.length > 0) {
+			sections.push("");
+			sections.push("--- Dependency Info ---");
+			for (const hint of plan.dependencyHints) {
+				sections.push(`  ${hint}`);
+			}
+			sections.push("Make sure changes don't break these importing files.");
+		}
+
+		return sections.filter(Boolean).join("\n");
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -725,6 +798,7 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 
 		// Run validation independently
 		const validation = await agent.validate();
+		this.streamValidationOutput(validation.output);
 		if (validation.passed) {
 			return { passed: true, extraResults };
 		}
@@ -757,9 +831,32 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 
 			// Re-validate
 			lastValidation = await agent.validate();
+			this.streamValidationOutput(lastValidation.output);
+
+			if (lastValidation.passed) break;
+
+			// Track debug cycle errors
+			this.errors.push({
+				phase: "validating",
+				message: `Debug cycle ${debugCycles}: ${lastValidation.output.slice(0, 200)}`,
+				recoverable: debugCycles < this.config.maxDebugCycles,
+			});
 		}
 
 		return { passed: lastValidation.passed, extraResults };
+	}
+
+	/** Stream validation output to the onStream callback. */
+	private streamValidationOutput(output: string): void {
+		if (!this.config.onStream || !output) return;
+
+		// Parse and stream per section
+		const sections = output.split("\n---\n");
+		for (const section of sections) {
+			const match = section.match(/^\[(\w+)\]/);
+			const source = match?.[1]?.toLowerCase() as "build" | "test" | "lint" | undefined;
+			this.config.onStream(section, source ?? "build");
+		}
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -881,7 +978,7 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 			this.gitExec("git add -A");
 
 			// Generate commit message
-			const commitMsg = this.generateCommitMessage(task, result);
+			const commitMsg = await this.generateCommitMessage(task, result);
 
 			// Write commit message to a temp file to avoid all shell escaping issues
 			const { writeFileSync, unlinkSync } = await import("node:fs");
@@ -899,6 +996,9 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 			if (commitHash) {
 				this.gitState.commits.push(commitHash);
 				log.debug("committed changes", { hash: commitHash });
+
+				// Clean up orchestrator stash entries on successful commit
+				this.cleanupStash();
 			}
 		} catch (err) {
 			const errMsg = err instanceof Error ? err.message : String(err);
@@ -906,18 +1006,87 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 			if (errMsg.includes("hook")) {
 				log.debug("commit blocked by git hook", { error: errMsg });
 				this.emitProgress("committing", `Commit blocked by git hook: ${errMsg.slice(0, 100)}`);
+				this.errors.push({ phase: "committing", message: `Git hook blocked commit: ${errMsg.slice(0, 100)}`, recoverable: true });
 			} else {
 				log.debug("commit failed", { error: errMsg });
+				this.errors.push({ phase: "committing", message: errMsg, recoverable: true });
 			}
 			// Non-fatal — the code changes are still there
 		}
 	}
 
-	private generateCommitMessage(task: string, result: OrchestratorResult): string {
-		const filesCount = result.filesModified.length + result.filesCreated.length;
-		const prefix = result.filesCreated.length > 0 ? "feat" : "fix";
-		const subject = task.length > 60 ? task.slice(0, 57) + "..." : task;
+	private async generateCommitMessage(task: string, result: OrchestratorResult): Promise<string> {
+		// Try LLM-based commit message generation
+		if (this.config.provider && result.diffPreview) {
+			try {
+				const msg = await this.llmCommitMessage(task, result);
+				if (msg) return msg;
+			} catch {
+				// Fall back to heuristic
+			}
+		}
+		return this.heuristicCommitMessage(task, result);
+	}
 
+	private async llmCommitMessage(task: string, result: OrchestratorResult): Promise<string | null> {
+		const { KARTRU_PROFILE } = await import("@chitragupta/core");
+
+		const commitAgent = new Agent({
+			profile: { ...KARTRU_PROFILE, id: "sanyojaka-committer", name: "Sanyojaka Committer" },
+			providerId: this.config.providerId,
+			model: this.config.modelId ?? "claude-sonnet-4-5-20250929",
+			tools: [],
+			thinkingLevel: "low",
+			workingDirectory: this.config.workingDirectory,
+			maxTurns: 1,
+			enableChetana: false,
+			enableLearning: false,
+			enableAutonomy: false,
+		});
+		commitAgent.setProvider(this.config.provider as import("@chitragupta/swara").ProviderDefinition);
+
+		const diff = (result.diffPreview ?? "").slice(0, 4000);
+		const prompt = `Generate a git commit message for these changes.
+
+Task: ${task}
+Files modified: ${result.filesModified.map((f) => basename(f)).join(", ")}
+Files created: ${result.filesCreated.map((f) => basename(f)).join(", ")}
+
+Diff (truncated):
+\`\`\`
+${diff}
+\`\`\`
+
+Rules:
+1. First line: type(scope): description (max 72 chars). Type: feat, fix, refactor, docs, test, chore
+2. Blank line, then body (2-4 sentences explaining WHY, not what)
+3. If a GitHub issue ID is in the task (e.g. #123 or PROJ-123), add "Closes #123" at end
+4. End with: Generated by Sanyojaka (CodingOrchestrator)
+5. Return ONLY the commit message, no markdown fences or explanation`;
+
+		const response = await commitAgent.prompt(prompt);
+		const text = response.content
+			.filter((p) => p.type === "text")
+			.map((p) => (p as { type: "text"; text: string }).text)
+			.join("");
+
+		return text.trim() || null;
+	}
+
+	private heuristicCommitMessage(task: string, result: OrchestratorResult): string {
+		const filesCount = result.filesModified.length + result.filesCreated.length;
+
+		// Detect commit type from task
+		const lower = task.toLowerCase();
+		let prefix = "feat";
+		if (/\b(fix|bug|error|crash|broken)\b/.test(lower)) prefix = "fix";
+		else if (/\b(refactor|cleanup|reorganize)\b/.test(lower)) prefix = "refactor";
+		else if (/\b(docs?|documentation|readme)\b/.test(lower)) prefix = "docs";
+		else if (/\b(test|spec|coverage)\b/.test(lower)) prefix = "test";
+		else if (/\b(chore|config|setup)\b/.test(lower)) prefix = "chore";
+		else if (result.filesCreated.length > 0) prefix = "feat";
+
+		const subject = task.length > 60 ? task.slice(0, 57) + "..." : task;
 		const lines = [`${prefix}: ${subject}`];
 
 		if (filesCount > 0) {
@@ -931,6 +1100,13 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 			if (result.diffStats) {
 				lines.push(`Changes: +${result.diffStats.insertions}/-${result.diffStats.deletions}`);
 			}
+		}
+
+		// Extract issue ID from task
+		const issueMatch = task.match(/#(\d+)|([A-Z]+-\d+)/);
+		if (issueMatch) {
+			lines.push("");
+			lines.push(`Closes ${issueMatch[0]}`);
 		}
 
 		if (result.validationPassed) {
@@ -1031,6 +1207,72 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 	private escapeForShell(str: string): string {
 		// Escape double quotes and backslashes for shell safety
 		return str.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+	}
+
+	/** Clean up orchestrator stash entries after successful commit. */
+	private cleanupStash(): void {
+		try {
+			const stashList = this.gitExec("git stash list").trim();
+			if (!stashList) return;
+
+			// Find our stash entries (search from bottom to avoid index shifting)
+			const lines = stashList.split("\n");
+			const toRemove: number[] = [];
+			for (let i = 0; i < lines.length; i++) {
+				if (lines[i].includes(STASH_PREFIX)) {
+					toRemove.push(i);
+				}
+			}
+
+			// Drop in reverse order to preserve indices
+			for (const idx of toRemove.reverse()) {
+				try {
+					this.gitExec(`git stash drop stash@{${idx}}`);
+				} catch { /* ignore individual drop failures */ }
+			}
+
+			if (toRemove.length > 0) {
+				log.debug("cleaned up stash entries", { count: toRemove.length });
+			}
+		} catch {
+			// Non-fatal
+		}
+	}
+
+	/**
+	 * Scan for files that import/use the files mentioned in the task.
+	 * Returns dependency hints for the coding agent.
+	 */
+	private scanDependencyHints(task: string): string[] {
+		if (!this.gitState.isGitRepo) return [];
+
+		const hints: string[] = [];
+		try {
+			// Extract potential file names from the task
+			const filePattern = task.match(/[\w-]+\.(ts|tsx|js|jsx|py|rs|go)/g);
+			if (!filePattern || filePattern.length === 0) return [];
+
+			for (const file of filePattern.slice(0, 3)) { // Limit to 3 files
+				const stem = file.replace(/\.\w+$/, "");
+				try {
+					// Search for imports of this file (up to 10 results)
+					const result = safeExecSync(
+						`git grep -l "from.*['\\"./]${stem}['\\".]\\|import.*${stem}\\|require.*${stem}" -- "*.ts" "*.tsx" "*.js" "*.jsx" 2>/dev/null | head -10`,
+						{ cwd: this.config.workingDirectory, encoding: "utf-8", timeout: 5_000, stdio: ["pipe", "pipe", "pipe"] },
+					).trim();
+
+					if (result) {
+						const importers = result.split("\n").filter(Boolean);
+						if (importers.length > 0) {
+							hints.push(`${file} is imported by: ${importers.join(", ")}`);
+						}
+					}
+				} catch { /* grep returned non-zero — no matches */ }
+			}
+		} catch {
+			// Non-fatal
+		}
+		return hints;
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
