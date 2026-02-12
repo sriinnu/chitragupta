@@ -315,6 +315,10 @@ function renderResult(
 		filesCreated: string[];
 		elapsedMs: number;
 		progressLog: { phase: string; message: string; elapsedMs: number }[];
+		diffPreview?: string;
+		phaseTimings?: Array<{ phase: string; durationMs: number }>;
+		diffStats?: { filesChanged: number; insertions: number; deletions: number };
+		errors?: Array<{ phase: string; message: string; recoverable: boolean }>;
 	},
 	stats: UsageStats,
 	providerId: string,
@@ -393,6 +397,39 @@ function renderResult(
 	// Tool usage
 	if (stats.totalToolCalls > 0) {
 		parts.push(renderToolUsage(stats, useColor));
+	}
+
+	// Diff preview (collapsed for CLI — just stats)
+	if (result.diffStats) {
+		const diffHeader = "── Diff ──";
+		parts.push(useColor ? dim(diffHeader) : diffHeader);
+		const ins = useColor ? green(`+${result.diffStats.insertions}`) : `+${result.diffStats.insertions}`;
+		const del = useColor ? red(`-${result.diffStats.deletions}`) : `-${result.diffStats.deletions}`;
+		parts.push(`  ${ins} ${del} in ${result.diffStats.filesChanged} file(s)`);
+		parts.push("");
+	}
+
+	// Phase timings
+	if (result.phaseTimings && result.phaseTimings.length > 0) {
+		const timingHeader = "── Phase Timings ──";
+		parts.push(useColor ? dim(timingHeader) : timingHeader);
+		for (const pt of result.phaseTimings) {
+			const dur = formatMs(pt.durationMs);
+			parts.push(`  ${(useColor ? dim(pt.phase) : pt.phase).padEnd(useColor ? pt.phase.length + 20 : 14)} ${dur}`);
+		}
+		parts.push("");
+	}
+
+	// Errors
+	if (result.errors && result.errors.length > 0) {
+		const errHeader = "── Errors ──";
+		parts.push(useColor ? dim(errHeader) : errHeader);
+		for (const err of result.errors) {
+			const phase = useColor ? red(`[${err.phase}]`) : `[${err.phase}]`;
+			const recov = err.recoverable ? (useColor ? dim(" (recovered)") : " (recovered)") : "";
+			parts.push(`  ${phase} ${err.message}${recov}`);
+		}
+		parts.push("");
 	}
 
 	// Timing

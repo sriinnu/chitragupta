@@ -101,6 +101,8 @@ export type {
 	OrchestratorProgress,
 	OrchestratorMode,
 	OrchestratorStats,
+	PhaseTiming,
+	DiffStats,
 	TaskPlan,
 	TaskStep,
 	GitState,

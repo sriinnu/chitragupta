@@ -116,6 +116,21 @@ export interface OrchestratorStats {
 	turns: number;
 }
 
+/** Per-phase timing breakdown. */
+export interface PhaseTiming {
+	phase: string;
+	startMs: number;
+	endMs: number;
+	durationMs: number;
+}
+
+/** Diff statistics. */
+export interface DiffStats {
+	filesChanged: number;
+	insertions: number;
+	deletions: number;
+}
+
 /** Full result of an orchestrated coding task. */
 export interface OrchestratorResult {
 	/** Whether the entire workflow succeeded. */
@@ -142,6 +157,14 @@ export interface OrchestratorResult {
 	progressLog: OrchestratorProgress[];
 	/** Aggregated usage stats (tokens, cost, tool calls). */
 	stats: OrchestratorStats;
+	/** Git diff preview captured before commit (truncated to 8000 chars). */
+	diffPreview?: string;
+	/** Per-phase timing breakdown. */
+	phaseTimings: PhaseTiming[];
+	/** Diff statistics (files changed, insertions, deletions). */
+	diffStats?: DiffStats;
+	/** Structured errors that occurred during orchestration. */
+	errors: Array<{ phase: string; message: string; recoverable: boolean }>;
 }
 
 /** Compact review issue for the orchestrator result. */
@@ -194,6 +217,15 @@ export interface CodingOrchestratorConfig {
 	additionalContext?: string;
 	/** Maximum time in milliseconds before aborting. Default: no timeout. */
 	timeoutMs?: number;
+	/** Optional session ID. When set, records the orchestration to smriti. */
+	sessionId?: string;
+	/**
+	 * Approval callback for destructive/high-impact operations.
+	 * Called before git branch creation, commit, or rollback.
+	 * Return `true` to proceed, `false` to skip.
+	 * If not set, all operations proceed automatically.
+	 */
+	onApproval?: (action: string, detail: string) => Promise<boolean>;
 }
 
 // ─── CodingOrchestrator ──────────────────────────────────────────────────────
@@ -225,6 +257,8 @@ export class CodingOrchestrator {
 	private planningAgent: Agent | null = null;
 	private gitState: GitState;
 	private progressLog: OrchestratorProgress[] = [];
+	private phaseTimings: PhaseTiming[] = [];
+	private errors: Array<{ phase: string; message: string; recoverable: boolean }> = [];
 	private startTime: number = 0;
 
 	constructor(config: CodingOrchestratorConfig) {
@@ -254,6 +288,8 @@ export class CodingOrchestrator {
 	 */
 	async run(task: string): Promise<OrchestratorResult> {
 		this.startTime = Date.now();
+		this.phaseTimings = [];
+		this.errors = [];
 		const result: OrchestratorResult = {
 			success: false,
 			plan: null,
@@ -271,6 +307,8 @@ export class CodingOrchestrator {
 				inputCost: 0, outputCost: 0, cacheReadCost: 0, cacheWriteCost: 0,
 				toolCalls: {}, totalToolCalls: 0, turns: 0,
 			},
+			phaseTimings: [],
+			errors: [],
 		};
 
 		// Timeout guard: abort if timeoutMs exceeded
@@ -287,9 +325,11 @@ export class CodingOrchestrator {
 
 		try {
 			// ── Phase 1: Plan ──
+			const planStart = Date.now();
 			this.emitProgress("planning", `Analyzing task: ${task.slice(0, 80)}...`);
 			const plan = await this.planTask(task);
 			result.plan = plan;
+			this.recordPhase("planning", planStart);
 
 			if (this.config.mode === "plan-only") {
 				result.success = true;
@@ -300,18 +340,26 @@ export class CodingOrchestrator {
 
 			// ── Phase 2: Branch ──
 			if (this.config.mode === "full" && this.shouldCreateBranch()) {
+				const branchStart = Date.now();
 				this.emitProgress("branching", "Creating feature branch...");
-				await this.createFeatureBranch(task);
+				const approved = await this.requestApproval("create_branch", `Create branch: ${this.config.branchPrefix}${task.slice(0, 40)}`);
+				if (approved) {
+					await this.createFeatureBranch(task);
+				}
+				this.recordPhase("branching", branchStart);
 			}
 
 			// ── Phase 3: Execute ──
+			const execStart = Date.now();
 			this.emitProgress("executing", `Executing ${plan.steps.length} step(s)...`);
 			const codingResult = await this.executeTask(task, plan);
 			result.codingResults.push(codingResult);
 			result.filesModified.push(...codingResult.filesModified);
 			result.filesCreated.push(...codingResult.filesCreated);
+			this.recordPhase("executing", execStart);
 
 			// ── Phase 4: Validate ──
+			const valStart = Date.now();
 			this.emitProgress("validating", "Running validation (build, test, lint)...");
 			const validationResult = await this.validateWithRetry(codingResult);
 			result.validationPassed = validationResult.passed;
@@ -323,9 +371,11 @@ export class CodingOrchestrator {
 					result.filesCreated.push(...r.filesCreated);
 				}
 			}
+			this.recordPhase("validating", valStart);
 
 			// ── Phase 5: Self-Review ──
 			if (this.config.mode === "full" && this.shouldSelfReview()) {
+				const revStart = Date.now();
 				this.emitProgress("reviewing", "Self-reviewing changes...");
 				const reviewResult = await this.selfReview();
 				result.reviewIssues = reviewResult.issues;
@@ -338,12 +388,30 @@ export class CodingOrchestrator {
 						result.filesModified.push(...fixResult.filesModified);
 					}
 				}
+				this.recordPhase("reviewing", revStart);
+			}
+
+			// ── Diff preview + stats (captured before commit) ──
+			if (this.gitState.isGitRepo && (result.filesModified.length > 0 || result.filesCreated.length > 0)) {
+				try {
+					const diff = this.gitExec("git diff HEAD").trim();
+					if (diff) {
+						result.diffPreview = diff.length > 8000 ? diff.slice(0, 8000) + "\n\n... (truncated)" : diff;
+						result.diffStats = this.parseDiffStats(diff);
+						this.emitProgress("committing", `Diff: +${result.diffStats.insertions}/-${result.diffStats.deletions} in ${result.diffStats.filesChanged} file(s)`);
+					}
+				} catch { /* non-fatal */ }
 			}
 
 			// ── Phase 6: Commit ──
 			if (this.config.mode === "full" && this.shouldAutoCommit()) {
+				const commitStart = Date.now();
 				this.emitProgress("committing", "Generating commit...");
-				await this.commitChanges(task, result);
+				const approved = await this.requestApproval("commit", `Commit changes (${result.filesModified.length + result.filesCreated.length} files)`);
+				if (approved) {
+					await this.commitChanges(task, result);
+				}
+				this.recordPhase("committing", commitStart);
 			}
 
 			result.success = true;
@@ -353,6 +421,7 @@ export class CodingOrchestrator {
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			result.summary = `Orchestration failed: ${message}`;
+			this.errors.push({ phase: "run", message, recoverable: false });
 			this.emitProgress("error", result.summary);
 			log.debug("orchestration failed", { error: message });
 
@@ -859,12 +928,18 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 			if (result.filesCreated.length > 0) {
 				lines.push(`Created: ${result.filesCreated.map((f) => basename(f)).join(", ")}`);
 			}
+			if (result.diffStats) {
+				lines.push(`Changes: +${result.diffStats.insertions}/-${result.diffStats.deletions}`);
+			}
 		}
 
 		if (result.validationPassed) {
 			lines.push("");
 			lines.push("Validation: passed (build + test + lint)");
 		}
+
+		lines.push("");
+		lines.push("Generated by Sanyojaka (CodingOrchestrator)");
 
 		return lines.join("\n");
 	}
@@ -1004,6 +1079,36 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 		return this.config.autoCommit !== false;
 	}
 
+	private recordPhase(phase: string, startMs: number): void {
+		const endMs = Date.now();
+		this.phaseTimings.push({ phase, startMs: startMs - this.startTime, endMs: endMs - this.startTime, durationMs: endMs - startMs });
+	}
+
+	private async requestApproval(action: string, detail: string): Promise<boolean> {
+		if (!this.config.onApproval) return true;
+		try {
+			return await this.config.onApproval(action, detail);
+		} catch {
+			return true; // Default to proceeding if callback fails
+		}
+	}
+
+	private parseDiffStats(diff: string): DiffStats {
+		let insertions = 0;
+		let deletions = 0;
+		const files = new Set<string>();
+		for (const line of diff.split("\n")) {
+			if (line.startsWith("+++ b/")) {
+				files.add(line.slice(6));
+			} else if (line.startsWith("+") && !line.startsWith("+++")) {
+				insertions++;
+			} else if (line.startsWith("-") && !line.startsWith("---")) {
+				deletions++;
+			}
+		}
+		return { filesChanged: files.size, insertions, deletions };
+	}
+
 	private emitProgress(phase: OrchestratorProgress["phase"], message: string, step?: number, totalSteps?: number): void {
 		const progress: OrchestratorProgress = {
 			phase,
@@ -1032,6 +1137,10 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 		const totalFiles = result.filesModified.length + result.filesCreated.length;
 
 		parts.push(`Task completed: ${totalFiles} file(s) changed`);
+
+		if (result.diffStats) {
+			parts.push(`+${result.diffStats.insertions}/-${result.diffStats.deletions}`);
+		}
 
 		if (result.validationPassed) {
 			parts.push("Validation: passed");
@@ -1062,7 +1171,68 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 		result.filesCreated = [...new Set(result.filesCreated)];
 		// Compute usage stats from agent messages
 		result.stats = this.computeStats();
+		// Phase timings and structured errors
+		result.phaseTimings = [...this.phaseTimings];
+		result.errors = [...this.errors];
+		// Record session (fire-and-forget)
+		this.recordSession(result).catch((e) => {
+			log.debug("session recording failed", { error: String(e) });
+		});
 		return result;
+	}
+
+	/** Record the orchestration result to @chitragupta/smriti (if sessionId set). */
+	private async recordSession(result: OrchestratorResult): Promise<void> {
+		if (!this.config.sessionId) return;
+
+		try {
+			const { createSession, addTurn } = await import("@chitragupta/smriti");
+			const project = this.config.workingDirectory;
+
+			const session = createSession({
+				title: `Coding: ${result.plan?.task ?? "unknown task"}`,
+				project,
+				agent: "sanyojaka",
+				model: this.config.modelId ?? "unknown",
+			});
+
+			const sessionId = session.meta.id;
+
+			// Record the plan as user turn
+			await addTurn(sessionId, project, {
+				turnNumber: 1,
+				role: "user",
+				content: `Task: ${result.plan?.task ?? "unknown"}\nMode: ${this.config.mode}\nComplexity: ${result.plan?.complexity ?? "unknown"}`,
+			});
+
+			// Record the result as assistant turn
+			const toolCalls = Object.entries(result.stats.toolCalls).map(([name, count]) => ({
+				name,
+				input: `${count} calls`,
+				result: "ok",
+			}));
+
+			await addTurn(sessionId, project, {
+				turnNumber: 2,
+				role: "assistant",
+				content: [
+					`Result: ${result.success ? "success" : "failed"}`,
+					`Files modified: ${result.filesModified.join(", ") || "none"}`,
+					`Files created: ${result.filesCreated.join(", ") || "none"}`,
+					`Validation: ${result.validationPassed ? "passed" : "failed"}`,
+					`Review issues: ${result.reviewIssues.length}`,
+					`Git: ${result.git.featureBranch ?? "no branch"} | ${result.git.commits.join(", ") || "no commits"}`,
+					`Cost: $${result.stats.totalCost.toFixed(4)} | ${result.stats.turns} turns | ${result.stats.totalToolCalls} tool calls`,
+					`Duration: ${result.elapsedMs}ms`,
+					result.summary,
+				].join("\n"),
+				toolCalls,
+			});
+
+			log.debug("session recorded", { sessionId });
+		} catch {
+			// smriti is optional — don't fail the orchestration
+		}
 	}
 
 	/** Aggregate cost and tool usage from the coding agent's message history. */

@@ -1157,6 +1157,10 @@ export function formatOrchestratorResult(result: {
 	filesCreated: string[];
 	summary: string;
 	elapsedMs: number;
+	diffPreview?: string;
+	phaseTimings?: Array<{ phase: string; startMs: number; endMs: number; durationMs: number }>;
+	diffStats?: { filesChanged: number; insertions: number; deletions: number };
+	errors?: Array<{ phase: string; message: string; recoverable: boolean }>;
 	stats?: {
 		totalCost: number; currency: string;
 		inputCost: number; outputCost: number; cacheReadCost: number; cacheWriteCost: number;
@@ -1221,6 +1225,19 @@ export function formatOrchestratorResult(result: {
 		lines.push("0 issues found");
 	}
 
+	// Diff preview
+	if (result.diffPreview) {
+		lines.push("");
+		lines.push("── Diff Preview ──");
+		const diffLines = result.diffPreview.split("\n");
+		if (diffLines.length > 60) {
+			lines.push(...diffLines.slice(0, 60));
+			lines.push(`... (${diffLines.length - 60} more lines)`);
+		} else {
+			lines.push(...diffLines);
+		}
+	}
+
 	// Stats
 	if (result.stats && (result.stats.totalToolCalls > 0 || result.stats.totalCost > 0)) {
 		lines.push("");
@@ -1238,7 +1255,31 @@ export function formatOrchestratorResult(result: {
 		}
 	}
 
-	// Timing
+	// Phase timings
+	if (result.phaseTimings && result.phaseTimings.length > 0) {
+		lines.push("");
+		lines.push("── Timing ──");
+		for (const pt of result.phaseTimings) {
+			const dur = pt.durationMs < 1000 ? `${pt.durationMs}ms` : `${(pt.durationMs / 1000).toFixed(1)}s`;
+			lines.push(`  ${pt.phase}: ${dur}`);
+		}
+	}
+
+	// Diff stats
+	if (result.diffStats) {
+		lines.push(`  Diff: +${result.diffStats.insertions}/-${result.diffStats.deletions} in ${result.diffStats.filesChanged} file(s)`);
+	}
+
+	// Errors
+	if (result.errors && result.errors.length > 0) {
+		lines.push("");
+		lines.push("── Errors ──");
+		for (const err of result.errors) {
+			lines.push(`  [${err.phase}] ${err.message}${err.recoverable ? " (recovered)" : ""}`);
+		}
+	}
+
+	// Total timing
 	lines.push("");
 	lines.push(`⏱ ${(result.elapsedMs / 1000).toFixed(1)}s`);
 

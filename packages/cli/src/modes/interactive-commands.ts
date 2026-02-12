@@ -577,6 +577,22 @@ export async function handleSlashCommand(
           }
         }
 
+        // Diff preview
+        if (result.diffPreview) {
+          stdout.write(dim("\n  ── Diff Preview ──\n"));
+          const diffLines = result.diffPreview.split("\n");
+          const show = diffLines.length > 30 ? diffLines.slice(0, 30) : diffLines;
+          for (const line of show) {
+            if (line.startsWith("+") && !line.startsWith("+++")) stdout.write(`  ${green(line)}\n`);
+            else if (line.startsWith("-") && !line.startsWith("---")) stdout.write(`  ${red(line)}\n`);
+            else if (line.startsWith("@@")) stdout.write(`  ${cyan(line)}\n`);
+            else stdout.write(`  ${dim(line)}\n`);
+          }
+          if (diffLines.length > 30) {
+            stdout.write(dim(`  ... (${diffLines.length - 30} more lines)\n`));
+          }
+        }
+
         // ── Token/Tool Usage Stats ──
         if (totalToolCalls > 0 || totalCost > 0) {
           stdout.write(dim("\n  ══ Tool Usage ═════════════════════════\n"));
@@ -594,7 +610,29 @@ export async function handleSlashCommand(
           stdout.write(`  ${yellow(`$${totalCost.toFixed(4)}`)}\n`);
         }
 
-        // Timing
+        // Phase timings
+        if (result.phaseTimings && result.phaseTimings.length > 0) {
+          stdout.write(dim("\n  ── Phase Timings ──\n"));
+          for (const pt of result.phaseTimings) {
+            const dur = pt.durationMs < 1000 ? `${pt.durationMs}ms` : `${(pt.durationMs / 1000).toFixed(1)}s`;
+            stdout.write(`  ${dim(pt.phase.padEnd(12))} ${dur}\n`);
+          }
+        }
+
+        // Diff stats
+        if (result.diffStats) {
+          stdout.write(`  ${green(`+${result.diffStats.insertions}`)} ${red(`-${result.diffStats.deletions}`)} in ${result.diffStats.filesChanged} file(s)\n`);
+        }
+
+        // Errors
+        if (result.errors && result.errors.length > 0) {
+          stdout.write(dim("\n  ── Errors ──\n"));
+          for (const err of result.errors) {
+            stdout.write(`  ${red(`[${err.phase}]`)} ${err.message}${err.recoverable ? dim(" (recovered)") : ""}\n`);
+          }
+        }
+
+        // Total timing
         const elapsed = result.elapsedMs < 1000 ? `${result.elapsedMs}ms` : result.elapsedMs < 60000 ? `${(result.elapsedMs / 1000).toFixed(1)}s` : `${Math.floor(result.elapsedMs / 60000)}m ${((result.elapsedMs % 60000) / 1000).toFixed(0)}s`;
         stdout.write(`\n  ${bold(dim(`⏱ ${elapsed}`))}\n`);
         stdout.write("\n");
