@@ -751,7 +751,6 @@ export async function runCodeInteractive(options: CodeInteractiveOptions): Promi
 			try {
 				const { KARTRU_PROFILE } = await import("@chitragupta/core");
 				const { Agent } = await import("@chitragupta/anina");
-				const { CODE_TOOL_NAMES } = await import("@chitragupta/anina");
 
 				// Filter to read-only tools only
 				const readOnlyNames = new Set(["read", "grep", "find", "ls", "bash", "diff"]);
