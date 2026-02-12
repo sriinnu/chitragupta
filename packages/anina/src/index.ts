@@ -91,7 +91,7 @@ export type { ReflectionResult, PeerReview, ReflectorConfig } from "./agent-refl
 
 // ─── Coding Agent (Kartru) ──────────────────────────────────────────────────
 export { CodingAgent, CODE_TOOL_NAMES } from "./coding-agent.js";
-export type { CodingAgentConfig, CodingResult, ProjectConventions } from "./coding-agent.js";
+export type { CodingAgentConfig, CodingAgentEvent, CodingResult, ProjectConventions } from "./coding-agent.js";
 
 // ─── Coding Orchestrator (Sanyojaka) ────────────────────────────────────────
 export { CodingOrchestrator } from "./coding-orchestrator.js";
