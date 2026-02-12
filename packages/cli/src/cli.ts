@@ -399,15 +399,7 @@ async function handleSubcommand(command: string, subcommand: string | undefined,
 			}
 
 			codeTask = codeTaskParts.join(" ");
-			if (!codeTask) {
-				process.stderr.write(
-					"\nError: No task provided.\n\n" +
-					"Usage: chitragupta code \"your coding task here\"\n" +
-					"       chitragupta code \"fix bug\" --mode plan-only\n" +
-					"       chitragupta code --help for full usage\n\n",
-				);
-				process.exit(1);
-			}
+			// No task → opens interactive coding REPL
 
 			const { runCodeMode } = await import("./modes/code.js");
 			const codeExitCode = await runCodeMode({

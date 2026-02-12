@@ -99,7 +99,8 @@ function printHelp(): void {
 Chitragupta Coding Agent (Kartru) — autonomous coding from the terminal
 
 Usage:
-  chitragupta-code "task description"              Run a coding task
+  chitragupta-code                                 Open interactive coding REPL
+  chitragupta-code "task description"              Run a single coding task
   chitragupta-code "task" --mode plan-only         Plan only, don't execute
   chitragupta-code "task" --plan                   Shorthand for --mode plan-only
 
@@ -173,15 +174,7 @@ async function main(): Promise<void> {
 		process.exit(0);
 	}
 
-	if (!args.task) {
-		process.stderr.write(
-			"\nError: No task provided.\n\n" +
-			"Usage: chitragupta-code \"your coding task here\"\n" +
-			"       chitragupta-code --help for full usage\n\n",
-		);
-		process.exit(1);
-	}
-
+	// No task → open interactive coding REPL
 	const exitCode = await runCodeMode({
 		task: args.task,
 		mode: args.mode ?? codingDefaults.mode,

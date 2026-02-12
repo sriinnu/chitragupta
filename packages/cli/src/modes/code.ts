@@ -26,8 +26,8 @@ import {
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface CodeModeOptions {
-	/** The coding task to accomplish. */
-	task: string;
+	/** The coding task. If omitted, opens interactive coding REPL. */
+	task?: string;
 	/** Execution mode. Default: "full". */
 	mode?: "full" | "execute" | "plan-only";
 	/** AI provider ID override. */
@@ -459,6 +459,22 @@ export async function runCodeMode(options: CodeModeOptions): Promise<number> {
 		project = process.cwd(),
 		timeout = cd.timeout ?? 300,
 	} = options;
+
+	// ── No task → open interactive coding REPL ─────────────────
+	if (!task) {
+		const { runCodeInteractive } = await import("./code-interactive.js");
+		return runCodeInteractive({
+			project,
+			provider: options.provider,
+			model: options.model,
+			mode: options.mode ?? cd.mode,
+			createBranch: options.createBranch,
+			autoCommit: options.autoCommit,
+			selfReview: options.selfReview,
+			timeout,
+		});
+	}
+
 	const useColor = options.color ?? process.stdout.isTTY ?? false;
 
 	// ── Print initial header to stderr ──────────────────────────────
