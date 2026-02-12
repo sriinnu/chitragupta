@@ -128,6 +128,89 @@ describe("Google Gemini converter", () => {
 			expect(result.generationConfig?.maxOutputTokens).toBe(8192);
 		});
 
+		it("strips default and unsupported format fields from schema", () => {
+			const req: AnthropicRequest = {
+				model: "claude-sonnet-4-20250514",
+				messages: [{ role: "user", content: "Hi" }],
+				max_tokens: 256,
+				tools: [{
+					name: "my_tool",
+					description: "A tool",
+					input_schema: {
+						type: "object",
+						properties: {
+							name: { type: "string", default: "foo", format: "uri" },
+							count: { type: "integer", format: "int32", default: 0 },
+						},
+						additionalProperties: false,
+						$schema: "http://json-schema.org/draft-07/schema#",
+					},
+				}],
+			};
+
+			const result = toGemini(req, "gemini-2.5-pro");
+			const params = result.tools![0].functionDeclarations[0].parameters!;
+			expect(params).not.toHaveProperty("additionalProperties");
+			expect(params).not.toHaveProperty("$schema");
+			expect(params).not.toHaveProperty("default");
+			const props = params.properties as Record<string, Record<string, unknown>>;
+			// "uri" is not a supported Gemini format — should be stripped
+			expect(props.name).not.toHaveProperty("format");
+			expect(props.name).not.toHaveProperty("default");
+			// "int32" is a supported Gemini format — should be kept
+			expect(props.count.format).toBe("int32");
+			expect(props.count).not.toHaveProperty("default");
+		});
+
+		it("extracts text from tool_result array content (filters text blocks)", () => {
+			const req: AnthropicRequest = {
+				model: "claude-sonnet-4-20250514",
+				messages: [
+					{ role: "user", content: "Do it" },
+					{
+						role: "assistant",
+						content: [{ type: "tool_use", id: "t1", name: "my_tool", input: {} }],
+					},
+					{
+						role: "user",
+						content: [{
+							type: "tool_result",
+							tool_use_id: "t1",
+							content: [
+								{ type: "text", text: "line 1" },
+								{ type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
+								{ type: "text", text: "line 2" },
+							],
+						}],
+					},
+				],
+				max_tokens: 1024,
+			};
+
+			const result = toGemini(req, "gemini-2.5-pro");
+			const toolMsg = result.contents[2];
+			const funcResp = toolMsg.parts[0] as { functionResponse: { response: { result: string } } };
+			expect(funcResp.functionResponse.response.result).toBe("line 1line 2");
+		});
+
+		it("skips thinking blocks", () => {
+			const req: AnthropicRequest = {
+				model: "claude-sonnet-4-20250514",
+				messages: [{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "Let me think..." },
+						{ type: "text", text: "Answer" },
+					],
+				}],
+				max_tokens: 256,
+			};
+
+			const result = toGemini(req, "gemini-2.5-pro");
+			expect(result.contents[0].parts).toHaveLength(1);
+			expect(result.contents[0].parts[0]).toEqual({ text: "Answer" });
+		});
+
 		it("passes temperature, topP, topK, stopSequences", () => {
 			const req: AnthropicRequest = {
 				model: "claude-sonnet-4-20250514",

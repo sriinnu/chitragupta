@@ -177,6 +177,81 @@ describe("OpenAI converter", () => {
 			expect(result.stream_options).toEqual({ include_usage: true });
 		});
 
+		it("extracts text from tool_result with array content (filters text blocks only)", () => {
+			const req: AnthropicRequest = {
+				model: "claude-sonnet-4-20250514",
+				messages: [
+					{ role: "user", content: "Do it" },
+					{
+						role: "assistant",
+						content: [{ type: "tool_use", id: "t1", name: "my_tool", input: {} }],
+					},
+					{
+						role: "user",
+						content: [{
+							type: "tool_result",
+							tool_use_id: "t1",
+							content: [
+								{ type: "text", text: "result line 1" },
+								{ type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
+								{ type: "text", text: "result line 2" },
+							],
+						}],
+					},
+				],
+				max_tokens: 1024,
+			};
+
+			const result = toOpenAI(req, "gpt-4.1");
+			const toolMsg = result.messages.find((m) => m.role === "tool");
+			expect(toolMsg?.content).toBe("result line 1result line 2");
+		});
+
+		it("handles tool_result with null/undefined content", () => {
+			const req: AnthropicRequest = {
+				model: "claude-sonnet-4-20250514",
+				messages: [
+					{ role: "user", content: "Do it" },
+					{
+						role: "assistant",
+						content: [{ type: "tool_use", id: "t1", name: "my_tool", input: {} }],
+					},
+					{
+						role: "user",
+						content: [{ type: "tool_result", tool_use_id: "t1" }],
+					},
+				],
+				max_tokens: 1024,
+			};
+
+			const result = toOpenAI(req, "gpt-4.1");
+			const toolMsg = result.messages.find((m) => m.role === "tool");
+			expect(toolMsg?.content).toBe("");
+		});
+
+		it("skips thinking blocks in messages", () => {
+			const req: AnthropicRequest = {
+				model: "claude-sonnet-4-20250514",
+				messages: [
+					{ role: "user", content: "Think about this" },
+					{
+						role: "assistant",
+						content: [
+							{ type: "thinking", thinking: "Let me think..." },
+							{ type: "text", text: "Here's my answer" },
+						],
+					},
+				],
+				max_tokens: 1024,
+			};
+
+			const result = toOpenAI(req, "gpt-4.1");
+			const assistantMsg = result.messages[1];
+			expect(assistantMsg.content).toBe("Here's my answer");
+			// Should not have any thinking-related content
+			expect(assistantMsg.tool_calls).toBeUndefined();
+		});
+
 		it("passes through temperature and top_p", () => {
 			const req: AnthropicRequest = {
 				model: "claude-sonnet-4-20250514",
@@ -262,6 +337,33 @@ describe("OpenAI converter", () => {
 			const result = fromOpenAI(res, "claude-sonnet-4-20250514");
 			expect(result.content).toEqual([]);
 			expect(result.stop_reason).toBe("end_turn");
+		});
+
+		it("falls back to {raw: args} when tool args JSON is invalid", () => {
+			const res: OpenAIResponse = {
+				id: "chatcmpl-bad-args",
+				object: "chat.completion",
+				model: "gpt-4.1",
+				choices: [{
+					index: 0,
+					message: {
+						role: "assistant",
+						content: null,
+						tool_calls: [{
+							id: "call_bad",
+							type: "function",
+							function: { name: "my_tool", arguments: "not valid json{{{" },
+						}],
+					},
+					finish_reason: "tool_calls",
+				}],
+			};
+
+			const result = fromOpenAI(res, "claude-sonnet-4-20250514");
+			expect(result.content[0].type).toBe("tool_use");
+			if (result.content[0].type === "tool_use") {
+				expect(result.content[0].input).toEqual({ raw: "not valid json{{{" });
+			}
 		});
 
 		it("maps length finish_reason to max_tokens", () => {
@@ -390,6 +492,29 @@ describe("OpenAI converter", () => {
 			expect(messageStop).toBeDefined();
 			if (deltaEvent?.type === "message_delta") {
 				expect(deltaEvent.delta.stop_reason).toBe("end_turn");
+			}
+		});
+
+		it("includes stop_sequence: null in message_delta", () => {
+			const state = createStreamState("claude-sonnet-4-20250514");
+			processOpenAIChunk({
+				id: "sq",
+				object: "chat.completion.chunk",
+				model: "gpt-4.1",
+				choices: [{ index: 0, delta: { content: "Hi" }, finish_reason: null }],
+			}, state);
+
+			const events = processOpenAIChunk({
+				id: "sq",
+				object: "chat.completion.chunk",
+				model: "gpt-4.1",
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			}, state);
+
+			const deltaEvent = events.find((e) => e.type === "message_delta");
+			expect(deltaEvent).toBeDefined();
+			if (deltaEvent?.type === "message_delta") {
+				expect(deltaEvent.delta.stop_sequence).toBeNull();
 			}
 		});
 

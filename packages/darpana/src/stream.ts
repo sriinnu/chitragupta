@@ -7,6 +7,16 @@ import { createStreamState, processOpenAIChunk } from "./converters/openai.js";
 import { createGeminiStreamState, processGeminiChunk } from "./converters/google.js";
 
 /**
+ * Extract the data payload from an SSE line.
+ * Handles both "data: value" and "data:value" per SSE spec.
+ */
+function extractSSEData(line: string): string | null {
+	if (line.startsWith("data: ")) return line.slice(6);
+	if (line.startsWith("data:")) return line.slice(5);
+	return null;
+}
+
+/**
  * Write an Anthropic SSE event to the client response.
  */
 function writeSSE(res: ServerResponse, event: AnthropicSSEEvent): void {
@@ -58,17 +68,17 @@ function pipeOpenAIStream(upstream: IncomingMessage, clientRes: ServerResponse, 
 			const trimmed = line.trim();
 			if (!trimmed || trimmed.startsWith(":")) continue;
 
-			if (trimmed.startsWith("data: ")) {
-				const data = trimmed.slice(6);
-				if (data === "[DONE]") continue;
+			// SSE spec: "data:" may or may not have a space after the colon
+			const data = extractSSEData(trimmed);
+			if (data === null) continue;
+			if (data === "[DONE]") continue;
 
-				try {
-					const parsed = JSON.parse(data) as OpenAIStreamChunk;
-					const events = processOpenAIChunk(parsed, state);
-					for (const event of events) writeSSE(clientRes, event);
-				} catch {
-					// Skip malformed chunks
-				}
+			try {
+				const parsed = JSON.parse(data) as OpenAIStreamChunk;
+				const events = processOpenAIChunk(parsed, state);
+				for (const event of events) writeSSE(clientRes, event);
+			} catch {
+				// Skip malformed chunks
 			}
 		}
 	});
@@ -109,17 +119,16 @@ function pipeGeminiStream(upstream: IncomingMessage, clientRes: ServerResponse, 
 			const trimmed = line.trim();
 			if (!trimmed || trimmed.startsWith(":")) continue;
 
-			if (trimmed.startsWith("data: ")) {
-				const data = trimmed.slice(6);
-				if (data === "[DONE]") continue;
+			const data = extractSSEData(trimmed);
+			if (data === null) continue;
+			if (data === "[DONE]") continue;
 
-				try {
-					const parsed = JSON.parse(data) as GeminiResponse;
-					const events = processGeminiChunk(parsed, state);
-					for (const event of events) writeSSE(clientRes, event);
-				} catch {
-					// Skip malformed chunks
-				}
+			try {
+				const parsed = JSON.parse(data) as GeminiResponse;
+				const events = processGeminiChunk(parsed, state);
+				for (const event of events) writeSSE(clientRes, event);
+			} catch {
+				// Skip malformed chunks
 			}
 		}
 	});

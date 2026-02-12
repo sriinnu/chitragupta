@@ -3,7 +3,7 @@
  *
  * Routes:
  *   POST /v1/messages            — main proxy endpoint (streaming + non-streaming)
- *   POST /v1/messages/count_tokens — token counting (passthrough only)
+ *   POST /v1/messages/count_tokens — token counting (passthrough)
  *   GET  /                        — health check
  */
 import http from "node:http";
@@ -15,6 +15,8 @@ import { toGemini, fromGemini, buildGeminiUrl } from "./converters/google.js";
 import { toPassthrough, fromPassthrough } from "./converters/passthrough.js";
 import { sendUpstream, buildUpstreamUrl, buildUpstreamHeaders } from "./upstream.js";
 import { pipeStream } from "./stream.js";
+
+const MAX_REQUEST_BODY = 10 * 1024 * 1024; // 10MB
 
 export interface DarpanaServer {
 	listen(): Promise<void>;
@@ -70,6 +72,10 @@ export function createServer(config: DarpanaConfig): DarpanaServer {
 		}
 	});
 
+	// Server-level timeouts
+	httpServer.headersTimeout = 30_000;
+	httpServer.requestTimeout = 300_000; // 5min for long-running LLM requests
+
 	return {
 		async listen() {
 			return new Promise<void>((resolve, reject) => {
@@ -121,15 +127,51 @@ async function handleMessages(
 	config: DarpanaConfig,
 	url: string,
 ): Promise<void> {
-	// Read request body
-	const body = await readBody(req);
-	const anthropicReq = JSON.parse(body.toString()) as AnthropicRequest;
+	// Read + validate request body
+	const body = await readBody(req, MAX_REQUEST_BODY);
+	if (!body) {
+		sendError(res, 413, "request_too_large", "Request body exceeds 10MB limit");
+		return;
+	}
+
+	let anthropicReq: AnthropicRequest;
+	try {
+		anthropicReq = JSON.parse(body.toString()) as AnthropicRequest;
+	} catch {
+		sendError(res, 400, "invalid_request_body", "Request body must be valid JSON");
+		return;
+	}
+
+	// Validate required fields
+	if (!anthropicReq.model || typeof anthropicReq.model !== "string") {
+		sendError(res, 400, "invalid_request", "model field is required and must be a string");
+		return;
+	}
+	if (!anthropicReq.messages || !Array.isArray(anthropicReq.messages) || anthropicReq.messages.length === 0) {
+		sendError(res, 400, "invalid_request", "messages array is required and must not be empty");
+		return;
+	}
+	if (url === "/v1/messages" && (typeof anthropicReq.max_tokens !== "number" || anthropicReq.max_tokens < 1)) {
+		sendError(res, 400, "invalid_request", "max_tokens is required and must be a positive number");
+		return;
+	}
+
 	const isStream = anthropicReq.stream === true;
 
 	// Resolve route
-	const route = resolveRoute(anthropicReq.model, config);
+	let route;
+	try {
+		route = resolveRoute(anthropicReq.model, config);
+	} catch (err) {
+		sendError(res, 400, "invalid_request", (err as Error).message);
+		return;
+	}
+
 	const { provider, upstreamModel, providerName } = route;
 	const overrides = provider.models?.[upstreamModel];
+
+	// Log request
+	logRequest(req.method ?? "POST", url, anthropicReq.model, `${providerName}/${upstreamModel}`, anthropicReq.messages.length, anthropicReq.tools?.length ?? 0);
 
 	// Convert request based on provider type
 	let upstreamBody: Buffer;
@@ -160,21 +202,35 @@ async function handleMessages(
 	}
 
 	const headers = buildUpstreamHeaders(provider, upstreamBody.length, isStream);
-	const upstreamRes = await sendUpstream(
-		{ url: upstreamUrl, method: "POST", headers, body: upstreamBody, timeout: provider.timeout },
-		provider,
-	);
+
+	let upstreamRes;
+	try {
+		upstreamRes = await sendUpstream(
+			{ url: upstreamUrl, method: "POST", headers, body: upstreamBody, timeout: provider.timeout },
+			provider,
+		);
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : "Upstream connection failed";
+		sendError(res, 502, "upstream_connection_error", `Failed to connect to ${providerName}: ${msg}`);
+		return;
+	}
 
 	// Check for upstream errors
 	if (upstreamRes.statusCode >= 400) {
 		const errBody = await readBody(upstreamRes.body);
 		const statusCode = upstreamRes.statusCode;
-		res.writeHead(statusCode, { "content-type": "application/json" });
+
+		// Pass through rate limit headers
+		const retryAfter = upstreamRes.headers["retry-after"];
+		const rateHeaders: Record<string, string> = { "content-type": "application/json" };
+		if (retryAfter) rateHeaders["retry-after"] = String(retryAfter);
+
+		res.writeHead(statusCode, rateHeaders);
 		res.end(JSON.stringify({
 			type: "error",
 			error: {
-				type: "upstream_error",
-				message: `${providerName} returned ${statusCode}: ${errBody.toString().slice(0, 500)}`,
+				type: statusCode === 429 ? "rate_limit_error" : "upstream_error",
+				message: `${providerName} returned ${statusCode}: ${errBody ? errBody.toString().slice(0, 500) : "empty response"}`,
 			},
 		}));
 		return;
@@ -185,7 +241,18 @@ async function handleMessages(
 		pipeStream(upstreamRes.body, res, provider.type, anthropicReq.model);
 	} else {
 		const resBody = await readBody(upstreamRes.body);
-		const parsed = JSON.parse(resBody.toString());
+		if (!resBody || resBody.length === 0) {
+			sendError(res, 502, "upstream_error", `${providerName} returned empty response`);
+			return;
+		}
+
+		let parsed: any;
+		try {
+			parsed = JSON.parse(resBody.toString());
+		} catch {
+			sendError(res, 502, "upstream_error", `${providerName} returned invalid JSON`);
+			return;
+		}
 
 		let anthropicRes: AnthropicResponse;
 		switch (provider.type) {
@@ -199,8 +266,13 @@ async function handleMessages(
 				anthropicRes = fromPassthrough(parsed);
 				break;
 			default:
-				sendError(res, 500, "config_error", `Unknown provider type`);
+				sendError(res, 500, "config_error", "Unknown provider type");
 				return;
+		}
+
+		// Ensure content is never empty (like Python version)
+		if (anthropicRes.content.length === 0) {
+			anthropicRes.content = [{ type: "text", text: "" }];
 		}
 
 		res.writeHead(200, { "content-type": "application/json" });
@@ -210,10 +282,20 @@ async function handleMessages(
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
-function readBody(stream: IncomingMessage): Promise<Buffer> {
+function readBody(stream: IncomingMessage, maxSize?: number): Promise<Buffer | null> {
 	return new Promise((resolve, reject) => {
 		const chunks: Buffer[] = [];
-		stream.on("data", (c: Buffer) => chunks.push(c));
+		let totalSize = 0;
+
+		stream.on("data", (c: Buffer) => {
+			totalSize += c.length;
+			if (maxSize && totalSize > maxSize) {
+				stream.destroy();
+				resolve(null);
+				return;
+			}
+			chunks.push(c);
+		});
 		stream.on("end", () => resolve(Buffer.concat(chunks)));
 		stream.on("error", reject);
 	});
@@ -224,4 +306,25 @@ function sendError(res: ServerResponse, status: number, type: string, message: s
 		res.writeHead(status, { "content-type": "application/json" });
 	}
 	res.end(JSON.stringify({ type: "error", error: { type, message } }));
+}
+
+/**
+ * Log request in a concise colorized format (like Python version's log_request_beautifully).
+ */
+function logRequest(
+	method: string,
+	path: string,
+	clientModel: string,
+	upstreamModel: string,
+	messageCount: number,
+	toolCount: number,
+): void {
+	// Strip provider prefix from client model for display
+	const clientDisplay = clientModel.replace(/^anthropic\//, "");
+	const upstream = `\x1b[32m${upstreamModel}\x1b[0m`;
+	const client = `\x1b[36m${clientDisplay}\x1b[0m`;
+	const tools = toolCount > 0 ? ` \x1b[35m${toolCount} tools\x1b[0m` : "";
+	const msgs = `\x1b[34m${messageCount} msgs\x1b[0m`;
+
+	process.stdout.write(`  ${method} ${path} ${client} \x1b[2m→\x1b[0m ${upstream} ${msgs}${tools}\n`);
 }

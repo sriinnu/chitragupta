@@ -101,11 +101,7 @@ function convertMessage(msg: AnthropicMessage): GeminiContent | null {
 				parts.push({ functionCall: { name: block.name, args: block.input } });
 				break;
 			case "tool_result": {
-				const text = typeof block.content === "string"
-					? block.content
-					: block.content
-						? block.content.map((b) => (b as { text?: string }).text ?? "").join("")
-						: "";
+				const text = extractToolResultContent(block.content);
 				parts.push({
 					functionResponse: {
 						name: block.tool_use_id,
@@ -114,6 +110,9 @@ function convertMessage(msg: AnthropicMessage): GeminiContent | null {
 				});
 				break;
 			}
+			case "thinking":
+				// Skip thinking blocks — Gemini doesn't support them
+				break;
 		}
 	}
 
@@ -121,12 +120,38 @@ function convertMessage(msg: AnthropicMessage): GeminiContent | null {
 }
 
 /**
+ * Extract text content from a tool_result block's content field.
+ * Handles: string, null/undefined, array of content blocks, dict/object.
+ */
+function extractToolResultContent(content: unknown): string {
+	if (content == null) return "";
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		return content
+			.filter((b: Record<string, unknown>) => b.type === "text")
+			.map((b: Record<string, unknown>) => (b as { text: string }).text)
+			.join("");
+	}
+	if (typeof content === "object") return JSON.stringify(content);
+	return String(content);
+}
+
+/**
  * Strip Gemini-unsupported schema fields recursively.
  */
+/** Gemini-supported format values. */
+const GEMINI_SUPPORTED_FORMATS = new Set(["float", "double", "int32", "int64", "enum", "date-time"]);
+
 function cleanSchemaForGemini(schema: Record<string, unknown>): Record<string, unknown> {
 	const cleaned = { ...schema };
 	delete cleaned.additionalProperties;
 	delete cleaned.$schema;
+	delete cleaned.default;
+
+	// Strip unsupported format values
+	if (typeof cleaned.format === "string" && !GEMINI_SUPPORTED_FORMATS.has(cleaned.format)) {
+		delete cleaned.format;
+	}
 
 	// Recursively clean nested schemas
 	if (cleaned.properties && typeof cleaned.properties === "object") {
@@ -297,7 +322,7 @@ export function processGeminiChunk(chunk: GeminiResponse, state: GeminiStreamSta
 		const stopReason = mapGeminiFinishReason(candidate.finishReason);
 		events.push({
 			type: "message_delta",
-			delta: { stop_reason: stopReason as string },
+			delta: { stop_reason: stopReason as string, stop_sequence: null },
 			usage: { output_tokens: state.usage.output_tokens },
 		});
 		events.push({ type: "message_stop" });

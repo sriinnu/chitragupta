@@ -96,9 +96,12 @@ function convertMessage(msg: AnthropicMessage): OpenAIMessage | OpenAIMessage[] 
 		return { role: msg.role, content: msg.content };
 	}
 
+	// Filter out thinking blocks — OpenAI doesn't support them
+	const blocks = msg.content.filter((b) => b.type !== "thinking");
+
 	// Check if this contains tool_result blocks (these become separate "tool" messages in OpenAI)
-	const toolResults = msg.content.filter((b) => b.type === "tool_result");
-	const otherBlocks = msg.content.filter((b) => b.type !== "tool_result");
+	const toolResults = blocks.filter((b) => b.type === "tool_result");
+	const otherBlocks = blocks.filter((b) => b.type !== "tool_result");
 
 	const messages: OpenAIMessage[] = [];
 
@@ -146,15 +149,10 @@ function convertMessage(msg: AnthropicMessage): OpenAIMessage | OpenAIMessage[] 
 	// Tool results become "tool" role messages in OpenAI
 	for (const block of toolResults) {
 		if (block.type !== "tool_result") continue;
-		const content = typeof block.content === "string"
-			? block.content
-			: block.content
-				? block.content.map((b) => (b as { text?: string }).text ?? "").join("")
-				: "";
 		messages.push({
 			role: "tool",
 			tool_call_id: block.tool_use_id,
-			content,
+			content: extractToolResultContent(block.content),
 		});
 	}
 
@@ -221,7 +219,24 @@ function mapFinishReason(reason: string | null): AnthropicResponse["stop_reason"
 
 function safeJsonParse(s: string): Record<string, unknown> {
 	try { return JSON.parse(s); }
-	catch { return {}; }
+	catch { return { raw: s }; }
+}
+
+/**
+ * Extract text content from a tool_result block's content field.
+ * Handles: string, null/undefined, array of content blocks, dict/object.
+ */
+function extractToolResultContent(content: unknown): string {
+	if (content == null) return "";
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		return content
+			.filter((b: Record<string, unknown>) => b.type === "text")
+			.map((b: Record<string, unknown>) => (b as { text: string }).text)
+			.join("");
+	}
+	if (typeof content === "object") return JSON.stringify(content);
+	return String(content);
 }
 
 // ─── Stream: OpenAI chunks → Anthropic SSE events ──────────────────
@@ -371,7 +386,7 @@ export function processOpenAIChunk(chunk: OpenAIStreamChunk, state: OpenAIStream
 
 		events.push({
 			type: "message_delta",
-			delta: { stop_reason: mapFinishReason(choice.finish_reason) as string },
+			delta: { stop_reason: mapFinishReason(choice.finish_reason) as string, stop_sequence: null },
 			usage: { output_tokens: state.usage.output_tokens },
 		});
 		events.push({ type: "message_stop" });

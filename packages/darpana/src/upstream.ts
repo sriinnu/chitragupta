@@ -7,8 +7,8 @@ import type { IncomingMessage } from "node:http";
 import type { ProviderConfig } from "./types.js";
 
 /** Keep-alive agents per scheme, reused across requests. */
-const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 32 });
-const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 32 });
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 32, maxFreeSockets: 10 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 32, maxFreeSockets: 10 });
 
 export interface UpstreamRequest {
 	url: string;
@@ -25,7 +25,7 @@ export interface UpstreamResponse {
 }
 
 /** Transient HTTP status codes that are safe to retry. */
-const RETRYABLE_CODES = new Set([429, 500, 502, 503]);
+const RETRYABLE_CODES = new Set([408, 429, 500, 502, 503]);
 
 /**
  * Send a request upstream and return the raw response stream.
@@ -45,7 +45,7 @@ export async function sendUpstream(
 			if (attempt < maxRetries && RETRYABLE_CODES.has(res.statusCode)) {
 				// Drain the response body before retrying
 				res.body.resume();
-				const delay = Math.min(1000 * 2 ** attempt, 4000);
+				const delay = backoffWithJitter(attempt);
 				await sleep(delay);
 				continue;
 			}
@@ -54,7 +54,7 @@ export async function sendUpstream(
 		} catch (err) {
 			lastError = err as Error;
 			if (attempt < maxRetries) {
-				const delay = Math.min(1000 * 2 ** attempt, 4000);
+				const delay = backoffWithJitter(attempt);
 				await sleep(delay);
 				continue;
 			}
@@ -96,6 +96,13 @@ function doRequest(req: UpstreamRequest): Promise<UpstreamResponse> {
 
 		outgoing.end(req.body);
 	});
+}
+
+/** Exponential backoff with ±25% jitter. */
+function backoffWithJitter(attempt: number): number {
+	const base = Math.min(1000 * 2 ** attempt, 4000);
+	const jitter = base * 0.25 * (2 * Math.random() - 1); // ±25%
+	return Math.max(100, Math.round(base + jitter));
 }
 
 function sleep(ms: number): Promise<void> {
