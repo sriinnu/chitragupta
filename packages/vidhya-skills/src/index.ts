@@ -376,3 +376,7 @@ export type {
 	ApprovalEvent,
 	ApprovalEventHandler,
 } from "./approval-queue.js";
+
+// ── Approval Notifier — Samiti Bridge ───────────────────────────────────────
+export { ApprovalNotifier } from "./approval-notifier.js";
+export type { SamitiBroadcaster, ApprovalNotifierConfig } from "./approval-notifier.js";
