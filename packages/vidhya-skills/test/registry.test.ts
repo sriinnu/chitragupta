@@ -146,6 +146,63 @@ describe("SkillRegistry", () => {
 		});
 	});
 
+	// ── Candidate-set priority ────────────────────────────────────────
+
+	describe("candidate-set priority", () => {
+		it("keeps all tier candidates and picks highest priority as active winner", () => {
+			const p3 = makeSkill({
+				name: "shadowed",
+				description: "tier-3 version",
+				source: { type: "manual", filePath: "/tmp/tier3/SKILL.md" },
+			});
+			const p4 = makeSkill({
+				name: "shadowed",
+				description: "tier-4 version",
+				source: { type: "manual", filePath: "/tmp/tier4/SKILL.md" },
+			});
+
+			registry.registerWithPriority(p3, 3, "/tmp/tier3/SKILL.md");
+			registry.registerWithPriority(p4, 4, "/tmp/tier4/SKILL.md");
+
+			expect(registry.get("shadowed")?.description).toBe("tier-4 version");
+			expect(registry.getCandidates("shadowed")).toHaveLength(2);
+		});
+
+		it("auto-promotes next-best candidate when winner is removed by source path", () => {
+			const p2 = makeSkill({
+				name: "fallback",
+				description: "tier-2 version",
+				source: { type: "manual", filePath: "/tmp/tier2/SKILL.md" },
+			});
+			const p4 = makeSkill({
+				name: "fallback",
+				description: "tier-4 version",
+				source: { type: "manual", filePath: "/tmp/tier4/SKILL.md" },
+			});
+
+			registry.registerWithPriority(p2, 2, "/tmp/tier2/SKILL.md");
+			registry.registerWithPriority(p4, 4, "/tmp/tier4/SKILL.md");
+
+			expect(registry.get("fallback")?.description).toBe("tier-4 version");
+			expect(registry.unregisterBySourcePath("/tmp/tier4/SKILL.md")).toBe(true);
+			expect(registry.get("fallback")?.description).toBe("tier-2 version");
+		});
+
+		it("fully unregisters when last candidate is removed", () => {
+			const p1 = makeSkill({
+				name: "single",
+				source: { type: "manual", filePath: "/tmp/tier1/SKILL.md" },
+			});
+
+			registry.registerWithPriority(p1, 1, "/tmp/tier1/SKILL.md");
+			expect(registry.get("single")).toBeDefined();
+
+			expect(registry.unregisterBySourcePath("/tmp/tier1/SKILL.md")).toBe(true);
+			expect(registry.get("single")).toBeUndefined();
+			expect(registry.getCandidates("single")).toHaveLength(0);
+		});
+	});
+
 	// ── Lookup by Tag ─────────────────────────────────────────────────
 
 	describe("getByTag", () => {

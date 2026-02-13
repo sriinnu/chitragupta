@@ -3,11 +3,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
 const mockClose = vi.fn();
+const mockOn = vi.fn();
 
 vi.mock("node:fs", () => ({
 	accessSync: vi.fn(),
 	watch: vi.fn(() => ({
 		close: mockClose,
+		on: mockOn,
 	})),
 	promises: {
 		readFile: vi.fn(),
@@ -46,6 +48,7 @@ describe("SkillDiscovery", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockClose.mockClear();
+		mockOn.mockClear();
 		discovery = new SkillDiscovery();
 	});
 
@@ -312,6 +315,17 @@ describe("SkillDiscovery", () => {
 			expect(typeof cleanup).toBe("function");
 			cleanup(); // should not throw
 			warnSpy.mockRestore();
+		});
+
+		it("should handle watcher runtime errors without crashing", () => {
+			const onChange = vi.fn();
+			const cleanup = discovery.watchDirectory("/skills", onChange);
+			const registered = mockOn.mock.calls.find((call) => call[0] === "error");
+			expect(registered).toBeDefined();
+			const handler = registered?.[1] as ((err: Error) => void) | undefined;
+			expect(() => handler?.(new Error("EMFILE"))).not.toThrow();
+			expect(mockClose).toHaveBeenCalled();
+			expect(() => cleanup()).not.toThrow();
 		});
 	});
 

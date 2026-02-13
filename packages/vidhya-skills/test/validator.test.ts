@@ -99,11 +99,10 @@ describe("validateSkill", () => {
 			expect(result.errors.some((e) => e.field === "version")).toBe(true);
 		});
 
-		it("should error for invalid semver '1.0'", () => {
+		it("should accept two-part semver '1.0'", () => {
 			const manifest = makeValidManifest({ version: "1.0" });
 			const result = validateSkill(manifest);
-			expect(result.valid).toBe(false);
-			expect(result.errors.some((e) => e.field === "version")).toBe(true);
+			expect(result.errors.filter((e) => e.field === "version")).toHaveLength(0);
 		});
 
 		it("should error for invalid semver 'abc'", () => {
@@ -169,15 +168,15 @@ describe("validateSkill", () => {
 			expect(result.errors.some((e) => e.field === "description")).toBe(true);
 		});
 
-		it("should warn when description is shorter than 10 characters", () => {
-			const manifest = makeValidManifest({ description: "Short" });
+		it("should warn when description is shorter than 30 characters", () => {
+			const manifest = makeValidManifest({ description: "Short description" });
 			const result = validateSkill(manifest);
 			expect(result.valid).toBe(true); // only warning, not error
 			expect(result.warnings.some((w) => w.field === "description")).toBe(true);
 		});
 
-		it("should not warn when description is 10+ characters", () => {
-			const manifest = makeValidManifest({ description: "A long enough description" });
+		it("should not warn when description is 30+ characters", () => {
+			const manifest = makeValidManifest({ description: "A sufficiently detailed skill description" });
 			const result = validateSkill(manifest);
 			expect(result.warnings.filter((w) => w.field === "description")).toHaveLength(0);
 		});
@@ -406,6 +405,295 @@ describe("validateSkill", () => {
 			expect(result.valid).toBe(false);
 			// At minimum: name, version, description, capabilities, tags, source
 			expect(result.errors.length).toBeGreaterThanOrEqual(5);
+		});
+	});
+
+	// ── Vidya Spec: name format ─────────────────────────────────────────
+
+	describe("name format (Vidya spec)", () => {
+		it("should error for uppercase in name", () => {
+			const result = validateSkill(makeValidManifest({ name: "MySkill" }));
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field === "name" && e.message.includes("lowercase"))).toBe(true);
+		});
+
+		it("should error for name over 64 characters", () => {
+			const result = validateSkill(makeValidManifest({ name: "a".repeat(65) }));
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field === "name" && e.message.includes("64"))).toBe(true);
+		});
+
+		it("should error for consecutive hyphens", () => {
+			const result = validateSkill(makeValidManifest({ name: "my--skill" }));
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field === "name" && e.message.includes("consecutive"))).toBe(true);
+		});
+
+		it("should error for leading hyphen", () => {
+			const result = validateSkill(makeValidManifest({ name: "-my-skill" }));
+			expect(result.valid).toBe(false);
+		});
+
+		it("should error for trailing hyphen", () => {
+			const result = validateSkill(makeValidManifest({ name: "my-skill-" }));
+			expect(result.valid).toBe(false);
+		});
+
+		it("should accept valid hyphenated name", () => {
+			const result = validateSkill(makeValidManifest({ name: "my-cool-skill" }));
+			expect(result.errors.filter((e) => e.field === "name")).toHaveLength(0);
+		});
+
+		it("should accept single-char name", () => {
+			const result = validateSkill(makeValidManifest({ name: "a" }));
+			expect(result.errors.filter((e) => e.field === "name")).toHaveLength(0);
+		});
+	});
+
+	// ── Vidya Spec: description length ──────────────────────────────────
+
+	describe("description max length (Vidya spec)", () => {
+		it("should error for description over 1024 characters", () => {
+			const result = validateSkill(makeValidManifest({ description: "x".repeat(1025) }));
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field === "description" && e.message.includes("1024"))).toBe(true);
+		});
+
+		it("should accept description at exactly 1024 characters", () => {
+			const result = validateSkill(makeValidManifest({ description: "x".repeat(1024) }));
+			expect(result.errors.filter((e) => e.field === "description")).toHaveLength(0);
+		});
+	});
+
+	// ── Vidya Spec: kula tier ───────────────────────────────────────────
+
+	describe("kula tier (Vidya spec)", () => {
+		it("should error for invalid kula value", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).kula = "invalid";
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field === "kula")).toBe(true);
+		});
+
+		it.each(["antara", "bahya", "shiksha"])("should accept kula '%s'", (kula) => {
+			const manifest = makeValidManifest();
+			(manifest as any).kula = kula;
+			const result = validateSkill(manifest);
+			expect(result.errors.filter((e) => e.field === "kula")).toHaveLength(0);
+		});
+
+		it("should not error when kula is omitted", () => {
+			const result = validateSkill(makeValidManifest());
+			expect(result.errors.filter((e) => e.field === "kula")).toHaveLength(0);
+		});
+	});
+
+	// ── Vidya Spec: requirements shape ──────────────────────────────────
+
+	describe("requirements shape (Vidya spec)", () => {
+		it("should error when requirements.bins is not an array", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).requirements = { bins: "nmap" };
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field === "requirements.bins")).toBe(true);
+		});
+
+		it("should error when requirements.network is not boolean", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).requirements = { network: "yes" };
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field === "requirements.network")).toBe(true);
+		});
+
+		it("should accept valid requirements", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).requirements = { bins: ["nmap"], env: ["KEY"], os: ["darwin"], network: true, privilege: false };
+			const result = validateSkill(manifest);
+			expect(result.errors.filter((e) => e.field.startsWith("requirements"))).toHaveLength(0);
+		});
+	});
+
+	// ── Vidya Spec: tags minimum warning ────────────────────────────────
+
+	describe("tags minimum (Vidya spec)", () => {
+		it("should warn when fewer than 3 tags", () => {
+			const result = validateSkill(makeValidManifest({ tags: ["one", "two"] }));
+			expect(result.warnings.some((w) => w.field === "tags" && w.message.includes("3"))).toBe(true);
+		});
+
+		it("should not warn when 3+ tags", () => {
+			const result = validateSkill(makeValidManifest({ tags: ["one", "two", "three"] }));
+			expect(result.warnings.filter((w) => w.field === "tags" && w.message.includes("3"))).toHaveLength(0);
+		});
+	});
+
+	// ── Vidya Spec: source type includes generated ──────────────────────
+
+	describe("generated source type (Vidya spec)", () => {
+		it("should accept source type 'generated'", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).source = { type: "generated", generator: "shiksha" };
+			const result = validateSkill(manifest);
+			expect(result.errors.filter((e) => e.field === "source.type")).toHaveLength(0);
+		});
+	});
+
+	// ── Granular Permissions Validation ─────────────────────────────────
+
+	describe("granular permissions (Vidya spec)", () => {
+		it("should error when networkPolicy.allowlist is not an array", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).permissions = { networkPolicy: { allowlist: "example.com" } };
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field === "permissions.networkPolicy.allowlist")).toBe(true);
+		});
+
+		it("should error when secrets is not an array", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).permissions = { secrets: "API_KEY" };
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field === "permissions.secrets")).toBe(true);
+		});
+
+		it("should error for invalid piiPolicy", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).permissions = { piiPolicy: "yolo" };
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field === "permissions.piiPolicy")).toBe(true);
+		});
+
+		it("should error for invalid filesystem.scope", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).permissions = { filesystem: { scope: "everywhere" } };
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field === "permissions.filesystem.scope")).toBe(true);
+		});
+
+		it("should accept valid granular permissions", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).permissions = {
+				networkPolicy: { allowlist: ["api.example.com"], timeoutMs: 5000 },
+				secrets: ["API_KEY"],
+				piiPolicy: "no_persist",
+				filesystem: { scope: "skill_dir", maxWriteMb: 10 },
+			};
+			const result = validateSkill(manifest);
+			expect(result.errors.filter((e) => e.field.startsWith("permissions"))).toHaveLength(0);
+		});
+
+		it("should not error when permissions is omitted", () => {
+			const result = validateSkill(makeValidManifest());
+			expect(result.errors.filter((e) => e.field.startsWith("permissions"))).toHaveLength(0);
+		});
+	});
+
+	// ── Approach Ladder Validation ──────────────────────────────────────
+
+	describe("approach ladder (Vidya spec)", () => {
+		it("should error when approachLadder is not an array", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).approachLadder = "not-array";
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field === "approachLadder")).toBe(true);
+		});
+
+		it("should error for missing name in approach entry", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).approachLadder = [{ status: "preferred", why: "best" }];
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field.includes("approachLadder") && e.message.includes("name"))).toBe(true);
+		});
+
+		it("should error for invalid status in approach entry", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).approachLadder = [{ name: "Test", status: "invalid", why: "reason" }];
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field.includes("approachLadder") && e.message.includes("status"))).toBe(true);
+		});
+
+		it("should error for missing why in approach entry", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).approachLadder = [{ name: "Test", status: "preferred" }];
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field.includes("approachLadder") && e.message.includes("why"))).toBe(true);
+		});
+
+		it("should accept valid approach ladder", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).approachLadder = [
+				{ name: "API", status: "preferred", why: "Official endpoint" },
+				{ name: "Scraping", status: "fallback", why: "No API key" },
+				{ name: "Hacking", status: "blocked", why: "Illegal" },
+			];
+			const result = validateSkill(manifest);
+			expect(result.errors.filter((e) => e.field.includes("approachLadder"))).toHaveLength(0);
+		});
+
+		it("should not error when approachLadder is omitted", () => {
+			const result = validateSkill(makeValidManifest());
+			expect(result.errors.filter((e) => e.field.includes("approachLadder"))).toHaveLength(0);
+		});
+	});
+
+	// ── Eval Cases Validation ───────────────────────────────────────────
+
+	describe("eval cases (Vidya spec)", () => {
+		it("should error when evalCases is not an array", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).evalCases = "not-array";
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field === "evalCases")).toBe(true);
+		});
+
+		it("should error for missing id in eval case", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).evalCases = [{ input: {}, expected: "ok" }];
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field.includes("evalCases") && e.message.includes("id"))).toBe(true);
+		});
+
+		it("should error for missing input in eval case", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).evalCases = [{ id: "test", expected: "ok" }];
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field.includes("evalCases") && e.message.includes("input"))).toBe(true);
+		});
+
+		it("should error for invalid type in eval case", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).evalCases = [{ id: "test", input: {}, expected: "ok", type: "unknown" }];
+			const result = validateSkill(manifest);
+			expect(result.valid).toBe(false);
+			expect(result.errors.some((e) => e.field.includes("evalCases") && e.message.includes("type"))).toBe(true);
+		});
+
+		it("should accept valid eval cases", () => {
+			const manifest = makeValidManifest();
+			(manifest as any).evalCases = [
+				{ id: "golden-1", input: { q: "hello" }, expected: "world", type: "golden" },
+				{ id: "adv-1", input: { q: "'; DROP TABLE --" }, expected: "rejected", type: "adversarial" },
+			];
+			const result = validateSkill(manifest);
+			expect(result.errors.filter((e) => e.field.includes("evalCases"))).toHaveLength(0);
+		});
+
+		it("should not error when evalCases is omitted", () => {
+			const result = validateSkill(makeValidManifest());
+			expect(result.errors.filter((e) => e.field.includes("evalCases"))).toHaveLength(0);
 		});
 	});
 });

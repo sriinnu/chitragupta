@@ -218,6 +218,20 @@ export type {
 	VidyaTantraMatch,
 	VidyaTantraConfig,
 	VidyaTantraState,
+	// Mudra types (integrity + signing)
+	SkillIntegrity,
+	SkillSignature,
+	IntegrityVerification,
+	// Granular permissions
+	GranularNetworkPermissions,
+	GranularUserDataPermissions,
+	GranularFilesystemPermissions,
+	GranularPermissions,
+	// Approach ladder
+	ApproachLadderEntry,
+	// Eval cases
+	EvalCase,
+	EvalResult,
 } from "./types-v2.js";
 export {
 	KULA_WEIGHTS,
@@ -316,3 +330,38 @@ export type {
 // ── Matcher V2 (Three-Phase Pipeline) ───────────────────────────────────────
 export { matchSkillsV2 } from "./matcher.js";
 export type { MatchContext } from "./matcher.js";
+
+// ── Prompt XML (System Prompt Injection) ────────────────────────────────────
+export {
+	skillToXml,
+	generateSkillsXml,
+	generateActivatedSkillXml,
+} from "./prompt-xml.js";
+export type { DisclosureTier, SkillXmlOptions } from "./prompt-xml.js";
+
+// ── Mudra (मुद्रा) — Integrity Hashing & Cryptographic Signing ──────────────
+export {
+	computeIntegrity,
+	verifyIntegrity,
+	writeIntegrity,
+	readIntegrity,
+	generateKeyPair,
+	signIntegrity,
+	verifySignature,
+	writeSignature,
+	readSignature,
+	sealSkill,
+	verifySeal,
+	INTEGRITY_FILE,
+	SIGNATURE_FILE,
+} from "./mudra.js";
+
+// ── Eval Harness — Structured Skill Evaluation ──────────────────────────────
+export {
+	loadEvalCases,
+	validateEvalCases,
+	runEvalSuite,
+	filterByType,
+	formatEvalSummary,
+} from "./eval-harness.js";
+export type { EvalExecutor, EvalComparator } from "./eval-harness.js";

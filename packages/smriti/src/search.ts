@@ -23,8 +23,13 @@ let _dbInitialized = false;
 function getAgentDb() {
 	const dbm = DatabaseManager.instance();
 	if (!_dbInitialized) {
-		initAgentSchema(dbm);
-		_dbInitialized = true;
+		try {
+			initAgentSchema(dbm);
+			_dbInitialized = true;
+		} catch (err) {
+			process.stderr.write(`[chitragupta] search DB schema init failed: ${err instanceof Error ? err.message : err}\n`);
+			throw err;
+		}
 	}
 	return dbm.get("agent");
 }
@@ -214,8 +219,9 @@ export function searchSessions(query: string, project?: string): SessionMeta[] {
 	// Try FTS5 search first
 	try {
 		return searchSessionsFts5(query, project);
-	} catch {
+	} catch (err) {
 		// Fall back to in-memory BM25
+		process.stderr.write(`[chitragupta] FTS5 search failed, falling back to BM25: ${err instanceof Error ? err.message : err}\n`);
 		return searchSessionsBm25(query, project);
 	}
 }

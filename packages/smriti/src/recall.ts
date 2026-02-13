@@ -141,8 +141,13 @@ export class RecallEngine {
   private getVectorsDb() {
     const dbm = DatabaseManager.instance();
     if (!_dbInitialized) {
-      initVectorsSchema(dbm);
-      _dbInitialized = true;
+      try {
+        initVectorsSchema(dbm);
+        _dbInitialized = true;
+      } catch (err) {
+        process.stderr.write(`[chitragupta] vectors DB schema init failed: ${err instanceof Error ? err.message : err}\n`);
+        throw err;
+      }
     }
     return dbm.get("vectors");
   }
