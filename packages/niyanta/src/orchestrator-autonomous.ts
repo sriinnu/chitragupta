@@ -466,7 +466,12 @@ export class AutonomousOrchestrator {
 			return;
 		}
 
-		const state = JSON.parse(raw) as PersistedState;
+		let state: PersistedState;
+		try {
+			state = JSON.parse(raw) as PersistedState;
+		} catch {
+			return; // Corrupted state file — start fresh
+		}
 
 		// Restore bandit state
 		if (state.banditState) {

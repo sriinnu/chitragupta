@@ -728,42 +728,50 @@ export class KartavyaEngine {
 		// Load kartavyas
 		const kartavyaRows = db.prepare("SELECT * FROM kartavyas").all() as Array<Record<string, unknown>>;
 		for (const row of kartavyaRows) {
-			const k: Kartavya = {
-				id: row.id as string,
-				name: row.name as string,
-				description: (row.description as string) ?? "",
-				status: row.status as KartavyaStatus,
-				sourceVasanaId: row.source_vasana_id as string | undefined,
-				sourceNiyamaId: row.source_niyama_id as string | undefined,
-				trigger: JSON.parse(row.trigger_json as string) as KartavyaTrigger,
-				action: JSON.parse(row.action_json as string) as KartavyaAction,
-				confidence: row.confidence as number,
-				successCount: row.success_count as number,
-				failureCount: row.failure_count as number,
-				lastExecuted: row.last_executed as number | undefined,
-				project: row.project as string | undefined,
-				createdAt: row.created_at as number,
-				updatedAt: row.updated_at as number,
-			};
-			this.kartavyas.set(k.id, k);
+			try {
+				const k: Kartavya = {
+					id: row.id as string,
+					name: row.name as string,
+					description: (row.description as string) ?? "",
+					status: row.status as KartavyaStatus,
+					sourceVasanaId: row.source_vasana_id as string | undefined,
+					sourceNiyamaId: row.source_niyama_id as string | undefined,
+					trigger: JSON.parse(row.trigger_json as string) as KartavyaTrigger,
+					action: JSON.parse(row.action_json as string) as KartavyaAction,
+					confidence: row.confidence as number,
+					successCount: row.success_count as number,
+					failureCount: row.failure_count as number,
+					lastExecuted: row.last_executed as number | undefined,
+					project: row.project as string | undefined,
+					createdAt: row.created_at as number,
+					updatedAt: row.updated_at as number,
+				};
+				this.kartavyas.set(k.id, k);
+			} catch {
+				// Skip corrupted kartavya row
+			}
 		}
 
 		// Load proposals
 		const proposalRows = db.prepare("SELECT * FROM niyama_proposals").all() as Array<Record<string, unknown>>;
 		for (const row of proposalRows) {
-			const p: NiyamaProposal = {
-				id: row.id as string,
-				vasanaId: row.vasana_id as string,
-				name: row.name as string,
-				description: (row.description as string) ?? "",
-				proposedTrigger: JSON.parse(row.trigger_json as string) as KartavyaTrigger,
-				proposedAction: JSON.parse(row.action_json as string) as KartavyaAction,
-				confidence: row.confidence as number,
-				evidence: JSON.parse((row.evidence_json as string) ?? "[]") as string[],
-				status: row.status as NiyamaProposal["status"],
-				createdAt: row.created_at as number,
-			};
-			this.proposals.set(p.id, p);
+			try {
+				const p: NiyamaProposal = {
+					id: row.id as string,
+					vasanaId: row.vasana_id as string,
+					name: row.name as string,
+					description: (row.description as string) ?? "",
+					proposedTrigger: JSON.parse(row.trigger_json as string) as KartavyaTrigger,
+					proposedAction: JSON.parse(row.action_json as string) as KartavyaAction,
+					confidence: row.confidence as number,
+					evidence: JSON.parse((row.evidence_json as string) ?? "[]") as string[],
+					status: row.status as NiyamaProposal["status"],
+					createdAt: row.created_at as number,
+				};
+				this.proposals.set(p.id, p);
+			} catch {
+				// Skip corrupted proposal row
+			}
 		}
 	}
 

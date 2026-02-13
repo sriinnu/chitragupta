@@ -408,7 +408,7 @@ export class DaemonManager extends EventEmitter {
 		try {
 			// Lazy-import vidhya-skills to avoid loading at startup
 			const { SkillDiscovery } = await import("@chitragupta/vidhya-skills");
-			const { ApprovalQueue, assessRisk } = await import("@chitragupta/vidhya-skills");
+			const { ApprovalQueue } = await import("@chitragupta/vidhya-skills");
 			const { validateSkill } = await import("@chitragupta/vidhya-skills");
 			const { getChitraguptaHome } = await import("@chitragupta/core");
 

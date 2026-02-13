@@ -156,9 +156,11 @@ function lgamma(z: number): number {
 
 /** Log-PDF of Student-t(x | nu, mu, sigma). */
 function logStudentT(x: number, nu: number, mu: number, sigma: number): number {
-	const z = (x - mu) / sigma;
+	// Guard: sigma must be positive; clamp to epsilon to prevent NaN from division by zero
+	const safeSigma = sigma > 1e-15 ? sigma : 1e-15;
+	const z = (x - mu) / safeSigma;
 	return lgamma((nu + 1) / 2) - lgamma(nu / 2)
-		- 0.5 * Math.log(nu * Math.PI * sigma * sigma)
+		- 0.5 * Math.log(nu * Math.PI * safeSigma * safeSigma)
 		- ((nu + 1) / 2) * Math.log(1 + z * z / nu);
 }
 
@@ -398,7 +400,10 @@ export class VasanaEngine {
 			const s = JSON.parse(row.rule_text) as SerializedState;
 			this.states = new Map(Object.entries(s.features));
 			this.obs = new Map(Object.entries(s.observations).map(([k, v]) => [k, Array.isArray(v) ? v : []]));
-		} catch { this.states.clear(); this.obs.clear(); }
+		} catch (err) {
+			process.stderr.write(`[vasana-engine] restore() failed to parse BOCPD state: ${err instanceof Error ? err.message : err}\n`);
+			this.states.clear(); this.obs.clear();
+		}
 	}
 
 	// ── BOCPD Core (Adams & MacKay 2007) ─────────────────────────────────
