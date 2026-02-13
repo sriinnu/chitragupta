@@ -313,6 +313,7 @@ export async function main(args: ParsedArgs): Promise<void> {
 
 		// ── Vidya Orchestrator (Skill ecosystem) ───────────────────────
 		let servVidyaOrchestrator: unknown;
+		const skillWatcherCleanups: Array<() => void> = [];
 		try {
 			const {
 				SkillRegistry,
@@ -334,20 +335,91 @@ export async function main(args: ParsedArgs): Promise<void> {
 			}));
 			bridge.registerToolsAsSkills(toolDefs);
 
-			// Load curated Agent Skills from SKILL.md files
+			// Load Agent Skills with candidate-set priorities + live-reload watchers
+			// Priority: skills-core=4, ecosystem/skills=3, skill-lab=2, skill-community=1
+			// Canonical structure per tier:
+			//   core/stable/community: <tier>/<skill-name>/SKILL.md
+			//   skill-lab lanes: <tier>/{auto|incubator}/<skill-name>/SKILL.md
 			try {
-				const { loadAgentSkills } = await import("@chitragupta/vidhya-skills");
-				const builtinSkillsDir = path.resolve(
+				const { SkillDiscovery: SD } = await import("@chitragupta/vidhya-skills");
+				const chitraguptaRoot = path.resolve(
 					path.dirname(new URL(import.meta.url).pathname),
-					"..", "..", "..", "skills", ".curated",
+					"..", "..", "..",
 				);
-				for (const dir of [path.resolve(projectPath, "skills", ".curated"), builtinSkillsDir]) {
-					const loaded = loadAgentSkills(dir);
-					for (const skill of loaded.skills) {
-						skillReg.register(skill);
+				const ecosystemRoot = path.resolve(chitraguptaRoot, "..", "ecosystem");
+				const discovery = new SD();
+
+				const isAllowedSkillManifestPath = (tierDir: string, filePath: string): boolean => {
+					const rel = path.relative(tierDir, filePath);
+					if (rel.startsWith("..") || path.isAbsolute(rel)) return false;
+					const parts = rel.split(path.sep).filter(Boolean);
+					if (parts.length === 2 && parts[1].toLowerCase() === "skill.md") {
+						return true;
 					}
+					if (
+						path.basename(tierDir) === "skill-lab" &&
+						parts.length === 3 &&
+						(parts[0] === "auto" || parts[0] === "incubator") &&
+						parts[2].toLowerCase() === "skill.md"
+					) {
+						return true;
+					}
+					return false;
+				};
+
+				const loadTier = async (dir: string, priority: number) => {
+					const discovered = await discovery.discoverFromDirectory(dir);
+					let skippedNonFlat = 0;
+					for (const skill of discovered) {
+						const sp = skill.source?.type === "manual" ? (skill.source as { filePath?: string }).filePath : undefined;
+						if (!sp || !isAllowedSkillManifestPath(dir, sp)) {
+							skippedNonFlat += 1;
+							continue;
+						}
+						skillReg.registerWithPriority(skill, priority, sp);
+					}
+					if (skippedNonFlat > 0) {
+						log.debug("Agent skills skipped (non-flat path)", { dir, skippedNonFlat });
+					}
+				};
+
+				const watchTier = (dir: string, priority: number) => {
+					const cleanup = discovery.watchDirectory(dir, (event) => {
+						if (!isAllowedSkillManifestPath(dir, event.filePath)) return;
+						if (event.type === "removed") {
+							skillReg.unregisterBySourcePath(event.filePath);
+						} else if (event.manifest) {
+							skillReg.registerWithPriority(event.manifest, priority, event.filePath);
+						}
+					});
+					skillWatcherCleanups.push(cleanup);
+				};
+
+				// Tier 1: skills-core (project-local + builtin) — priority 4
+				for (const root of [projectPath, chitraguptaRoot]) {
+					const dir = path.resolve(root, "skills-core");
+					await loadTier(dir, 4);
+					watchTier(dir, 4);
 				}
-			} catch (e) { log.debug("Curated skill loading failed", { error: String(e) }); }
+				// Tier 2: ecosystem/skills (approved, vetted) — priority 3
+				{
+					const dir = path.resolve(ecosystemRoot, "skills");
+					await loadTier(dir, 3);
+					watchTier(dir, 3);
+				}
+				// Tier 3: ecosystem/skill-lab (experimental) — priority 2
+				{
+					const dir = path.resolve(ecosystemRoot, "skill-lab");
+					await loadTier(dir, 2);
+					watchTier(dir, 2);
+				}
+				// Tier 4: ecosystem/skill-community (disabled by default) — priority 1
+				if (process.env.VAAYU_SKILL_COMMUNITY_ENABLED === "true") {
+					const dir = path.resolve(ecosystemRoot, "skill-community");
+					await loadTier(dir, 1);
+					watchTier(dir, 1);
+				}
+			} catch (e) { log.debug("Agent skill loading failed", { error: String(e) }); }
 
 			let scanner: InstanceType<typeof SurakshaScanner> | undefined;
 			let shiksha: InstanceType<typeof ShikshaController> | undefined;
@@ -415,6 +487,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 			process.on("SIGINT", () => {
 				process.stdout.write(`\n  Shutting down server...\n`);
 				const cleanup = async () => {
+					// Stop skill watchers
+					for (const fn of skillWatcherCleanups) { try { fn(); } catch { /* best-effort */ } }
 					if (servNidraDaemon) {
 						try { await (servNidraDaemon as { stop: () => Promise<void> }).stop(); } catch { /* best-effort */ }
 					}
@@ -498,6 +572,7 @@ export async function main(args: ParsedArgs): Promise<void> {
 	let skillContext: string | undefined;
 	let shikshaController: { detectGap(q: string, m: Array<{ score: number }>): boolean; learn(q: string): Promise<{ success: boolean; executed: boolean; executionOutput?: string; skill?: { manifest: { name: string } }; autoApproved: boolean; quarantineId?: string; durationMs: number; error?: string }>; } | undefined;
 	let vidyaOrchestrator: import("@chitragupta/vidhya-skills").VidyaOrchestrator | undefined;
+	const mcpSkillWatcherCleanups: Array<() => void> = [];
 	try {
 		const {
 			SkillRegistry,
@@ -521,23 +596,82 @@ export async function main(args: ParsedArgs): Promise<void> {
 		}));
 		bridge.registerToolsAsSkills(toolDefs);
 
-		// Load curated Agent Skills from SKILL.md files
+		// Load Agent Skills with candidate-set priorities + live-reload watchers
+		// Priority: skills-core=4, ecosystem/skills=3, skill-lab=2, skill-community=1
+		// Canonical structure per tier:
+		//   core/stable/community: <tier>/<skill-name>/SKILL.md
+		//   skill-lab lanes: <tier>/{auto|incubator}/<skill-name>/SKILL.md
 		try {
-			const { loadAgentSkills } = await import("@chitragupta/vidhya-skills");
-			const curatedDir = path.resolve(projectPath, "skills", ".curated");
-			// Also check the chitragupta package root for skills shipped with the CLI
-			const builtinSkillsDir = path.resolve(
+			const { SkillDiscovery: SD } = await import("@chitragupta/vidhya-skills");
+			const chitraguptaRoot = path.resolve(
 				path.dirname(new URL(import.meta.url).pathname),
-				"..", "..", "..", "skills", ".curated",
+				"..", "..", "..",
 			);
-			for (const dir of [curatedDir, builtinSkillsDir]) {
-				const loaded = loadAgentSkills(dir);
-				for (const skill of loaded.skills) {
-					skillRegistry.register(skill);
+			const ecosystemRoot = path.resolve(chitraguptaRoot, "..", "ecosystem");
+			const discovery = new SD();
+
+			const isAllowedSkillManifestPath = (tierDir: string, filePath: string): boolean => {
+				const rel = path.relative(tierDir, filePath);
+				if (rel.startsWith("..") || path.isAbsolute(rel)) return false;
+				const parts = rel.split(path.sep).filter(Boolean);
+				if (parts.length === 2 && parts[1].toLowerCase() === "skill.md") {
+					return true;
 				}
-				if (loaded.skipped.length > 0) {
-					log.debug("Agent skills skipped", { dir, skipped: loaded.skipped });
+				if (
+					path.basename(tierDir) === "skill-lab" &&
+					parts.length === 3 &&
+					(parts[0] === "auto" || parts[0] === "incubator") &&
+					parts[2].toLowerCase() === "skill.md"
+				) {
+					return true;
 				}
+				return false;
+			};
+
+			const loadTier = async (dir: string, priority: number) => {
+				const discovered = await discovery.discoverFromDirectory(dir);
+				for (const skill of discovered) {
+					const sp = skill.source?.type === "manual" ? (skill.source as { filePath?: string }).filePath : undefined;
+					if (!sp || !isAllowedSkillManifestPath(dir, sp)) continue;
+					skillRegistry.registerWithPriority(skill, priority, sp);
+				}
+			};
+
+			const watchTier = (dir: string, priority: number) => {
+				const cleanup = discovery.watchDirectory(dir, (event) => {
+					if (!isAllowedSkillManifestPath(dir, event.filePath)) return;
+					if (event.type === "removed") {
+						skillRegistry.unregisterBySourcePath(event.filePath);
+					} else if (event.manifest) {
+						skillRegistry.registerWithPriority(event.manifest, priority, event.filePath);
+					}
+				});
+				mcpSkillWatcherCleanups.push(cleanup);
+			};
+
+			// Tier 1: skills-core (project-local + builtin) — priority 4
+			for (const root of [projectPath, chitraguptaRoot]) {
+				const dir = path.resolve(root, "skills-core");
+				await loadTier(dir, 4);
+				watchTier(dir, 4);
+			}
+			// Tier 2: ecosystem/skills (approved, vetted) — priority 3
+			{
+				const dir = path.resolve(ecosystemRoot, "skills");
+				await loadTier(dir, 3);
+				watchTier(dir, 3);
+			}
+			// Tier 3: ecosystem/skill-lab (experimental) — priority 2
+			{
+				const dir = path.resolve(ecosystemRoot, "skill-lab");
+				await loadTier(dir, 2);
+				watchTier(dir, 2);
+			}
+			// Tier 4: ecosystem/skill-community (disabled by default) — priority 1
+			if (process.env.VAAYU_SKILL_COMMUNITY_ENABLED === "true") {
+				const dir = path.resolve(ecosystemRoot, "skill-community");
+				await loadTier(dir, 1);
+				watchTier(dir, 1);
 			}
 		} catch {
 			// Agent skill loading is best-effort
@@ -1102,6 +1236,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 
 	// ─── 12. Register cleanup on exit ────────────────────────────────
 	const shutdownAll = async () => {
+		// Stop skill watchers
+		for (const fn of mcpSkillWatcherCleanups) { try { fn(); } catch { /* best-effort */ } }
 		if (nidraDaemon) {
 			try { await nidraDaemon.stop(); } catch { /* best-effort */ }
 		}
