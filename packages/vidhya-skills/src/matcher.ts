@@ -98,18 +98,44 @@ export function cosineSimilarityF32(a: Float32Array, b: Float32Array): number {
 function computeTagBoost(
 	queryTags: string[] | undefined,
 	skillTags: string[],
+	queryText?: string,
 ): number {
-	if (!queryTags || queryTags.length === 0) return 0;
-
 	const skillTagSet = new Set(skillTags.map((t) => t.toLowerCase()));
-	let matches = 0;
-	for (const tag of queryTags) {
-		if (skillTagSet.has(tag.toLowerCase())) {
-			matches++;
+	if (skillTagSet.size === 0) return 0;
+
+	// Explicit tags — exact overlap
+	if (queryTags && queryTags.length > 0) {
+		let matches = 0;
+		for (const tag of queryTags) {
+			if (skillTagSet.has(tag.toLowerCase())) {
+				matches++;
+			}
 		}
+		return (matches / queryTags.length) * TAG_BOOST_MULTIPLIER;
 	}
 
-	return (matches / queryTags.length) * TAG_BOOST_MULTIPLIER;
+	// No explicit tags — extract keywords from query text and match against skill tags
+	if (queryText) {
+		const queryWords = new Set(
+			queryText.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2),
+		);
+		let matches = 0;
+		for (const tag of skillTagSet) {
+			if (queryWords.has(tag)) matches++;
+			// Also check if any query word contains the tag or vice versa
+			for (const word of queryWords) {
+				if (word !== tag && (word.includes(tag) || tag.includes(word)) && word.length > 3) {
+					matches += 0.5;
+					break;
+				}
+			}
+		}
+		return matches > 0
+			? Math.min(1, (matches / skillTagSet.size) * TAG_BOOST_MULTIPLIER)
+			: 0;
+	}
+
+	return 0;
 }
 
 // ─── Capability Match ───────────────────────────────────────────────────────
@@ -278,7 +304,7 @@ export function matchSkills(
 
 		// Component scores
 		const traitSimilarity = cosineSimilarityF32(queryVector, skillVector);
-		const tagBoost = computeTagBoost(query.tags, skill.tags);
+		const tagBoost = computeTagBoost(query.tags, skill.tags, query.text);
 		const capabilityMatch = computeCapabilityMatch(query.text, skill);
 		const antiPatternPenalty = computeAntiPatternPenalty(
 			query.text,
@@ -497,7 +523,7 @@ export function matchSkillsV2(
 
 		// Component scores
 		const traitSimilarity = cosineSimilarityF32(queryVector, skillVector);
-		const tagBoost = computeTagBoost(query.tags, manifest.tags);
+		const tagBoost = computeTagBoost(query.tags, manifest.tags, query.text);
 		const capabilityMatch = computeCapabilityMatch(query.text, manifest);
 		const antiPatternPenalty = computeAntiPatternPenalty(
 			query.text,
