@@ -48,6 +48,10 @@ export {
 	saveSession,
 	loadSession,
 	listSessions,
+	listSessionsByDate,
+	listSessionsByDateRange,
+	listSessionDates,
+	listSessionProjects,
 	deleteSession,
 	addTurn,
 	migrateExistingSessions,
@@ -260,3 +264,39 @@ export type {
 	ClassificationContext,
 	VrittiSerializedState,
 } from "./pancha-vritti.js";
+
+// Day Consolidation — Diary Writer (daily cross-project summaries)
+export {
+	consolidateDay,
+	getDaysRoot,
+	getDayFilePath,
+	readDayFile,
+	listDayFiles,
+	searchDayFiles,
+	isDayConsolidated,
+	getUnconsolidatedDates,
+} from "./day-consolidation.js";
+export type { DayConsolidationResult } from "./day-consolidation.js";
+
+// Unified Recall Engine — searches ALL layers (FTS5, memory, day files)
+export { recall } from "./unified-recall.js";
+export type { RecallAnswer, RecallOptions as UnifiedRecallOptions } from "./unified-recall.js";
+
+// Event Chain Extractor (session turns → typed event chains)
+export {
+	detectSessionType,
+	extractEventChain,
+} from "./event-extractor.js";
+export type {
+	SessionType,
+	SessionEvent,
+	EventChain,
+} from "./event-extractor.js";
+
+// Fact Extractor (real-time personal fact detection from user turns)
+export { FactExtractor, getFactExtractor } from "./fact-extractor.js";
+export type { ExtractedFact, FactExtractorConfig } from "./fact-extractor.js";
+
+// Provider Bridge (memory injection on session start — provider-agnostic)
+export { loadProviderContext } from "./provider-bridge.js";
+export type { ProviderContext } from "./provider-bridge.js";

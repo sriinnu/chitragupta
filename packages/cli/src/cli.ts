@@ -423,6 +423,14 @@ async function handleSubcommand(command: string, subcommand: string | undefined,
 			break;
 		}
 
+		case "daemon": {
+			const { parseDaemonArgs, runDaemonMode } = await import("./modes/daemon.js");
+			const daemonOpts = parseDaemonArgs([subcommand, ...rest].filter(Boolean) as string[]);
+			await runDaemonMode(daemonOpts);
+			// Daemon runs until killed — don't exit
+			return;
+		}
+
 		default:
 			process.stderr.write(
 				`\nUnknown command: ${command}\n` +

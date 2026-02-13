@@ -199,6 +199,8 @@ function rowToSessionMeta(row: Record<string, unknown>): SessionMeta {
 	let metadata: Record<string, unknown> | undefined;
 	try { metadata = row.metadata ? JSON.parse(row.metadata as string) : undefined; } catch { /* corrupted */ }
 
+	const provider = metadata?.provider as string | undefined;
+
 	const createdAt = row.created_at as number | string | null;
 	const updatedAt = row.updated_at as number | string | null;
 
@@ -209,6 +211,7 @@ function rowToSessionMeta(row: Record<string, unknown>): SessionMeta {
 		updated: updatedAt ? new Date(updatedAt).toISOString() : new Date().toISOString(),
 		agent: (row.agent as string) ?? "chitragupta",
 		model: (row.model as string) ?? "unknown",
+		provider,
 		project: row.project as string,
 		parent: (row.parent_id as string) ?? null,
 		branch: (row.branch as string) ?? null,
@@ -294,6 +297,7 @@ export function createSession(opts: SessionOpts): Session {
 		updated: now,
 		agent: opts.agent ?? "chitragupta",
 		model: opts.model ?? "unknown",
+		provider: opts.provider,
 		project: opts.project,
 		parent: opts.parentSessionId ?? null,
 		branch: opts.branch ?? null,
@@ -302,6 +306,10 @@ export function createSession(opts: SessionOpts): Session {
 		totalTokens: 0,
 		metadata: opts.metadata,
 	};
+
+	if (opts.provider) {
+		meta.metadata = { ...meta.metadata, provider: opts.provider };
+	}
 
 	const session: Session = { meta, turns: [] };
 
@@ -397,6 +405,124 @@ export function listSessions(project?: string): SessionMeta[] {
 
 	// Fallback: filesystem scan (for pre-migration or if SQLite fails)
 	return listSessionsFromFilesystem(project);
+}
+
+/**
+ * List sessions created on a specific date.
+ * Uses SQLite index on created_at for fast lookup.
+ *
+ * @param date - Date string in YYYY-MM-DD format.
+ * @param project - Optional project filter.
+ */
+export function listSessionsByDate(date: string, project?: string): SessionMeta[] {
+	// Parse YYYY-MM-DD to start/end epoch ms
+	const dateMatch = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+	if (!dateMatch) {
+		throw new SessionError(`Invalid date format: ${date}. Expected YYYY-MM-DD.`);
+	}
+
+	const startOfDay = new Date(`${date}T00:00:00.000Z`).getTime();
+	const endOfDay = startOfDay + 86_400_000; // +24h
+
+	return listSessionsByDateRange(startOfDay, endOfDay, project);
+}
+
+/**
+ * List sessions created within a date range (epoch ms).
+ * Uses SQLite index on created_at for fast lookup.
+ *
+ * @param startMs - Start of range (inclusive), epoch ms.
+ * @param endMs - End of range (exclusive), epoch ms.
+ * @param project - Optional project filter.
+ */
+export function listSessionsByDateRange(startMs: number, endMs: number, project?: string): SessionMeta[] {
+	try {
+		const db = getAgentDb();
+		let rows: Array<Record<string, unknown>>;
+
+		if (project) {
+			rows = db.prepare(
+				"SELECT * FROM sessions WHERE project = ? AND created_at >= ? AND created_at < ? ORDER BY created_at ASC",
+			).all(project, startMs, endMs) as Array<Record<string, unknown>>;
+		} else {
+			rows = db.prepare(
+				"SELECT * FROM sessions WHERE created_at >= ? AND created_at < ? ORDER BY created_at ASC",
+			).all(startMs, endMs) as Array<Record<string, unknown>>;
+		}
+
+		if (rows.length > 0) {
+			return rows.map(rowToSessionMeta);
+		}
+	} catch {
+		// SQLite unavailable — fall through to filesystem scan
+	}
+
+	// Fallback: scan filesystem and filter by date
+	const allSessions = listSessionsFromFilesystem(project);
+	return allSessions.filter((s) => {
+		const created = new Date(s.created).getTime();
+		return created >= startMs && created < endMs;
+	});
+}
+
+/**
+ * List all unique dates that have sessions.
+ * Returns dates in YYYY-MM-DD format, most recent first.
+ *
+ * @param project - Optional project filter.
+ */
+export function listSessionDates(project?: string): string[] {
+	try {
+		const db = getAgentDb();
+		let rows: Array<Record<string, unknown>>;
+
+		if (project) {
+			rows = db.prepare(
+				`SELECT DISTINCT date(created_at / 1000, 'unixepoch') as session_date
+				 FROM sessions WHERE project = ?
+				 ORDER BY session_date DESC`,
+			).all(project) as Array<Record<string, unknown>>;
+		} else {
+			rows = db.prepare(
+				`SELECT DISTINCT date(created_at / 1000, 'unixepoch') as session_date
+				 FROM sessions
+				 ORDER BY session_date DESC`,
+			).all() as Array<Record<string, unknown>>;
+		}
+
+		return rows.map((r) => r.session_date as string).filter(Boolean);
+	} catch {
+		// SQLite unavailable — fall through to filesystem scan
+		const allSessions = listSessionsFromFilesystem(project);
+		const dates = new Set<string>();
+		for (const s of allSessions) {
+			dates.add(s.created.slice(0, 10));
+		}
+		return [...dates].sort().reverse();
+	}
+}
+
+/**
+ * List all unique projects that have sessions.
+ */
+export function listSessionProjects(): Array<{ project: string; sessionCount: number; lastActive: string }> {
+	try {
+		const db = getAgentDb();
+		const rows = db.prepare(
+			`SELECT project, COUNT(*) as count, MAX(updated_at) as last_active
+			 FROM sessions
+			 GROUP BY project
+			 ORDER BY last_active DESC`,
+		).all() as Array<Record<string, unknown>>;
+
+		return rows.map((r) => ({
+			project: r.project as string,
+			sessionCount: r.count as number,
+			lastActive: new Date(r.last_active as number).toISOString(),
+		}));
+	} catch {
+		return [];
+	}
 }
 
 /**

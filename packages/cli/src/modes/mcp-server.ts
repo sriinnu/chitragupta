@@ -1815,6 +1815,316 @@ const createRecallPrompt = () => prompt(
 	(a) => `Recall everything about "${a.topic || ""}": call chitragupta_memory_search, akasha_traces, and check recent sessions. Present a timeline of decisions and current state.`,
 );
 
+// ─── Day File Tools ─────────────────────────────────────────────────────────
+
+/**
+ * Create the `chitragupta_day_show` tool — shows a consolidated day file.
+ */
+function createDayShowTool(): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_day_show",
+			description:
+				"Show the consolidated day file (diary) for a specific date. " +
+				"Day files contain all projects, sessions, tool usage, and files modified for that day.",
+			inputSchema: {
+				type: "object" as const,
+				properties: {
+					date: {
+						type: "string",
+						description: "Date in YYYY-MM-DD format. Omit for today.",
+					},
+				},
+				required: [],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const date = args.date
+				? String(args.date)
+				: new Date().toISOString().slice(0, 10);
+
+			try {
+				const { readDayFile } = await import("@chitragupta/smriti/day-consolidation");
+				const content = readDayFile(date);
+
+				if (!content) {
+					return {
+						content: [{ type: "text", text: `No day file for ${date}. Run consolidation first, or the daemon will create it automatically.` }],
+						_metadata: { action: "day_show", date },
+					};
+				}
+
+				return {
+					content: [{ type: "text", text: content }],
+					_metadata: { action: "day_show", date },
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
+/**
+ * Create the `chitragupta_day_list` tool — lists available day files.
+ */
+function createDayListTool(): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_day_list",
+			description:
+				"List all consolidated day files (diaries). " +
+				"Returns dates in YYYY-MM-DD format, most recent first.",
+			inputSchema: {
+				type: "object" as const,
+				properties: {
+					limit: {
+						type: "number",
+						description: "Maximum dates to return. Default: 30.",
+					},
+				},
+				required: [],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 30) || 30));
+
+			try {
+				const { listDayFiles } = await import("@chitragupta/smriti/day-consolidation");
+				const dates = listDayFiles().slice(0, limit);
+
+				if (dates.length === 0) {
+					return {
+						content: [{ type: "text", text: "No consolidated day files found. The daemon will create them automatically." }],
+						_metadata: { action: "day_list" },
+					};
+				}
+
+				const output = `Day files (${dates.length}):\n\n${dates.map((d: string) => `- ${d}`).join("\n")}`;
+				return {
+					content: [{ type: "text", text: output }],
+					_metadata: { action: "day_list" },
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
+/**
+ * Create the `chitragupta_day_search` tool — searches across day files.
+ */
+function createDaySearchTool(): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_day_search",
+			description:
+				"Search across all consolidated day files (diaries) for a query. " +
+				"Finds matching content across any date or project.",
+			inputSchema: {
+				type: "object" as const,
+				properties: {
+					query: {
+						type: "string",
+						description: "Search query (case-insensitive substring match).",
+					},
+					limit: {
+						type: "number",
+						description: "Maximum day files to return. Default: 10.",
+					},
+				},
+				required: ["query"],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const query = String(args.query ?? "");
+			const limit = Math.min(50, Math.max(1, Number(args.limit ?? 10) || 10));
+
+			if (!query) {
+				return {
+					content: [{ type: "text", text: "Error: 'query' is required for search." }],
+					isError: true,
+				};
+			}
+
+			try {
+				const { searchDayFiles } = await import("@chitragupta/smriti/day-consolidation");
+				const results = searchDayFiles(query, { limit });
+
+				if (results.length === 0) {
+					return {
+						content: [{ type: "text", text: `No matches found for: ${query}` }],
+						_metadata: { action: "day_search", query },
+					};
+				}
+
+				const lines: string[] = [`Found matches in ${results.length} day(s):\n`];
+				for (const r of results) {
+					lines.push(`## ${r.date}`);
+					for (const m of r.matches) {
+						lines.push(`  L${m.line}: ${m.text}`);
+					}
+					lines.push("");
+				}
+
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					_metadata: { action: "day_search", query },
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
+// ─── Unified Recall Tool ─────────────────────────────────────────────────────
+
+/**
+ * Create the `chitragupta_recall` tool — unified search across ALL memory layers.
+ */
+function createRecallTool(): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_recall",
+			description:
+				"Unified recall — searches ALL of Chitragupta's memory layers " +
+				"(sessions, memory, knowledge graph, day files) to answer natural language " +
+				"questions. Use this to recall past conversations, decisions, facts, or " +
+				"anything that happened across any provider, project, or date.",
+			inputSchema: {
+				type: "object" as const,
+				properties: {
+					query: {
+						type: "string",
+						description:
+							"Natural language question. E.g. 'how did I fix the yaxis interval in charts?' " +
+							"or 'what do we know about the auth system?'",
+					},
+					project: {
+						type: "string",
+						description: "Optional: filter to specific project path.",
+					},
+					limit: {
+						type: "number",
+						description: "Max results. Default: 5.",
+					},
+				},
+				required: ["query"],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const query = String(args.query ?? "");
+			const project = args.project != null ? String(args.project) : undefined;
+			const limit = Math.min(20, Math.max(1, Number(args.limit ?? 5) || 5));
+
+			if (!query) {
+				return {
+					content: [{ type: "text", text: "Error: 'query' is required." }],
+					isError: true,
+				};
+			}
+
+			try {
+				const { recall } = await import("@chitragupta/smriti/unified-recall");
+				const results = await recall(query, { limit, project });
+
+				if (results.length === 0) {
+					return {
+						content: [{ type: "text", text: `No recall results for: ${query}` }],
+						_metadata: { action: "recall", query },
+					};
+				}
+
+				const lines: string[] = [`Recall results for "${query}":\n`];
+				for (let i = 0; i < results.length; i++) {
+					const r = results[i];
+					lines.push(`**[${i + 1}]** (${(r.score * 100).toFixed(0)}% match, via ${r.primarySource})`);
+					lines.push(r.answer);
+					if (r.sessionId) lines.push(`  Session: ${r.sessionId}`);
+					if (r.date) lines.push(`  Date: ${r.date}`);
+					lines.push("");
+				}
+
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					_metadata: { action: "recall", query, resultCount: results.length },
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
+// ─── Provider Context Tool ───────────────────────────────────────────────────
+
+/**
+ * Create the `chitragupta_context` tool — load memory context for a new session.
+ *
+ * Returns global facts, project memory, and recent session summaries.
+ * Call this at session start to bootstrap persistent memory into any provider.
+ */
+function createContextTool(projectPath: string): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_context",
+			description:
+				"Load memory context for a new session. Returns global facts, project memory, " +
+				"and recent session summaries. Call this at the start of every session to get " +
+				"persistent memory.",
+			inputSchema: {
+				type: "object" as const,
+				properties: {
+					project: {
+						type: "string",
+						description: "Project path for project-specific memory. Defaults to current project.",
+					},
+				},
+				required: [],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const project = args.project != null ? String(args.project) : projectPath;
+
+			try {
+				const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
+				const ctx = await loadProviderContext(project);
+
+				if (ctx.itemCount === 0) {
+					return {
+						content: [{ type: "text", text: "No memory context found. This appears to be a fresh start." }],
+						_metadata: { action: "context", itemCount: 0 },
+					};
+				}
+
+				return {
+					content: [{ type: "text", text: ctx.assembled }],
+					_metadata: { action: "context", itemCount: ctx.itemCount },
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
 // ─── Server Entry Point ─────────────────────────────────────────────────────
 
 /**
@@ -1869,6 +2179,17 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	mcpTools.push(createHealthStatusTool());
 	mcpTools.push(createAtmanReportTool());
 
+	// Add day file query tools (consolidated daily diaries)
+	mcpTools.push(createDayShowTool());
+	mcpTools.push(createDayListTool());
+	mcpTools.push(createDaySearchTool());
+
+	// Add unified recall tool (searches ALL memory layers)
+	mcpTools.push(createRecallTool());
+
+	// Add provider context tool (memory injection on session start)
+	mcpTools.push(createContextTool(projectPath));
+
 	// ─── 2. Session recording ───────────────────────────────────────
 	// Lazy-init: create a session on the first tool call, record every
 	// tool invocation as a turn. This gives /last_session and /recall
@@ -1893,6 +2214,18 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		}
 		return mcpSessionId;
 	};
+
+	/** Extract user-facing text from tool arguments for fact extraction. */
+	function extractUserText(args: Record<string, unknown>): string | null {
+		// Direct content fields
+		for (const key of ["content", "text", "query", "message", "task", "proposal"]) {
+			const val = args[key];
+			if (typeof val === "string" && val.length > 5 && val.length < 5000) {
+				return val;
+			}
+		}
+		return null;
+	}
 
 	const recordToolCall = async (info: { tool: string; args: Record<string, unknown>; result: import("@chitragupta/tantra").McpToolResult; elapsedMs: number }) => {
 		const sid = await ensureSession();
@@ -1927,6 +2260,23 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			});
 
 			turnCounter += 2;
+
+			// Real-time fact extraction on all user-facing content
+			try {
+				const { getFactExtractor } = await import("@chitragupta/smriti/fact-extractor");
+				const extractor = getFactExtractor();
+				// Extract from the arguments (which contain user input)
+				const userText = extractUserText(info.args);
+				if (userText) {
+					await extractor.extractAndSave(
+						userText,
+						{ type: "global" },
+						{ type: "project", path: projectPath },
+					);
+				}
+			} catch {
+				// Best-effort — never break recording
+			}
 
 			// Auto-extract key events for memory persistence
 			try {
@@ -1997,6 +2347,25 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 					projectScope,
 					`File ${info.tool === "write" ? "created" : "edited"}: ${filePath}`,
 				);
+			}
+		}
+
+		// Real-time fact extraction from user turns (provider-agnostic)
+		// Intercepts ANY user message and extracts personal facts immediately
+		if (info.tool === "record" || resultText.includes("[tool:")) {
+			// Skip — these are tool calls, not user statements
+		} else {
+			// Check if the args contain user-like content
+			const userContent = String(info.args.content ?? info.args.text ?? info.args.query ?? "");
+			if (userContent.length > 5 && userContent.length < 2000) {
+				try {
+					const { getFactExtractor } = await import("@chitragupta/smriti/fact-extractor");
+					const extractor = getFactExtractor();
+					const factProjectScope = { type: "project" as const, path: project };
+					await extractor.extractAndSave(userContent, { type: "global" }, factProjectScope);
+				} catch {
+					// Best-effort — never break recording
+				}
 			}
 		}
 	};
