@@ -141,18 +141,22 @@ export function assessRisk(manifest: SkillManifest | EnhancedSkillManifest): { l
 			}
 		}
 
-		// Filesystem access
+		// Filesystem access — check as string since community skills may use non-standard values
 		if (perms.filesystem) {
-			if (perms.filesystem.scope === "full") {
+			const scope = perms.filesystem.scope as string;
+			if (scope === "full") {
 				factors.push("Full filesystem access");
-			} else if (perms.filesystem.scope === "project") {
+			} else if (scope === "project") {
 				factors.push("Project-scoped filesystem access");
 			}
 		}
 
-		// PII policy
-		if (perms.piiPolicy === "collect" || perms.piiPolicy === "store") {
-			factors.push(`PII policy: ${perms.piiPolicy}`);
+		// PII policy — check as string since community skills may use non-standard values
+		if (perms.piiPolicy) {
+			const policy = perms.piiPolicy as string;
+			if (policy === "collect" || policy === "store") {
+				factors.push(`PII policy: ${policy}`);
+			}
 		}
 	}
 

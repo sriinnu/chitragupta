@@ -2519,6 +2519,86 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 
 	await server.start();
 
+	// ─── 5. Auto-start daemon (self-healing, skill sync) ─────────────
+	// The daemon runs in-process alongside the MCP server. It handles:
+	// - Session consolidation (daily/monthly/yearly)
+	// - Skill discovery + approval queue
+	// - Self-healing with auto-restart on crash
+	try {
+		const { DaemonManager } = await import("@chitragupta/anina");
+		const { getChitraguptaHome } = await import("@chitragupta/core");
+
+		const home = getChitraguptaHome();
+		const skillPaths: string[] = [];
+
+		// Scan skill directories if they exist
+		const potentialSkillDirs = [
+			path.join(home, "skills"),
+			path.join(projectPath, "skills"),
+			path.join(projectPath, "skills-core"),
+		];
+		for (const dir of potentialSkillDirs) {
+			try {
+				if (fs.existsSync(dir)) skillPaths.push(dir);
+			} catch { /* skip */ }
+		}
+
+		const daemonManager = new DaemonManager({
+			daemon: { consolidateOnIdle: true, backfillOnStartup: true },
+			skillScanPaths: skillPaths,
+			enableSkillSync: skillPaths.length > 0,
+			skillScanIntervalMs: 300_000, // 5 minutes
+			autoApproveSafe: true,
+		});
+
+		// Wire Samiti for health/skill notifications
+		try {
+			const { Samiti } = await import("@chitragupta/sutra");
+			const samiti = new Samiti();
+			daemonManager.setSamiti(samiti as any);
+		} catch {
+			// Samiti is optional — daemon works without it
+		}
+
+		// Log daemon events
+		daemonManager.on("health", (event: any) => {
+			process.stderr.write(`[daemon] ${event.from} → ${event.to}: ${event.reason}\n`);
+		});
+		daemonManager.on("skill-sync", (event: any) => {
+			if (event.type !== "scan-start") {
+				process.stderr.write(`[daemon:skills] ${event.type}: ${event.detail}\n`);
+			}
+		});
+		daemonManager.on("error", () => {
+			// Suppress unhandled error throw — errors are tracked in the manager
+		});
+
+		// Start daemon in background (don't block MCP server)
+		daemonManager.start().catch((err) => {
+			process.stderr.write(`[daemon] auto-start failed: ${err}\n`);
+		});
+
+		// Add daemon to shutdown sequence
+		const originalShutdown = shutdown;
+		const shutdownWithDaemon = async () => {
+			try {
+				await daemonManager.stop();
+			} catch { /* best-effort */ }
+			await originalShutdown();
+		};
+		process.removeListener("SIGINT", shutdown);
+		process.removeListener("SIGTERM", shutdown);
+		process.on("SIGINT", shutdownWithDaemon);
+		process.on("SIGTERM", shutdownWithDaemon);
+
+		process.stderr.write(
+			`[daemon] Auto-started (skills: ${skillPaths.length} paths)\n`,
+		);
+	} catch (err) {
+		// Daemon auto-start is best-effort — MCP server works without it
+		process.stderr.write(`[daemon] Auto-start skipped: ${err instanceof Error ? err.message : String(err)}\n`);
+	}
+
 	// For stdio, the process stays alive reading stdin.
 	// For SSE, the HTTP server keeps the process alive.
 	// In either case, we return and let the event loop run.
