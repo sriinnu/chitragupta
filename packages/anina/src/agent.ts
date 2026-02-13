@@ -272,12 +272,14 @@ export class Agent implements TreeAgent {
       this.emit("agent:abort", {});
     }
 
-    // Clean up pending input requests to prevent leaked timers and hanging promises
-    for (const [, pending] of this.pendingInputs) {
+    // Clean up pending input requests to prevent leaked timers and hanging promises.
+    // Snapshot to array first — reject() callbacks could modify the map during iteration.
+    const pendingEntries = [...this.pendingInputs.values()];
+    this.pendingInputs.clear();
+    for (const pending of pendingEntries) {
       if (pending.timer) clearTimeout(pending.timer);
       pending.reject(new Error("Agent aborted"));
     }
-    this.pendingInputs.clear();
 
     for (const child of this.children) {
       child.abort();
@@ -783,15 +785,26 @@ export class Agent implements TreeAgent {
 
       // WS1.9: Policy engine check — block disallowed tool calls before execution
       if (this.config.policyEngine) {
-        const verdict = this.config.policyEngine.check(call.name, args);
-        if (!verdict.allowed) {
-          const reason = verdict.reason ?? "Blocked by policy engine";
-          this.emit("tool:error", { name: call.name, id: call.id, error: reason });
-          const blockedContent: ToolResultContent = {
+        try {
+          const verdict = this.config.policyEngine.check(call.name, args);
+          if (!verdict.allowed) {
+            const reason = verdict.reason ?? "Blocked by policy engine";
+            this.emit("tool:error", { name: call.name, id: call.id, error: reason });
+            const blockedContent: ToolResultContent = {
+              type: "tool_result", toolCallId: call.id,
+              content: `Policy denied: ${reason}`, isError: true,
+            };
+            this.state.messages.push(this.createMessage("tool_result", [blockedContent]));
+            continue;
+          }
+        } catch (policyErr) {
+          const errMsg = policyErr instanceof Error ? policyErr.message : String(policyErr);
+          this.emit("tool:error", { name: call.name, id: call.id, error: `Policy engine error: ${errMsg}` });
+          const errorContent: ToolResultContent = {
             type: "tool_result", toolCallId: call.id,
-            content: `Policy denied: ${reason}`, isError: true,
+            content: `Policy engine error: ${errMsg}`, isError: true,
           };
-          this.state.messages.push(this.createMessage("tool_result", [blockedContent]));
+          this.state.messages.push(this.createMessage("tool_result", [errorContent]));
           continue;
         }
       }
