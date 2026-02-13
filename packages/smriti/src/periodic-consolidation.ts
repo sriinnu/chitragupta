@@ -296,6 +296,12 @@ export class PeriodicConsolidation {
 		const filePath = this.getReportPath("monthly", period);
 		this._writeReport(filePath, markdown);
 
+		// ── Vector-index for hierarchical temporal search ──────────────────
+		try {
+			const { indexConsolidationSummary } = await import("./consolidation-indexer.js");
+			await indexConsolidationSummary("monthly", period, markdown, this._project);
+		} catch { /* best-effort */ }
+
 		// ── Index into FTS5 ───────────────────────────────────────────────
 		this._indexIntoFts(agentDb, markdown);
 
@@ -472,6 +478,12 @@ export class PeriodicConsolidation {
 
 		const filePath = this.getReportPath("yearly", period);
 		this._writeReport(filePath, markdown);
+
+		// ── Vector-index for hierarchical temporal search ──────────────────
+		try {
+			const { indexConsolidationSummary } = await import("./consolidation-indexer.js");
+			await indexConsolidationSummary("yearly", period, markdown, this._project);
+		} catch { /* best-effort */ }
 
 		// ── Index into FTS5 ───────────────────────────────────────────────
 		this._indexIntoFts(agentDb, markdown);

@@ -168,6 +168,14 @@ export { safeExecSync, validateCommand, parseCommand } from "./safe-exec.js";
 // Nidra Daemon (3-state sleep cycle manager)
 export { NidraDaemon } from "./nidra-daemon.js";
 
+// Chitragupta Daemon (calendar-aware consolidation orchestrator)
+export { ChitraguptaDaemon } from "./chitragupta-daemon.js";
+export type {
+	ChitraguptaDaemonConfig,
+	DaemonState,
+	ConsolidationEvent,
+} from "./chitragupta-daemon.js";
+
 // Pratyabhijna (self-recognition on session start)
 export { Pratyabhijna } from "./pratyabhijna.js";
 
