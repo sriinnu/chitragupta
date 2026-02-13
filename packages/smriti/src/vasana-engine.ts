@@ -56,13 +56,30 @@ export interface VasanaConfig {
 	priorKappa: number;
 	/** Normal-Gamma prior: alpha_0. Default: 1. */
 	priorAlpha: number;
+	/**
+	 * Anomaly revert window — observations to wait before confirming a regime shift.
+	 * If the signal reverts within this window, it's classified as an anomaly (one-off)
+	 * rather than a genuine change-point. Default: 3.
+	 */
+	anomalyRevertWindow: number;
+	/**
+	 * Anomaly confirmation threshold — ratio of high-P(r=0) observations in the
+	 * revert window needed to confirm a genuine change-point.
+	 * If < this fraction of revert-window observations are change-points,
+	 * classify as anomaly instead. Default: 0.5.
+	 */
+	anomalyConfirmRatio: number;
 }
+
+/** Classification of a detected deviation. */
+export type DeviationType = "change-point" | "anomaly" | "stable";
 
 const DEFAULT_CONFIG: VasanaConfig = {
 	lambda: 50, changePointThreshold: 0.3, stabilityWindow: 5,
 	windowSize: 20, holdoutTrainRatio: 0.7, accuracyThreshold: 0.6,
 	decayHalfLifeMs: 30 * 86_400_000, promotionMinProjects: 3,
 	maxRunLength: 200, priorMu: 0, priorKappa: 1, priorAlpha: 1,
+	anomalyRevertWindow: 3, anomalyConfirmRatio: 0.5,
 };
 
 const HARD_CEILINGS: Partial<VasanaConfig> = {
@@ -80,6 +97,13 @@ interface BOCPDState {
 	stats: SuffStats[];       // sufficient stats per run length
 	stableCount: number;      // consecutive sessions without change-point
 	totalObs: number;
+	/**
+	 * Recent P(r=0) values for anomaly/change-point discrimination.
+	 * A sliding window of the last `anomalyRevertWindow` observations'
+	 * change-point probabilities. If high, it's a regime shift.
+	 * If only one or two spike and then revert, it's an anomaly.
+	 */
+	recentCpProbs: number[];
 }
 
 interface SerializedState {
@@ -94,6 +118,8 @@ export interface CrystallizationResult {
 	reinforced: Vasana[];
 	pending: string[];
 	changePoints: string[];
+	/** Temporary anomalies detected (one-off deviations, not regime shifts). */
+	anomalies: string[];
 	timestamp: number;
 }
 
@@ -195,7 +221,7 @@ export class VasanaEngine {
 	/** Run crystallization: stability check, holdout validation, vasana upsert. */
 	crystallize(project: string): CrystallizationResult {
 		const now = Date.now();
-		const res: CrystallizationResult = { created: [], reinforced: [], pending: [], changePoints: [], timestamp: now };
+		const res: CrystallizationResult = { created: [], reinforced: [], pending: [], changePoints: [], anomalies: [], timestamp: now };
 		const db = DatabaseManager.instance().get("agent");
 
 		const rows = db.prepare(
@@ -210,7 +236,9 @@ export class VasanaEngine {
 			const st = this.states.get(feat);
 			if (!st) { res.pending.push(key); continue; }
 
-			if (this.isChangePoint(st)) { st.stableCount = 0; res.changePoints.push(key); continue; }
+			const deviation = this.classifyDeviation(st);
+			if (deviation === "change-point") { st.stableCount = 0; res.changePoints.push(key); continue; }
+			if (deviation === "anomaly") { res.anomalies.push(key); continue; }
 			st.stableCount++;
 			if (st.stableCount < this.cfg.stabilityWindow) { res.pending.push(key); continue; }
 
@@ -380,7 +408,7 @@ export class VasanaEngine {
 			logR: [0], // P(r=0) = 1
 			stats: [{ mu: this.cfg.priorMu, kappa: this.cfg.priorKappa,
 				alpha: this.cfg.priorAlpha, beta: this.cfg.priorAlpha }],
-			stableCount: 0, totalObs: 0,
+			stableCount: 0, totalObs: 0, recentCpProbs: [],
 		};
 	}
 
@@ -443,10 +471,45 @@ export class VasanaEngine {
 			st.logR = newLR; st.stats = newS;
 		}
 		st.totalObs++;
+
+		// Track recent P(r=0) for anomaly/change-point discrimination
+		const cpProb = st.logR.length > 0 ? Math.exp(st.logR[0]) : 0;
+		if (!st.recentCpProbs) st.recentCpProbs = [];
+		st.recentCpProbs.push(cpProb);
+		if (st.recentCpProbs.length > this.cfg.anomalyRevertWindow) {
+			st.recentCpProbs.shift();
+		}
+	}
+
+	/**
+	 * Classify a deviation as change-point, anomaly, or stable.
+	 *
+	 * Joint anomaly/change-point discrimination (arxiv 2508.06385):
+	 * - If P(r=0) > threshold and persists across the revert window → change-point
+	 * - If P(r=0) > threshold but reverts within the window → anomaly (one-off)
+	 * - Otherwise → stable
+	 */
+	classifyDeviation(st: BOCPDState): DeviationType {
+		if (st.logR.length === 0) return "stable";
+		const cpProb = Math.exp(st.logR[0]);
+		if (cpProb <= this.cfg.changePointThreshold) return "stable";
+
+		// Count how many of the recent observations exceeded the threshold
+		const recent = st.recentCpProbs ?? [cpProb];
+		const exceedCount = recent.filter(p => p > this.cfg.changePointThreshold).length;
+		const ratio = exceedCount / Math.max(1, recent.length);
+
+		// If enough of the revert window shows change-point, it's genuine
+		if (recent.length >= this.cfg.anomalyRevertWindow && ratio >= this.cfg.anomalyConfirmRatio) {
+			return "change-point";
+		}
+
+		// Still in the revert window but current observation is high — call it anomaly for now
+		return "anomaly";
 	}
 
 	private isChangePoint(st: BOCPDState): boolean {
-		return st.logR.length > 0 && Math.exp(st.logR[0]) > this.cfg.changePointThreshold;
+		return this.classifyDeviation(st) === "change-point";
 	}
 
 	private stabilityScore(st: BOCPDState): number {

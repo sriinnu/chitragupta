@@ -137,6 +137,18 @@ export interface AkashaConfig {
 	topKRetrieval: number;
 	/** Boost factor for GraphRAG result boosting. Default: 0.3. */
 	traceBoostFactor: number;
+	/**
+	 * Diminishing returns factor α for reinforcement.
+	 * boost = reinforcementBoost / (1 + α × reinforcements)
+	 * Higher α = faster diminishing. 0 = flat (legacy). Default: 0.3.
+	 */
+	diminishingAlpha: number;
+	/**
+	 * Frequency-weighted decay factor β.
+	 * effectiveHalfLife = baseHalfLife × (1 + β × ln(1 + reinforcements))
+	 * Frequently-reinforced traces decay slower (highway effect). Default: 0.5.
+	 */
+	frequencyDecayBeta: number;
 }
 
 /** Duck-typed database interface -- just needs prepare().run/all/get. */
@@ -161,6 +173,8 @@ const DEFAULT_CONFIG: AkashaConfig = {
 	initialStrength: 0.5,
 	topKRetrieval: 10,
 	traceBoostFactor: 0.3,
+	diminishingAlpha: 0.3,
+	frequencyDecayBeta: 0.5,
 };
 
 /**
@@ -294,7 +308,12 @@ export class AkashaField {
 		const agents = this.reinforcedBy.get(traceId);
 		if (agents?.has(agentId)) return null;
 
-		trace.strength = Math.min(1.0, trace.strength + this.config.reinforcementBoost);
+		// Diminishing returns: boost = base / (1 + α × n)
+		// First reinforcement gets full boost, subsequent ones get progressively less.
+		// This prevents traces from being "spammed" to max strength.
+		const α = this.config.diminishingAlpha;
+		const effectiveBoost = this.config.reinforcementBoost / (1 + α * trace.reinforcements);
+		trace.strength = Math.min(1.0, trace.strength + effectiveBoost);
 		trace.reinforcements++;
 		trace.lastReinforcedAt = Date.now();
 
@@ -400,7 +419,8 @@ export class AkashaField {
 	 */
 	decay(): { decayed: number; pruned: number } {
 		const now = Date.now();
-		const halfLife = this.config.decayHalfLife;
+		const baseHalfLife = this.config.decayHalfLife;
+		const β = this.config.frequencyDecayBeta;
 		let decayed = 0;
 		const toPrune: string[] = [];
 
@@ -408,7 +428,11 @@ export class AkashaField {
 			const elapsed = now - trace.lastReinforcedAt;
 			if (elapsed <= 0) continue;
 
-			const factor = Math.exp(-Math.LN2 * elapsed / halfLife);
+			// Frequency-weighted decay: more reinforced traces decay slower
+			// effectiveHalfLife = baseHalfLife × (1 + β × ln(1 + reinforcements))
+			// A trace reinforced 10 times gets ~1.7× the half-life (with β=0.5)
+			const effectiveHalfLife = baseHalfLife * (1 + β * Math.log(1 + trace.reinforcements));
+			const factor = Math.exp(-Math.LN2 * elapsed / effectiveHalfLife);
 			const newStrength = trace.strength * factor;
 
 			if (Math.abs(newStrength - trace.strength) > 1e-10) {
