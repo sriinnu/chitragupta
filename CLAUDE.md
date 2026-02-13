@@ -18,11 +18,16 @@
 - On session resume, call `chitragupta_session_show` with the last session ID
   to restore context.
 
-## Available Tools (25)
+## Available Tools (28)
 - `chitragupta_memory_search` — search project memory (GraphRAG-backed)
 - `chitragupta_session_list` — list recent sessions
 - `chitragupta_session_show` — show session by ID
 - `chitragupta_handover` — work-state handover for context continuity
+- `chitragupta_recall` — unified search across all memory layers
+- `chitragupta_context` — load memory context for provider sessions
+- `chitragupta_day_show` — show consolidated day file
+- `chitragupta_day_list` — list available day files
+- `chitragupta_day_search` — search across day files
 - `akasha_traces` — query collective knowledge traces
 - `akasha_deposit` — record solutions, patterns, warnings
 - `vasana_tendencies` — learned behavioral patterns
