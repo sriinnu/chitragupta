@@ -2196,6 +2196,7 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	// something to work with.
 	let mcpSessionId: string | null = null;
 	let turnCounter = 0;
+	let contextInjected = false;
 
 	const ensureSession = async () => {
 		if (mcpSessionId) return mcpSessionId;
@@ -2208,6 +2209,29 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 				title: `MCP session`,
 			});
 			mcpSessionId = session.meta.id;
+
+			// Auto-inject provider context on first session creation
+			// so MCP clients get memory without calling chitragupta_context
+			if (!contextInjected && mcpSessionId) {
+				contextInjected = true;
+				try {
+					const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
+					const ctx = await loadProviderContext(projectPath);
+					if (ctx.assembled.trim()) {
+						const { addTurn } = await import("@chitragupta/smriti/session-store");
+						await addTurn(mcpSessionId, projectPath, {
+							turnNumber: 0,
+							role: "assistant",
+							content: `[system:context] ${ctx.assembled}`,
+							agent: "mcp",
+							model: "mcp",
+						});
+						turnCounter++;
+					}
+				} catch {
+					// Best-effort — context injection is optional
+				}
+			}
 		} catch (err) {
 			// Session recording is best-effort — don't break MCP if smriti fails
 			process.stderr.write(`[chitragupta] session init failed: ${err}\n`);
@@ -2350,24 +2374,8 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			}
 		}
 
-		// Real-time fact extraction from user turns (provider-agnostic)
-		// Intercepts ANY user message and extracts personal facts immediately
-		if (info.tool === "record" || resultText.includes("[tool:")) {
-			// Skip — these are tool calls, not user statements
-		} else {
-			// Check if the args contain user-like content
-			const userContent = String(info.args.content ?? info.args.text ?? info.args.query ?? "");
-			if (userContent.length > 5 && userContent.length < 2000) {
-				try {
-					const { getFactExtractor } = await import("@chitragupta/smriti/fact-extractor");
-					const extractor = getFactExtractor();
-					const factProjectScope = { type: "project" as const, path: project };
-					await extractor.extractAndSave(userContent, { type: "global" }, factProjectScope);
-				} catch {
-					// Best-effort — never break recording
-				}
-			}
-		}
+		// NOTE: Fact extraction from user content is already handled in recordToolCall()
+		// via extractUserText(). Removed duplicate extraction that was here previously.
 	};
 
 	// ─── 3. Create MCP server ────────────────────────────────────────

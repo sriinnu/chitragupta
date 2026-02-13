@@ -291,12 +291,30 @@ async function searchMemoryLayer(query: string): Promise<RecallAnswer[]> {
 // ─── Layer: Day Files ───────────────────────────────────────────────────────
 
 async function searchDayFileLayer(query: string, limit: number): Promise<RecallAnswer[]> {
+	// Try hierarchical search first (vector-indexed, fast)
+	try {
+		const { hierarchicalTemporalSearch } = await import("./hierarchical-temporal-search.js");
+		const results = await hierarchicalTemporalSearch(query, { limit });
+
+		if (results.length > 0) {
+			return results.map((r) => ({
+				score: r.score,
+				answer: `On ${r.date ?? r.period}: ${r.snippet.slice(0, 300)}`,
+				primarySource: "dayfile" as const,
+				date: r.date ?? r.period,
+				project: r.project,
+				snippet: r.snippet.slice(0, 300),
+			}));
+		}
+	} catch { /* fall through to linear search */ }
+
+	// Fallback: linear day file search (no vector index available)
 	try {
 		const { searchDayFiles } = await import("./day-consolidation.js");
 		const results = searchDayFiles(query, { limit });
 
 		return results.map((r) => ({
-			score: 0.5, // Day file matches are supplementary
+			score: 0.5,
 			answer: `On ${r.date}: ${r.matches.map((m) => m.text).join(" | ").slice(0, 300)}`,
 			primarySource: "dayfile" as const,
 			date: r.date,

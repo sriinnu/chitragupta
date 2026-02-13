@@ -215,6 +215,12 @@ export async function consolidateDay(
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(dayPath, markdown, "utf-8");
 
+	// Vector-index the daily summary for hierarchical search
+	try {
+		const { indexConsolidationSummary } = await import("./consolidation-indexer.js");
+		await indexConsolidationSummary("daily", date, markdown);
+	} catch { /* best-effort */ }
+
 	return {
 		date,
 		filePath: dayPath,

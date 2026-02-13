@@ -300,3 +300,11 @@ export type { ExtractedFact, FactExtractorConfig } from "./fact-extractor.js";
 // Provider Bridge (memory injection on session start — provider-agnostic)
 export { loadProviderContext } from "./provider-bridge.js";
 export type { ProviderContext } from "./provider-bridge.js";
+
+// Consolidation Indexer (vector-indexed daily/monthly/yearly summaries)
+export { indexConsolidationSummary, searchConsolidationSummaries, backfillConsolidationIndices, extractSummaryText } from "./consolidation-indexer.js";
+export type { ConsolidationLevel, ConsolidationSummaryIndex } from "./consolidation-indexer.js";
+
+// Hierarchical Temporal Search (top-down drill: years → months → days)
+export { hierarchicalTemporalSearch } from "./hierarchical-temporal-search.js";
+export type { TemporalSearchResult } from "./hierarchical-temporal-search.js";

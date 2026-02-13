@@ -34,6 +34,10 @@ export interface ChitraguptaDaemonConfig {
 	consolidateOnIdle: boolean;
 	/** Whether to run backfill on startup. Default: true. */
 	backfillOnStartup: boolean;
+	/** Hour for monthly consolidation (1st of month). Default: 3. */
+	monthlyConsolidationHour: number;
+	/** Hour for yearly consolidation (Jan 1). Default: 4. */
+	yearlyConsolidationHour: number;
 }
 
 /** Daemon state snapshot. */
@@ -62,6 +66,8 @@ const DEFAULT_CONFIG: ChitraguptaDaemonConfig = {
 	maxBackfillDays: 7,
 	consolidateOnIdle: true,
 	backfillOnStartup: true,
+	monthlyConsolidationHour: 3,
+	yearlyConsolidationHour: 4,
 };
 
 // ─── Daemon ─────────────────────────────────────────────────────────────────
@@ -82,6 +88,8 @@ export class ChitraguptaDaemon extends EventEmitter {
 	private config: ChitraguptaDaemonConfig;
 	private nidra: NidraDaemon | null = null;
 	private cronTimer: ReturnType<typeof setTimeout> | null = null;
+	private monthlyTimer: ReturnType<typeof setTimeout> | null = null;
+	private yearlyTimer: ReturnType<typeof setTimeout> | null = null;
 	private running = false;
 	private startTime = 0;
 	private consolidating = false;
@@ -121,12 +129,18 @@ export class ChitraguptaDaemon extends EventEmitter {
 		// Schedule daily consolidation
 		this.scheduleDailyCron();
 
+		// Schedule monthly/yearly consolidation
+		this.scheduleMonthlyConsolidation();
+		this.scheduleYearlyConsolidation();
+
 		// Backfill missed days on startup
 		if (this.config.backfillOnStartup) {
 			// Run backfill async — don't block startup
-			this.backfillMissedDays().catch((err) => {
-				this.emit("error", err);
-			});
+			this.backfillMissedDays()
+				.then(() => this.backfillPeriodicReports())
+				.catch((err) => {
+					this.emit("error", err);
+				});
 		}
 
 		this.emit("started");
@@ -140,10 +154,18 @@ export class ChitraguptaDaemon extends EventEmitter {
 		if (!this.running) return;
 		this.running = false;
 
-		// Clear cron timer
+		// Clear cron timers
 		if (this.cronTimer) {
 			clearTimeout(this.cronTimer);
 			this.cronTimer = null;
+		}
+		if (this.monthlyTimer) {
+			clearTimeout(this.monthlyTimer);
+			this.monthlyTimer = null;
+		}
+		if (this.yearlyTimer) {
+			clearTimeout(this.yearlyTimer);
+			this.yearlyTimer = null;
 		}
 
 		// Quick consolidation of today on shutdown
@@ -312,7 +334,192 @@ export class ChitraguptaDaemon extends EventEmitter {
 		}
 	}
 
+	// ─── Monthly / Yearly Consolidation ──────────────────────────────
+
+	/**
+	 * Consolidate last month's data for all projects.
+	 */
+	async consolidateLastMonth(): Promise<void> {
+		const now = new Date();
+		const lastMonth = now.getMonth() === 0 ? 12 : now.getMonth(); // 1-indexed
+		const year = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+
+		this.emit("consolidation", { type: "start", date: `monthly-${year}-${String(lastMonth).padStart(2, "0")}` });
+
+		try {
+			const { PeriodicConsolidation } = await import("@chitragupta/smriti/periodic-consolidation");
+			const { listSessionProjects } = await import("@chitragupta/smriti/session-store");
+			const projectEntries = listSessionProjects();
+
+			for (const entry of projectEntries) {
+				try {
+					const pc = new PeriodicConsolidation({ project: entry.project });
+					if (!pc.hasMonthlyReport(year, lastMonth)) {
+						await pc.monthly(year, lastMonth);
+						this.emit("consolidation", {
+							type: "progress",
+							date: `monthly-${year}-${String(lastMonth).padStart(2, "0")}`,
+							phase: "monthly",
+							detail: entry.project,
+						});
+					}
+				} catch (err) {
+					this.emit("consolidation", {
+						type: "error",
+						date: `monthly-${year}-${String(lastMonth).padStart(2, "0")}`,
+						detail: `${entry.project}: ${err instanceof Error ? err.message : String(err)}`,
+					});
+				}
+			}
+
+			this.emit("consolidation", {
+				type: "complete",
+				date: `monthly-${year}-${String(lastMonth).padStart(2, "0")}`,
+			});
+		} catch (err) {
+			this.emit("consolidation", {
+				type: "error",
+				date: `monthly-${year}-${String(lastMonth).padStart(2, "0")}`,
+				detail: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	/**
+	 * Consolidate last year's data for all projects.
+	 */
+	async consolidateLastYear(): Promise<void> {
+		const lastYear = new Date().getFullYear() - 1;
+
+		this.emit("consolidation", { type: "start", date: `yearly-${lastYear}` });
+
+		try {
+			const { PeriodicConsolidation } = await import("@chitragupta/smriti/periodic-consolidation");
+			const { listSessionProjects } = await import("@chitragupta/smriti/session-store");
+			const projectEntries = listSessionProjects();
+
+			for (const entry of projectEntries) {
+				try {
+					const pc = new PeriodicConsolidation({ project: entry.project });
+					if (!pc.hasYearlyReport(lastYear)) {
+						await pc.yearly(lastYear);
+						this.emit("consolidation", {
+							type: "progress",
+							date: `yearly-${lastYear}`,
+							phase: "yearly",
+							detail: entry.project,
+						});
+					}
+				} catch (err) {
+					this.emit("consolidation", {
+						type: "error",
+						date: `yearly-${lastYear}`,
+						detail: `${entry.project}: ${err instanceof Error ? err.message : String(err)}`,
+					});
+				}
+			}
+
+			this.emit("consolidation", {
+				type: "complete",
+				date: `yearly-${lastYear}`,
+			});
+		} catch (err) {
+			this.emit("consolidation", {
+				type: "error",
+				date: `yearly-${lastYear}`,
+				detail: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	/**
+	 * Backfill missing periodic reports and vector indices on startup.
+	 * Checks last 3 months for missing monthly reports and last year for yearly.
+	 */
+	async backfillPeriodicReports(): Promise<void> {
+		try {
+			const { PeriodicConsolidation } = await import("@chitragupta/smriti/periodic-consolidation");
+			const { listSessionProjects } = await import("@chitragupta/smriti/session-store");
+			const projectEntries = listSessionProjects();
+			const now = new Date();
+
+			for (const entry of projectEntries) {
+				const pc = new PeriodicConsolidation({ project: entry.project });
+
+				// Check last 3 months
+				for (let i = 1; i <= 3; i++) {
+					const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+					const year = d.getFullYear();
+					const month = d.getMonth() + 1;
+					if (!pc.hasMonthlyReport(year, month)) {
+						try {
+							await pc.monthly(year, month);
+						} catch { /* skip */ }
+					}
+				}
+
+				// Check last year
+				const lastYear = now.getFullYear() - 1;
+				if (!pc.hasYearlyReport(lastYear)) {
+					try {
+						await pc.yearly(lastYear);
+					} catch { /* skip */ }
+				}
+			}
+
+			// Backfill vector indices for all consolidation files
+			try {
+				const { backfillConsolidationIndices } = await import("@chitragupta/smriti/consolidation-indexer");
+				await backfillConsolidationIndices();
+			} catch { /* best-effort */ }
+		} catch {
+			// Best-effort — don't break startup
+		}
+	}
+
 	// ─── Scheduling ───────────────────────────────────────────────────
+
+	/**
+	 * Schedule monthly consolidation: 1st of month at configured hour.
+	 */
+	private scheduleMonthlyConsolidation(): void {
+		if (!this.running) return;
+
+		const now = new Date();
+		const next = new Date(now.getFullYear(), now.getMonth() + 1, 1,
+			this.config.monthlyConsolidationHour, 0, 0, 0);
+
+		const msUntil = next.getTime() - now.getTime();
+
+		this.monthlyTimer = setTimeout(async () => {
+			if (!this.running) return;
+			await this.consolidateLastMonth();
+			this.scheduleMonthlyConsolidation(); // Re-schedule
+		}, msUntil);
+
+		if (this.monthlyTimer.unref) this.monthlyTimer.unref();
+	}
+
+	/**
+	 * Schedule yearly consolidation: Jan 1st at configured hour.
+	 */
+	private scheduleYearlyConsolidation(): void {
+		if (!this.running) return;
+
+		const now = new Date();
+		const next = new Date(now.getFullYear() + 1, 0, 1,
+			this.config.yearlyConsolidationHour, 0, 0, 0);
+
+		const msUntil = next.getTime() - now.getTime();
+
+		this.yearlyTimer = setTimeout(async () => {
+			if (!this.running) return;
+			await this.consolidateLastYear();
+			this.scheduleYearlyConsolidation(); // Re-schedule
+		}, msUntil);
+
+		if (this.yearlyTimer.unref) this.yearlyTimer.unref();
+	}
 
 	/**
 	 * Schedule the next daily consolidation cron.
