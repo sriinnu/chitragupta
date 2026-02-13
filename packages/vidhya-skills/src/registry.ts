@@ -63,6 +63,98 @@ export class SkillRegistry {
 	private states = new Map<string, SkillState>();
 
 	/**
+	 * Candidate set: skill name -> sorted array of candidates (highest priority first).
+	 * When multiple tiers provide a skill with the same name, all candidates are kept.
+	 * The active winner (highest priority) is promoted to the primary index.
+	 * On removal, the next-best candidate is auto-promoted.
+	 */
+	private candidates = new Map<string, Array<{ manifest: SkillManifest; priority: number; sourcePath?: string }>>();
+
+	/**
+	 * Register a skill with tier priority. Maintains a candidate set per skill name.
+	 * The highest-priority candidate becomes the active entry in the primary index.
+	 * When a higher-priority skill is removed, the next-best candidate auto-promotes.
+	 *
+	 * @param manifest - The skill manifest to register.
+	 * @param priority - Numeric priority (higher = wins). Tier mapping: skills-core=4, ecosystem/skills=3, skill-lab=2, skill-community=1.
+	 * @param sourcePath - Optional file path for watcher-driven removal.
+	 */
+	registerWithPriority(manifest: SkillManifest, priority: number, sourcePath?: string): void {
+		const name = manifest.name;
+		if (!this.candidates.has(name)) {
+			this.candidates.set(name, []);
+		}
+		const cands = this.candidates.get(name)!;
+
+		// Remove any existing candidate at this priority (or same sourcePath)
+		const existingIdx = sourcePath
+			? cands.findIndex(c => c.sourcePath === sourcePath)
+			: cands.findIndex(c => c.priority === priority);
+		if (existingIdx >= 0) cands.splice(existingIdx, 1);
+
+		// Add new candidate, sort by priority descending
+		cands.push({ manifest, priority, sourcePath });
+		cands.sort((a, b) => b.priority - a.priority);
+
+		// The winner is always cands[0] — register it in the primary index
+		this.register(cands[0].manifest);
+	}
+
+	/**
+	 * Remove a specific candidate by skill name and priority.
+	 * If the removed candidate was the active winner, the next-best auto-promotes.
+	 * If no candidates remain, the skill is fully unregistered.
+	 *
+	 * @param name - The skill name.
+	 * @param priority - The priority tier to remove.
+	 * @returns `true` if a candidate was found and removed.
+	 */
+	unregisterCandidate(name: string, priority: number): boolean {
+		const cands = this.candidates.get(name);
+		if (!cands) return false;
+
+		const idx = cands.findIndex(c => c.priority === priority);
+		if (idx < 0) return false;
+
+		cands.splice(idx, 1);
+
+		if (cands.length === 0) {
+			this.candidates.delete(name);
+			return this.unregister(name);
+		}
+
+		// Promote next-best — register() replaces the current entry
+		this.register(cands[0].manifest);
+		return true;
+	}
+
+	/**
+	 * Remove a candidate by its source file path (for watcher-driven removal).
+	 * Scans all candidate sets to find the matching source path.
+	 *
+	 * @param sourcePath - The absolute path of the removed SKILL.md file.
+	 * @returns `true` if a candidate was found and removed.
+	 */
+	unregisterBySourcePath(sourcePath: string): boolean {
+		for (const [name, cands] of this.candidates) {
+			const idx = cands.findIndex(c => c.sourcePath === sourcePath);
+			if (idx >= 0) {
+				const priority = cands[idx].priority;
+				return this.unregisterCandidate(name, priority);
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Get all candidates for a skill name (for debugging/auditing).
+	 * Returns empty array if no candidates exist.
+	 */
+	getCandidates(name: string): ReadonlyArray<{ manifest: SkillManifest; priority: number; sourcePath?: string }> {
+		return this.candidates.get(name) ?? [];
+	}
+
+	/**
 	 * Register a skill manifest in the registry.
 	 *
 	 * If the manifest does not have a pre-computed trait vector, one will be
@@ -277,6 +369,7 @@ export class SkillRegistry {
 		this.byKula.clear();
 		this.byAshrama.clear();
 		this.states.clear();
+		this.candidates.clear();
 	}
 
 	/**

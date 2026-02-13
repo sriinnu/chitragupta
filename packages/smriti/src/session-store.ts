@@ -158,11 +158,19 @@ function resolveSessionPath(id: string, project: string): string {
  * Get or initialize the agent database. Lazy — creates on first call.
  */
 let _dbInitialized = false;
+let _dbInitError: Error | null = null;
 function getAgentDb() {
 	const dbm = DatabaseManager.instance();
 	if (!_dbInitialized) {
-		initAgentSchema(dbm);
-		_dbInitialized = true;
+		try {
+			initAgentSchema(dbm);
+			_dbInitialized = true;
+			_dbInitError = null;
+		} catch (err) {
+			_dbInitError = err instanceof Error ? err : new Error(String(err));
+			process.stderr.write(`[chitragupta] agent DB schema init failed: ${_dbInitError.message}\n`);
+			throw _dbInitError;
+		}
 	}
 	return dbm.get("agent");
 }
@@ -170,6 +178,15 @@ function getAgentDb() {
 /** Reset db init flag (for testing). */
 export function _resetDbInit(): void {
 	_dbInitialized = false;
+	_dbInitError = null;
+}
+
+/** Get the last DB initialization error (for diagnostics). */
+export function _getDbStatus(): { initialized: boolean; error: string | null } {
+	return {
+		initialized: _dbInitialized,
+		error: _dbInitError?.message ?? null,
+	};
 }
 
 function sessionMetaToRow(meta: SessionMeta, filePath: string) {
@@ -230,8 +247,9 @@ function upsertSessionToDb(meta: SessionMeta, filePath: string): void {
 				title = @title, updated_at = @updated_at, turn_count = @turn_count,
 				model = @model, cost = @cost, tokens = @tokens, tags = @tags, metadata = @metadata
 		`).run(row);
-	} catch {
+	} catch (err) {
 		// SQLite write-through is best-effort — .md file is the source of truth
+		process.stderr.write(`[chitragupta] session upsert failed for ${meta.id}: ${err instanceof Error ? err.message : err}\n`);
 	}
 }
 
@@ -270,8 +288,9 @@ function insertTurnToDb(sessionId: string, turn: SessionTurn): void {
 			).run(now, sessionId);
 		});
 		insertTurn();
-	} catch {
+	} catch (err) {
 		// Best-effort write-through
+		process.stderr.write(`[chitragupta] turn insert failed for session ${sessionId}: ${err instanceof Error ? err.message : err}\n`);
 	}
 }
 
@@ -391,8 +410,9 @@ export function listSessions(project?: string): SessionMeta[] {
 		if (rows.length > 0) {
 			return rows.map(rowToSessionMeta);
 		}
-	} catch {
+	} catch (err) {
 		// SQLite unavailable — fall through to filesystem scan
+		process.stderr.write(`[chitragupta] listSessions SQLite failed, falling back to filesystem: ${err instanceof Error ? err.message : err}\n`);
 	}
 
 	// Fallback: filesystem scan (for pre-migration or if SQLite fails)

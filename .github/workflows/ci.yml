@@ -36,6 +36,9 @@ jobs:
       - name: Lint and format
         run: pnpm run check
 
+      - name: Check skill locations
+        run: node scripts/check-skill-locations.mjs
+
       - name: Build all packages
         run: pnpm run build
 

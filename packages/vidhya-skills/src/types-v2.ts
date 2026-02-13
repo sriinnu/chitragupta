@@ -415,22 +415,8 @@ export interface SamskaraImpression {
 
 // ─── Enhanced Skill Manifest ──────────────────────────────────────────────
 
-/**
- * Extended manifest fields layered onto the existing SkillManifest.
- * All fields are optional to maintain backward compatibility.
- * A skill.md with none of these fields is still a valid SkillManifest.
- */
-export interface VidyaTantraExtension {
-	/** Provenance tier: core, community, or auto-generated. */
-	readonly kula?: KulaType;
-	/** Runtime requirements (Pranamaya sheath). */
-	readonly requirements?: PranamayaRequirements;
-	/** Selection wisdom (Vijnanamaya sheath). */
-	readonly whenToUse?: string[];
-	readonly whenNotToUse?: string[];
-	readonly complements?: string[];
-	readonly supersedes?: string[];
-}
+// NOTE: VidyaTantraExtension is defined below (after Mudra, Granular Permissions,
+// Approach Ladder, and Eval Cases sections) to include all extension fields.
 
 /**
  * A SkillManifest with Vidya-Tantra extensions.
@@ -539,6 +525,199 @@ export const VIDYA_TANTRA_CEILINGS: Readonly<VidyaTantraConfig> = {
 	preferLocalLLM: true,
 	maxDisambiguationCostPerSession: 5.0,
 };
+
+// ─── Mudra (मुद्रा) — Integrity & Signing ──────────────────────────────────
+
+/**
+ * Per-file integrity manifest for a skill directory.
+ * SHA-256 hash per file + Merkle-style root hash.
+ * Written as INTEGRITY.json in the skill directory.
+ */
+export interface SkillIntegrity {
+	/** Map of relative file path → SHA-256 hex hash. */
+	readonly files: Record<string, string>;
+	/** Root hash: SHA-256 of sorted (path + hash) pairs concatenated. */
+	readonly rootHash: string;
+	/** Hash algorithm used. Always "sha256". */
+	readonly algorithm: "sha256";
+	/** ISO 8601 timestamp of when integrity was computed. */
+	readonly timestamp: string;
+}
+
+/**
+ * Cryptographic signature for a skill's root hash.
+ * Uses Ed25519 for compact, fast verification.
+ * Written as SIGNATURE.json in the skill directory.
+ */
+export interface SkillSignature {
+	/** The root hash that was signed (from SkillIntegrity). */
+	readonly rootHash: string;
+	/** Base64-encoded Ed25519 signature. */
+	readonly signature: string;
+	/** Base64-encoded public key (for verification without external PKI). */
+	readonly publicKey: string;
+	/** Signing algorithm. Always "ed25519". */
+	readonly algorithm: "ed25519";
+	/** ISO 8601 timestamp of signing. */
+	readonly timestamp: string;
+}
+
+/** Result of verifying a skill's integrity. */
+export interface IntegrityVerification {
+	/** Whether all file hashes match. */
+	readonly valid: boolean;
+	/** Files that have been modified since integrity was computed. */
+	readonly modified: string[];
+	/** Files present in integrity manifest but missing from disk. */
+	readonly missing: string[];
+	/** Files on disk not present in integrity manifest (new files). */
+	readonly added: string[];
+}
+
+// ─── Granular Permissions (from Skill Factory Pro) ─────────────────────────
+
+/**
+ * Fine-grained network permissions.
+ * Extends the boolean `network` flag in PranamayaRequirements
+ * with allowlisting, rate limiting, and timeout enforcement.
+ */
+export interface GranularNetworkPermissions {
+	/** Allowed domains/URLs. Empty = no network access. */
+	readonly allowlist: string[];
+	/** Explicitly denied domains (overrides allowlist wildcards). */
+	readonly denylist?: string[];
+	/** Per-request timeout in milliseconds. Default: 10000. */
+	readonly timeoutMs?: number;
+	/** Rate limiting. */
+	readonly rateLimit?: {
+		/** Maximum requests per minute. */
+		readonly maxPerMinute: number;
+	};
+}
+
+/**
+ * User data access scopes.
+ * Each scope declares the minimum access level needed.
+ */
+export interface GranularUserDataPermissions {
+	/** Location access: none, coarse (city-level), or precise (lat/lon). */
+	readonly location?: "none" | "coarse" | "precise";
+	/** Memory access: none, read-only, or read-write. */
+	readonly memory?: "none" | "read" | "write";
+	/** Calendar access. */
+	readonly calendar?: boolean;
+	/** Email access. */
+	readonly email?: boolean;
+}
+
+/**
+ * Filesystem access scoping.
+ * Limits where a skill can read/write.
+ */
+export interface GranularFilesystemPermissions {
+	/** Access scope. "none" = no filesystem access. */
+	readonly scope: "none" | "skill_dir" | "staging_dir";
+	/** Maximum write size in megabytes. */
+	readonly maxWriteMb?: number;
+}
+
+/**
+ * Full granular permissions — superset of PranamayaRequirements.
+ * Adds network allowlisting, user data scopes, filesystem limits,
+ * and named secret injection.
+ */
+export interface GranularPermissions extends PranamayaRequirements {
+	/** Fine-grained network permissions (extends the boolean `network` flag). */
+	readonly networkPolicy?: GranularNetworkPermissions;
+	/** Secrets injected by name only (never hardcoded). */
+	readonly secrets?: string[];
+	/** User data access scopes. */
+	readonly userData?: GranularUserDataPermissions;
+	/** Filesystem access scoping. */
+	readonly filesystem?: GranularFilesystemPermissions;
+	/** PII handling policy. */
+	readonly piiPolicy?: "no_persist" | "minimize" | "explicit_only";
+	/** Data retention in days. 0 = no persistence. */
+	readonly retentionDays?: number;
+}
+
+// ─── Approach Ladder (Compliance Reasoning) ────────────────────────────────
+
+/** A single approach in the compliance ladder. */
+export interface ApproachLadderEntry {
+	/** Short name for this approach (e.g., "Official API", "Local fallback"). */
+	readonly name: string;
+	/** Status: preferred (use this), fallback (if preferred unavailable), blocked (never use). */
+	readonly status: "preferred" | "fallback" | "blocked";
+	/** Why this approach has this status. */
+	readonly why: string;
+	/** What's needed for this approach (API keys, bins, etc.). */
+	readonly requirements?: string[];
+	/** Known risks of this approach. */
+	readonly risks?: string[];
+}
+
+// ─── Eval Cases (Structured Testing) ───────────────────────────────────────
+
+/**
+ * A structured evaluation test case for a skill.
+ * Lives in `eval/cases/*.json` within the skill directory.
+ */
+export interface EvalCase {
+	/** Unique identifier for this test case. */
+	readonly id: string;
+	/** Input to feed the skill. */
+	readonly input: Record<string, unknown>;
+	/** Expected output or behavior description. */
+	readonly expected: Record<string, unknown> | string;
+	/** Test type: golden (happy path) or adversarial (attack/edge case). */
+	readonly type?: "golden" | "adversarial";
+	/** Human-readable description of what this case tests. */
+	readonly description?: string;
+}
+
+/** Result of running eval cases against a skill. */
+export interface EvalResult {
+	readonly skillName: string;
+	readonly totalCases: number;
+	readonly passed: number;
+	readonly failed: number;
+	readonly results: Array<{
+		readonly caseId: string;
+		readonly passed: boolean;
+		readonly actual?: unknown;
+		readonly error?: string;
+	}>;
+}
+
+// ─── Extended VidyaTantra Extension ────────────────────────────────────────
+
+/**
+ * Extended manifest fields layered onto the existing SkillManifest.
+ * All fields are optional to maintain backward compatibility.
+ * A skill.md with none of these fields is still a valid SkillManifest.
+ */
+export interface VidyaTantraExtension {
+	/** Provenance tier: core, community, or auto-generated. */
+	readonly kula?: KulaType;
+	/** Runtime requirements (Pranamaya sheath). */
+	readonly requirements?: PranamayaRequirements;
+	/** Selection wisdom (Vijnanamaya sheath). */
+	readonly whenToUse?: string[];
+	readonly whenNotToUse?: string[];
+	readonly complements?: string[];
+	readonly supersedes?: string[];
+	/** Granular permissions (extends requirements with fine-grained policies). */
+	readonly permissions?: GranularPermissions;
+	/** Compliance approach ladder — structured reasoning for capability implementation. */
+	readonly approachLadder?: ApproachLadderEntry[];
+	/** Structured evaluation test cases. */
+	readonly evalCases?: EvalCase[];
+	/** Integrity manifest (computed hash per file + root hash). */
+	readonly integrity?: SkillIntegrity;
+	/** Cryptographic signature of the integrity root hash. */
+	readonly signature?: SkillSignature;
+}
 
 // ─── Serializable State ───────────────────────────────────────────────────
 

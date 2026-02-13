@@ -14,6 +14,7 @@
  *   GET  /sessions/:id    — Get session details
  *   GET  /health          — Health check
  *   POST /abort           — Abort the current request
+ *   POST /v1/marga/decide — Stateless LLM routing decision
  */
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
@@ -393,6 +394,41 @@ function handleAbort(agent: Agent, res: ServerResponse): void {
 	jsonResponse(res, 200, { aborted: true });
 }
 
+/**
+ * POST /v1/marga/decide — Stateless LLM routing decision.
+ *
+ * Stable contract for Vaayu (and any external consumer).
+ * Returns a MargaDecision payload with provider, model, task type,
+ * complexity, skipLLM flag, escalation chain, and rationale.
+ *
+ * Hard timeout: 150ms. Typical: <5ms (pure CPU, no I/O).
+ */
+async function handleMargaDecide(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	const body = await parseBody(req);
+	if (!body || typeof body.message !== "string" || !body.message) {
+		errorResponse(res, 400, "Request body must include a non-empty 'message' string.");
+		return;
+	}
+
+	const validStrategies = ["local", "cloud", "hybrid"] as const;
+	const strategy = typeof body.bindingStrategy === "string" && validStrategies.includes(body.bindingStrategy as any)
+		? (body.bindingStrategy as "local" | "cloud" | "hybrid")
+		: "hybrid";
+
+	try {
+		const { margaDecide } = await import("@chitragupta/swara");
+		const decision = margaDecide({
+			message: body.message as string,
+			hasTools: Boolean(body.hasTools),
+			hasImages: Boolean(body.hasImages),
+			bindingStrategy: strategy,
+		});
+		jsonResponse(res, 200, decision);
+	} catch (err) {
+		errorResponse(res, 500, `Marga decision failed: ${err instanceof Error ? err.message : String(err)}`);
+	}
+}
+
 // ─── Server ─────────────────────────────────────────────────────────────────
 
 /**
@@ -478,6 +514,12 @@ export function startServer(options: ServerModeOptions): {
 				return;
 			}
 
+			// POST /v1/marga/decide — Stateless routing decision API
+			if (req.method === "POST" && pathname === "/v1/marga/decide") {
+				await handleMargaDecide(req, res);
+				return;
+			}
+
 			// ─── 404 ───────────────────────────────────────────────────
 			errorResponse(res, 404, `Not found: ${req.method} ${pathname}`);
 		} catch (err) {
@@ -510,6 +552,7 @@ export function startServer(options: ServerModeOptions): {
 			"    GET  /sessions/:id    — Get session details",
 			"    GET  /health          — Health check",
 			"    POST /abort           — Abort current request",
+			"    POST /v1/marga/decide — Stateless LLM routing",
 			"",
 			"  Press Ctrl+C to stop.",
 			"",

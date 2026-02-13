@@ -82,12 +82,17 @@ function createMemorySearchTool(projectPath: string): McpToolHandler {
 
 			try {
 				const { searchMemory } = await import("@chitragupta/smriti/search");
+				const { listMemoryScopes } = await import("@chitragupta/smriti/memory-store");
 				const results = searchMemory(query);
 				const limited = results.slice(0, limit);
 
 				if (limited.length === 0) {
+					const scopes = listMemoryScopes();
+					const hint = scopes.length === 0
+						? " No memory files exist yet — use the `memory` tool with action 'write' or 'append' to create memory."
+						: ` Searched ${scopes.length} memory scope(s).`;
 					return {
-						content: [{ type: "text", text: "No memory entries found for this query." }],
+						content: [{ type: "text", text: `No memory entries found for query "${query}".${hint}` }],
 					};
 				}
 
@@ -145,7 +150,7 @@ function createSessionListTool(projectPath: string): McpToolHandler {
 
 				if (limited.length === 0) {
 					return {
-						content: [{ type: "text", text: "No sessions found for this project." }],
+						content: [{ type: "text", text: `No sessions found for project: ${projectPath}. Sessions are created when you start a new conversation via the CLI or when the MCP server records tool calls.` }],
 					};
 				}
 
@@ -226,6 +231,78 @@ function createSessionShowTool(projectPath: string): McpToolHandler {
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: `Failed to load session: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
+/**
+ * Create the `swara_marga_decide` tool — stateless LLM routing decision.
+ *
+ * Returns a versioned MargaDecision payload with:
+ * providerId, modelId, taskType, complexity, skipLLM, escalationChain, rationale.
+ *
+ * Chitragupta = Brain (picks the model). Vaayu = Guard (enforces budget/health/policy).
+ */
+function createMargaDecideTool(): McpToolHandler {
+	return {
+		definition: {
+			name: "swara_marga_decide",
+			description:
+				"Get a stateless LLM routing decision from Chitragupta's Marga pipeline. " +
+				"Classifies the task type (14 categories) and complexity (5 tiers), " +
+				"then selects the optimal provider/model. Returns escalation chain for fallback. " +
+				"Chitragupta picks the model; caller enforces budget/health/policy.",
+			inputSchema: {
+				type: "object",
+				properties: {
+					message: {
+						type: "string",
+						description: "The user's message text to classify and route.",
+					},
+					hasTools: {
+						type: "boolean",
+						description: "Whether the caller has tools available. Default: false",
+					},
+					hasImages: {
+						type: "boolean",
+						description: "Whether the message contains images. Default: false",
+					},
+					bindingStrategy: {
+						type: "string",
+						enum: ["local", "cloud", "hybrid"],
+						description: "Model binding strategy. Default: hybrid",
+					},
+				},
+				required: ["message"],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const message = String(args.message ?? "");
+			if (!message) {
+				return {
+					content: [{ type: "text", text: "Error: message is required" }],
+					isError: true,
+				};
+			}
+
+			try {
+				const { margaDecide } = await import("@chitragupta/swara");
+				const decision = margaDecide({
+					message,
+					hasTools: Boolean(args.hasTools),
+					hasImages: Boolean(args.hasImages),
+					bindingStrategy: (args.bindingStrategy as "local" | "cloud" | "hybrid") ?? "hybrid",
+				});
+
+				return {
+					content: [{ type: "text", text: JSON.stringify(decision) }],
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Marga decision failed: ${err instanceof Error ? err.message : String(err)}` }],
 					isError: true,
 				};
 			}
@@ -1834,6 +1911,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	mcpTools.push(createMemorySearchTool(projectPath));
 	mcpTools.push(createSessionListTool(projectPath));
 	mcpTools.push(createSessionShowTool(projectPath));
+
+	// Add Marga routing decision tool (stable contract for Vaayu)
+	mcpTools.push(createMargaDecideTool());
 
 	// Optionally add agent prompt tool
 	if (enableAgent) {
