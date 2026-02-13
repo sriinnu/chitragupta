@@ -769,8 +769,16 @@ export class Agent implements TreeAgent {
       try {
         args = JSON.parse(call.arguments);
       } catch {
-        args = {};
+        // Malformed JSON — return error result instead of executing with empty args
         this.emit("stream:error", { error: `Malformed JSON in tool call args for "${call.name}": ${call.arguments.slice(0, 100)}` });
+        const errorContent: ToolResultContent = {
+          type: "tool_result",
+          toolCallId: call.id,
+          content: `Error: Failed to parse tool arguments as JSON for "${call.name}"`,
+          isError: true,
+        };
+        this.state.messages.push(this.createMessage("tool_result", [errorContent]));
+        continue;
       }
 
       // WS1.9: Policy engine check — block disallowed tool calls before execution

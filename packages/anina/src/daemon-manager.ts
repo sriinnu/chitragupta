@@ -310,6 +310,9 @@ export class DaemonManager extends EventEmitter {
 			if (this.health === "healthy") {
 				this.setHealth("degraded", `Error budget exhausted: ${message}`);
 			}
+		} else if (this.health === "degraded") {
+			// Recover: error rate dropped below budget threshold
+			this.setHealth("healthy", "Error rate recovered below budget");
 		}
 
 		this.emit("error", new Error(message));

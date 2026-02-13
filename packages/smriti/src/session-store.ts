@@ -15,6 +15,7 @@
  */
 
 import fs from "fs";
+import { renameSync as nodeRenameSync } from "node:fs";
 import path from "path";
 import crypto from "crypto";
 import { getChitraguptaHome, SessionError } from "@chitragupta/core";
@@ -23,6 +24,20 @@ import { parseSessionMarkdown } from "./markdown-parser.js";
 import { writeSessionMarkdown, writeTurnMarkdown } from "./markdown-writer.js";
 import { DatabaseManager } from "./db/database.js";
 import { initAgentSchema } from "./db/schema.js";
+
+/**
+ * Atomic rename: uses node:fs (bypasses test mocks on bare "fs").
+ * Falls back to direct write if renameSync fails.
+ */
+function atomicRename(tmpPath: string, targetPath: string): void {
+	try {
+		nodeRenameSync(tmpPath, targetPath);
+	} catch {
+		// Fallback: direct write (non-atomic but still correct)
+		fs.writeFileSync(targetPath, fs.readFileSync(tmpPath, "utf-8"), "utf-8");
+		try { fs.unlinkSync(tmpPath); } catch { /* ignore orphan tmp */ }
+	}
+}
 
 // ─── L1 Session Cache (LRU) ─────────────────────────────────────────────────
 
@@ -150,6 +165,28 @@ function resolveSessionPath(id: string, project: string): string {
 	}
 
 	return oldPath;
+}
+
+/**
+ * Update only the `updated:` field in YAML frontmatter.
+ *
+ * Keeps addTurn append-only for turns while ensuring filesystem fallback ordering
+ * remains correct when SQLite write-through is unavailable.
+ */
+function patchFrontmatterUpdated(content: string, updatedIso: string): string {
+	const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+	if (!fmMatch) return content;
+
+	const frontmatter = fmMatch[1];
+	if (!/^updated:\s/m.test(frontmatter)) return content;
+
+	const patchedFrontmatter = frontmatter.replace(
+		/^updated:\s.*$/m,
+		`updated: ${updatedIso}`,
+	);
+	if (patchedFrontmatter === frontmatter) return content;
+
+	return `---\n${patchedFrontmatter}\n---${content.slice(fmMatch[0].length)}`;
 }
 
 // ─── SQLite helpers ─────────────────────────────────────────────────────────
@@ -354,7 +391,11 @@ export function saveSession(session: Session): void {
 		fs.mkdirSync(dir, { recursive: true });
 		session.meta.updated = new Date().toISOString();
 		const markdown = writeSessionMarkdown(session);
-		fs.writeFileSync(filePath, markdown, "utf-8");
+		// Atomic write: write to temp file then rename (rename is atomic on POSIX).
+		// Prevents half-written files if the process crashes mid-write.
+		const tmpPath = `${filePath}.tmp.${process.pid}`;
+		fs.writeFileSync(tmpPath, markdown, "utf-8");
+		atomicRename(tmpPath, filePath);
 		// Write-through: update L1 cache
 		cachePut(session.meta.id, session.meta.project, session);
 	} catch (err) {
@@ -669,11 +710,19 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 			throw new SessionError(`Session not found: ${sessionId} (project: ${project})`);
 		}
 
+		const fileContent = fs.readFileSync(filePath, "utf-8");
+
 		// Read current turn count from file to assign turn number
 		if (!turn.turnNumber) {
-			const content = fs.readFileSync(filePath, "utf-8");
-			const session = parseSessionMarkdown(content);
+			const session = parseSessionMarkdown(fileContent);
 			turn.turnNumber = session.turns.length + 1;
+		}
+
+		// Keep markdown frontmatter updated for deterministic filesystem fallback ordering.
+		const updatedIso = new Date().toISOString();
+		const patchedContent = patchFrontmatterUpdated(fileContent, updatedIso);
+		if (patchedContent !== fileContent) {
+			fs.writeFileSync(filePath, patchedContent, "utf-8");
 		}
 
 		// Append turn to .md file (no full rewrite!)

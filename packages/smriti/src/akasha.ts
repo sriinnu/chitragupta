@@ -785,6 +785,11 @@ export class AkashaField {
 			}
 		}
 
+		// Fallback: if all traces have equal strength+timestamp, evict the first one
+		if (!weakestId && this.traces.size > 0) {
+			weakestId = this.traces.keys().next().value!;
+		}
+
 		if (weakestId) {
 			this.traces.delete(weakestId);
 			this.reinforcedBy.delete(weakestId);

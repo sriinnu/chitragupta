@@ -2530,6 +2530,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 
 		const home = getChitraguptaHome();
 		const skillPaths: string[] = [];
+		const autoApproveSafe = new Set(["1", "true", "yes", "on"]).has(
+			(process.env.CHITRAGUPTA_DAEMON_AUTO_APPROVE_SAFE ?? "").trim().toLowerCase(),
+		);
 
 		// Scan skill directories if they exist
 		const potentialSkillDirs = [
@@ -2548,7 +2551,8 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			skillScanPaths: skillPaths,
 			enableSkillSync: skillPaths.length > 0,
 			skillScanIntervalMs: 300_000, // 5 minutes
-			autoApproveSafe: true,
+			// Safe-by-default: explicit opt-in required for auto-approval.
+			autoApproveSafe,
 		});
 
 		// Wire Samiti for health/skill notifications
