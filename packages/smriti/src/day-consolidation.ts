@@ -7,18 +7,29 @@
  *
  * Day file location: ~/.chitragupta/days/YYYY/MM/DD.md
  *
+ * Uses the Event Extractor for session-type-aware gist extraction:
+ *   - Coding sessions → compress to outcomes (files, commits, errors)
+ *   - Discussion sessions → keep topics, options, decisions
+ *   - Mixed sessions → segment and compress each
+ *   - Personal sessions → keep everything
+ *
+ * Uses the Fact Extractor (pattern + vector similarity) for intelligent
+ * fact detection instead of simple regex.
+ *
  * Each day file contains:
- *   - Date header
- *   - Per-project sections (project path, branch, providers used)
- *   - Timeline of significant events (tool calls, decisions, errors)
+ *   - Date header with summary stats
+ *   - Per-project sections with event narratives
  *   - Facts extracted for global memory
- *   - Summary statistics
+ *   - Session type indicators
  */
 
 import fs from "fs";
 import path from "path";
 import { getChitraguptaHome, SessionError } from "@chitragupta/core";
 import type { SessionMeta, SessionTurn } from "./types.js";
+import { extractEventChain } from "./event-extractor.js";
+import type { EventChain, SessionEvent } from "./event-extractor.js";
+import { FactExtractor } from "./fact-extractor.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -40,15 +51,14 @@ export interface DayConsolidationResult {
 	durationMs: number;
 }
 
-/** A project's activity for the day. */
+/** A project's activity for the day (enriched by event extractor). */
 interface ProjectDayActivity {
 	project: string;
 	branch: string | null;
 	providers: Set<string>;
 	sessions: SessionMeta[];
+	eventChains: EventChain[];
 	turns: Array<SessionTurn & { sessionId: string; createdAt: number }>;
-	toolCalls: Array<{ tool: string; args: string; result: string; isError: boolean; sessionId: string; timestamp: number }>;
-	decisions: string[];
 	filesModified: Set<string>;
 }
 
@@ -146,7 +156,7 @@ export async function consolidateDay(
 		};
 	}
 
-	// Group by project
+	// Group by project and extract event chains
 	const projectMap = new Map<string, ProjectDayActivity>();
 	let totalTurns = 0;
 
@@ -158,9 +168,8 @@ export async function consolidateDay(
 				branch: meta.branch,
 				providers: new Set(),
 				sessions: [],
+				eventChains: [],
 				turns: [],
-				toolCalls: [],
-				decisions: [],
 				filesModified: new Set(),
 			});
 		}
@@ -173,29 +182,20 @@ export async function consolidateDay(
 
 		if (meta.branch) activity.branch = meta.branch;
 
+		// Run the event extractor on this session's turns
+		const eventChain = extractEventChain(meta, turns);
+		activity.eventChains.push(eventChain);
+
 		for (const turn of turns) {
 			totalTurns++;
 			activity.turns.push({ ...turn, sessionId: meta.id, createdAt: turn.createdAt });
+		}
 
-			// Extract tool calls from turn content
-			const toolMatch = turn.content.match(/\[tool:(\w+)\]\s*(\{.*\})?/);
-			if (toolMatch) {
-				activity.toolCalls.push({
-					tool: toolMatch[1],
-					args: toolMatch[2] ?? "",
-					result: "",
-					isError: false,
-					sessionId: meta.id,
-					timestamp: turn.createdAt,
-				});
-			}
-
-			// Extract file paths from content
-			const filePatterns = turn.content.match(/(?:File (?:created|edited|modified|deleted):\s*)(.+)/g);
-			if (filePatterns) {
-				for (const fp of filePatterns) {
-					const filePath = fp.replace(/File (?:created|edited|modified|deleted):\s*/, "").trim();
-					activity.filesModified.add(filePath);
+		// Collect files from event chain (more reliable than ad-hoc regex)
+		for (const event of eventChain.events) {
+			if (event.files) {
+				for (const f of event.files) {
+					activity.filesModified.add(f);
 				}
 			}
 		}
@@ -204,10 +204,10 @@ export async function consolidateDay(
 		activity.turns.sort((a, b) => a.createdAt - b.createdAt);
 	}
 
-	// Extract facts (simple heuristic)
-	const extractedFacts = extractFacts(sessions);
+	// Extract facts using the real FactExtractor (pattern + vector similarity)
+	const extractedFacts = await extractFactsWithEngine(sessions);
 
-	// Generate markdown
+	// Generate markdown (now using event chains for richer content)
 	const markdown = generateDayMarkdown(date, projectMap, sessions.length, totalTurns, extractedFacts);
 
 	// Write day file
@@ -226,13 +226,52 @@ export async function consolidateDay(
 	};
 }
 
-// ─── Fact Extraction ────────────────────────────────────────────────────────
+// ─── Fact Extraction (via FactExtractor engine) ─────────────────────────────
 
 /**
- * Extract personal facts from session content.
- * Looks for patterns like "I live in ...", "my name is ...", etc.
+ * Extract personal facts using the real FactExtractor.
+ * Uses pattern matching + vector similarity for robust detection.
+ * Falls back to simple regex if FactExtractor fails.
  */
-function extractFacts(
+async function extractFactsWithEngine(
+	sessions: Array<{ meta: SessionMeta; turns: Array<SessionTurn & { createdAt: number }> }>,
+): Promise<string[]> {
+	const facts: string[] = [];
+	const seen = new Set<string>();
+
+	try {
+		const extractor = new FactExtractor({ useVectors: true });
+
+		for (const { turns } of sessions) {
+			for (const turn of turns) {
+				if (turn.role !== "user") continue;
+				if (turn.content.length < 5 || turn.content.length > 5000) continue;
+
+				const extracted = await extractor.extract(turn.content);
+				for (const fact of extracted) {
+					const key = fact.fact.toLowerCase().slice(0, 50);
+					if (!seen.has(key)) {
+						seen.add(key);
+						facts.push(`[${fact.category}] ${fact.fact}`);
+					}
+				}
+			}
+		}
+
+		extractor.dispose();
+	} catch {
+		// Fallback: simple regex extraction if FactExtractor fails
+		return extractFactsFallback(sessions);
+	}
+
+	return facts;
+}
+
+/**
+ * Fallback fact extraction — simple regex patterns.
+ * Used only when FactExtractor engine fails to initialize.
+ */
+function extractFactsFallback(
 	sessions: Array<{ meta: SessionMeta; turns: Array<SessionTurn & { createdAt: number }> }>,
 ): string[] {
 	const facts: string[] = [];
@@ -256,7 +295,6 @@ function extractFacts(
 		}
 	}
 
-	// Deduplicate
 	return [...new Set(facts)];
 }
 
@@ -264,6 +302,7 @@ function extractFacts(
 
 /**
  * Generate the consolidated day file markdown.
+ * Now uses event chains for structured, type-aware content.
  */
 function generateDayMarkdown(
 	date: string,
@@ -307,25 +346,60 @@ function generateDayMarkdown(
 		lines.push(meta.join(" | "));
 		lines.push("");
 
-		// Session listing
-		for (const session of activity.sessions) {
+		// Per-session sections with event chain narratives
+		for (let i = 0; i < activity.sessions.length; i++) {
+			const session = activity.sessions[i];
+			const chain = activity.eventChains[i];
 			const time = new Date(session.created).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
 			const provider = (session.metadata?.provider as string) ?? session.agent ?? "unknown";
 			const turnCount = activity.turns.filter((t) => t.sessionId === session.id).length;
+
 			lines.push(`### Session: ${session.id}`);
-			lines.push(`*${time} | ${provider} | ${turnCount} turns*`);
+			lines.push(`*${time} | ${provider} | ${turnCount} turns | ${chain?.sessionType ?? "unknown"} session*`);
 			lines.push("");
+
+			// Event chain narrative (the gist)
+			if (chain) {
+				// Narrative summary line
+				if (chain.narrative) {
+					lines.push(`> ${chain.narrative}`);
+					lines.push("");
+				}
+
+				// Topics discussed
+				if (chain.topics.length > 0) {
+					lines.push(`**Topics**: ${chain.topics.slice(0, 5).join(", ")}`);
+					lines.push("");
+				}
+
+				// Key events (decisions, errors, commits — not every action)
+				const keyEvents = chain.events.filter((e) =>
+					e.type === "decision" || e.type === "error" || e.type === "commit" ||
+					e.type === "fact" || e.type === "preference",
+				);
+				if (keyEvents.length > 0) {
+					for (const event of keyEvents.slice(0, 10)) {
+						const icon = eventIcon(event.type);
+						lines.push(`- ${icon} ${event.summary}`);
+					}
+					lines.push("");
+				}
+			}
 		}
 
-		// Tool call timeline
-		if (activity.toolCalls.length > 0) {
-			lines.push("### Tool Timeline");
-			lines.push("");
-			const uniqueTools = new Map<string, number>();
-			for (const tc of activity.toolCalls) {
-				uniqueTools.set(tc.tool, (uniqueTools.get(tc.tool) ?? 0) + 1);
+		// Tool usage summary (aggregated from event chains)
+		const toolCounts = new Map<string, number>();
+		for (const chain of activity.eventChains) {
+			for (const event of chain.events) {
+				if (event.tool) {
+					toolCounts.set(event.tool, (toolCounts.get(event.tool) ?? 0) + 1);
+				}
 			}
-			for (const [tool, count] of uniqueTools) {
+		}
+		if (toolCounts.size > 0) {
+			lines.push("### Tools Used");
+			lines.push("");
+			for (const [tool, count] of toolCounts) {
 				lines.push(`- **${tool}**: ${count} calls`);
 			}
 			lines.push("");
@@ -348,6 +422,22 @@ function generateDayMarkdown(
 	lines.push("");
 
 	return lines.join("\n");
+}
+
+/** Map event types to markdown icons. */
+function eventIcon(type: SessionEvent["type"]): string {
+	switch (type) {
+		case "decision": return "**Decision**:";
+		case "error": return "**Error**:";
+		case "commit": return "**Commit**:";
+		case "fact": return "**Fact**:";
+		case "preference": return "**Pref**:";
+		case "question": return "**Q**:";
+		case "action": return "**Action**:";
+		case "topic": return "**Topic**:";
+		case "problem": return "**Problem**:";
+		default: return "-";
+	}
 }
 
 // ─── Query API ──────────────────────────────────────────────────────────────

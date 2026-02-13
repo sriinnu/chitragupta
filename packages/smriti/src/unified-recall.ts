@@ -2,8 +2,14 @@
  * @chitragupta/smriti — Unified Recall Engine
  *
  * The nervous system's query center. Takes a natural language question
- * and searches ALL layers: FTS5 (turns), graph (relationships),
- * vectors (semantic), memory (facts), day files (diary).
+ * and searches ALL layers:
+ *   1. HybridSearch (RRF fusion: BM25 + Vectors + GraphRAG + Pramana + Thompson Sampling)
+ *   2. Memory (BM25 fact search)
+ *   3. Day files (consolidated diary search)
+ *
+ * Falls back gracefully: if HybridSearchEngine can't initialize (no SQLite,
+ * no Ollama), degrades to simple FTS5 → still returns results, just less
+ * intelligent.
  *
  * Returns assembled answers — not raw search results.
  *
@@ -19,7 +25,7 @@ export interface RecallAnswer {
 	/** Human-readable answer text. */
 	answer: string;
 	/** Source type that contributed most. */
-	primarySource: "turns" | "memory" | "graph" | "dayfile";
+	primarySource: "turns" | "memory" | "graph" | "dayfile" | "hybrid";
 	/** Session ID if from a session. */
 	sessionId?: string;
 	/** Project path if known. */
@@ -51,6 +57,10 @@ export interface RecallOptions {
 /**
  * Unified recall — searches all layers and assembles answers.
  *
+ * Tries HybridSearchEngine first (RRF + Thompson Sampling + vectors + graph).
+ * If it fails to initialize, falls back to simple FTS5.
+ * Memory and day file layers always run as supplementary sources.
+ *
  * @param query - Natural language question.
  * @param options - Search options.
  * @returns Assembled answers ranked by relevance.
@@ -62,16 +72,27 @@ export async function recall(
 	const limit = options?.limit ?? 5;
 	const answers: RecallAnswer[] = [];
 
-	// Run searches in parallel for speed
-	const [sessionResults, memoryResults, dayFileResults] = await Promise.allSettled([
+	// Run ALL searches in parallel for speed
+	const [hybridResults, turnFallbackResults, memoryResults, dayFileResults] = await Promise.allSettled([
+		searchHybrid(query, options?.project, limit),
+		// FTS5 fallback runs in parallel — used only if hybrid fails
 		searchTurns(query, options?.project),
 		options?.includeMemory !== false ? searchMemoryLayer(query) : Promise.resolve([]),
 		options?.includeDayFiles !== false ? searchDayFileLayer(query, limit) : Promise.resolve([]),
 	]);
 
-	// Process session/turn results (FTS5)
-	if (sessionResults.status === "fulfilled") {
-		for (const result of sessionResults.value.slice(0, limit)) {
+	// Prefer hybrid results (intelligent stack) over simple FTS5
+	let usedHybrid = false;
+	if (hybridResults.status === "fulfilled" && hybridResults.value.length > 0) {
+		usedHybrid = true;
+		for (const result of hybridResults.value.slice(0, limit)) {
+			answers.push(result);
+		}
+	}
+
+	// Fall back to simple FTS5 if hybrid returned nothing
+	if (!usedHybrid && turnFallbackResults.status === "fulfilled") {
+		for (const result of turnFallbackResults.value.slice(0, limit)) {
 			answers.push({
 				score: result.score,
 				answer: result.answer,
@@ -85,14 +106,14 @@ export async function recall(
 		}
 	}
 
-	// Process memory results
+	// Memory results (always supplementary)
 	if (memoryResults.status === "fulfilled") {
 		for (const result of memoryResults.value.slice(0, limit)) {
 			answers.push(result);
 		}
 	}
 
-	// Process day file results
+	// Day file results (always supplementary)
 	if (dayFileResults.status === "fulfilled") {
 		for (const result of dayFileResults.value.slice(0, limit)) {
 			answers.push(result);
@@ -105,7 +126,78 @@ export async function recall(
 	return ranked.slice(0, limit);
 }
 
-// ─── Layer: Turns (FTS5 + Session Context) ──────────────────────────────────
+// ─── Layer: Hybrid Search (RRF + Thompson Sampling + Vectors + GraphRAG) ────
+
+/**
+ * Search using HybridSearchEngine — the full intelligent stack.
+ * Fuses BM25, vector similarity, GraphRAG, and Pramana epistemic weights
+ * via Reciprocal Rank Fusion with Thompson Sampling weight learning.
+ *
+ * Falls back gracefully: if engines can't initialize, returns [].
+ */
+async function searchHybrid(query: string, project?: string, limit?: number): Promise<RecallAnswer[]> {
+	try {
+		const { HybridSearchEngine } = await import("./hybrid-search.js");
+
+		// Try to construct with real engines (vector + graph)
+		let recallEngine = null;
+		let graphEngine = null;
+
+		try {
+			const { RecallEngine } = await import("./recall.js");
+			recallEngine = new RecallEngine();
+		} catch {
+			// No vector search available — continue without
+		}
+
+		try {
+			const { GraphRAGEngine } = await import("./graphrag.js");
+			graphEngine = new GraphRAGEngine();
+		} catch {
+			// No graph search available — continue without
+		}
+
+		const hybrid = new HybridSearchEngine(
+			{
+				project,
+				topK: limit ?? 10,
+				enableBM25: true,
+				enableVector: recallEngine !== null,
+				enableGraphRAG: graphEngine !== null,
+				enablePramana: true,
+			},
+			recallEngine ?? undefined,
+			graphEngine ?? undefined,
+		);
+
+		const results = await hybrid.search(query);
+
+		return results.map((r) => {
+			// Determine primary source from contributing rankers
+			let primarySource: RecallAnswer["primarySource"] = "hybrid";
+			if (r.sources.length === 1) {
+				if (r.sources[0] === "bm25") primarySource = "turns";
+				else if (r.sources[0] === "graphrag") primarySource = "graph";
+			}
+
+			// Normalize score to 0-1 range (RRF scores can exceed 1)
+			const normalizedScore = Math.min(r.score / (r.score + 0.5), 1.0);
+
+			return {
+				score: normalizedScore,
+				answer: `${r.title}: ${r.content.slice(0, 300)}`,
+				primarySource,
+				sessionId: r.id.startsWith("session-") ? r.id : undefined,
+				snippet: r.content.slice(0, 300),
+			};
+		});
+	} catch {
+		// Hybrid search failed entirely — caller will use FTS5 fallback
+		return [];
+	}
+}
+
+// ─── Layer: Turns (FTS5 fallback) ───────────────────────────────────────────
 
 interface TurnSearchResult {
 	score: number;
@@ -117,6 +209,9 @@ interface TurnSearchResult {
 	snippet: string;
 }
 
+/**
+ * Simple FTS5 search — used as fallback when HybridSearchEngine can't init.
+ */
 async function searchTurns(query: string, project?: string): Promise<TurnSearchResult[]> {
 	try {
 		const { searchSessions } = await import("./search.js");

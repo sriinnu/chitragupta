@@ -47,6 +47,29 @@ vi.mock("@chitragupta/core", () => ({
 	},
 }));
 
+// ─── Mock hybrid search infrastructure ──────────────────────────────────────
+// By default, hybrid returns [] so FTS5 fallback path is exercised.
+// Tests in the "hybrid search integration" block override this.
+let mockHybridSearchResults: Array<{
+	id: string; title: string; content: string;
+	sources: Array<"bm25" | "vector" | "graphrag">; score: number;
+	ranks: { bm25?: number; vector?: number; graphrag?: number };
+}> = [];
+
+vi.mock("../src/hybrid-search.js", () => ({
+	HybridSearchEngine: class MockHybridSearchEngine {
+		async search() { return mockHybridSearchResults; }
+	},
+}));
+
+vi.mock("../src/recall.js", () => ({
+	RecallEngine: class MockRecallEngine {},
+}));
+
+vi.mock("../src/graphrag.js", () => ({
+	GraphRAGEngine: class MockGraphRAGEngine {},
+}));
+
 // ─── Import real modules, then spy on their exports ──────────────────────────
 
 import * as searchModule from "../src/search.js";
@@ -117,6 +140,7 @@ let spySearchDayFiles: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
 	vi.restoreAllMocks();
+	mockHybridSearchResults = []; // Reset hybrid to empty → FTS5 fallback used
 
 	spySearchSessions = vi.spyOn(searchModule, "searchSessions").mockReturnValue([]);
 	spySearchMemory = vi.spyOn(searchModule, "searchMemory").mockReturnValue([]);
@@ -1147,6 +1171,209 @@ describe("recall — unified recall engine", () => {
 			expect(r).toHaveProperty("date", "2025-07-04");
 			expect(r).toHaveProperty("snippet");
 			expect(r.sessionId).toBeUndefined();
+		});
+	});
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// 10. Hybrid Search Integration
+	// ═══════════════════════════════════════════════════════════════════════════
+
+	describe("hybrid search integration", () => {
+		it("uses hybrid results when available (skips FTS5 fallback)", async () => {
+			mockHybridSearchResults = [{
+				id: "session-2025-01-15-abcd",
+				title: "Test session",
+				content: "how to fix the yaxis interval correctly",
+				sources: ["bm25", "vector"],
+				score: 2.5,
+				ranks: { bm25: 1, vector: 2 },
+			}];
+
+			// FTS5 fallback data — should NOT be used when hybrid succeeds
+			const meta = makeMeta();
+			spySearchSessions.mockReturnValue([meta]);
+			spyLoadSession.mockReturnValue(makeSession([
+				{ role: "assistant", content: "this should not appear" },
+			]));
+
+			const results = await recall("fix yaxis");
+
+			// Hybrid result should be preferred
+			const hybridResults = results.filter((r) => r.primarySource === "hybrid");
+			expect(hybridResults.length).toBe(1);
+			expect(hybridResults[0].snippet).toContain("yaxis interval");
+
+			// FTS5 fallback should NOT produce turns results
+			const turnResults = results.filter((r) => r.primarySource === "turns");
+			expect(turnResults.length).toBe(0);
+		});
+
+		it("assigns primarySource 'turns' for single-source bm25 hybrid result", async () => {
+			mockHybridSearchResults = [{
+				id: "session-2025-01-15-abcd",
+				title: "BM25 only",
+				content: "found via text search",
+				sources: ["bm25"],
+				score: 1.0,
+				ranks: { bm25: 1 },
+			}];
+
+			const results = await recall("text search");
+
+			expect(results.length).toBeGreaterThanOrEqual(1);
+			const first = results.find((r) => r.snippet.includes("found via text search"));
+			expect(first?.primarySource).toBe("turns");
+		});
+
+		it("assigns primarySource 'graph' for single-source graphrag hybrid result", async () => {
+			mockHybridSearchResults = [{
+				id: "node-42",
+				title: "Graph entity",
+				content: "entity from knowledge graph",
+				sources: ["graphrag"],
+				score: 1.5,
+				ranks: { graphrag: 1 },
+			}];
+
+			const results = await recall("knowledge graph");
+
+			const first = results.find((r) => r.snippet.includes("entity from knowledge graph"));
+			expect(first?.primarySource).toBe("graph");
+		});
+
+		it("assigns primarySource 'hybrid' for multi-source results", async () => {
+			mockHybridSearchResults = [{
+				id: "session-2025-01-15-abcd",
+				title: "Multi-source",
+				content: "found by both bm25 and vector",
+				sources: ["bm25", "vector"],
+				score: 3.0,
+				ranks: { bm25: 1, vector: 2 },
+			}];
+
+			const results = await recall("both sources");
+
+			const first = results.find((r) => r.snippet.includes("found by both"));
+			expect(first?.primarySource).toBe("hybrid");
+		});
+
+		it("normalizes RRF scores to 0-1 range", async () => {
+			mockHybridSearchResults = [{
+				id: "session-high",
+				title: "High score",
+				content: "very relevant result",
+				sources: ["bm25", "vector", "graphrag"],
+				score: 10.0, // High RRF score
+				ranks: { bm25: 1, vector: 1, graphrag: 1 },
+			}];
+
+			const results = await recall("relevant");
+
+			// score = min(10 / (10 + 0.5), 1.0) = min(0.952, 1.0) = 0.952
+			expect(results[0].score).toBeLessThanOrEqual(1.0);
+			expect(results[0].score).toBeGreaterThan(0.9);
+		});
+
+		it("extracts sessionId from id when it starts with 'session-'", async () => {
+			mockHybridSearchResults = [{
+				id: "session-2025-06-01-beef",
+				title: "Session match",
+				content: "matched content",
+				sources: ["bm25"],
+				score: 1.0,
+				ranks: { bm25: 1 },
+			}];
+
+			const results = await recall("matched");
+
+			const first = results.find((r) => r.snippet.includes("matched content"));
+			expect(first?.sessionId).toBe("session-2025-06-01-beef");
+		});
+
+		it("does not set sessionId when id does not start with 'session-'", async () => {
+			mockHybridSearchResults = [{
+				id: "graph-node-42",
+				title: "Graph result",
+				content: "from graph",
+				sources: ["graphrag"],
+				score: 1.0,
+				ranks: { graphrag: 1 },
+			}];
+
+			const results = await recall("graph");
+
+			const first = results.find((r) => r.snippet.includes("from graph"));
+			expect(first?.sessionId).toBeUndefined();
+		});
+
+		it("falls back to FTS5 when hybrid returns empty", async () => {
+			mockHybridSearchResults = []; // Empty → fallback
+
+			const meta = makeMeta({ provider: "claude-code" });
+			spySearchSessions.mockReturnValue([meta]);
+			spyLoadSession.mockReturnValue(makeSession([
+				{ role: "assistant", content: "fallback content matches query" },
+			]));
+
+			const results = await recall("matches query");
+
+			const turnResults = results.filter((r) => r.primarySource === "turns");
+			expect(turnResults.length).toBe(1);
+			expect(turnResults[0].snippet).toContain("fallback content");
+		});
+
+		it("combines hybrid results with memory and dayfile layers", async () => {
+			mockHybridSearchResults = [{
+				id: "session-2025-01-15-abcd",
+				title: "Hybrid hit",
+				content: "from hybrid search engine",
+				sources: ["bm25", "vector"],
+				score: 2.0,
+				ranks: { bm25: 1, vector: 3 },
+			}];
+			spySearchMemory.mockReturnValue([
+				makeMemoryResult("from memory store", 0.7),
+			]);
+			spySearchDayFiles.mockReturnValue([
+				makeDayFileResult("2025-01-20", [{ line: 1, text: "from day file" }]),
+			]);
+
+			const results = await recall("search");
+
+			const sources = results.map((r) => r.primarySource);
+			expect(sources).toContain("hybrid");
+			expect(sources).toContain("memory");
+			expect(sources).toContain("dayfile");
+		});
+
+		it("truncates hybrid content in snippet to 300 chars", async () => {
+			mockHybridSearchResults = [{
+				id: "session-long",
+				title: "Long content",
+				content: "x".repeat(500),
+				sources: ["bm25"],
+				score: 1.0,
+				ranks: { bm25: 1 },
+			}];
+
+			const results = await recall("test");
+
+			expect(results[0].snippet.length).toBeLessThanOrEqual(300);
+		});
+
+		it("builds answer as 'title: content' for hybrid results", async () => {
+			mockHybridSearchResults = [{
+				id: "session-fmt",
+				title: "Auth module refactor",
+				content: "Refactored the auth module to use JWT",
+				sources: ["bm25"],
+				score: 1.0,
+				ranks: { bm25: 1 },
+			}];
+
+			const results = await recall("auth");
+
+			expect(results[0].answer).toBe("Auth module refactor: Refactored the auth module to use JWT");
 		});
 	});
 });
