@@ -193,9 +193,10 @@ export class DaemonManager extends EventEmitter {
 			this.nextSkillScan = null;
 		}
 
-		// Stop daemon
+		// Stop daemon (remove listeners to prevent leaks)
 		if (this.daemon) {
 			try {
+				this.daemon.removeAllListeners();
 				await this.daemon.stop();
 			} catch {
 				// Best-effort
@@ -275,9 +276,10 @@ export class DaemonManager extends EventEmitter {
 			this.restartCount++;
 			this.consecutiveRestarts++;
 
-			// Clean up old daemon
+			// Clean up old daemon (remove listeners to prevent leaks)
 			if (this.daemon) {
 				try {
+					this.daemon.removeAllListeners();
 					await this.daemon.stop();
 				} catch { /* ignore */ }
 				this.daemon = null;

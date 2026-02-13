@@ -41,14 +41,28 @@ function atomicRename(tmpPath: string, targetPath: string): void {
 
 // ─── L1 Session Cache (LRU) ─────────────────────────────────────────────────
 
-/** Max sessions to cache in-process. ~25 MB budget per PERFORMANCE_SPEC. */
+/** Max sessions to cache in-process (hard cap). */
 const SESSION_CACHE_MAX = 500;
+/** Byte budget for the L1 cache (~25 MB). */
+const SESSION_CACHE_MAX_BYTES = 25 * 1024 * 1024;
 
 /**
  * Simple LRU cache backed by Map insertion order.
  * On access, delete + re-insert to move entry to tail (most recent).
+ * Tracks rough byte usage and evicts when exceeding either count or byte budget.
  */
 const sessionCache = new Map<string, Session>();
+const sessionCacheSizes = new Map<string, number>();
+let sessionCacheBytes = 0;
+
+/** Rough byte estimate for a session (metadata overhead + turn content). */
+function estimateSessionBytes(session: Session): number {
+	let bytes = 200; // metadata overhead estimate
+	for (const turn of session.turns) {
+		bytes += Buffer.byteLength(turn.content, "utf-8") + 50; // per-turn overhead
+	}
+	return bytes;
+}
 
 function cacheKey(id: string, project: string): string {
 	return `${id}:${project}`;
@@ -58,31 +72,56 @@ function cacheGet(id: string, project: string): Session | undefined {
 	const key = cacheKey(id, project);
 	const entry = sessionCache.get(key);
 	if (!entry) return undefined;
-	// Move to tail (most recent)
+	// Move to tail (most recent) — preserve size tracking
+	const size = sessionCacheSizes.get(key) ?? 0;
 	sessionCache.delete(key);
+	sessionCacheSizes.delete(key);
 	sessionCache.set(key, entry);
+	sessionCacheSizes.set(key, size);
 	return entry;
 }
 
 function cachePut(id: string, project: string, session: Session): void {
 	const key = cacheKey(id, project);
-	// Delete first to refresh position
+	// Remove existing entry first (refresh position + update byte tracking)
+	const existingSize = sessionCacheSizes.get(key) ?? 0;
 	sessionCache.delete(key);
-	// Evict oldest if at capacity
-	if (sessionCache.size >= SESSION_CACHE_MAX) {
+	sessionCacheSizes.delete(key);
+	sessionCacheBytes -= existingSize;
+
+	const newSize = estimateSessionBytes(session);
+
+	// Evict oldest entries while over count or byte budget
+	while (
+		(sessionCache.size >= SESSION_CACHE_MAX || sessionCacheBytes + newSize > SESSION_CACHE_MAX_BYTES)
+		&& sessionCache.size > 0
+	) {
 		const oldest = sessionCache.keys().next().value;
-		if (oldest !== undefined) sessionCache.delete(oldest);
+		if (oldest === undefined) break;
+		const evictedSize = sessionCacheSizes.get(oldest) ?? 0;
+		sessionCache.delete(oldest);
+		sessionCacheSizes.delete(oldest);
+		sessionCacheBytes -= evictedSize;
 	}
+
 	sessionCache.set(key, session);
+	sessionCacheSizes.set(key, newSize);
+	sessionCacheBytes += newSize;
 }
 
 function cacheInvalidate(id: string, project: string): void {
-	sessionCache.delete(cacheKey(id, project));
+	const key = cacheKey(id, project);
+	const size = sessionCacheSizes.get(key) ?? 0;
+	sessionCache.delete(key);
+	sessionCacheSizes.delete(key);
+	sessionCacheBytes -= size;
 }
 
 /** Reset L1 session cache (for testing). */
 export function _resetSessionCache(): void {
 	sessionCache.clear();
+	sessionCacheSizes.clear();
+	sessionCacheBytes = 0;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -856,6 +895,10 @@ export function findSessionByMetadata(
 	value: string,
 	project?: string,
 ): SessionMeta | undefined {
+	// Validate key to prevent JSON path injection — only allow safe identifiers
+	if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+		return undefined;
+	}
 	try {
 		const db = getAgentDb();
 		const sql = project

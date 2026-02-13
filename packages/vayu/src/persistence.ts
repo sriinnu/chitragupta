@@ -68,6 +68,15 @@ function deserializeExecution(data: Record<string, unknown>): WorkflowExecution 
 	};
 }
 
+// ─── ID Validation ──────────────────────────────────────────────────────────
+
+/** Validate that an ID is safe for use as a filename (no path traversal). */
+function validateId(id: string): void {
+	if (!id || !/^[a-zA-Z0-9_-]+$/.test(id)) {
+		throw new Error(`Invalid ID: must be alphanumeric, hyphens, or underscores`);
+	}
+}
+
 // ─── Workflow CRUD ──────────────────────────────────────────────────────────
 
 /**
@@ -76,6 +85,7 @@ function deserializeExecution(data: Record<string, unknown>): WorkflowExecution 
  * @param workflow - The workflow to save. Uses `workflow.id` as the filename.
  */
 export function saveWorkflow(workflow: Workflow): void {
+	validateId(workflow.id);
 	const dir = getWorkflowsDir();
 	ensureDir(dir);
 
@@ -90,14 +100,15 @@ export function saveWorkflow(workflow: Workflow): void {
  * @returns The loaded Workflow, or `undefined` if not found or corrupted.
  */
 export function loadWorkflow(id: string): Workflow | undefined {
+	validateId(id);
 	const filePath = path.join(getWorkflowsDir(), `${id}.json`);
 	try {
 		if (fs.existsSync(filePath)) {
 			const raw = fs.readFileSync(filePath, "utf-8");
 			return JSON.parse(raw) as Workflow;
 		}
-	} catch {
-		// Corrupted file — return undefined
+	} catch (err) {
+		process.stderr.write(`[vayu] failed to load workflow ${id}: ${err instanceof Error ? err.message : err}\n`);
 	}
 	return undefined;
 }
@@ -124,8 +135,8 @@ export function listWorkflows(): Workflow[] {
 		try {
 			const raw = fs.readFileSync(filePath, "utf-8");
 			workflows.push(JSON.parse(raw) as Workflow);
-		} catch {
-			// Skip corrupted files
+		} catch (err) {
+			process.stderr.write(`[vayu] skipping corrupted workflow file ${file}: ${err instanceof Error ? err.message : err}\n`);
 		}
 	}
 
@@ -139,6 +150,7 @@ export function listWorkflows(): Workflow[] {
  * @returns `true` if the file was deleted, `false` if not found.
  */
 export function deleteWorkflow(id: string): boolean {
+	validateId(id);
 	const filePath = path.join(getWorkflowsDir(), `${id}.json`);
 	try {
 		if (fs.existsSync(filePath)) {
@@ -160,6 +172,8 @@ export function deleteWorkflow(id: string): boolean {
  * @param execution - The execution to persist. Stored under the workflow's ID subdirectory.
  */
 export function saveExecution(execution: WorkflowExecution): void {
+	validateId(execution.workflowId);
+	validateId(execution.executionId);
 	const dir = path.join(getHistoryDir(), execution.workflowId);
 	ensureDir(dir);
 
@@ -187,6 +201,7 @@ export function saveExecution(execution: WorkflowExecution): void {
  * ```
  */
 export function loadExecution(executionId: string): WorkflowExecution | undefined {
+	validateId(executionId);
 	const historyDir = getHistoryDir();
 	if (!fs.existsSync(historyDir)) return undefined;
 
@@ -231,6 +246,7 @@ export function loadExecution(executionId: string): WorkflowExecution | undefine
  * ```
  */
 export function listExecutions(workflowId: string): WorkflowExecution[] {
+	validateId(workflowId);
 	const dir = path.join(getHistoryDir(), workflowId);
 	if (!fs.existsSync(dir)) return [];
 

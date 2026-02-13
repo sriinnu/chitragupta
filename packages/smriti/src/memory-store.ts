@@ -100,14 +100,13 @@ export function getMemory(scope: MemoryScope): string {
 	if (!filePath) return "";
 
 	try {
-		if (fs.existsSync(filePath)) {
-			return fs.readFileSync(filePath, "utf-8");
-		}
+		return fs.readFileSync(filePath, "utf-8");
 	} catch (err) {
+		const isNotFound = (err as NodeJS.ErrnoException).code === "ENOENT"
+			|| (err instanceof Error && err.message.includes("ENOENT"));
+		if (isNotFound) return "";
 		throw new MemoryError(`Failed to read memory at ${filePath}: ${err}`);
 	}
-
-	return "";
 }
 
 /**
@@ -184,8 +183,17 @@ export function appendMemory(scope: MemoryScope, entry: string): Promise<void> {
 			const timestamp = new Date().toISOString();
 			const formatted = `\n---\n\n*${timestamp}*\n\n${entry}\n`;
 
-			if (fs.existsSync(filePath)) {
-				const existing = fs.readFileSync(filePath, "utf-8");
+			// Read existing content atomically (no TOCTOU: single readFileSync + ENOENT catch)
+			let existing: string | null = null;
+			try {
+				existing = fs.readFileSync(filePath, "utf-8");
+			} catch (readErr) {
+				const isNotFound = (readErr as NodeJS.ErrnoException).code === "ENOENT"
+					|| (readErr instanceof Error && readErr.message.includes("ENOENT"));
+				if (!isNotFound) throw readErr;
+			}
+
+			if (existing !== null) {
 				const totalSize = Buffer.byteLength(existing, "utf-8")
 					+ Buffer.byteLength(formatted, "utf-8");
 
@@ -261,8 +269,12 @@ export function deleteMemory(scope: MemoryScope): void {
 	if (!filePath) return;
 
 	try {
-		if (fs.existsSync(filePath)) {
+		try {
 			fs.unlinkSync(filePath);
+		} catch (unlinkErr) {
+			const isNotFound = (unlinkErr as NodeJS.ErrnoException).code === "ENOENT"
+				|| (unlinkErr instanceof Error && unlinkErr.message.includes("ENOENT"));
+			if (!isNotFound) throw unlinkErr;
 		}
 
 		// Clean up empty parent directories
