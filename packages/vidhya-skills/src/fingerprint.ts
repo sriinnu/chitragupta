@@ -159,7 +159,7 @@ export function computeTraitVector(manifest: SkillManifest): Float32Array {
 
 	const buckets: Float32Array[] = [
 		computeNameNgrams(manifest.name),
-		computeDescriptionTokens(manifest.description),
+		computeDescriptionTokens([manifest.description, manifest.body].filter(Boolean).join(" ")),
 		computeParameterTypes(manifest),
 		computeTagHashes(manifest.tags),
 		computeCapabilityVerbs(manifest),

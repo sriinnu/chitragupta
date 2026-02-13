@@ -27,6 +27,8 @@ export interface SkillManifest {
 	description: string;
 	/** Author or source attribution. */
 	author?: string;
+	/** Full markdown body (after frontmatter). Used for TVM fingerprinting. */
+	body?: string;
 	/** The capabilities this skill provides — each a verb/object pair. */
 	capabilities: SkillCapability[];
 	/** JSON Schema describing acceptable input. */

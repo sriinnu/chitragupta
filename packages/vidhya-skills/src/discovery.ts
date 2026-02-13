@@ -274,6 +274,16 @@ export class SkillDiscovery {
 			);
 
 			this.watchers.push(watcher);
+			watcher.on("error", () => {
+				// Best-effort recovery: detach this watcher so runtime keeps running.
+				const idx = this.watchers.indexOf(watcher);
+				if (idx >= 0) this.watchers.splice(idx, 1);
+				try {
+					watcher.close();
+				} catch {
+					// no-op
+				}
+			});
 		} catch {
 			// Silently skip: directory watching is best-effort; caller gets a no-op cleanup
 			return () => {};
