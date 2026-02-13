@@ -71,7 +71,7 @@ function createMemorySearchTool(projectPath: string): McpToolHandler {
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const query = String(args.query ?? "");
-			const limit = Number(args.limit ?? 10) || 10;
+			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 10) || 10));
 
 			if (!query) {
 				return {
@@ -136,7 +136,7 @@ function createSessionListTool(projectPath: string): McpToolHandler {
 			},
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
-			const limit = Number(args.limit ?? 20) || 20;
+			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 20) || 20));
 
 			try {
 				const { listSessions } = await import("@chitragupta/smriti/session-store");
@@ -504,7 +504,7 @@ function createSamitiChannelsTool(): McpToolHandler {
 			try {
 				const samiti = await getSamiti();
 				const channel = args.channel != null ? String(args.channel) : undefined;
-				const limit = Number(args.limit ?? 20) || 20;
+				const limit = Math.min(100, Math.max(1, Number(args.limit ?? 20) || 20));
 
 				if (channel) {
 					const messages = samiti.listen(channel, { limit });
@@ -582,7 +582,9 @@ function createSamitiBroadcastTool(): McpToolHandler {
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const channel = String(args.channel ?? "");
 			const content = String(args.content ?? "");
-			const severity = (args.severity as "info" | "warning" | "critical") ?? "info";
+			const VALID_SEVERITIES = ["info", "warning", "critical"] as const;
+			const rawSeverity = String(args.severity ?? "info");
+			const severity = VALID_SEVERITIES.includes(rawSeverity as any) ? rawSeverity as typeof VALID_SEVERITIES[number] : "info";
 
 			if (!channel) {
 				return {
@@ -760,13 +762,15 @@ function createAkashaTracesTool(): McpToolHandler {
 				};
 			}
 
-			const type = args.type != null ? String(args.type) : undefined;
-			const limit = Number(args.limit ?? 10) || 10;
+			const VALID_TRACE_TYPES = ["solution", "warning", "shortcut", "pattern", "correction", "preference"] as const;
+			const rawType = args.type != null ? String(args.type) : undefined;
+			const traceType = rawType && VALID_TRACE_TYPES.includes(rawType as any) ? rawType as typeof VALID_TRACE_TYPES[number] : undefined;
+			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 10) || 10));
 
 			try {
 				const akasha = await getAkasha();
 				const traces = akasha.query(query, {
-					type: type as "solution" | "warning" | "shortcut" | "pattern" | "correction" | "preference" | undefined,
+					type: traceType,
 					limit,
 				});
 
@@ -830,7 +834,9 @@ function createAkashaDepositTool(): McpToolHandler {
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const content = String(args.content ?? "");
-			const type = String(args.type ?? "");
+			const VALID_TRACE_TYPES = ["solution", "warning", "shortcut", "pattern", "correction", "preference"] as const;
+			const rawType = String(args.type ?? "solution");
+			const depositType = VALID_TRACE_TYPES.includes(rawType as any) ? rawType as typeof VALID_TRACE_TYPES[number] : "solution";
 			const topics = Array.isArray(args.topics)
 				? (args.topics as string[]).map(String)
 				: [];
@@ -841,9 +847,9 @@ function createAkashaDepositTool(): McpToolHandler {
 					isError: true,
 				};
 			}
-			if (!type) {
+			if (!rawType || !VALID_TRACE_TYPES.includes(rawType as any)) {
 				return {
-					content: [{ type: "text", text: "Error: type is required" }],
+					content: [{ type: "text", text: `Error: type must be one of: ${VALID_TRACE_TYPES.join(", ")}` }],
 					isError: true,
 				};
 			}
@@ -859,7 +865,7 @@ function createAkashaDepositTool(): McpToolHandler {
 				const topic = topics.join(" ");
 				const trace = akasha.leave(
 					"mcp-client",
-					type as "solution" | "warning" | "shortcut" | "pattern" | "correction" | "preference",
+					depositType,
 					topic,
 					content,
 				);
@@ -899,7 +905,7 @@ function createVasanaTendenciesTool(projectPath: string): McpToolHandler {
 			},
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
-			const limit = Number(args.limit ?? 20) || 20;
+			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 20) || 20));
 
 			try {
 				const vasana = await getVasana();
@@ -1439,7 +1445,10 @@ function writeChitraguptaState(partial: Partial<McpState>): void {
 			...existing,
 			...partial,
 		};
-		fs.writeFileSync(statePath, JSON.stringify(merged, null, 2));
+		// Atomic write: write to temp file then rename to avoid TOCTOU races
+		const tmpPath = statePath + "." + Date.now().toString(36) + ".tmp";
+		fs.writeFileSync(tmpPath, JSON.stringify(merged, null, 2));
+		fs.renameSync(tmpPath, statePath);
 	} catch {
 		// Best-effort state persistence — never block MCP operations
 	}
@@ -1452,7 +1461,10 @@ function clearChitraguptaState(): void {
 			const existing = JSON.parse(fs.readFileSync(statePath, "utf-8")) as McpState;
 			existing.active = false;
 			existing.lastUpdate = new Date().toISOString();
-			fs.writeFileSync(statePath, JSON.stringify(existing, null, 2));
+			// Atomic write: write to temp file then rename
+			const tmpPath = statePath + "." + Date.now().toString(36) + ".tmp";
+			fs.writeFileSync(tmpPath, JSON.stringify(existing, null, 2));
+			fs.renameSync(tmpPath, statePath);
 		}
 	} catch { /* best-effort cleanup */ }
 }
@@ -1555,7 +1567,8 @@ function createHandoverTool(projectPath: string): McpToolHandler {
 
 							// Capture errors
 							if (tc.isError && tc.result) {
-								errors.push(`${tc.name}: ${tc.result.slice(0, 200)}`);
+								const resultStr = typeof tc.result === "string" ? tc.result : JSON.stringify(tc.result);
+								errors.push(`${tc.name}: ${resultStr.slice(0, 200)}`);
 							}
 						}
 					}
@@ -1888,9 +1901,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		try {
 			const { addTurn } = await import("@chitragupta/smriti/session-store");
 
-			// Record tool call as a user turn (the request)
+			// Record tool call as a user turn (the request) — no truncation
 			const argSummary = Object.keys(info.args).length > 0
-				? JSON.stringify(info.args).slice(0, 500)
+				? JSON.stringify(info.args, null, 2)
 				: "(no args)";
 			await addTurn(sid, projectPath, {
 				turnNumber: 0,
@@ -1900,12 +1913,11 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 				model: "mcp",
 			});
 
-			// Record tool result as an assistant turn (the response)
+			// Record tool result as an assistant turn (the response) — no truncation
 			const resultText = info.result.content
 				?.filter((c): c is { type: "text"; text: string } => c.type === "text")
 				.map((c) => c.text)
-				.join("\n")
-				.slice(0, 2000) ?? "(no output)";
+				.join("\n") ?? "(no output)";
 			await addTurn(sid, projectPath, {
 				turnNumber: 0,
 				role: "assistant",
@@ -1916,6 +1928,13 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 
 			turnCounter += 2;
 
+			// Auto-extract key events for memory persistence
+			try {
+				await autoExtractEvents(info, projectPath);
+			} catch {
+				// Best-effort — don't break recording if extraction fails
+			}
+
 			// Update state file with session info
 			writeChitraguptaState({
 				sessionId: sid,
@@ -1925,6 +1944,60 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			});
 		} catch (err) {
 			process.stderr.write(`[chitragupta] record failed: ${err}\n`);
+		}
+	};
+
+	/**
+	 * Auto-extract significant events from tool calls and persist to project memory.
+	 * Fires for: coding_agent results, file modifications, deliberation outcomes.
+	 */
+	const autoExtractEvents = async (
+		info: { tool: string; args: Record<string, unknown>; result: import("@chitragupta/tantra").McpToolResult; elapsedMs: number },
+		project: string,
+	) => {
+		const resultText = info.result.content
+			?.filter((c): c is { type: "text"; text: string } => c.type === "text")
+			.map((c) => c.text)
+			.join("\n") ?? "";
+
+		const projectScope = { type: "project" as const, path: project };
+
+		// coding_agent — record plan, files changed, and outcome
+		if (info.tool === "coding_agent") {
+			const { appendMemory } = await import("@chitragupta/smriti/memory-store");
+			const task = String(info.args.task ?? "").slice(0, 500);
+			const success = !info.result.isError && resultText.includes("✓");
+			const filesMatch = resultText.match(/(?:Modified|Created): (.+)/g);
+			const files = filesMatch ? filesMatch.join("; ") : "none";
+			const elapsed = (info.elapsedMs / 1000).toFixed(1);
+			const summary = [
+				`## Coding Agent: ${success ? "Success" : "Failed"}`,
+				`**Task**: ${task}`,
+				`**Files**: ${files}`,
+				`**Duration**: ${elapsed}s`,
+			].join("\n");
+			await appendMemory(projectScope, summary);
+		}
+
+		// sabha_deliberate — record deliberation outcomes
+		if (info.tool === "sabha_deliberate") {
+			const { appendMemory } = await import("@chitragupta/smriti/memory-store");
+			const proposal = String(info.args.proposal ?? "").slice(0, 300);
+			const verdict = resultText.match(/verdict[:\s]*(\w+)/i)?.[1] ?? "unknown";
+			const summary = `## Deliberation: ${verdict}\n**Proposal**: ${proposal}`;
+			await appendMemory(projectScope, summary);
+		}
+
+		// write/edit tools — record file modifications
+		if (info.tool === "write" || info.tool === "edit") {
+			const filePath = String(info.args.path ?? "");
+			if (filePath && !info.result.isError) {
+				const { appendMemory } = await import("@chitragupta/smriti/memory-store");
+				await appendMemory(
+					projectScope,
+					`File ${info.tool === "write" ? "created" : "edited"}: ${filePath}`,
+				);
+			}
 		}
 	};
 
