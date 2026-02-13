@@ -751,10 +751,15 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 
 		const fileContent = fs.readFileSync(filePath, "utf-8");
 
-		// Read current turn count from file to assign turn number
+		// Read current turn count from file to assign turn number.
+		// Fall back to SQLite if markdown is corrupted (prevents permanently stuck sessions).
 		if (!turn.turnNumber) {
-			const session = parseSessionMarkdown(fileContent);
-			turn.turnNumber = session.turns.length + 1;
+			try {
+				const session = parseSessionMarkdown(fileContent);
+				turn.turnNumber = session.turns.length + 1;
+			} catch {
+				turn.turnNumber = getMaxTurnNumber(sessionId) + 1;
+			}
 		}
 
 		// Keep markdown frontmatter updated for deterministic filesystem fallback ordering.
