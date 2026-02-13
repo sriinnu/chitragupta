@@ -81,6 +81,12 @@ importers:
 
   packages/core: {}
 
+  packages/darpana:
+    dependencies:
+      '@chitragupta/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/dharma:
     dependencies:
       '@chitragupta/core':

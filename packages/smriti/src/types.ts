@@ -15,6 +15,8 @@ export interface SessionMeta {
 	updated: string;
 	agent: string;
 	model: string;
+	/** Provider that created this session (e.g. claude-code, codex, vaayu). */
+	provider?: string;
 	project: string;
 	parent: string | null; // For branching
 	branch: string | null;
@@ -76,6 +78,8 @@ export interface SessionOpts {
 	project: string;
 	agent?: string;
 	model?: string;
+	/** Provider that created this session (e.g. claude-code, codex, vaayu). */
+	provider?: string;
 	branch?: string;
 	parentSessionId?: string;
 	tags?: string[];
