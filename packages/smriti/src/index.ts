@@ -286,9 +286,12 @@ export type { RecallAnswer, RecallOptions as UnifiedRecallOptions } from "./unif
 export {
 	detectSessionType,
 	extractEventChain,
+	getExtractorStrategy,
 } from "./event-extractor.js";
 export type {
 	SessionType,
+	CoreSessionType,
+	ExtendedSessionType,
 	SessionEvent,
 	EventChain,
 } from "./event-extractor.js";
