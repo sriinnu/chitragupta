@@ -30,7 +30,7 @@ All packages live under `@chitragupta/*` npm scope.
 The primary integration is via `ChitraguptaBridge` in Vaayu's gateway:
 
 ```
-vaayu/apps/gateway/src/lodestar/bridge.ts
+vaayu/apps/gateway/src/chitragupta-bridge/bridge.ts
 ```
 
 **Key principle**: Chitragupta is **optional**. Vaayu runs at full capacity without it. The bridge:
