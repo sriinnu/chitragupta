@@ -9,6 +9,7 @@
  */
 
 import type { SkillManifest, SkillSource } from "./types.js";
+import type { EnhancedSkillManifest } from "./types-v2.js";
 
 // ─── Frontmatter Writer ─────────────────────────────────────────────────────
 
@@ -154,8 +155,9 @@ function sourceToRecord(source: SkillSource): Record<string, unknown> {
  * await fs.writeFile("skills/my-skill/skill.md", md);
  * ```
  */
-export function writeSkillMarkdown(manifest: SkillManifest): string {
+export function writeSkillMarkdown(manifest: SkillManifest | EnhancedSkillManifest): string {
 	const parts: string[] = [];
+	const enhanced = manifest as EnhancedSkillManifest;
 
 	// ── Frontmatter ──
 	const frontmatterData: Record<string, unknown> = {
@@ -169,6 +171,35 @@ export function writeSkillMarkdown(manifest: SkillManifest): string {
 	frontmatterData.tags = manifest.tags;
 	frontmatterData.source = sourceToRecord(manifest.source);
 	frontmatterData.updatedAt = manifest.updatedAt;
+
+	// ── Vidya-Tantra extended fields ──
+	if (enhanced.kula !== undefined) {
+		frontmatterData.kula = enhanced.kula;
+	}
+	if (enhanced.requirements !== undefined) {
+		frontmatterData.requirements = enhanced.requirements;
+	}
+	if (enhanced.whenToUse !== undefined && enhanced.whenToUse.length > 0) {
+		frontmatterData.whenToUse = enhanced.whenToUse;
+	}
+	if (enhanced.whenNotToUse !== undefined && enhanced.whenNotToUse.length > 0) {
+		frontmatterData.whenNotToUse = enhanced.whenNotToUse;
+	}
+	if (enhanced.complements !== undefined && enhanced.complements.length > 0) {
+		frontmatterData.complements = enhanced.complements;
+	}
+	if (enhanced.supersedes !== undefined && enhanced.supersedes.length > 0) {
+		frontmatterData.supersedes = enhanced.supersedes;
+	}
+	if (enhanced.permissions !== undefined) {
+		frontmatterData.permissions = enhanced.permissions;
+	}
+	if (enhanced.approachLadder !== undefined && enhanced.approachLadder.length > 0) {
+		frontmatterData.approachLadder = enhanced.approachLadder;
+	}
+	if (enhanced.evalCases !== undefined && enhanced.evalCases.length > 0) {
+		frontmatterData.evalCases = enhanced.evalCases;
+	}
 
 	parts.push("---");
 	parts.push(writeFrontmatter(frontmatterData));

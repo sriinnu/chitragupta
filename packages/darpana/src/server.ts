@@ -64,7 +64,7 @@ export function createServer(config: DarpanaConfig): DarpanaServer {
 			if (config.auth?.apiKey) {
 				const provided = req.headers["x-api-key"] as string
 					?? (req.headers.authorization as string)?.replace(/^Bearer\s+/i, "");
-				if (provided !== config.auth.apiKey) {
+				if (!provided || !timingSafeEqual(provided, config.auth.apiKey)) {
 					sendError(res, 401, "authentication_error", "Invalid API key");
 					return;
 				}
@@ -313,18 +313,32 @@ function readBody(stream: IncomingMessage, maxSize?: number): Promise<Buffer | n
 	return new Promise((resolve, reject) => {
 		const chunks: Buffer[] = [];
 		let totalSize = 0;
+		let settled = false;
 
 		stream.on("data", (c: Buffer) => {
 			totalSize += c.length;
 			if (maxSize && totalSize > maxSize) {
 				stream.destroy();
-				resolve(null);
+				if (!settled) {
+					settled = true;
+					resolve(null);
+				}
 				return;
 			}
 			chunks.push(c);
 		});
-		stream.on("end", () => resolve(Buffer.concat(chunks)));
-		stream.on("error", reject);
+		stream.on("end", () => {
+			if (!settled) {
+				settled = true;
+				resolve(Buffer.concat(chunks));
+			}
+		});
+		stream.on("error", (err) => {
+			if (!settled) {
+				settled = true;
+				reject(err);
+			}
+		});
 	});
 }
 
@@ -333,6 +347,21 @@ function sendError(res: ServerResponse, status: number, type: string, message: s
 		res.writeHead(status, { "content-type": "application/json" });
 	}
 	res.end(JSON.stringify({ type: "error", error: { type, message } }));
+}
+
+/**
+ * Constant-time string comparison to prevent timing attacks on auth tokens.
+ * Pads the shorter string so both buffers are equal length before comparison.
+ */
+function timingSafeEqual(a: string, b: string): boolean {
+	const bufA = Buffer.from(a);
+	const bufB = Buffer.from(b);
+	if (bufA.length !== bufB.length) {
+		// Compare against self to consume constant time, then return false
+		crypto.timingSafeEqual(bufA, bufA);
+		return false;
+	}
+	return crypto.timingSafeEqual(bufA, bufB);
 }
 
 /**

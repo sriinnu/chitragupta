@@ -128,6 +128,10 @@ export type {
 	MargaPipelineConfig,
 } from "./router-pipeline.js";
 
+// ─── Marga Decision API (stable contract for Vaayu) ─────────────────────────
+export { margaDecide, MARGA_CONTRACT_VERSION, ESCALATION_CHAIN } from "./marga-decide.js";
+export type { MargaDecideRequest, MargaDecision } from "./marga-decide.js";
+
 // ─── Environment Detection ──────────────────────────────────────────────────
 export {
 	detectEnvironment,

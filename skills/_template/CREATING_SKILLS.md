@@ -5,14 +5,25 @@ This guide explains how to create a skill that follows the [Agent Skills open st
 ## Quick Start
 
 ```bash
-# Copy the template
-cp -r skills/_template skills/my-skill
+# From workspace root, copy the template into ecosystem skill-lab
+cp -r chitragupta/skills/_template ecosystem/skill-lab/my-skill
 
 # Edit the SKILL.md
-$EDITOR skills/my-skill/SKILL.md
+$EDITOR ecosystem/skill-lab/my-skill/SKILL.md
 ```
 
-That's it. The agent discovers skills automatically from the `skills/` directory.
+That's it. The agent discovers skills automatically from the 4-tier layout.
+
+## Skill Tiers
+
+| Priority | Directory | Purpose |
+|----------|-----------|---------|
+| 4 (highest) | `{project}/skills-core/` | First-party project skills |
+| 3 | `ecosystem/skills/` | Approved, vetted, cross-project skills |
+| 2 | `ecosystem/skill-lab/` | Experimental, sandboxed skills |
+| 1 (lowest) | `ecosystem/skill-community/` | External submissions (disabled by default) |
+
+Place new skills in `ecosystem/skill-lab/` first, then promote when vetted.
 
 ## Directory Structure
 
