@@ -394,4 +394,235 @@ describe("writeSkillMarkdown", () => {
 		expect(md).toContain("## Anti-Patterns");
 		expect(md).toContain("Not for production deployment");
 	});
+
+	it("serializes Vidya-Tantra extended fields", () => {
+		const enhanced = {
+			name: "secure-skill",
+			version: "1.0.0",
+			description: "A skill with all extended fields.",
+			capabilities: [{ verb: "test", object: "things", description: "Test" }],
+			tags: ["security", "test", "extended"],
+			source: { type: "manual" as const, filePath: "/test" },
+			updatedAt: "2025-06-01T12:00:00Z",
+			kula: "antara" as const,
+			requirements: { bins: ["curl"], network: true },
+			whenToUse: ["User asks for security scan"],
+			whenNotToUse: ["User asks about weather"],
+			complements: ["code-review"],
+			supersedes: ["old-scanner"],
+			permissions: {
+				networkPolicy: { allowlist: ["api.example.com"] },
+				secrets: ["API_KEY"],
+				piiPolicy: "no_persist",
+				filesystem: { scope: "skill_dir", maxWriteMb: 10 },
+			},
+			approachLadder: [
+				{ name: "Official API", status: "preferred", why: "Stable and authenticated" },
+				{ name: "Scraping", status: "blocked", why: "ToS violation" },
+			],
+			evalCases: [
+				{ id: "golden-1", input: { q: "test" }, expected: "pass", type: "golden" },
+			],
+		};
+
+		const md = writeSkillMarkdown(enhanced as any);
+		expect(md).toContain("kula: antara");
+		expect(md).toContain("requirements:");
+		expect(md).toContain("whenToUse:");
+		expect(md).toContain("whenNotToUse:");
+		expect(md).toContain("complements:");
+		expect(md).toContain("supersedes:");
+		expect(md).toContain("permissions:");
+		expect(md).toContain("approachLadder:");
+		expect(md).toContain("evalCases:");
+	});
+});
+
+// ─── Round-Trip Tests (parse → write → re-parse) ───────────────────────────
+
+describe("round-trip: parse → write → re-parse with extended fields", () => {
+	const EXTENDED_SKILL_MD = `---
+name: weather-api
+version: 2.0.0
+description: Fetch weather data from OpenWeatherMap API with rate limiting.
+author: chitragupta
+tags: [weather, api, openweathermap]
+source:
+  type: manual
+  filePath: /skills/weather-api/SKILL.md
+updatedAt: 2025-06-01T12:00:00Z
+kula: antara
+requirements:
+  bins: [curl]
+  env: [WEATHER_API_KEY]
+  network: true
+whenToUse: [User asks about weather, User needs temperature data]
+whenNotToUse: [User asks about historical weather trends]
+complements: [location-places]
+supersedes: [old-weather]
+permissions:
+  networkPolicy:
+    allowlist: [api.openweathermap.org]
+    timeoutMs: 10000
+    rateLimit:
+      maxPerMinute: 60
+  secrets: [WEATHER_API_KEY]
+  userData:
+    location: coarse
+  filesystem:
+    scope: skill_dir
+    maxWriteMb: 5
+  piiPolicy: no_persist
+  retentionDays: 0
+approachLadder:
+  -
+    name: Official API
+    status: preferred
+    why: Rate-limited and authenticated
+    requirements: [WEATHER_API_KEY]
+  -
+    name: Web scraping
+    status: blocked
+    why: ToS violation
+    risks: [Legal risk, Breakage]
+evalCases:
+  -
+    id: golden-london
+    input:
+      city: London
+    expected: success
+    type: golden
+    description: Basic weather lookup
+---
+
+## Capabilities
+
+### fetch / weather
+Fetch current weather for a city.
+
+## When To Use
+
+- User asks about current weather conditions
+
+## Anti-Patterns
+
+- Do not use for historical weather data
+`;
+
+	it("parser extracts all extended fields", () => {
+		const manifest = parseSkillMarkdown(EXTENDED_SKILL_MD);
+
+		expect(manifest.name).toBe("weather-api");
+		expect(manifest.kula).toBe("antara");
+		expect(manifest.requirements).toBeDefined();
+		expect(manifest.requirements!.bins).toEqual(["curl"]);
+		expect(manifest.requirements!.env).toEqual(["WEATHER_API_KEY"]);
+		expect(manifest.requirements!.network).toBe(true);
+		expect(manifest.whenToUse).toContain("User asks about weather");
+		expect(manifest.whenNotToUse).toContain("User asks about historical weather trends");
+		expect(manifest.complements).toContain("location-places");
+		expect(manifest.supersedes).toContain("old-weather");
+	});
+
+	it("parser extracts granular permissions", () => {
+		const manifest = parseSkillMarkdown(EXTENDED_SKILL_MD);
+
+		expect(manifest.permissions).toBeDefined();
+		expect(manifest.permissions!.networkPolicy).toBeDefined();
+		expect(manifest.permissions!.networkPolicy!.allowlist).toContain("api.openweathermap.org");
+		expect(manifest.permissions!.networkPolicy!.timeoutMs).toBe(10000);
+		expect(manifest.permissions!.networkPolicy!.rateLimit!.maxPerMinute).toBe(60);
+		expect(manifest.permissions!.secrets).toContain("WEATHER_API_KEY");
+		expect(manifest.permissions!.userData!.location).toBe("coarse");
+		expect(manifest.permissions!.filesystem!.scope).toBe("skill_dir");
+		expect(manifest.permissions!.filesystem!.maxWriteMb).toBe(5);
+		expect(manifest.permissions!.piiPolicy).toBe("no_persist");
+		expect(manifest.permissions!.retentionDays).toBe(0);
+	});
+
+	it("parser extracts approach ladder", () => {
+		const manifest = parseSkillMarkdown(EXTENDED_SKILL_MD);
+
+		expect(manifest.approachLadder).toBeDefined();
+		expect(manifest.approachLadder).toHaveLength(2);
+		expect(manifest.approachLadder![0].name).toBe("Official API");
+		expect(manifest.approachLadder![0].status).toBe("preferred");
+		expect(manifest.approachLadder![0].why).toBe("Rate-limited and authenticated");
+		expect(manifest.approachLadder![0].requirements).toContain("WEATHER_API_KEY");
+		expect(manifest.approachLadder![1].name).toBe("Web scraping");
+		expect(manifest.approachLadder![1].status).toBe("blocked");
+		expect(manifest.approachLadder![1].risks).toContain("Legal risk");
+	});
+
+	it("parser extracts eval cases", () => {
+		const manifest = parseSkillMarkdown(EXTENDED_SKILL_MD);
+
+		expect(manifest.evalCases).toBeDefined();
+		expect(manifest.evalCases).toHaveLength(1);
+		expect(manifest.evalCases![0].id).toBe("golden-london");
+		expect(manifest.evalCases![0].input).toEqual({ city: "London" });
+		expect(manifest.evalCases![0].expected).toBe("success");
+		expect(manifest.evalCases![0].type).toBe("golden");
+		expect(manifest.evalCases![0].description).toBe("Basic weather lookup");
+	});
+
+	it("writer preserves extended fields in output", () => {
+		const manifest = parseSkillMarkdown(EXTENDED_SKILL_MD);
+		const written = writeSkillMarkdown(manifest);
+
+		expect(written).toContain("kula: antara");
+		expect(written).toContain("requirements:");
+		expect(written).toContain("whenToUse:");
+		expect(written).toContain("whenNotToUse:");
+		expect(written).toContain("complements:");
+		expect(written).toContain("supersedes:");
+		expect(written).toContain("permissions:");
+		expect(written).toContain("approachLadder:");
+		expect(written).toContain("evalCases:");
+	});
+
+	it("round-trip preserves core fields", () => {
+		const original = parseSkillMarkdown(EXTENDED_SKILL_MD);
+		const written = writeSkillMarkdown(original);
+		const reparsed = parseSkillMarkdown(written);
+
+		expect(reparsed.name).toBe(original.name);
+		expect(reparsed.version).toBe(original.version);
+		expect(reparsed.description).toBe(original.description);
+		expect(reparsed.tags).toEqual(original.tags);
+		expect(reparsed.kula).toBe(original.kula);
+	});
+
+	it("round-trip preserves extended fields", () => {
+		const original = parseSkillMarkdown(EXTENDED_SKILL_MD);
+		const written = writeSkillMarkdown(original);
+		const reparsed = parseSkillMarkdown(written);
+
+		// Requirements
+		expect(reparsed.requirements?.bins).toEqual(original.requirements?.bins);
+		expect(reparsed.requirements?.network).toBe(original.requirements?.network);
+
+		// Selection wisdom
+		expect(reparsed.whenToUse).toEqual(original.whenToUse);
+		expect(reparsed.whenNotToUse).toEqual(original.whenNotToUse);
+		expect(reparsed.complements).toEqual(original.complements);
+		expect(reparsed.supersedes).toEqual(original.supersedes);
+
+		// Permissions
+		expect(reparsed.permissions).toBeDefined();
+		expect(reparsed.permissions!.networkPolicy!.allowlist).toEqual(
+			original.permissions!.networkPolicy!.allowlist,
+		);
+		expect(reparsed.permissions!.secrets).toEqual(original.permissions!.secrets);
+		expect(reparsed.permissions!.piiPolicy).toBe(original.permissions!.piiPolicy);
+
+		// Approach ladder
+		expect(reparsed.approachLadder).toHaveLength(original.approachLadder!.length);
+		expect(reparsed.approachLadder![0].name).toBe(original.approachLadder![0].name);
+		expect(reparsed.approachLadder![0].status).toBe(original.approachLadder![0].status);
+
+		// Eval cases
+		expect(reparsed.evalCases).toHaveLength(original.evalCases!.length);
+		expect(reparsed.evalCases![0].id).toBe(original.evalCases![0].id);
+	});
 });
