@@ -541,8 +541,8 @@ export class ConsolidationEngine {
 				for (const rule of data) {
 					this.rules.set(rule.id, rule);
 				}
-			} catch {
-				// Corrupted file — start fresh
+			} catch (err) {
+				process.stderr.write(`[consolidation] corrupted rules.json, starting fresh: ${err instanceof Error ? err.message : err}\n`);
 				this.rules.clear();
 			}
 		}
@@ -552,7 +552,8 @@ export class ConsolidationEngine {
 				this.history = JSON.parse(
 					fs.readFileSync(historyPath, "utf-8"),
 				) as ConsolidationHistoryEntry[];
-			} catch {
+			} catch (err) {
+				process.stderr.write(`[consolidation] corrupted history.json, starting fresh: ${err instanceof Error ? err.message : err}\n`);
 				this.history = [];
 			}
 		}
