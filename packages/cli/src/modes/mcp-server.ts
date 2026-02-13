@@ -71,7 +71,7 @@ function createMemorySearchTool(projectPath: string): McpToolHandler {
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const query = String(args.query ?? "");
-			const limit = Number(args.limit ?? 10) || 10;
+			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 10) || 10));
 
 			if (!query) {
 				return {
@@ -141,7 +141,7 @@ function createSessionListTool(projectPath: string): McpToolHandler {
 			},
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
-			const limit = Number(args.limit ?? 20) || 20;
+			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 20) || 20));
 
 			try {
 				const { listSessions } = await import("@chitragupta/smriti/session-store");
@@ -581,7 +581,7 @@ function createSamitiChannelsTool(): McpToolHandler {
 			try {
 				const samiti = await getSamiti();
 				const channel = args.channel != null ? String(args.channel) : undefined;
-				const limit = Number(args.limit ?? 20) || 20;
+				const limit = Math.min(100, Math.max(1, Number(args.limit ?? 20) || 20));
 
 				if (channel) {
 					const messages = samiti.listen(channel, { limit });
@@ -659,7 +659,9 @@ function createSamitiBroadcastTool(): McpToolHandler {
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const channel = String(args.channel ?? "");
 			const content = String(args.content ?? "");
-			const severity = (args.severity as "info" | "warning" | "critical") ?? "info";
+			const VALID_SEVERITIES = ["info", "warning", "critical"] as const;
+			const rawSeverity = String(args.severity ?? "info");
+			const severity = VALID_SEVERITIES.includes(rawSeverity as any) ? rawSeverity as typeof VALID_SEVERITIES[number] : "info";
 
 			if (!channel) {
 				return {
@@ -837,13 +839,15 @@ function createAkashaTracesTool(): McpToolHandler {
 				};
 			}
 
-			const type = args.type != null ? String(args.type) : undefined;
-			const limit = Number(args.limit ?? 10) || 10;
+			const VALID_TRACE_TYPES = ["solution", "warning", "shortcut", "pattern", "correction", "preference"] as const;
+			const rawType = args.type != null ? String(args.type) : undefined;
+			const traceType = rawType && VALID_TRACE_TYPES.includes(rawType as any) ? rawType as typeof VALID_TRACE_TYPES[number] : undefined;
+			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 10) || 10));
 
 			try {
 				const akasha = await getAkasha();
 				const traces = akasha.query(query, {
-					type: type as "solution" | "warning" | "shortcut" | "pattern" | "correction" | "preference" | undefined,
+					type: traceType,
 					limit,
 				});
 
@@ -907,7 +911,9 @@ function createAkashaDepositTool(): McpToolHandler {
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const content = String(args.content ?? "");
-			const type = String(args.type ?? "");
+			const VALID_TRACE_TYPES = ["solution", "warning", "shortcut", "pattern", "correction", "preference"] as const;
+			const rawType = String(args.type ?? "solution");
+			const depositType = VALID_TRACE_TYPES.includes(rawType as any) ? rawType as typeof VALID_TRACE_TYPES[number] : "solution";
 			const topics = Array.isArray(args.topics)
 				? (args.topics as string[]).map(String)
 				: [];
@@ -918,9 +924,9 @@ function createAkashaDepositTool(): McpToolHandler {
 					isError: true,
 				};
 			}
-			if (!type) {
+			if (!rawType || !VALID_TRACE_TYPES.includes(rawType as any)) {
 				return {
-					content: [{ type: "text", text: "Error: type is required" }],
+					content: [{ type: "text", text: `Error: type must be one of: ${VALID_TRACE_TYPES.join(", ")}` }],
 					isError: true,
 				};
 			}
@@ -936,7 +942,7 @@ function createAkashaDepositTool(): McpToolHandler {
 				const topic = topics.join(" ");
 				const trace = akasha.leave(
 					"mcp-client",
-					type as "solution" | "warning" | "shortcut" | "pattern" | "correction" | "preference",
+					depositType,
 					topic,
 					content,
 				);
@@ -976,7 +982,7 @@ function createVasanaTendenciesTool(projectPath: string): McpToolHandler {
 			},
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
-			const limit = Number(args.limit ?? 20) || 20;
+			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 20) || 20));
 
 			try {
 				const vasana = await getVasana();
@@ -1516,7 +1522,10 @@ function writeChitraguptaState(partial: Partial<McpState>): void {
 			...existing,
 			...partial,
 		};
-		fs.writeFileSync(statePath, JSON.stringify(merged, null, 2));
+		// Atomic write: write to temp file then rename to avoid TOCTOU races
+		const tmpPath = statePath + "." + Date.now().toString(36) + ".tmp";
+		fs.writeFileSync(tmpPath, JSON.stringify(merged, null, 2));
+		fs.renameSync(tmpPath, statePath);
 	} catch {
 		// Best-effort state persistence — never block MCP operations
 	}
@@ -1529,7 +1538,10 @@ function clearChitraguptaState(): void {
 			const existing = JSON.parse(fs.readFileSync(statePath, "utf-8")) as McpState;
 			existing.active = false;
 			existing.lastUpdate = new Date().toISOString();
-			fs.writeFileSync(statePath, JSON.stringify(existing, null, 2));
+			// Atomic write: write to temp file then rename
+			const tmpPath = statePath + "." + Date.now().toString(36) + ".tmp";
+			fs.writeFileSync(tmpPath, JSON.stringify(existing, null, 2));
+			fs.renameSync(tmpPath, statePath);
 		}
 	} catch { /* best-effort cleanup */ }
 }
@@ -1632,7 +1644,8 @@ function createHandoverTool(projectPath: string): McpToolHandler {
 
 							// Capture errors
 							if (tc.isError && tc.result) {
-								errors.push(`${tc.name}: ${tc.result.slice(0, 200)}`);
+								const resultStr = typeof tc.result === "string" ? tc.result : JSON.stringify(tc.result);
+								errors.push(`${tc.name}: ${resultStr.slice(0, 200)}`);
 							}
 						}
 					}
@@ -1879,6 +1892,316 @@ const createRecallPrompt = () => prompt(
 	(a) => `Recall everything about "${a.topic || ""}": call chitragupta_memory_search, akasha_traces, and check recent sessions. Present a timeline of decisions and current state.`,
 );
 
+// ─── Day File Tools ─────────────────────────────────────────────────────────
+
+/**
+ * Create the `chitragupta_day_show` tool — shows a consolidated day file.
+ */
+function createDayShowTool(): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_day_show",
+			description:
+				"Show the consolidated day file (diary) for a specific date. " +
+				"Day files contain all projects, sessions, tool usage, and files modified for that day.",
+			inputSchema: {
+				type: "object" as const,
+				properties: {
+					date: {
+						type: "string",
+						description: "Date in YYYY-MM-DD format. Omit for today.",
+					},
+				},
+				required: [],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const date = args.date
+				? String(args.date)
+				: new Date().toISOString().slice(0, 10);
+
+			try {
+				const { readDayFile } = await import("@chitragupta/smriti/day-consolidation");
+				const content = readDayFile(date);
+
+				if (!content) {
+					return {
+						content: [{ type: "text", text: `No day file for ${date}. Run consolidation first, or the daemon will create it automatically.` }],
+						_metadata: { action: "day_show", date },
+					};
+				}
+
+				return {
+					content: [{ type: "text", text: content }],
+					_metadata: { action: "day_show", date },
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
+/**
+ * Create the `chitragupta_day_list` tool — lists available day files.
+ */
+function createDayListTool(): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_day_list",
+			description:
+				"List all consolidated day files (diaries). " +
+				"Returns dates in YYYY-MM-DD format, most recent first.",
+			inputSchema: {
+				type: "object" as const,
+				properties: {
+					limit: {
+						type: "number",
+						description: "Maximum dates to return. Default: 30.",
+					},
+				},
+				required: [],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 30) || 30));
+
+			try {
+				const { listDayFiles } = await import("@chitragupta/smriti/day-consolidation");
+				const dates = listDayFiles().slice(0, limit);
+
+				if (dates.length === 0) {
+					return {
+						content: [{ type: "text", text: "No consolidated day files found. The daemon will create them automatically." }],
+						_metadata: { action: "day_list" },
+					};
+				}
+
+				const output = `Day files (${dates.length}):\n\n${dates.map((d: string) => `- ${d}`).join("\n")}`;
+				return {
+					content: [{ type: "text", text: output }],
+					_metadata: { action: "day_list" },
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
+/**
+ * Create the `chitragupta_day_search` tool — searches across day files.
+ */
+function createDaySearchTool(): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_day_search",
+			description:
+				"Search across all consolidated day files (diaries) for a query. " +
+				"Finds matching content across any date or project.",
+			inputSchema: {
+				type: "object" as const,
+				properties: {
+					query: {
+						type: "string",
+						description: "Search query (case-insensitive substring match).",
+					},
+					limit: {
+						type: "number",
+						description: "Maximum day files to return. Default: 10.",
+					},
+				},
+				required: ["query"],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const query = String(args.query ?? "");
+			const limit = Math.min(50, Math.max(1, Number(args.limit ?? 10) || 10));
+
+			if (!query) {
+				return {
+					content: [{ type: "text", text: "Error: 'query' is required for search." }],
+					isError: true,
+				};
+			}
+
+			try {
+				const { searchDayFiles } = await import("@chitragupta/smriti/day-consolidation");
+				const results = searchDayFiles(query, { limit });
+
+				if (results.length === 0) {
+					return {
+						content: [{ type: "text", text: `No matches found for: ${query}` }],
+						_metadata: { action: "day_search", query },
+					};
+				}
+
+				const lines: string[] = [`Found matches in ${results.length} day(s):\n`];
+				for (const r of results) {
+					lines.push(`## ${r.date}`);
+					for (const m of r.matches) {
+						lines.push(`  L${m.line}: ${m.text}`);
+					}
+					lines.push("");
+				}
+
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					_metadata: { action: "day_search", query },
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
+// ─── Unified Recall Tool ─────────────────────────────────────────────────────
+
+/**
+ * Create the `chitragupta_recall` tool — unified search across ALL memory layers.
+ */
+function createRecallTool(): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_recall",
+			description:
+				"Unified recall — searches ALL of Chitragupta's memory layers " +
+				"(sessions, memory, knowledge graph, day files) to answer natural language " +
+				"questions. Use this to recall past conversations, decisions, facts, or " +
+				"anything that happened across any provider, project, or date.",
+			inputSchema: {
+				type: "object" as const,
+				properties: {
+					query: {
+						type: "string",
+						description:
+							"Natural language question. E.g. 'how did I fix the yaxis interval in charts?' " +
+							"or 'what do we know about the auth system?'",
+					},
+					project: {
+						type: "string",
+						description: "Optional: filter to specific project path.",
+					},
+					limit: {
+						type: "number",
+						description: "Max results. Default: 5.",
+					},
+				},
+				required: ["query"],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const query = String(args.query ?? "");
+			const project = args.project != null ? String(args.project) : undefined;
+			const limit = Math.min(20, Math.max(1, Number(args.limit ?? 5) || 5));
+
+			if (!query) {
+				return {
+					content: [{ type: "text", text: "Error: 'query' is required." }],
+					isError: true,
+				};
+			}
+
+			try {
+				const { recall } = await import("@chitragupta/smriti/unified-recall");
+				const results = await recall(query, { limit, project });
+
+				if (results.length === 0) {
+					return {
+						content: [{ type: "text", text: `No recall results for: ${query}` }],
+						_metadata: { action: "recall", query },
+					};
+				}
+
+				const lines: string[] = [`Recall results for "${query}":\n`];
+				for (let i = 0; i < results.length; i++) {
+					const r = results[i];
+					lines.push(`**[${i + 1}]** (${(r.score * 100).toFixed(0)}% match, via ${r.primarySource})`);
+					lines.push(r.answer);
+					if (r.sessionId) lines.push(`  Session: ${r.sessionId}`);
+					if (r.date) lines.push(`  Date: ${r.date}`);
+					lines.push("");
+				}
+
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					_metadata: { action: "recall", query, resultCount: results.length },
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
+// ─── Provider Context Tool ───────────────────────────────────────────────────
+
+/**
+ * Create the `chitragupta_context` tool — load memory context for a new session.
+ *
+ * Returns global facts, project memory, and recent session summaries.
+ * Call this at session start to bootstrap persistent memory into any provider.
+ */
+function createContextTool(projectPath: string): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_context",
+			description:
+				"Load memory context for a new session. Returns global facts, project memory, " +
+				"and recent session summaries. Call this at the start of every session to get " +
+				"persistent memory.",
+			inputSchema: {
+				type: "object" as const,
+				properties: {
+					project: {
+						type: "string",
+						description: "Project path for project-specific memory. Defaults to current project.",
+					},
+				},
+				required: [],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const project = args.project != null ? String(args.project) : projectPath;
+
+			try {
+				const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
+				const ctx = await loadProviderContext(project);
+
+				if (ctx.itemCount === 0) {
+					return {
+						content: [{ type: "text", text: "No memory context found. This appears to be a fresh start." }],
+						_metadata: { action: "context", itemCount: 0 },
+					};
+				}
+
+				return {
+					content: [{ type: "text", text: ctx.assembled }],
+					_metadata: { action: "context", itemCount: ctx.itemCount },
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
 // ─── Server Entry Point ─────────────────────────────────────────────────────
 
 /**
@@ -1936,12 +2259,24 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	mcpTools.push(createHealthStatusTool());
 	mcpTools.push(createAtmanReportTool());
 
+	// Add day file query tools (consolidated daily diaries)
+	mcpTools.push(createDayShowTool());
+	mcpTools.push(createDayListTool());
+	mcpTools.push(createDaySearchTool());
+
+	// Add unified recall tool (searches ALL memory layers)
+	mcpTools.push(createRecallTool());
+
+	// Add provider context tool (memory injection on session start)
+	mcpTools.push(createContextTool(projectPath));
+
 	// ─── 2. Session recording ───────────────────────────────────────
 	// Lazy-init: create a session on the first tool call, record every
 	// tool invocation as a turn. This gives /last_session and /recall
 	// something to work with.
 	let mcpSessionId: string | null = null;
 	let turnCounter = 0;
+	let contextInjected = false;
 
 	const ensureSession = async () => {
 		if (mcpSessionId) return mcpSessionId;
@@ -1954,12 +2289,47 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 				title: `MCP session`,
 			});
 			mcpSessionId = session.meta.id;
+
+			// Auto-inject provider context on first session creation
+			// so MCP clients get memory without calling chitragupta_context
+			if (!contextInjected && mcpSessionId) {
+				contextInjected = true;
+				try {
+					const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
+					const ctx = await loadProviderContext(projectPath);
+					if (ctx.assembled.trim()) {
+						const { addTurn } = await import("@chitragupta/smriti/session-store");
+						await addTurn(mcpSessionId, projectPath, {
+							turnNumber: 0,
+							role: "assistant",
+							content: `[system:context] ${ctx.assembled}`,
+							agent: "mcp",
+							model: "mcp",
+						});
+						turnCounter++;
+					}
+				} catch {
+					// Best-effort — context injection is optional
+				}
+			}
 		} catch (err) {
 			// Session recording is best-effort — don't break MCP if smriti fails
 			process.stderr.write(`[chitragupta] session init failed: ${err}\n`);
 		}
 		return mcpSessionId;
 	};
+
+	/** Extract user-facing text from tool arguments for fact extraction. */
+	function extractUserText(args: Record<string, unknown>): string | null {
+		// Direct content fields
+		for (const key of ["content", "text", "query", "message", "task", "proposal"]) {
+			const val = args[key];
+			if (typeof val === "string" && val.length > 5 && val.length < 5000) {
+				return val;
+			}
+		}
+		return null;
+	}
 
 	const recordToolCall = async (info: { tool: string; args: Record<string, unknown>; result: import("@chitragupta/tantra").McpToolResult; elapsedMs: number }) => {
 		const sid = await ensureSession();
@@ -1968,9 +2338,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		try {
 			const { addTurn } = await import("@chitragupta/smriti/session-store");
 
-			// Record tool call as a user turn (the request)
+			// Record tool call as a user turn (the request) — no truncation
 			const argSummary = Object.keys(info.args).length > 0
-				? JSON.stringify(info.args).slice(0, 500)
+				? JSON.stringify(info.args, null, 2)
 				: "(no args)";
 			await addTurn(sid, projectPath, {
 				turnNumber: 0,
@@ -1980,12 +2350,11 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 				model: "mcp",
 			});
 
-			// Record tool result as an assistant turn (the response)
+			// Record tool result as an assistant turn (the response) — no truncation
 			const resultText = info.result.content
 				?.filter((c): c is { type: "text"; text: string } => c.type === "text")
 				.map((c) => c.text)
-				.join("\n")
-				.slice(0, 2000) ?? "(no output)";
+				.join("\n") ?? "(no output)";
 			await addTurn(sid, projectPath, {
 				turnNumber: 0,
 				role: "assistant",
@@ -1995,6 +2364,30 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			});
 
 			turnCounter += 2;
+
+			// Real-time fact extraction on all user-facing content
+			try {
+				const { getFactExtractor } = await import("@chitragupta/smriti/fact-extractor");
+				const extractor = getFactExtractor();
+				// Extract from the arguments (which contain user input)
+				const userText = extractUserText(info.args);
+				if (userText) {
+					await extractor.extractAndSave(
+						userText,
+						{ type: "global" },
+						{ type: "project", path: projectPath },
+					);
+				}
+			} catch {
+				// Best-effort — never break recording
+			}
+
+			// Auto-extract key events for memory persistence
+			try {
+				await autoExtractEvents(info, projectPath);
+			} catch {
+				// Best-effort — don't break recording if extraction fails
+			}
 
 			// Update state file with session info
 			writeChitraguptaState({
@@ -2006,6 +2399,63 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		} catch (err) {
 			process.stderr.write(`[chitragupta] record failed: ${err}\n`);
 		}
+	};
+
+	/**
+	 * Auto-extract significant events from tool calls and persist to project memory.
+	 * Fires for: coding_agent results, file modifications, deliberation outcomes.
+	 */
+	const autoExtractEvents = async (
+		info: { tool: string; args: Record<string, unknown>; result: import("@chitragupta/tantra").McpToolResult; elapsedMs: number },
+		project: string,
+	) => {
+		const resultText = info.result.content
+			?.filter((c): c is { type: "text"; text: string } => c.type === "text")
+			.map((c) => c.text)
+			.join("\n") ?? "";
+
+		const projectScope = { type: "project" as const, path: project };
+
+		// coding_agent — record plan, files changed, and outcome
+		if (info.tool === "coding_agent") {
+			const { appendMemory } = await import("@chitragupta/smriti/memory-store");
+			const task = String(info.args.task ?? "").slice(0, 500);
+			const success = !info.result.isError && resultText.includes("✓");
+			const filesMatch = resultText.match(/(?:Modified|Created): (.+)/g);
+			const files = filesMatch ? filesMatch.join("; ") : "none";
+			const elapsed = (info.elapsedMs / 1000).toFixed(1);
+			const summary = [
+				`## Coding Agent: ${success ? "Success" : "Failed"}`,
+				`**Task**: ${task}`,
+				`**Files**: ${files}`,
+				`**Duration**: ${elapsed}s`,
+			].join("\n");
+			await appendMemory(projectScope, summary);
+		}
+
+		// sabha_deliberate — record deliberation outcomes
+		if (info.tool === "sabha_deliberate") {
+			const { appendMemory } = await import("@chitragupta/smriti/memory-store");
+			const proposal = String(info.args.proposal ?? "").slice(0, 300);
+			const verdict = resultText.match(/verdict[:\s]*(\w+)/i)?.[1] ?? "unknown";
+			const summary = `## Deliberation: ${verdict}\n**Proposal**: ${proposal}`;
+			await appendMemory(projectScope, summary);
+		}
+
+		// write/edit tools — record file modifications
+		if (info.tool === "write" || info.tool === "edit") {
+			const filePath = String(info.args.path ?? "");
+			if (filePath && !info.result.isError) {
+				const { appendMemory } = await import("@chitragupta/smriti/memory-store");
+				await appendMemory(
+					projectScope,
+					`File ${info.tool === "write" ? "created" : "edited"}: ${filePath}`,
+				);
+			}
+		}
+
+		// NOTE: Fact extraction from user content is already handled in recordToolCall()
+		// via extractUserText(). Removed duplicate extraction that was here previously.
 	};
 
 	// ─── 3. Create MCP server ────────────────────────────────────────

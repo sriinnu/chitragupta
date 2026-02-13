@@ -50,7 +50,8 @@ function parseArgs(argv: string[]): {
 		} else if (arg === "--stdio") {
 			transport = "stdio";
 		} else if (arg === "--port" && i + 1 < argv.length) {
-			port = parseInt(argv[++i], 10) || 3001;
+			const parsed = parseInt(argv[++i], 10);
+			port = (!isNaN(parsed) && parsed > 0 && parsed < 65536) ? parsed : 3001;
 		} else if (arg === "--project" && i + 1 < argv.length) {
 			projectPath = argv[++i];
 		} else if (arg === "--agent") {
