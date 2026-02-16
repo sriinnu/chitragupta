@@ -151,6 +151,10 @@ export {
 } from "./graphrag-pagerank-personalized.js";
 export type { PersonalizedPageRankOpts } from "./graphrag-pagerank-personalized.js";
 
+// Leiden Community Detection (Traag, Waltman & van Eck 2019)
+export { leiden, annotateCommunities, communitySummary, filterByCommunity, findBridgeNodes } from "./graphrag-leiden.js";
+export type { LeidenConfig, LeidenResult, Community } from "./graphrag-leiden.js";
+
 // Checkpoint Manager (Sthiti)
 export { CheckpointManager } from "./checkpoint.js";
 export type { CheckpointConfig, Checkpoint, CheckpointData } from "./checkpoint.js";
@@ -205,7 +209,7 @@ export type { IdentityConfig, IdentityFileType } from "./identity-context.js";
 
 // Vasana Engine (BOCPD behavioral crystallization)
 export { VasanaEngine } from "./vasana-engine.js";
-export type { VasanaConfig, CrystallizationResult, PromotionResult } from "./vasana-engine.js";
+export type { VasanaConfig, CrystallizationResult, PromotionResult, DeviationType } from "./vasana-engine.js";
 
 // Svapna Consolidation (5-phase dream cycle)
 export { SvapnaConsolidation } from "./svapna-consolidation.js";
@@ -286,9 +290,12 @@ export type { RecallAnswer, RecallOptions as UnifiedRecallOptions } from "./unif
 export {
 	detectSessionType,
 	extractEventChain,
+	getExtractorStrategy,
 } from "./event-extractor.js";
 export type {
 	SessionType,
+	CoreSessionType,
+	ExtendedSessionType,
 	SessionEvent,
 	EventChain,
 } from "./event-extractor.js";

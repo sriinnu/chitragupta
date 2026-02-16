@@ -2290,28 +2290,30 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			});
 			mcpSessionId = session.meta.id;
 
-			// Auto-inject provider context on first session creation
-			// so MCP clients get memory without calling chitragupta_context
-			if (!contextInjected && mcpSessionId) {
-				contextInjected = true;
-				try {
-					const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
-					const ctx = await loadProviderContext(projectPath);
-					if (ctx.assembled.trim()) {
-						const { addTurn } = await import("@chitragupta/smriti/session-store");
+				// Auto-inject provider context on first session creation
+				// so MCP clients get memory without calling chitragupta_context
+				if (!contextInjected && mcpSessionId) {
+					try {
+						const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
+						const ctx = await loadProviderContext(projectPath);
+						if (ctx.assembled.trim()) {
+							const { addTurn } = await import("@chitragupta/smriti/session-store");
 						await addTurn(mcpSessionId, projectPath, {
 							turnNumber: 0,
 							role: "assistant",
 							content: `[system:context] ${ctx.assembled}`,
 							agent: "mcp",
 							model: "mcp",
-						});
-						turnCounter++;
+							});
+							turnCounter++;
+						}
+						// Mark injected only after successful load/append.
+						// If loading fails transiently, keep retries enabled.
+						contextInjected = true;
+					} catch {
+						// Best-effort — context injection is optional
 					}
-				} catch {
-					// Best-effort — context injection is optional
 				}
-			}
 		} catch (err) {
 			// Session recording is best-effort — don't break MCP if smriti fails
 			process.stderr.write(`[chitragupta] session init failed: ${err}\n`);
@@ -2518,6 +2520,90 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	}
 
 	await server.start();
+
+	// ─── 5. Auto-start daemon (self-healing, skill sync) ─────────────
+	// The daemon runs in-process alongside the MCP server. It handles:
+	// - Session consolidation (daily/monthly/yearly)
+	// - Skill discovery + approval queue
+	// - Self-healing with auto-restart on crash
+	try {
+		const { DaemonManager } = await import("@chitragupta/anina");
+		const { getChitraguptaHome } = await import("@chitragupta/core");
+
+		const home = getChitraguptaHome();
+		const skillPaths: string[] = [];
+		const autoApproveSafe = new Set(["1", "true", "yes", "on"]).has(
+			(process.env.CHITRAGUPTA_DAEMON_AUTO_APPROVE_SAFE ?? "").trim().toLowerCase(),
+		);
+
+		// Scan skill directories if they exist
+		const potentialSkillDirs = [
+			path.join(home, "skills"),
+			path.join(projectPath, "skills"),
+			path.join(projectPath, "skills-core"),
+		];
+		for (const dir of potentialSkillDirs) {
+			try {
+				if (fs.existsSync(dir)) skillPaths.push(dir);
+			} catch { /* skip */ }
+		}
+
+		const daemonManager = new DaemonManager({
+			daemon: { consolidateOnIdle: true, backfillOnStartup: true },
+			skillScanPaths: skillPaths,
+			enableSkillSync: skillPaths.length > 0,
+			skillScanIntervalMs: 300_000, // 5 minutes
+			// Safe-by-default: explicit opt-in required for auto-approval.
+			autoApproveSafe,
+		});
+
+		// Wire Samiti for health/skill notifications
+		try {
+			const { Samiti } = await import("@chitragupta/sutra");
+			const samiti = new Samiti();
+			daemonManager.setSamiti(samiti as any);
+		} catch {
+			// Samiti is optional — daemon works without it
+		}
+
+		// Log daemon events
+		daemonManager.on("health", (event: any) => {
+			process.stderr.write(`[daemon] ${event.from} → ${event.to}: ${event.reason}\n`);
+		});
+		daemonManager.on("skill-sync", (event: any) => {
+			if (event.type !== "scan-start") {
+				process.stderr.write(`[daemon:skills] ${event.type}: ${event.detail}\n`);
+			}
+		});
+		daemonManager.on("error", () => {
+			// Suppress unhandled error throw — errors are tracked in the manager
+		});
+
+		// Start daemon in background (don't block MCP server)
+		daemonManager.start().catch((err) => {
+			process.stderr.write(`[daemon] auto-start failed: ${err}\n`);
+		});
+
+		// Add daemon to shutdown sequence
+		const originalShutdown = shutdown;
+		const shutdownWithDaemon = async () => {
+			try {
+				await daemonManager.stop();
+			} catch { /* best-effort */ }
+			await originalShutdown();
+		};
+		process.removeListener("SIGINT", shutdown);
+		process.removeListener("SIGTERM", shutdown);
+		process.on("SIGINT", shutdownWithDaemon);
+		process.on("SIGTERM", shutdownWithDaemon);
+
+		process.stderr.write(
+			`[daemon] Auto-started (skills: ${skillPaths.length} paths)\n`,
+		);
+	} catch (err) {
+		// Daemon auto-start is best-effort — MCP server works without it
+		process.stderr.write(`[daemon] Auto-start skipped: ${err instanceof Error ? err.message : String(err)}\n`);
+	}
 
 	// For stdio, the process stays alive reading stdin.
 	// For SSE, the HTTP server keeps the process alive.

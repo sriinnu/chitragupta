@@ -1,5 +1,6 @@
 {
 	"name": "@chitragupta/ui",
+	"private": true,
 	"version": "0.1.0",
 	"description": "Terminal UI framework with Nakshatram theme, status bar, and streaming output",
 	"type": "module",

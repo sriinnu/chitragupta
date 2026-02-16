@@ -89,15 +89,21 @@ async function fetchJWKS(url: string): Promise<JWK[] | null> {
 			signal: AbortSignal.timeout(10_000),
 		});
 
-		if (!response.ok) return null;
+		if (!response.ok) {
+			// Fetch failed — fall back to stale cached keys if available
+			return cached?.keys ?? null;
+		}
 
 		const body = (await response.json()) as { keys?: JWK[] };
-		if (!body.keys || !Array.isArray(body.keys)) return null;
+		if (!body.keys || !Array.isArray(body.keys)) {
+			return cached?.keys ?? null;
+		}
 
 		jwksCache.set(url, { keys: body.keys, fetchedAt: now });
 		return body.keys;
 	} catch {
-		return null;
+		// Network error — fall back to stale cached keys if available
+		return cached?.keys ?? null;
 	}
 }
 

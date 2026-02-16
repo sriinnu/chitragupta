@@ -15,6 +15,7 @@ credentials.json
 
 # Runtime state & databases
 .chitragupta/
+.tmp/
 sessions/
 consolidation/
 *.db
@@ -48,7 +49,7 @@ package-lock.json
 CHITRAGUPTA_MASTER_SPEC.md
 PERFORMANCE_SPEC.md
 SMRITI_EVOLUTION_SPEC.md
-ARCHITECTURE.md
+/ARCHITECTURE.md
 TODO.md
 discussion.md
 AUDIT_REPORT.md

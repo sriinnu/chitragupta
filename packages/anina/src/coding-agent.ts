@@ -12,7 +12,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve as pathResolve } from "node:path";
 
 import { KARTRU_PROFILE } from "@chitragupta/core";
 
@@ -640,8 +640,11 @@ export class CodingAgent {
 
 			try {
 				const args = JSON.parse(argsStr) as Record<string, unknown>;
-				const filePath = (args.path ?? args.file_path ?? args.file) as string | undefined;
-				if (!filePath) return;
+				const rawPath = (args.path ?? args.file_path ?? args.file) as string | undefined;
+				if (!rawPath) return;
+
+				// Normalize path to prevent tracking of traversal paths
+				const filePath = pathResolve(rawPath);
 
 				if (toolName === "write") {
 					// Check if the file exists to determine create vs modify

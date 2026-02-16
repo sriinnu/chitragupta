@@ -36,9 +36,10 @@ const DESTRUCTIVE_COMMAND_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
 	{ name: "fork bomb", pattern: /:\(\)\s*\{\s*:\|:&\s*\}\s*;?\s*:/ },
 	{ name: "chmod 777 recursive", pattern: /chmod\s+(?:-R\s+)?777\s/ },
 	{ name: "format disk", pattern: /format\s+[A-Za-z]:/ },
-	{ name: "delete system files", pattern: /rm\s+(?:-\w+\s+)*\/(?:etc|usr|bin|sbin|boot|var)\// },
+	{ name: "delete system files", pattern: /rm\s+(?:-\w+\s+)*\/(?:etc|usr|bin|sbin|boot|var)(?:\/|$|\s)/ },
 	{ name: "overwrite MBR", pattern: /dd\s+.*of=\/dev\/[sh]d[a-z]/ },
 	{ name: "> /dev/sda", pattern: />\s*\/dev\/[sh]d[a-z]/ },
+	{ name: "env variable exfiltration", pattern: /(?:^|\|)\s*(?:env|printenv|set)\b.*\|\s*(?:grep|curl|wget|nc|base64)/ },
 ];
 
 // ─── Exfiltration Patterns ──────────────────────────────────────────────────

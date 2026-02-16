@@ -752,8 +752,9 @@ export class VidhiEngine {
 		// Use the gamma distribution method: Beta(a,b) = X/(X+Y) where X~Gamma(a), Y~Gamma(b)
 		const x = this._sampleGamma(alpha);
 		const y = this._sampleGamma(beta);
-		if (x + y === 0) return 0.5; // Degenerate case
-		return x / (x + y);
+		const sum = x + y;
+		if (sum < 1e-300 || !isFinite(sum)) return 0.5; // Degenerate case: epsilon guard for float safety
+		return x / sum;
 	}
 
 	/**

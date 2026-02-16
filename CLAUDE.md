@@ -1,5 +1,8 @@
 # Chitragupta MCP
 
+- with git push, dont add co-authored information AT ALL.
+- before git push, check what files/folders need to be ignored and add them to .gitignore, report to jaanu whats been done.
+
 ## Session Start
 - At the START of every session, call `chitragupta_memory_search` with the current task
   to load relevant context from past sessions.

@@ -22,6 +22,79 @@ function getSessionsDir(): string {
 	return path.join(os.homedir(), ".chitragupta", "sessions");
 }
 
+type DirentLike = {
+	name: string;
+	isDirectory?: () => boolean;
+	isFile?: () => boolean;
+};
+
+/**
+ * Recursively collect markdown session files from nested session directories.
+ * Supports both flat and v2 layouts.
+ */
+async function listSessionMarkdownFiles(dir: string): Promise<string[]> {
+	let entries: Array<string | DirentLike> | undefined;
+	try {
+		entries = await fs.promises.readdir(dir, { withFileTypes: true } as any) as
+			| Array<string | DirentLike>
+			| undefined;
+	} catch {
+		return [];
+	}
+	if (!Array.isArray(entries)) return [];
+
+	const files: string[] = [];
+	for (const entry of entries) {
+		if (typeof entry === "string") {
+			if (entry.endsWith(".md")) files.push(path.join(dir, entry));
+			continue;
+		}
+
+		const fullPath = path.join(dir, entry.name);
+		if (entry.isDirectory?.()) {
+			files.push(...(await listSessionMarkdownFiles(fullPath)));
+			continue;
+		}
+		if (entry.isFile?.() && entry.name.endsWith(".md")) {
+			files.push(fullPath);
+		}
+	}
+	return files;
+}
+
+async function resolveSessionFile(
+	rootDir: string,
+	sessionId: string,
+): Promise<{ filePath?: string; matches: string[] }> {
+	const directPath = path.join(rootDir, `${sessionId}.md`);
+	try {
+		await fs.promises.readFile(directPath, "utf-8");
+		return { filePath: directPath, matches: [] };
+	} catch {
+		// Fall through to recursive search.
+	}
+
+	const files = await listSessionMarkdownFiles(rootDir);
+	const exactMatches = files.filter((fullPath) => path.basename(fullPath, ".md") === sessionId);
+	if (exactMatches.length === 1) {
+		return { filePath: exactMatches[0], matches: [] };
+	}
+
+	const partialMatches = files.filter((fullPath) =>
+		path.basename(fullPath).includes(sessionId),
+	);
+	if (partialMatches.length === 1) {
+		return { filePath: partialMatches[0], matches: [] };
+	}
+
+	return {
+		filePath: undefined,
+		matches: [...new Set([...exactMatches, ...partialMatches].map((fullPath) =>
+			path.basename(fullPath, ".md")
+		))],
+	};
+}
+
 /**
  * Parse minimal session metadata from frontmatter without pulling
  * in the full @chitragupta/smriti parser. We just need the YAML header.
@@ -55,8 +128,7 @@ async function listSessions(): Promise<string> {
 		return "No sessions found. Sessions directory does not exist yet.";
 	}
 
-	const files = await fs.promises.readdir(dir);
-	const mdFiles = files.filter((f) => f.endsWith(".md")).sort().reverse();
+	const mdFiles = (await listSessionMarkdownFiles(dir)).sort().reverse();
 
 	if (mdFiles.length === 0) {
 		return "No sessions found.";
@@ -64,17 +136,17 @@ async function listSessions(): Promise<string> {
 
 	const entries: string[] = [];
 
-	for (const file of mdFiles.slice(0, 50)) {
+	for (const filePath of mdFiles.slice(0, 50)) {
 		try {
-			const content = await fs.promises.readFile(path.join(dir, file), "utf-8");
+			const content = await fs.promises.readFile(filePath, "utf-8");
 			const meta = parseMinimalFrontmatter(content);
-			const id = meta.id || file.replace(".md", "");
+			const id = meta.id || path.basename(filePath, ".md");
 			const title = meta.title || "Untitled";
 			const created = meta.created || "unknown";
 			const model = meta.model || "unknown";
 			entries.push(`  ${id}  ${created}  ${model}  ${title}`);
 		} catch {
-			entries.push(`  ${file.replace(".md", "")}  (could not read)`);
+			entries.push(`  ${path.basename(filePath, ".md")}  (could not read)`);
 		}
 	}
 
@@ -95,30 +167,18 @@ async function listSessions(): Promise<string> {
  */
 async function showSession(sessionId: string): Promise<string> {
 	const dir = getSessionsDir();
-	const filePath = path.join(dir, `${sessionId}.md`);
 
 	try {
-		const content = await fs.promises.readFile(filePath, "utf-8");
-		return content;
+		const resolved = await resolveSessionFile(dir, sessionId);
+		if (resolved.filePath) {
+			return await fs.promises.readFile(resolved.filePath, "utf-8");
+		}
+		if (resolved.matches.length > 1) {
+			return `Multiple sessions match '${sessionId}':\n${resolved.matches.map((id) => `  ${id}`).join("\n")}`;
+		}
+		return `Session not found: ${sessionId}`;
 	} catch (error) {
 		const err = error as NodeJS.ErrnoException;
-		if (err.code === "ENOENT") {
-			// Try to find by partial match
-			try {
-				const files = await fs.promises.readdir(dir);
-				const matches = files.filter((f) => f.includes(sessionId));
-				if (matches.length === 1) {
-					const content = await fs.promises.readFile(path.join(dir, matches[0]), "utf-8");
-					return content;
-				}
-				if (matches.length > 1) {
-					return `Multiple sessions match '${sessionId}':\n${matches.map((f) => "  " + f.replace(".md", "")).join("\n")}`;
-				}
-			} catch {
-				// Fall through
-			}
-			return `Session not found: ${sessionId}`;
-		}
 		return `Error reading session: ${err.message}`;
 	}
 }
@@ -135,19 +195,18 @@ async function searchSessions(query: string): Promise<string> {
 		return "No sessions found. Sessions directory does not exist yet.";
 	}
 
-	const files = await fs.promises.readdir(dir);
-	const mdFiles = files.filter((f) => f.endsWith(".md"));
+	const mdFiles = await listSessionMarkdownFiles(dir);
 	const queryLower = query.toLowerCase();
 	const results: string[] = [];
 
-	for (const file of mdFiles) {
+	for (const filePath of mdFiles) {
 		try {
-			const content = await fs.promises.readFile(path.join(dir, file), "utf-8");
+			const content = await fs.promises.readFile(filePath, "utf-8");
 
 			if (!content.toLowerCase().includes(queryLower)) continue;
 
 			const meta = parseMinimalFrontmatter(content);
-			const id = meta.id || file.replace(".md", "");
+			const id = meta.id || path.basename(filePath, ".md");
 			const title = meta.title || "Untitled";
 
 			// Find matching lines
@@ -184,16 +243,23 @@ async function branchSession(
 	branchName: string,
 ): Promise<string> {
 	const dir = getSessionsDir();
-	const sourcePath = path.join(dir, `${sessionId}.md`);
 
 	try {
+		const resolved = await resolveSessionFile(dir, sessionId);
+		if (!resolved.filePath) {
+			if (resolved.matches.length > 1) {
+				return `Multiple sessions match '${sessionId}':\n${resolved.matches.map((id) => `  ${id}`).join("\n")}`;
+			}
+			return `Source session not found: ${sessionId}`;
+		}
+		const sourcePath = resolved.filePath;
 		const content = await fs.promises.readFile(sourcePath, "utf-8");
 
 		// Generate a branch session ID
 		const timestamp = Date.now().toString(36);
 		const random = Math.random().toString(36).slice(2, 8);
 		const branchId = `${branchName}-${timestamp}-${random}`;
-		const branchPath = path.join(dir, `${branchId}.md`);
+		const branchPath = path.join(path.dirname(sourcePath), `${branchId}.md`);
 
 		// Update frontmatter with branch info
 		let branchedContent = content;

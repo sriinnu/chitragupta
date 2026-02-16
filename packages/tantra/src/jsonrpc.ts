@@ -37,6 +37,8 @@ export function createRequest(
 	params?: Record<string, unknown>,
 	id?: string | number,
 ): JsonRpcRequest {
+	// Wrap _autoId before exceeding MAX_SAFE_INTEGER to maintain integer precision
+	if (_autoId >= Number.MAX_SAFE_INTEGER) _autoId = 0;
 	return {
 		jsonrpc: "2.0",
 		id: id ?? ++_autoId,

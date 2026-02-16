@@ -612,7 +612,7 @@ export class HybridSearchEngine {
 			for (let rank = 0; rank < ranking.results.length; rank++) {
 				const doc = ranking.results[rank];
 				// Weighted RRF: w_i / (k + rank)
-				const rrfContribution = ranking.weight / (cfg.k + rank + 1); // rank is 0-indexed, RRF uses 1-indexed
+				const rrfContribution = ranking.weight / (cfg.k + rank); // rank is 0-indexed; standard RRF: 1/(k + rank_1based) = 1/(k + rank_0based) since k absorbs the offset
 
 				const existing = fusedScores.get(doc.id);
 				if (existing) {
