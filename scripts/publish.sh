@@ -166,8 +166,9 @@ if [[ -f "$ROOT/LICENSE" ]]; then
 	cp "$ROOT/LICENSE" "$ROOT/dist/LICENSE"
 fi
 
-# Remove metafile (not for publishing)
+# Remove metafile and sourcemaps (not for publishing)
 rm -f "$ROOT/dist/meta.json"
+find "$ROOT/dist" -name "*.js.map" -delete
 
 ok "dist/ ready"
 

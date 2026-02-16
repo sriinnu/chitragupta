@@ -1,6 +1,6 @@
 {
 	"name": "@yugenlab/chitragupta",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "AI agent memory engine — sessions, recall, fact extraction, MCP server",
 	"type": "module",
 	"author": "Srinivas Pendela",
@@ -89,7 +89,7 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/Kaala-Brahma/chitragupta.git"
+		"url": "https://github.com/sriinnu/chitragupta.git"
 	},
 	"keywords": [
 		"chitragupta",
@@ -102,8 +102,8 @@
 		"graphrag",
 		"fact-extraction"
 	],
-	"homepage": "https://github.com/Kaala-Brahma/chitragupta#readme",
+	"homepage": "https://github.com/sriinnu/chitragupta#readme",
 	"bugs": {
-		"url": "https://github.com/Kaala-Brahma/chitragupta/issues"
+		"url": "https://github.com/sriinnu/chitragupta/issues"
 	}
 }
