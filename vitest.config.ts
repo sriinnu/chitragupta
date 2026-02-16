@@ -5,6 +5,7 @@ export default defineConfig({
 	test: {
 		globals: true,
 		include: ["packages/*/test/**/*.test.ts"],
+		setupFiles: [resolve(__dirname, "vitest.setup.ts")],
 		alias: {
 			"@chitragupta/core": resolve(__dirname, "packages/core/src/index.ts"),
 			"@chitragupta/swara/provider-registry": resolve(__dirname, "packages/swara/src/provider-registry.ts"),

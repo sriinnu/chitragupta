@@ -864,6 +864,9 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 		let debugCycles = 0;
 		let lastValidation = validation;
 
+		// Per-cycle timeout: 2 minutes per debug cycle prevents infinite hangs
+		const debugCycleTimeoutMs = 120_000;
+
 		while (!lastValidation.passed && debugCycles < this.config.maxDebugCycles) {
 			debugCycles++;
 			this.emitProgress(
@@ -874,10 +877,15 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 			try {
 				// Use DebugAgent for structured root cause analysis + auto-fix
 				const debugAgent = this.createDebugAgent();
-				const debugResult = await debugAgent.quickFix({
-					error: lastValidation.output.slice(0, 2000),
-					reproduction: `Validation command failed in ${this.config.workingDirectory}`,
-				});
+				const debugResult = await Promise.race([
+					debugAgent.quickFix({
+						error: lastValidation.output.slice(0, 2000),
+						reproduction: `Validation command failed in ${this.config.workingDirectory}`,
+					}),
+					new Promise<never>((_, reject) =>
+						setTimeout(() => reject(new Error(`Debug cycle ${debugCycles} timed out after ${debugCycleTimeoutMs}ms`)), debugCycleTimeoutMs),
+					),
+				]);
 
 				log.debug("debug agent result", {
 					rootCause: debugResult.rootCause.slice(0, 100),

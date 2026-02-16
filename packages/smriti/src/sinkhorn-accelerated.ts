@@ -189,9 +189,10 @@ function expMatrix(L: number[][]): number[][] {
 	return L.map((row) => row.map((v) => Math.exp(v)));
 }
 
-/** Convert a non-negative matrix to log domain, clamping zeros. */
+/** Convert a non-negative matrix to log domain, clamping zeros to log(MIN_VALUE) ≈ -708. */
 function logMatrix(A: number[][]): number[][] {
-	return A.map((row) => row.map((v) => (v > 0 ? Math.log(v) : -30)));
+	const LOG_FLOOR = Math.log(Number.MIN_VALUE); // ≈ -708, principled floor
+	return A.map((row) => row.map((v) => (v > 0 ? Math.log(v) : LOG_FLOOR)));
 }
 
 /**

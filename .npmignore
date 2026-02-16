@@ -1,36 +1,7 @@
-# Source & build config
-src/
-tsconfig.json
-tsconfig.*.json
-biome.json
-
-# Tests
-test/
-tests/
-__tests__/
-*.test.ts
-*.spec.ts
-vitest.config.ts
-vitest.config.mts
-coverage/
-
-# Dev tooling
-.turbo/
-.eslintrc*
-.prettierrc*
-.editorconfig
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Misc
-node_modules/
-*.tgz
-*.log
+# Everything except dist/ — we publish from dist/ directly via `npm publish ./dist`
+# This .npmignore is a safety net in case someone runs `npm publish` from root.
+*
+!dist/
+!dist/**
+!README.md
+!LICENSE

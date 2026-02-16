@@ -5,7 +5,7 @@
  * All command strings are checked against an allowlist of safe binaries and
  * rejected if they contain dangerous shell metacharacters.
  *
- * Security model: since we reject ALL shell metacharacters (; | & $ ` > <)
+ * Security model: since we reject ALL shell metacharacters (; | & $ ` > < ( ))
  * AND validate the binary against an allowlist, shell interpretation of the
  * validated string is safe — the shell has no special characters to act on.
  */
@@ -50,7 +50,7 @@ const SAFE_COMMAND_PREFIXES = new Set([
  * Any command containing these is rejected outright.
  * Includes newlines (\n, \r) to prevent multi-line injection.
  */
-const DANGEROUS_CHARS = /[;|&$`><\n\r]/;
+const DANGEROUS_CHARS = /[;|&$`><()\n\r]/;
 
 // ─── Parsing ─────────────────────────────────────────────────────────────────
 
@@ -71,7 +71,10 @@ export function parseCommand(command: string): string[] {
 		const ch = command[i];
 
 		if (inQuote) {
-			if (ch === inQuote) {
+			// Handle backslash escapes inside double quotes (not single quotes per POSIX)
+			if (ch === "\\" && inQuote === '"' && i + 1 < command.length) {
+				current += command[++i];
+			} else if (ch === inQuote) {
 				inQuote = null;
 			} else {
 				current += ch;

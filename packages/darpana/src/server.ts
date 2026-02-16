@@ -351,17 +351,13 @@ function sendError(res: ServerResponse, status: number, type: string, message: s
 
 /**
  * Constant-time string comparison to prevent timing attacks on auth tokens.
- * Pads the shorter string so both buffers are equal length before comparison.
+ * Hashes both inputs to a fixed 32-byte SHA-256 digest before comparison,
+ * eliminating length leakage entirely.
  */
 function timingSafeEqual(a: string, b: string): boolean {
-	const bufA = Buffer.from(a);
-	const bufB = Buffer.from(b);
-	if (bufA.length !== bufB.length) {
-		// Compare against self to consume constant time, then return false
-		crypto.timingSafeEqual(bufA, bufA);
-		return false;
-	}
-	return crypto.timingSafeEqual(bufA, bufB);
+	const hashA = crypto.createHash("sha256").update(a).digest();
+	const hashB = crypto.createHash("sha256").update(b).digest();
+	return crypto.timingSafeEqual(hashA, hashB);
 }
 
 /**

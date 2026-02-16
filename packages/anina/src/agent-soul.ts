@@ -219,7 +219,13 @@ export class SoulManager {
 
 	/** Restore souls from serialized JSON. */
 	deserialize(json: string): void {
-		const data = JSON.parse(json) as Array<Record<string, unknown>>;
+		let data: Array<Record<string, unknown>>;
+		try {
+			data = JSON.parse(json) as Array<Record<string, unknown>>;
+		} catch {
+			return; // Corrupted data — keep current state
+		}
+		if (!Array.isArray(data)) return;
 		for (const entry of data) {
 			const raw = entry as unknown as Omit<AgentSoul, "confidenceModel"> & {
 				confidenceModel?: Record<string, number>;

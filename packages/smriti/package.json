@@ -1,5 +1,6 @@
 {
 	"name": "@chitragupta/smriti",
+	"private": true,
 	"version": "0.1.0",
 	"description": "Memory system with GraphRAG, information-theoretic compaction, and hybrid search",
 	"type": "module",

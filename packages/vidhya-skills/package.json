@@ -1,5 +1,6 @@
 {
 	"name": "@chitragupta/vidhya-skills",
+	"private": true,
 	"version": "0.1.0",
 	"description": "Skill discovery via Trait Vector Matching with 128-dim fingerprinting and skill evolution",
 	"type": "module",

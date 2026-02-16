@@ -141,11 +141,16 @@ export function cascadeConfigs(...layers: Config[]): Config {
 /**
  * Get the Chitragupta home directory path (~/.chitragupta).
  *
+ * Honors `CHITRAGUPTA_HOME` when set, otherwise falls back to
+ * `$HOME/.chitragupta` (`$USERPROFILE` on Windows).
+ *
  * Uses `HOME` on Unix/macOS and `USERPROFILE` on Windows, falling back to "~".
  *
  * @returns Absolute path to the Chitragupta home directory.
  */
 export function getChitraguptaHome(): string {
+	const override = process.env.CHITRAGUPTA_HOME?.trim();
+	if (override) return override;
 	return path.join(process.env.HOME || process.env.USERPROFILE || "~", ".chitragupta");
 }
 

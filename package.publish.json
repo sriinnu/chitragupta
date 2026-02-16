@@ -1,0 +1,117 @@
+{
+	"name": "@yugenlab/chitragupta",
+	"version": "0.1.3",
+	"description": "AI agent memory engine — sessions, recall, fact extraction, MCP server",
+	"type": "module",
+	"author": "Srinivas Pendela",
+	"license": "MIT",
+	"engines": {
+		"node": ">=22"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"bin": {
+		"chitragupta": "./cli.js",
+		"chitragupta-mcp": "./mcp-entry.js",
+		"chitragupta-code": "./code-entry.js"
+	},
+	"main": "./index.js",
+	"types": "./index.d.ts",
+	"exports": {
+		".": {
+			"types": "./index.d.ts",
+			"import": "./index.js"
+		},
+		"./core": {
+			"types": "./core.d.ts",
+			"import": "./core.js"
+		},
+		"./smriti": {
+			"types": "./smriti.d.ts",
+			"import": "./smriti.js"
+		},
+		"./swara": {
+			"types": "./swara.d.ts",
+			"import": "./swara.js"
+		},
+		"./anina": {
+			"types": "./anina.d.ts",
+			"import": "./anina.js"
+		},
+		"./tantra": {
+			"types": "./tantra.d.ts",
+			"import": "./tantra.js"
+		},
+		"./dharma": {
+			"types": "./dharma.d.ts",
+			"import": "./dharma.js"
+		},
+		"./yantra": {
+			"types": "./yantra.d.ts",
+			"import": "./yantra.js"
+		},
+		"./vayu": {
+			"types": "./vayu.d.ts",
+			"import": "./vayu.js"
+		},
+		"./niyanta": {
+			"types": "./niyanta.d.ts",
+			"import": "./niyanta.js"
+		},
+		"./sutra": {
+			"types": "./sutra.d.ts",
+			"import": "./sutra.js"
+		},
+		"./netra": {
+			"types": "./netra.d.ts",
+			"import": "./netra.js"
+		},
+		"./ui": {
+			"types": "./ui.d.ts",
+			"import": "./ui.js"
+		},
+		"./darpana": {
+			"types": "./darpana.d.ts",
+			"import": "./darpana.js"
+		},
+		"./vidhya-skills": {
+			"types": "./vidhya-skills.d.ts",
+			"import": "./vidhya-skills.js"
+		},
+		"./mcp": {
+			"types": "./mcp-entry.d.ts",
+			"import": "./mcp-entry.js"
+		}
+	},
+	"files": [
+		"*.js",
+		"*.d.ts",
+		"chunks",
+		"_types",
+		"README.md",
+		"LICENSE"
+	],
+	"dependencies": {
+		"better-sqlite3": "^12.6.2"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/sriinnu/chitragupta.git"
+	},
+	"keywords": [
+		"chitragupta",
+		"ai",
+		"agent",
+		"memory",
+		"mcp",
+		"recall",
+		"sessions",
+		"graphrag",
+		"fact-extraction"
+	],
+	"homepage": "https://github.com/sriinnu/chitragupta#readme",
+	"bugs": {
+		"url": "https://github.com/sriinnu/chitragupta/issues"
+	}
+}

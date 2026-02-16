@@ -1,5 +1,6 @@
 {
 	"name": "@chitragupta/vayu",
+	"private": true,
 	"version": "0.1.0",
 	"description": "Workflow engine with DAG execution, parallel pipelines, and step orchestration",
 	"type": "module",

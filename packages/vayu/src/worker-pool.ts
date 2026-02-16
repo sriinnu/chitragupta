@@ -186,7 +186,7 @@ export class WorkerPool {
 				if (!mw.busy) {
 					return mw.worker.terminate();
 				}
-				// Wait for the worker to become idle
+				// Wait for the worker to become idle (timeout after 30s)
 				return new Promise<void>((resolve) => {
 					const check = setInterval(() => {
 						if (!mw.busy) {
@@ -194,6 +194,11 @@ export class WorkerPool {
 							void mw.worker.terminate().then(() => resolve());
 						}
 					}, 50);
+					// Safety timeout: force-terminate after 30 seconds
+					setTimeout(() => {
+						clearInterval(check);
+						void mw.worker.terminate().then(() => resolve());
+					}, 30_000).unref();
 				});
 			}),
 		);

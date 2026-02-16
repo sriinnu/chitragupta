@@ -1045,6 +1045,7 @@ export class SvapnaConsolidation {
 				if (startIdx >= 0) {
 					const args: Array<Record<string, unknown>> = [];
 					for (let i = 0; i < ngramToolNames.length; i++) {
+						if (startIdx + i >= sd.calls.length) break; // Bounds check
 						const callGroup = sd.calls[startIdx + i];
 						if (callGroup && callGroup.length > 0) {
 							try {

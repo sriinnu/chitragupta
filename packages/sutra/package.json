@@ -1,5 +1,6 @@
 {
 	"name": "@chitragupta/sutra",
+	"private": true,
 	"version": "0.1.0",
 	"description": "Inter-process communication hub with event routing and agent message delivery",
 	"type": "module",

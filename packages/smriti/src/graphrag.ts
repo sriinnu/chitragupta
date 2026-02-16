@@ -45,6 +45,7 @@ import {
   removeSessionFromGraph,
   removeMemoryFromGraph,
 } from "./graphrag-builder.js";
+import { leiden, annotateCommunities } from "./graphrag-leiden.js";
 import { EmbeddingService } from "./embedding-service.js";
 import { DatabaseManager } from "./db/database.js";
 import { initGraphSchema } from "./db/schema.js";
@@ -301,6 +302,13 @@ export class GraphRAGEngine {
     await extractConceptsFromNodes(this, nodes, edges);
 
     this.graph = { nodes, edges };
+
+    // Leiden community detection — annotate nodes with community membership
+    if (this.graph.nodes.length > 0 && this.graph.edges.length > 0) {
+      const leidenResult = leiden(this.graph);
+      annotateCommunities(this.graph, leidenResult);
+    }
+
     // Full graph build — initialize incremental PR from scratch
     this.initIncrementalPR();
     this.saveToDisk();

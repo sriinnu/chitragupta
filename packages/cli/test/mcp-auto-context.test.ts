@@ -75,4 +75,21 @@ describe("MCP auto-context injection", () => {
 		const beforeContext = fnBody.slice(0, contextStart);
 		expect(beforeContext).toContain("try");
 	});
+
+	it("marks contextInjected only after context load path", () => {
+		const source = fs.readFileSync(
+			new URL("../src/modes/mcp-server.ts", import.meta.url),
+			"utf-8",
+		);
+
+		const fnStart = source.indexOf("const ensureSession = async () => {");
+		const fnEnd = source.indexOf("};", fnStart + 100);
+		const fnBody = source.slice(fnStart, fnEnd + 2);
+
+		const loadIdx = fnBody.indexOf("loadProviderContext");
+		const markIdx = fnBody.indexOf("contextInjected = true");
+
+		expect(loadIdx).toBeGreaterThan(-1);
+		expect(markIdx).toBeGreaterThan(loadIdx);
+	});
 });

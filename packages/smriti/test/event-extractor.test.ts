@@ -2,9 +2,12 @@ import { describe, it, expect } from "vitest";
 import {
 	detectSessionType,
 	extractEventChain,
+	getExtractorStrategy,
 } from "../src/event-extractor.js";
 import type {
 	SessionType,
+	CoreSessionType,
+	ExtendedSessionType,
 	SessionEvent,
 	EventChain,
 } from "../src/event-extractor.js";
@@ -1055,5 +1058,227 @@ describe("edge cases", () => {
 		});
 		const chain3 = extractEventChain(meta3, [makeTurn("user", "hi")]);
 		expect(chain3.events[0].provider).toBe("my-agent");
+	});
+});
+
+// ─── Extended Session Types (Personal AI Assistant Domains) ─────────────────
+
+describe("extended session type detection", () => {
+	/** Helper to create 6+ user turns with domain-specific content. */
+	function makeDomainTurns(messages: string[]): TimestampedTurn[] {
+		const turns: TimestampedTurn[] = [];
+		for (let i = 0; i < messages.length; i++) {
+			turns.push(makeTurn("user", messages[i], { num: i * 2 + 1 }));
+			turns.push(makeTurn("assistant", `I'll help with that. Here's what I found about your request on this topic.`, { num: i * 2 + 2 }));
+		}
+		return turns;
+	}
+
+	it("should detect 'planning' for task/project planning content", () => {
+		const turns = makeDomainTurns([
+			"I need to plan for the next sprint and set milestones",
+			"What should the roadmap look like for Q2?",
+			"Let's create a timeline with due dates for each feature",
+			"Add these to the todo list and prioritise them",
+		]);
+		expect(detectSessionType(turns)).toBe("planning");
+	});
+
+	it("should detect 'learning' for educational content", () => {
+		const turns = makeDomainTurns([
+			"Teach me about how neural networks work, explain to me the basics",
+			"What is a transformer architecture? Give me a walkthrough",
+			"I want to learn about attention mechanisms, lesson on self-attention",
+			"Help me understand backpropagation, what are the fundamentals of it?",
+		]);
+		expect(detectSessionType(turns)).toBe("learning");
+	});
+
+	it("should detect 'creative' for writing/brainstorming content", () => {
+		const turns = makeDomainTurns([
+			"Write a blog post about productivity tips",
+			"Brainstorm some name suggestions for my new app",
+			"Draft a tagline for the marketing page",
+			"Compose a story about a developer who discovers AI",
+		]);
+		expect(detectSessionType(turns)).toBe("creative");
+	});
+
+	it("should detect 'health' for wellness content", () => {
+		const turns = makeDomainTurns([
+			"Help me plan my exercise routine and workout schedule",
+			"What nutrition plan should I follow for my diet plan?",
+			"Track my sleep schedule and meditation sessions",
+			"I have a doctor appointment tomorrow, what symptoms of fatigue should I mention?",
+		]);
+		expect(detectSessionType(turns)).toBe("health");
+	});
+
+	it("should detect 'finance' for financial content", () => {
+		const turns = makeDomainTurns([
+			"Help me set up a budget for this month's monthly expenses",
+			"Should I invest in index funds for my portfolio?",
+			"What's the best savings account rate right now?",
+			"Calculate my tax return deductions and net worth",
+		]);
+		expect(detectSessionType(turns)).toBe("finance");
+	});
+
+	it("should detect 'social' for people/messaging content", () => {
+		const turns = makeDomainTurns([
+			"Draft an email to my colleague about the schedule a meeting for Friday",
+			"It's my friend's birthday next week, help me plan a gift for her",
+			"Reply to the party invitation, my family is coming too",
+			"Send a message to my partner about the anniversary dinner",
+		]);
+		expect(detectSessionType(turns)).toBe("social");
+	});
+
+	it("should detect 'research' for investigation content", () => {
+		const turns = makeDomainTurns([
+			"Do a deep dive into the state of the art for memory systems",
+			"Find papers on arxiv about graph neural networks and survey of recent work",
+			"Research on the tradeoffs between SQL and NoSQL for our use case",
+			"Compare Redis vs Memcached, give me pros and cons of each",
+		]);
+		expect(detectSessionType(turns)).toBe("research");
+	});
+
+	it("should detect 'reflection' for journaling content", () => {
+		const turns = makeDomainTurns([
+			"Let's do a retrospective on this week, reflect on what happened",
+			"What went well this sprint? What could improve?",
+			"Write a journal entry about my takeaways from the project",
+			"I'm grateful for the team, let me do a self-assessment",
+		]);
+		expect(detectSessionType(turns)).toBe("reflection");
+	});
+
+	it("should detect 'security' for security content", () => {
+		const turns = makeDomainTurns([
+			"Run a security audit on our authentication flow",
+			"Check for vulnerability in the SSL certificate setup",
+			"Review the access control rules and firewall rule configuration",
+			"Do a penetration test on the API endpoints, check for data breach risk",
+		]);
+		expect(detectSessionType(turns)).toBe("security");
+	});
+
+	it("should detect 'operational' for ops content", () => {
+		const turns = makeDomainTurns([
+			"Deploy to production and set up the CI/CD pipeline",
+			"The docker containers need to be updated on kubernetes",
+			"Check the infrastructure status, there was a downtime incident",
+			"Rollback the last release, the staging environment is broken",
+		]);
+		expect(detectSessionType(turns)).toBe("operational");
+	});
+
+	it("should not override coding sessions even with domain keywords", () => {
+		// Mostly tool calls (>60%) — should stay "coding" even with domain keywords
+		const turns: SessionTurn[] = [
+			{ role: "user", content: "Deploy to production via the CI/CD pipeline", turnNumber: 1 },
+			{ role: "assistant", content: "[tool:bash] deploying", turnNumber: 2 },
+			{ role: "assistant", content: "[tool:read] checking config", turnNumber: 3 },
+			{ role: "assistant", content: "[tool:write] writing manifest", turnNumber: 4 },
+			{ role: "assistant", content: "[tool:bash] running deploy", turnNumber: 5 },
+		];
+		// 4/5 = 80% tool ratio → coding
+		expect(detectSessionType(turns)).toBe("coding");
+	});
+
+	it("should fall back to core type when domain signals are weak (< 2 groups)", () => {
+		// Only one domain signal group matches — not enough to override
+		const turns = makeDomainTurns([
+			"Let's discuss the architecture of the system",
+			"What about the performance characteristics?",
+			"How should we structure the modules?",
+			"I think we should use a modular approach for this",
+		]);
+		// No domain has 2+ groups matching, should be "discussion"
+		const type = detectSessionType(turns);
+		expect(type).toBe("discussion");
+	});
+});
+
+// ─── getExtractorStrategy ───────────────────────────────────────────────────
+
+describe("getExtractorStrategy", () => {
+	it("should return core types as-is", () => {
+		expect(getExtractorStrategy("coding")).toBe("coding");
+		expect(getExtractorStrategy("discussion")).toBe("discussion");
+		expect(getExtractorStrategy("mixed")).toBe("mixed");
+		expect(getExtractorStrategy("personal")).toBe("personal");
+	});
+
+	it("should map extended types to correct core extractors", () => {
+		expect(getExtractorStrategy("planning")).toBe("discussion");
+		expect(getExtractorStrategy("learning")).toBe("discussion");
+		expect(getExtractorStrategy("creative")).toBe("discussion");
+		expect(getExtractorStrategy("research")).toBe("discussion");
+		expect(getExtractorStrategy("reflection")).toBe("discussion");
+		expect(getExtractorStrategy("operational")).toBe("mixed");
+		expect(getExtractorStrategy("security")).toBe("mixed");
+		expect(getExtractorStrategy("health")).toBe("personal");
+		expect(getExtractorStrategy("social")).toBe("personal");
+		expect(getExtractorStrategy("finance")).toBe("personal");
+	});
+});
+
+// ─── Extended Session Types — Event Extraction ──────────────────────────────
+
+describe("extended session types — event extraction", () => {
+	function makeDomainSession(messages: string[]): TimestampedTurn[] {
+		const turns: TimestampedTurn[] = [];
+		for (let i = 0; i < messages.length; i++) {
+			turns.push(makeTurn("user", messages[i], { num: i * 2 + 1 }));
+			turns.push(makeTurn("assistant", `I'll help with that. Here's my detailed response about your request.`, { num: i * 2 + 2 }));
+		}
+		return turns;
+	}
+
+	it("should use discussion extractor for planning sessions", () => {
+		const meta = makeMeta();
+		const turns = makeDomainSession([
+			"Let's plan for the next sprint and set milestones",
+			"Create a timeline with due dates for each deliverable",
+			"Add these to the todo list and prioritise by impact",
+		]);
+		const chain = extractEventChain(meta, turns);
+		expect(chain.sessionType).toBe("planning");
+		// Discussion extractor produces topic events
+		expect(chain.events.some(e => e.type === "topic" || e.type === "decision" || e.type === "question")).toBe(true);
+	});
+
+	it("should use personal extractor for health sessions", () => {
+		const meta = makeMeta();
+		const turns = makeDomainSession([
+			"Track my exercise routine and workout schedule",
+			"I need a diet plan and nutrition guide for the week",
+			"Check my sleep schedule and meditation progress",
+		]);
+		const chain = extractEventChain(meta, turns);
+		expect(chain.sessionType).toBe("health");
+		// Personal extractor keeps short responses as actions
+		expect(chain.events.some(e => e.type === "action")).toBe(true);
+	});
+
+	it("should include domain label in narrative for extended types", () => {
+		const meta = makeMeta();
+		const turns = makeDomainSession([
+			"Help me set up a budget for monthly expenses",
+			"Track my portfolio and savings account status",
+			"Calculate my tax return and net worth",
+		]);
+		const chain = extractEventChain(meta, turns);
+		expect(chain.sessionType).toBe("finance");
+		expect(chain.narrative).toContain("[Finance]");
+	});
+
+	it("should not include domain label for core types", () => {
+		const meta = makeMeta();
+		const turns = [makeTurn("user", "Hello")];
+		const chain = extractEventChain(meta, turns);
+		expect(chain.narrative).not.toMatch(/\[.*\]/);
 	});
 });

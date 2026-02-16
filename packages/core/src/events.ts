@@ -39,9 +39,12 @@ export function createEventBus(): EventBus {
 			for (const handler of handlers) {
 				try {
 					handler(data);
-				} catch (_err) {
+				} catch (err) {
 					// Handler errors are caught to prevent one broken listener from disrupting others.
-					// Cannot log here — core has no logger dependency. Consumers should wrap handlers.
+					// Log to stderr so failures are visible without requiring a logger dependency.
+					process.stderr.write(
+						`[chitragupta] EventBus handler error on "${event}": ${err instanceof Error ? err.message : String(err)}\n`,
+					);
 				}
 			}
 		},
