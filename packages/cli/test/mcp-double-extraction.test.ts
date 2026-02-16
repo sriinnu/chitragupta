@@ -20,8 +20,10 @@ describe("MCP double extraction fix", () => {
 		const fnStart = source.indexOf("const autoExtractEvents = async (");
 		expect(fnStart).toBeGreaterThan(-1);
 
-		// Get the function body (until the next top-level const/function)
-		const fnBody = source.slice(fnStart, source.indexOf("\n\t// ─── 3.", fnStart));
+		// Get the function body (until the next section marker)
+		const nextSection = source.indexOf("\n\t// ─── 2b.", fnStart);
+		const fallback = source.indexOf("\n\t// ─── 3.", fnStart);
+		const fnBody = source.slice(fnStart, nextSection > -1 ? nextSection : fallback);
 
 		// Should NOT contain getFactExtractor call (that's the duplication)
 		expect(fnBody).not.toContain("getFactExtractor");
