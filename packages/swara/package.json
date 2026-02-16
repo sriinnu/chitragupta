@@ -1,5 +1,6 @@
 {
 	"name": "@chitragupta/swara",
+	"private": true,
 	"version": "0.1.0",
 	"description": "AI provider abstraction layer with pluggable LLM backends for the Chitragupta platform",
 	"type": "module",
