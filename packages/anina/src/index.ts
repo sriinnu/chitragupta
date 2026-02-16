@@ -176,6 +176,16 @@ export type {
 	ConsolidationEvent,
 } from "./chitragupta-daemon.js";
 
+// Daemon Manager (Prana — self-healing daemon wrapper)
+export { DaemonManager } from "./daemon-manager.js";
+export type {
+	DaemonHealth,
+	DaemonManagerConfig,
+	DaemonManagerState,
+	HealthEvent,
+	SkillSyncEvent,
+} from "./daemon-manager.js";
+
 // Pratyabhijna (self-recognition on session start)
 export { Pratyabhijna } from "./pratyabhijna.js";
 

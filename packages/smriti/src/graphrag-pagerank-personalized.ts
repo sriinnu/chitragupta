@@ -310,6 +310,8 @@ export class IncrementalPageRank {
 	private ranks = new Map<string, number>();
 	private outDegree = new Map<string, number>();
 	private inLinks = new Map<string, Set<string>>();
+	/** Forward adjacency list: source → Set<target>. Avoids O(E) reverse lookup in getOutNeighbors(). */
+	private outLinks = new Map<string, Set<string>>();
 	private nodeSet = new Set<string>();
 	private damping: number;
 	private epsilon: number;
@@ -328,17 +330,20 @@ export class IncrementalPageRank {
 		this.nodeSet.clear();
 		this.outDegree.clear();
 		this.inLinks.clear();
+		this.outLinks.clear();
 
 		for (const node of graph.nodes) {
 			this.nodeSet.add(node.id);
 			this.outDegree.set(node.id, 0);
 			this.inLinks.set(node.id, new Set());
+			this.outLinks.set(node.id, new Set());
 		}
 
 		for (const edge of graph.edges) {
 			if (this.nodeSet.has(edge.source) && this.nodeSet.has(edge.target)) {
 				this.outDegree.set(edge.source, (this.outDegree.get(edge.source) ?? 0) + 1);
 				this.inLinks.get(edge.target)!.add(edge.source);
+				this.outLinks.get(edge.source)!.add(edge.target);
 			}
 		}
 
@@ -369,12 +374,14 @@ export class IncrementalPageRank {
 			this.nodeSet.add(source);
 			this.outDegree.set(source, 0);
 			this.inLinks.set(source, new Set());
+			this.outLinks.set(source, new Set());
 			this.ranks.set(source, 1 / this.nodeSet.size);
 		}
 		if (!this.nodeSet.has(target)) {
 			this.nodeSet.add(target);
 			this.outDegree.set(target, 0);
 			this.inLinks.set(target, new Set());
+			this.outLinks.set(target, new Set());
 			this.ranks.set(target, 1 / this.nodeSet.size);
 		}
 
@@ -382,6 +389,7 @@ export class IncrementalPageRank {
 		const newDeg = oldDeg + 1;
 		this.outDegree.set(source, newDeg);
 		this.inLinks.get(target)!.add(source);
+		this.outLinks.get(source)!.add(target);
 
 		const prU = this.ranks.get(source) ?? 0;
 		const residuals = new Map<string, number>();
@@ -420,6 +428,7 @@ export class IncrementalPageRank {
 		const newDeg = oldDeg - 1;
 		this.outDegree.set(source, newDeg);
 		inSet.delete(source);
+		this.outLinks.get(source)?.delete(target);
 
 		const prU = this.ranks.get(source) ?? 0;
 		const residuals = new Map<string, number>();
@@ -494,13 +503,9 @@ export class IncrementalPageRank {
 
 	/**
 	 * Get outgoing neighbors of a node.
-	 * Reconstructed from inLinks (reverse lookup).
+	 * Uses forward adjacency list for O(degree) lookup instead of O(E).
 	 */
 	private getOutNeighbors(nodeId: string): string[] {
-		const neighbors: string[] = [];
-		for (const [target, sources] of this.inLinks) {
-			if (sources.has(nodeId)) neighbors.push(target);
-		}
-		return neighbors;
+		return [...(this.outLinks.get(nodeId) ?? [])];
 	}
 }
