@@ -502,6 +502,12 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 			const previousOnEvent = agent.getConfig().onEvent;
 			let fullText = "";
 
+			const restoreEventHandler = () => {
+				if (previousOnEvent) {
+					agent.setOnEvent(previousOnEvent);
+				}
+			};
+
 			agent.setOnEvent((event: AgentEventType, data: unknown) => {
 				const eventData = data as Record<string, unknown>;
 
@@ -561,19 +567,19 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 				pushChunk(null); // Signal end (consumer will check streamError)
 			});
 
-			// Yield chunks as they arrive
-			while (true) {
-				const chunk = await nextChunk();
-				if (chunk === null) break;
-				yield chunk;
-			}
+			try {
+				// Yield chunks as they arrive
+				while (true) {
+					const chunk = await nextChunk();
+					if (chunk === null) break;
+					yield chunk;
+				}
 
-			// Ensure the prompt finishes (no unhandled rejection — error stored in streamError)
-			await promptDone;
-
-			// Restore previous event handler before throwing
-			if (previousOnEvent) {
-				agent.setOnEvent(previousOnEvent);
+				// Ensure the prompt finishes (no unhandled rejection — error stored in streamError)
+				await promptDone;
+			} finally {
+				// Always restore the event handler, even if the generator is abandoned early
+				restoreEventHandler();
 			}
 
 			// Now propagate the stored error after generator cleanup

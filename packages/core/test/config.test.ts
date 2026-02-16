@@ -158,24 +158,37 @@ describe("Config", () => {
   describe("getChitraguptaHome", () => {
     const originalHome = process.env.HOME;
     const originalUserProfile = process.env.USERPROFILE;
+    const originalChitraguptaHome = process.env.CHITRAGUPTA_HOME;
 
     afterEach(() => {
       process.env.HOME = originalHome;
       process.env.USERPROFILE = originalUserProfile;
+      process.env.CHITRAGUPTA_HOME = originalChitraguptaHome;
     });
 
-    it("should return a path ending with .chitragupta", () => {
+    it("should honor CHITRAGUPTA_HOME override", () => {
+      process.env.CHITRAGUPTA_HOME = "/tmp/chitragupta-custom";
+      process.env.HOME = "/home/testuser";
+      const home = getChitraguptaHome();
+      expect(home).toBe("/tmp/chitragupta-custom");
+    });
+
+    it("should return a path ending with .chitragupta when override is unset", () => {
+      delete process.env.CHITRAGUPTA_HOME;
+      process.env.HOME = "/home/testuser";
       const home = getChitraguptaHome();
       expect(home).toMatch(/\.chitragupta$/);
     });
 
     it("should use HOME environment variable", () => {
+      delete process.env.CHITRAGUPTA_HOME;
       process.env.HOME = "/home/testuser";
       const home = getChitraguptaHome();
       expect(home).toBe("/home/testuser/.chitragupta");
     });
 
     it("should fall back to USERPROFILE on Windows", () => {
+      delete process.env.CHITRAGUPTA_HOME;
       delete process.env.HOME;
       process.env.USERPROFILE = "C:\\Users\\testuser";
       const home = getChitraguptaHome();

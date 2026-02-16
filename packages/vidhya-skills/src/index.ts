@@ -365,3 +365,18 @@ export {
 	formatEvalSummary,
 } from "./eval-harness.js";
 export type { EvalExecutor, EvalComparator } from "./eval-harness.js";
+
+// ── Approval Queue — Skill Approval Workflow ────────────────────────────────
+export { ApprovalQueue, assessRisk } from "./approval-queue.js";
+export type {
+	ApprovalStatus,
+	RiskLevel,
+	ApprovalRequest,
+	ApprovalLedgerEntry,
+	ApprovalEvent,
+	ApprovalEventHandler,
+} from "./approval-queue.js";
+
+// ── Approval Notifier — Samiti Bridge ───────────────────────────────────────
+export { ApprovalNotifier } from "./approval-notifier.js";
+export type { SamitiBroadcaster, ApprovalNotifierConfig } from "./approval-notifier.js";

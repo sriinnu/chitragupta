@@ -1,5 +1,6 @@
 {
 	"name": "@chitragupta/netra",
+	"private": true,
 	"version": "0.1.0",
 	"description": "Vision and multimodal processing capabilities for the Chitragupta platform",
 	"type": "module",

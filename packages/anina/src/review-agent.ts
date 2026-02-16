@@ -12,12 +12,10 @@
  * A code reviewer examines changes with a critical eye, never modifying code itself.
  */
 
-import { execSync } from "node:child_process";
-
 import { PARIKSHAKA_PROFILE } from "@chitragupta/core";
 
 import { Agent } from "./agent.js";
-import { validateCommand } from "./safe-exec.js";
+import { safeExecSync, validateCommand } from "./safe-exec.js";
 import type { AgentConfig, AgentMessage, ToolHandler } from "./types.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -212,7 +210,7 @@ export class ReviewAgent {
 		validateCommand(diffCmd);
 
 		try {
-			diffOutput = execSync(diffCmd, {
+			diffOutput = safeExecSync(diffCmd, {
 				cwd: this.config.workingDirectory,
 				encoding: "utf-8",
 				timeout: 30_000,

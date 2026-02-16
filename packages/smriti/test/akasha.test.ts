@@ -209,7 +209,9 @@ describe("Akasha -- Shared Knowledge Field (Stigmergic Traces)", () => {
 			field.reinforce(trace.id, "agent-4");
 
 			expect(trace.reinforcements).toBe(3);
-			expect(trace.strength).toBeCloseTo(0.5 + 3 * 0.15, 10);
+			// Diminishing returns: boost = 0.15 / (1 + 0.3 * n) for n-th reinforcement
+			const expected = 0.5 + 0.15 / (1 + 0.3 * 0) + 0.15 / (1 + 0.3 * 1) + 0.15 / (1 + 0.3 * 2);
+			expect(trace.strength).toBeCloseTo(expected, 10);
 		});
 
 		it("should clamp strength to 1.0", () => {

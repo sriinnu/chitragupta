@@ -68,8 +68,9 @@ export class Counter {
 		this.labelNames = labels ?? [];
 	}
 
-	/** Increment the counter by `value` (default 1). Value must be non-negative. */
+	/** Increment the counter by `value` (default 1). Value must be finite and non-negative. */
 	inc(value: number = 1, labels?: Record<string, string>): void {
+		if (!Number.isFinite(value)) return; // silently ignore NaN/Infinity
 		if (value < 0) {
 			throw new Error(`Counter ${this.name}: increment value must be non-negative, got ${value}`);
 		}
@@ -137,8 +138,9 @@ export class Gauge {
 		this.labelNames = labels ?? [];
 	}
 
-	/** Set the gauge to an absolute value. */
+	/** Set the gauge to an absolute value. NaN/Infinity values are silently ignored. */
 	set(value: number, labels?: Record<string, string>): void {
+		if (!Number.isFinite(value)) return;
 		const key = labelsKey(labels);
 		this.values.set(key, value);
 		if (labels && !this.labelSets.has(key)) {
@@ -146,8 +148,9 @@ export class Gauge {
 		}
 	}
 
-	/** Increment the gauge by 1 (or by value if provided). */
+	/** Increment the gauge by 1 (or by value if provided). NaN/Infinity values are silently ignored. */
 	inc(value: number = 1, labels?: Record<string, string>): void {
+		if (!Number.isFinite(value)) return;
 		const key = labelsKey(labels);
 		this.values.set(key, (this.values.get(key) ?? 0) + value);
 		if (labels && !this.labelSets.has(key)) {
@@ -155,8 +158,9 @@ export class Gauge {
 		}
 	}
 
-	/** Decrement the gauge by 1 (or by value if provided). */
+	/** Decrement the gauge by 1 (or by value if provided). NaN/Infinity values are silently ignored. */
 	dec(value: number = 1, labels?: Record<string, string>): void {
+		if (!Number.isFinite(value)) return;
 		const key = labelsKey(labels);
 		this.values.set(key, (this.values.get(key) ?? 0) - value);
 		if (labels && !this.labelSets.has(key)) {
@@ -232,8 +236,9 @@ export class Histogram {
 		this.bucketBoundaries = [...(buckets ?? DEFAULT_BUCKETS)].sort((a, b) => a - b);
 	}
 
-	/** Record an observed value. */
+	/** Record an observed value. NaN/Infinity values are silently ignored. */
 	observe(value: number, labels?: Record<string, string>): void {
+		if (!Number.isFinite(value)) return;
 		const key = labelsKey(labels);
 		let entry = this.data.get(key);
 		if (!entry) {

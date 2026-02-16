@@ -160,7 +160,8 @@ class BM25Corpus<T> {
 			if (tf === 0) continue;
 			const idf = this.idf(term);
 			const numerator = tf * (BM25_K1 + 1);
-			const denominator = tf + BM25_K1 * (1 - BM25_B + BM25_B * (doc.length / this.avgDl));
+			// Guard: when avgDl is 0 (all documents empty), treat as avgDl=1 to avoid NaN
+			const denominator = tf + BM25_K1 * (1 - BM25_B + BM25_B * (doc.length / (this.avgDl || 1)));
 			score += idf * (numerator / denominator);
 		}
 		return score;

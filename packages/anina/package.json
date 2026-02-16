@@ -1,5 +1,6 @@
 {
 	"name": "@chitragupta/anina",
+	"private": true,
 	"version": "0.1.0",
 	"description": "Autonomous agent framework with self-healing, learning loops, and agent tree lifecycle",
 	"type": "module",

@@ -479,6 +479,38 @@ export class ChitraguptaDaemon extends EventEmitter {
 
 	// ─── Scheduling ───────────────────────────────────────────────────
 
+	/** Max safe setTimeout value (2^31 - 1 ms ≈ 24.8 days) */
+	private static readonly MAX_TIMEOUT = 2_147_483_647;
+
+	/**
+	 * Schedule a long-running timer that may exceed setTimeout's 32-bit limit.
+	 * If the delay is too large, schedules a shorter wake-up and re-checks.
+	 */
+	private scheduleLongTimeout(
+		callback: () => Promise<void>,
+		targetTime: number,
+	): ReturnType<typeof setTimeout> {
+		const remaining = targetTime - Date.now();
+		if (remaining <= 0) {
+			// Target time already passed — fire immediately
+			const timer = setTimeout(() => { if (this.running) callback(); }, 0);
+			if (timer.unref) timer.unref();
+			return timer;
+		}
+		const delay = Math.min(remaining, ChitraguptaDaemon.MAX_TIMEOUT);
+		const timer = setTimeout(() => {
+			if (!this.running) return;
+			if (Date.now() >= targetTime) {
+				callback();
+			} else {
+				// Not yet time — re-schedule with clamped delay
+				this.scheduleLongTimeout(callback, targetTime);
+			}
+		}, delay);
+		if (timer.unref) timer.unref();
+		return timer;
+	}
+
 	/**
 	 * Schedule monthly consolidation: 1st of month at configured hour.
 	 */
@@ -489,15 +521,10 @@ export class ChitraguptaDaemon extends EventEmitter {
 		const next = new Date(now.getFullYear(), now.getMonth() + 1, 1,
 			this.config.monthlyConsolidationHour, 0, 0, 0);
 
-		const msUntil = next.getTime() - now.getTime();
-
-		this.monthlyTimer = setTimeout(async () => {
-			if (!this.running) return;
+		this.monthlyTimer = this.scheduleLongTimeout(async () => {
 			await this.consolidateLastMonth();
-			this.scheduleMonthlyConsolidation(); // Re-schedule
-		}, msUntil);
-
-		if (this.monthlyTimer.unref) this.monthlyTimer.unref();
+			this.scheduleMonthlyConsolidation();
+		}, next.getTime());
 	}
 
 	/**
@@ -510,15 +537,10 @@ export class ChitraguptaDaemon extends EventEmitter {
 		const next = new Date(now.getFullYear() + 1, 0, 1,
 			this.config.yearlyConsolidationHour, 0, 0, 0);
 
-		const msUntil = next.getTime() - now.getTime();
-
-		this.yearlyTimer = setTimeout(async () => {
-			if (!this.running) return;
+		this.yearlyTimer = this.scheduleLongTimeout(async () => {
 			await this.consolidateLastYear();
-			this.scheduleYearlyConsolidation(); // Re-schedule
-		}, msUntil);
-
-		if (this.yearlyTimer.unref) this.yearlyTimer.unref();
+			this.scheduleYearlyConsolidation();
+		}, next.getTime());
 	}
 
 	/**

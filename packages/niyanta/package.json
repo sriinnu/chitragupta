@@ -1,5 +1,6 @@
 {
 	"name": "@chitragupta/niyanta",
+	"private": true,
 	"version": "0.1.0",
 	"description": "Orchestrator with multi-armed bandit strategy selection, agent tree management, and deadlock prevention",
 	"type": "module",

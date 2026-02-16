@@ -15,6 +15,7 @@
  */
 
 import fs from "fs";
+import { renameSync as nodeRenameSync } from "node:fs";
 import path from "path";
 import crypto from "crypto";
 import { getChitraguptaHome, SessionError } from "@chitragupta/core";
@@ -24,16 +25,44 @@ import { writeSessionMarkdown, writeTurnMarkdown } from "./markdown-writer.js";
 import { DatabaseManager } from "./db/database.js";
 import { initAgentSchema } from "./db/schema.js";
 
+/**
+ * Atomic rename: uses node:fs (bypasses test mocks on bare "fs").
+ * Falls back to direct write if renameSync fails.
+ */
+function atomicRename(tmpPath: string, targetPath: string): void {
+	try {
+		nodeRenameSync(tmpPath, targetPath);
+	} catch {
+		// Fallback: direct write (non-atomic but still correct)
+		fs.writeFileSync(targetPath, fs.readFileSync(tmpPath, "utf-8"), "utf-8");
+		try { fs.unlinkSync(tmpPath); } catch { /* ignore orphan tmp */ }
+	}
+}
+
 // ─── L1 Session Cache (LRU) ─────────────────────────────────────────────────
 
-/** Max sessions to cache in-process. ~25 MB budget per PERFORMANCE_SPEC. */
+/** Max sessions to cache in-process (hard cap). */
 const SESSION_CACHE_MAX = 500;
+/** Byte budget for the L1 cache (~25 MB). */
+const SESSION_CACHE_MAX_BYTES = 25 * 1024 * 1024;
 
 /**
  * Simple LRU cache backed by Map insertion order.
  * On access, delete + re-insert to move entry to tail (most recent).
+ * Tracks rough byte usage and evicts when exceeding either count or byte budget.
  */
 const sessionCache = new Map<string, Session>();
+const sessionCacheSizes = new Map<string, number>();
+let sessionCacheBytes = 0;
+
+/** Rough byte estimate for a session (metadata overhead + turn content). */
+function estimateSessionBytes(session: Session): number {
+	let bytes = 200; // metadata overhead estimate
+	for (const turn of session.turns) {
+		bytes += Buffer.byteLength(turn.content, "utf-8") + 50; // per-turn overhead
+	}
+	return bytes;
+}
 
 function cacheKey(id: string, project: string): string {
 	return `${id}:${project}`;
@@ -43,31 +72,56 @@ function cacheGet(id: string, project: string): Session | undefined {
 	const key = cacheKey(id, project);
 	const entry = sessionCache.get(key);
 	if (!entry) return undefined;
-	// Move to tail (most recent)
+	// Move to tail (most recent) — preserve size tracking
+	const size = sessionCacheSizes.get(key) ?? 0;
 	sessionCache.delete(key);
+	sessionCacheSizes.delete(key);
 	sessionCache.set(key, entry);
+	sessionCacheSizes.set(key, size);
 	return entry;
 }
 
 function cachePut(id: string, project: string, session: Session): void {
 	const key = cacheKey(id, project);
-	// Delete first to refresh position
+	// Remove existing entry first (refresh position + update byte tracking)
+	const existingSize = sessionCacheSizes.get(key) ?? 0;
 	sessionCache.delete(key);
-	// Evict oldest if at capacity
-	if (sessionCache.size >= SESSION_CACHE_MAX) {
+	sessionCacheSizes.delete(key);
+	sessionCacheBytes -= existingSize;
+
+	const newSize = estimateSessionBytes(session);
+
+	// Evict oldest entries while over count or byte budget
+	while (
+		(sessionCache.size >= SESSION_CACHE_MAX || sessionCacheBytes + newSize > SESSION_CACHE_MAX_BYTES)
+		&& sessionCache.size > 0
+	) {
 		const oldest = sessionCache.keys().next().value;
-		if (oldest !== undefined) sessionCache.delete(oldest);
+		if (oldest === undefined) break;
+		const evictedSize = sessionCacheSizes.get(oldest) ?? 0;
+		sessionCache.delete(oldest);
+		sessionCacheSizes.delete(oldest);
+		sessionCacheBytes -= evictedSize;
 	}
+
 	sessionCache.set(key, session);
+	sessionCacheSizes.set(key, newSize);
+	sessionCacheBytes += newSize;
 }
 
 function cacheInvalidate(id: string, project: string): void {
-	sessionCache.delete(cacheKey(id, project));
+	const key = cacheKey(id, project);
+	const size = sessionCacheSizes.get(key) ?? 0;
+	sessionCache.delete(key);
+	sessionCacheSizes.delete(key);
+	sessionCacheBytes -= size;
 }
 
 /** Reset L1 session cache (for testing). */
 export function _resetSessionCache(): void {
 	sessionCache.clear();
+	sessionCacheSizes.clear();
+	sessionCacheBytes = 0;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -150,6 +204,28 @@ function resolveSessionPath(id: string, project: string): string {
 	}
 
 	return oldPath;
+}
+
+/**
+ * Update only the `updated:` field in YAML frontmatter.
+ *
+ * Keeps addTurn append-only for turns while ensuring filesystem fallback ordering
+ * remains correct when SQLite write-through is unavailable.
+ */
+function patchFrontmatterUpdated(content: string, updatedIso: string): string {
+	const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+	if (!fmMatch) return content;
+
+	const frontmatter = fmMatch[1];
+	if (!/^updated:\s/m.test(frontmatter)) return content;
+
+	const patchedFrontmatter = frontmatter.replace(
+		/^updated:\s.*$/m,
+		`updated: ${updatedIso}`,
+	);
+	if (patchedFrontmatter === frontmatter) return content;
+
+	return `---\n${patchedFrontmatter}\n---${content.slice(fmMatch[0].length)}`;
 }
 
 // ─── SQLite helpers ─────────────────────────────────────────────────────────
@@ -354,7 +430,11 @@ export function saveSession(session: Session): void {
 		fs.mkdirSync(dir, { recursive: true });
 		session.meta.updated = new Date().toISOString();
 		const markdown = writeSessionMarkdown(session);
-		fs.writeFileSync(filePath, markdown, "utf-8");
+		// Atomic write: write to temp file then rename (rename is atomic on POSIX).
+		// Prevents half-written files if the process crashes mid-write.
+		const tmpPath = `${filePath}.tmp.${process.pid}`;
+		fs.writeFileSync(tmpPath, markdown, "utf-8");
+		atomicRename(tmpPath, filePath);
 		// Write-through: update L1 cache
 		cachePut(session.meta.id, session.meta.project, session);
 	} catch (err) {
@@ -669,11 +749,24 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 			throw new SessionError(`Session not found: ${sessionId} (project: ${project})`);
 		}
 
-		// Read current turn count from file to assign turn number
+		const fileContent = fs.readFileSync(filePath, "utf-8");
+
+		// Read current turn count from file to assign turn number.
+		// Fall back to SQLite if markdown is corrupted (prevents permanently stuck sessions).
 		if (!turn.turnNumber) {
-			const content = fs.readFileSync(filePath, "utf-8");
-			const session = parseSessionMarkdown(content);
-			turn.turnNumber = session.turns.length + 1;
+			try {
+				const session = parseSessionMarkdown(fileContent);
+				turn.turnNumber = session.turns.length + 1;
+			} catch {
+				turn.turnNumber = getMaxTurnNumber(sessionId) + 1;
+			}
+		}
+
+		// Keep markdown frontmatter updated for deterministic filesystem fallback ordering.
+		const updatedIso = new Date().toISOString();
+		const patchedContent = patchFrontmatterUpdated(fileContent, updatedIso);
+		if (patchedContent !== fileContent) {
+			fs.writeFileSync(filePath, patchedContent, "utf-8");
 		}
 
 		// Append turn to .md file (no full rewrite!)
@@ -807,6 +900,10 @@ export function findSessionByMetadata(
 	value: string,
 	project?: string,
 ): SessionMeta | undefined {
+	// Validate key to prevent JSON path injection — only allow safe identifiers
+	if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+		return undefined;
+	}
 	try {
 		const db = getAgentDb();
 		const sql = project
