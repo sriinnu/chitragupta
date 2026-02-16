@@ -84,6 +84,14 @@
 			"import": "./mcp-entry.js"
 		}
 	},
+	"files": [
+		"*.js",
+		"*.d.ts",
+		"chunks",
+		"_types",
+		"README.md",
+		"LICENSE"
+	],
 	"dependencies": {
 		"better-sqlite3": "^12.6.2"
 	},
