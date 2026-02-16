@@ -2277,6 +2277,8 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	let mcpSessionId: string | null = null;
 	let turnCounter = 0;
 	let contextInjected = false;
+	// Mutable ref for daemon touch — assigned once daemon starts (section 5)
+	let daemonManagerRef: { touch(): void } | null = null;
 
 	const ensureSession = async () => {
 		if (mcpSessionId) return mcpSessionId;
@@ -2290,28 +2292,30 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			});
 			mcpSessionId = session.meta.id;
 
-			// Auto-inject provider context on first session creation
-			// so MCP clients get memory without calling chitragupta_context
-			if (!contextInjected && mcpSessionId) {
-				contextInjected = true;
-				try {
-					const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
-					const ctx = await loadProviderContext(projectPath);
-					if (ctx.assembled.trim()) {
-						const { addTurn } = await import("@chitragupta/smriti/session-store");
+				// Auto-inject provider context on first session creation
+				// so MCP clients get memory without calling chitragupta_context
+				if (!contextInjected && mcpSessionId) {
+					try {
+						const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
+						const ctx = await loadProviderContext(projectPath);
+						if (ctx.assembled.trim()) {
+							const { addTurn } = await import("@chitragupta/smriti/session-store");
 						await addTurn(mcpSessionId, projectPath, {
 							turnNumber: 0,
 							role: "assistant",
 							content: `[system:context] ${ctx.assembled}`,
 							agent: "mcp",
 							model: "mcp",
-						});
-						turnCounter++;
+							});
+							turnCounter++;
+						}
+						// Mark injected only after successful load/append.
+						// If loading fails transiently, keep retries enabled.
+						contextInjected = true;
+					} catch {
+						// Best-effort — context injection is optional
 					}
-				} catch {
-					// Best-effort — context injection is optional
 				}
-			}
 		} catch (err) {
 			// Session recording is best-effort — don't break MCP if smriti fails
 			process.stderr.write(`[chitragupta] session init failed: ${err}\n`);
@@ -2332,6 +2336,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	}
 
 	const recordToolCall = async (info: { tool: string; args: Record<string, unknown>; result: import("@chitragupta/tantra").McpToolResult; elapsedMs: number }) => {
+		// Signal activity to daemon — prevents consolidation mid-conversation
+		try { daemonManagerRef?.touch(); } catch { /* best-effort */ }
+
 		const sid = await ensureSession();
 		if (!sid) return;
 
@@ -2458,6 +2465,114 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		// via extractUserText(). Removed duplicate extraction that was here previously.
 	};
 
+	// ─── 2b. Conversation recording tool ────────────────────────────
+	// MCP only sees tool calls — the actual user/assistant conversation is invisible.
+	// This tool lets the host agent explicitly send conversation turns for recording.
+	const recordConversationTool: McpToolHandler = {
+		definition: {
+			name: "chitragupta_record_conversation",
+			description:
+				"Record conversation turns (user messages and assistant responses) " +
+				"into the current Chitragupta session. Call this periodically to capture " +
+				"conversation context between tool calls.",
+			inputSchema: {
+				type: "object" as const,
+				properties: {
+					turns: {
+						type: "array",
+						description: "Conversation turns to record, in chronological order.",
+						items: {
+							type: "object",
+							properties: {
+								role: {
+									type: "string",
+									enum: ["user", "assistant"],
+									description: "Who said this turn.",
+								},
+								content: {
+									type: "string",
+									description: "The text content of the turn.",
+								},
+							},
+							required: ["role", "content"],
+						},
+					},
+				},
+				required: ["turns"],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<import("@chitragupta/tantra").McpToolResult> {
+			const turns = args.turns;
+			if (!Array.isArray(turns) || turns.length === 0) {
+				return { content: [{ type: "text", text: "No turns provided." }], isError: true };
+			}
+
+			const capped = turns.slice(0, 50); // Cap per call to prevent abuse
+
+			try {
+				const sid = await ensureSession();
+				if (!sid) {
+					return { content: [{ type: "text", text: "Session not available." }], isError: true };
+				}
+
+				const { addTurn } = await import("@chitragupta/smriti/session-store");
+				let recorded = 0;
+
+				for (const turn of capped) {
+					const role = (turn as Record<string, unknown>).role;
+					const content = (turn as Record<string, unknown>).content;
+
+					if ((role !== "user" && role !== "assistant") ||
+						typeof content !== "string" || content.length === 0) {
+						continue;
+					}
+
+					const truncated = content.length > 100_000
+						? content.slice(0, 100_000) + "\n...[truncated]"
+						: content;
+
+					await addTurn(sid, projectPath, {
+						turnNumber: 0,
+						role,
+						content: `[conversation] ${truncated}`,
+						agent: role === "user" ? "mcp-client" : "mcp-host",
+						model: "mcp",
+					});
+					recorded++;
+				}
+
+				turnCounter += recorded;
+
+				// Fact extraction on user turns
+				try {
+					const { getFactExtractor } = await import("@chitragupta/smriti/fact-extractor");
+					const extractor = getFactExtractor();
+					for (const turn of capped) {
+						const t = turn as Record<string, unknown>;
+						if (t.role === "user" && typeof t.content === "string" &&
+							t.content.length > 5 && t.content.length < 5000) {
+							await extractor.extractAndSave(
+								t.content,
+								{ type: "global" },
+								{ type: "project", path: projectPath },
+							);
+						}
+					}
+				} catch { /* best-effort */ }
+
+				try { daemonManagerRef?.touch(); } catch { /* best-effort */ }
+
+				return { content: [{ type: "text", text: `Recorded ${recorded} conversation turn(s).` }] };
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Failed to record: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+	mcpTools.push(recordConversationTool);
+
 	// ─── 3. Create MCP server ────────────────────────────────────────
 	const server = new McpServer({
 		name,
@@ -2581,6 +2696,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		daemonManager.start().catch((err) => {
 			process.stderr.write(`[daemon] auto-start failed: ${err}\n`);
 		});
+
+		// Wire daemon touch into tool call recording
+		daemonManagerRef = daemonManager;
 
 		// Add daemon to shutdown sequence
 		const originalShutdown = shutdown;
