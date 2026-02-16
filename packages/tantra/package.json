@@ -1,5 +1,6 @@
 {
 	"name": "@chitragupta/tantra",
+	"private": true,
 	"version": "0.1.0",
 	"description": "MCP server manager with lifecycle state machine, circuit breaker, and capability aggregation",
 	"type": "module",

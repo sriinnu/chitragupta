@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# publish.sh — Build, test, and publish all @chitragupta packages in dependency order.
+# publish.sh — Build, bundle, and publish @yugenlab/chitragupta as a single npm package.
 #
 # Usage:
-#   ./scripts/publish.sh              # dry-run (default)
-#   ./scripts/publish.sh --real       # actually publish to npm
-#   ./scripts/publish.sh --bump patch # bump version before publish (patch|minor|major)
+#   ./scripts/publish.sh                 # dry-run (default)
+#   ./scripts/publish.sh --real          # actually publish to npm
+#   ./scripts/publish.sh --bump patch    # bump version before publish (patch|minor|major)
 #   ./scripts/publish.sh --bump minor --real
 #
 set -euo pipefail
@@ -16,6 +16,7 @@ cd "$ROOT"
 # ── Defaults ──────────────────────────────────────────────────────────
 DRY_RUN=true
 BUMP=""
+SKIP_TESTS=false
 
 # ── Parse flags ───────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -32,11 +33,16 @@ while [[ $# -gt 0 ]]; do
 			fi
 			shift 2
 			;;
+		--skip-tests)
+			SKIP_TESTS=true
+			shift
+			;;
 		--help|-h)
-			echo "Usage: ./scripts/publish.sh [--real] [--bump patch|minor|major]"
+			echo "Usage: ./scripts/publish.sh [--real] [--bump patch|minor|major] [--skip-tests]"
 			echo ""
 			echo "  --real          Actually publish (default is dry-run)"
-			echo "  --bump <level>  Bump version in all packages before publishing"
+			echo "  --bump <level>  Bump version before publishing"
+			echo "  --skip-tests    Skip test suite"
 			echo "  --help          Show this help message"
 			exit 0
 			;;
@@ -47,46 +53,32 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-# ── Publish order (respects dependency graph) ─────────────────────────
-PACKAGES=(
-	core
-	swara
-	anina
-	smriti
-	ui
-	yantra
-	dharma
-	netra
-	vayu
-	sutra
-	tantra
-	vidhya-skills
-	niyanta
-	cli
-)
-
 # ── Colors ────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 info()  { echo -e "${CYAN}[info]${NC}  $*"; }
 ok()    { echo -e "${GREEN}[ok]${NC}    $*"; }
 warn()  { echo -e "${YELLOW}[warn]${NC}  $*"; }
 fail()  { echo -e "${RED}[fail]${NC}  $*"; exit 1; }
 
+echo ""
+echo -e "${CYAN}━━━ @yugenlab/chitragupta publish ━━━${NC}"
+echo ""
+
 # ── Pre-flight checks ────────────────────────────────────────────────
-info "Checking Node.js version..."
+info "Pre-flight checks..."
+
 NODE_VERSION=$(node -v)
 NODE_MAJOR=$(echo "$NODE_VERSION" | sed 's/v\([0-9]*\).*/\1/')
-if [[ "$NODE_MAJOR" -lt 20 ]]; then
-	fail "Node.js >= 20 required (found $NODE_VERSION)"
+if [[ "$NODE_MAJOR" -lt 22 ]]; then
+	fail "Node.js >= 22 required (found $NODE_VERSION)"
 fi
 ok "Node.js $NODE_VERSION"
 
-info "Checking npm auth..."
 if [[ "$DRY_RUN" == false ]]; then
 	if ! npm whoami &>/dev/null; then
 		fail "Not logged in to npm. Run 'npm login' first."
@@ -97,96 +89,126 @@ else
 fi
 
 # ── Version bump ──────────────────────────────────────────────────────
+PUBLISH_JSON="$ROOT/package.publish.json"
+
 if [[ -n "$BUMP" ]]; then
-	info "Bumping version ($BUMP) across all packages..."
-	for pkg in "${PACKAGES[@]}"; do
-		PKG_DIR="$ROOT/packages/$pkg"
-		cd "$PKG_DIR"
-		npm version "$BUMP" --no-git-tag-version --silent
-		NEW_VERSION=$(node -p "require('./package.json').version")
-		ok "  @chitragupta/$pkg -> $NEW_VERSION"
-	done
+	info "Bumping version ($BUMP)..."
 
-	# Update root package.json version too
-	cd "$ROOT"
-	npm version "$BUMP" --no-git-tag-version --silent
-	ROOT_VERSION=$(node -p "require('./package.json').version")
-	ok "  root -> $ROOT_VERSION"
+	CURRENT=$(node -p "JSON.parse(require('fs').readFileSync('$PUBLISH_JSON','utf8')).version")
+	IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
-	# Update cross-references: workspace dependencies should match new version
-	info "Updating cross-package dependency versions..."
-	for pkg in "${PACKAGES[@]}"; do
-		PKG_JSON="$ROOT/packages/$pkg/package.json"
-		# Use node to update @chitragupta/* dependency versions in-place
-		node -e "
-			const fs = require('fs');
-			const pkg = JSON.parse(fs.readFileSync('$PKG_JSON', 'utf8'));
-			let changed = false;
-			for (const depType of ['dependencies', 'devDependencies', 'peerDependencies']) {
-				if (!pkg[depType]) continue;
-				for (const [name, ver] of Object.entries(pkg[depType])) {
-					if (name.startsWith('@chitragupta/') && ver !== '$ROOT_VERSION') {
-						pkg[depType][name] = '$ROOT_VERSION';
-						changed = true;
-					}
-				}
-			}
-			if (changed) {
-				fs.writeFileSync('$PKG_JSON', JSON.stringify(pkg, null, '\t') + '\n');
-			}
-		"
-	done
-	ok "Cross-references updated to $ROOT_VERSION"
+	case "$BUMP" in
+		major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+		minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+		patch) PATCH=$((PATCH + 1)) ;;
+	esac
+
+	NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+
+	# Update package.publish.json
+	node -e "
+		const fs = require('fs');
+		const pkg = JSON.parse(fs.readFileSync('$PUBLISH_JSON', 'utf8'));
+		pkg.version = '$NEW_VERSION';
+		fs.writeFileSync('$PUBLISH_JSON', JSON.stringify(pkg, null, '\t') + '\n');
+	"
+
+	# Update root package.json to match
+	node -e "
+		const fs = require('fs');
+		const pkg = JSON.parse(fs.readFileSync('$ROOT/package.json', 'utf8'));
+		pkg.version = '$NEW_VERSION';
+		fs.writeFileSync('$ROOT/package.json', JSON.stringify(pkg, null, '\t') + '\n');
+	"
+
+	ok "Version bumped: $CURRENT -> $NEW_VERSION"
 fi
+
+VERSION=$(node -p "JSON.parse(require('fs').readFileSync('$PUBLISH_JSON','utf8')).version")
+info "Publishing version: $VERSION"
 
 # ── Clean ─────────────────────────────────────────────────────────────
 info "Cleaning previous builds..."
-npm run clean 2>/dev/null || true
-ok "Clean complete"
+rm -rf "$ROOT/dist"
+pnpm run clean 2>/dev/null || true
+ok "Clean"
 
-# ── Build (in dependency order) ───────────────────────────────────────
-info "Building all packages in dependency order..."
-for pkg in "${PACKAGES[@]}"; do
-	info "  Building @chitragupta/$pkg..."
-	npm run build --workspace="packages/$pkg"
-	ok "  @chitragupta/$pkg built"
-done
-ok "All packages built successfully"
+# ── Build all packages with tsc ──────────────────────────────────────
+info "Building all packages (tsc)..."
+pnpm -r run build
+ok "All packages built"
 
-# ── Test ──────────────────────────────────────────────────────────────
-info "Running tests..."
-if npx vitest run; then
-	ok "All tests passed"
+# ── Bundle with esbuild ──────────────────────────────────────────────
+info "Bundling with esbuild..."
+node scripts/bundle.mjs
+ok "Bundle complete"
+
+# ── Assemble type declarations ────────────────────────────────────────
+info "Assembling type declarations..."
+node scripts/build-types.mjs
+ok "Types assembled"
+
+# ── Prepare dist/ for publishing ──────────────────────────────────────
+info "Preparing dist/ for publish..."
+
+# Copy publishable package.json
+cp "$PUBLISH_JSON" "$ROOT/dist/package.json"
+
+# Copy README (use npm-specific if it exists, otherwise root)
+if [[ -f "$ROOT/README.npm.md" ]]; then
+	cp "$ROOT/README.npm.md" "$ROOT/dist/README.md"
+elif [[ -f "$ROOT/README.md" ]]; then
+	cp "$ROOT/README.md" "$ROOT/dist/README.md"
+fi
+
+# Copy LICENSE
+if [[ -f "$ROOT/LICENSE" ]]; then
+	cp "$ROOT/LICENSE" "$ROOT/dist/LICENSE"
+fi
+
+# Remove metafile (not for publishing)
+rm -f "$ROOT/dist/meta.json"
+
+ok "dist/ ready"
+
+# ── Tests ─────────────────────────────────────────────────────────────
+if [[ "$SKIP_TESTS" == true ]]; then
+	warn "Skipping tests (--skip-tests)"
 else
-	warn "Some tests failed — review output above"
-	if [[ "$DRY_RUN" == false ]]; then
-		fail "Cannot publish with failing tests. Fix tests or use dry-run mode."
+	info "Running tests..."
+	if npx vitest run; then
+		ok "All tests passed"
+	else
+		warn "Some tests failed — review output above"
+		if [[ "$DRY_RUN" == false ]]; then
+			fail "Cannot publish with failing tests. Fix tests or use --skip-tests."
+		fi
 	fi
 fi
 
 # ── Publish ───────────────────────────────────────────────────────────
 echo ""
 if [[ "$DRY_RUN" == true ]]; then
-	info "=== DRY RUN — nothing will be published ==="
-else
-	warn "=== PUBLISHING TO NPM FOR REAL ==="
-fi
-echo ""
-
-PUBLISH_FLAGS=""
-if [[ "$DRY_RUN" == true ]]; then
-	PUBLISH_FLAGS="--dry-run"
-fi
-
-for pkg in "${PACKAGES[@]}"; do
-	info "Publishing @chitragupta/$pkg..."
-	npm publish --workspace="packages/$pkg" $PUBLISH_FLAGS
-	ok "  @chitragupta/$pkg published"
-done
-
-echo ""
-if [[ "$DRY_RUN" == true ]]; then
+	info "=== DRY RUN ==="
+	echo ""
+	info "Package contents:"
+	npm pack --dry-run "$ROOT/dist" 2>&1 | head -50
+	echo ""
 	ok "Dry run complete. Use --real to publish for real."
 else
-	ok "All 14 @chitragupta packages published successfully!"
+	warn "=== PUBLISHING TO NPM ==="
+	echo ""
+
+	# Publish from dist/
+	npm publish "$ROOT/dist"
+	ok "@yugenlab/chitragupta@$VERSION published!"
+
+	# Git tag
+	TAG="v$VERSION"
+	info "Creating git tag: $TAG"
+	git tag "$TAG"
+	ok "Tagged $TAG"
+
+	echo ""
+	ok "Done! Run 'git push && git push --tags' to push."
 fi

@@ -1,5 +1,6 @@
 {
 	"name": "@chitragupta/dharma",
+	"private": true,
 	"version": "0.1.0",
 	"description": "Policy engine with permission guards, rate limiting, and safety constraints",
 	"type": "module",
