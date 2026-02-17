@@ -8,6 +8,7 @@
 import { PARIKARTRU_PROFILE } from "@chitragupta/core";
 
 import { Agent } from "./agent.js";
+import { parseField, extractText } from "./agent-response-parser.js";
 import { safeExecSync } from "./safe-exec.js";
 import type { AgentConfig, AgentMessage, ToolHandler } from "./types.js";
 
@@ -309,7 +310,7 @@ export class RefactorAgent {
 	 * Parse a RefactorPlan from the agent response.
 	 */
 	private parsePlanResponse(message: AgentMessage): RefactorPlan {
-		const text = this.extractText(message);
+		const text = extractText(message);
 		return this.parsePlanFromText(text);
 	}
 
@@ -317,11 +318,11 @@ export class RefactorAgent {
 	 * Parse a RefactorPlan from text.
 	 */
 	private parsePlanFromText(text: string): RefactorPlan {
-		const typeStr = this.parseField(text, "TYPE") ?? "general";
-		const description = this.parseField(text, "DESCRIPTION") ?? "No description provided.";
-		const filesStr = this.parseField(text, "FILES AFFECTED") ?? "";
-		const changesStr = this.parseField(text, "ESTIMATED CHANGES") ?? "0";
-		const risksStr = this.parseField(text, "RISKS") ?? "";
+		const typeStr = parseField(text, "TYPE") ?? "general";
+		const description = parseField(text, "DESCRIPTION") ?? "No description provided.";
+		const filesStr = parseField(text, "FILES AFFECTED") ?? "";
+		const changesStr = parseField(text, "ESTIMATED CHANGES") ?? "0";
+		const risksStr = parseField(text, "RISKS") ?? "";
 
 		const validTypes = new Set<RefactorType>(["rename", "extract", "inline", "move", "simplify", "modernize", "general"]);
 		const type: RefactorType = validTypes.has(typeStr.toLowerCase() as RefactorType)
@@ -347,7 +348,7 @@ export class RefactorAgent {
 	 * Parse a RefactorPlan from a result response (which has both plan and result fields).
 	 */
 	private parsePlanFromResult(message: AgentMessage): RefactorPlan {
-		const text = this.extractText(message);
+		const text = extractText(message);
 		return this.parsePlanFromText(text);
 	}
 
@@ -355,12 +356,12 @@ export class RefactorAgent {
 	 * Parse the full RefactorResult from the agent response.
 	 */
 	private parseResultResponse(message: AgentMessage, plan: RefactorPlan): RefactorResult {
-		const text = this.extractText(message);
+		const text = extractText(message);
 
-		const filesModifiedStr = this.parseField(text, "FILES MODIFIED") ?? "";
-		const successStr = this.parseField(text, "SUCCESS") ?? "NO";
-		const summary = this.parseField(text, "SUMMARY") ?? "Refactoring completed.";
-		const rollbackCommand = this.parseField(text, "ROLLBACK");
+		const filesModifiedStr = parseField(text, "FILES MODIFIED") ?? "";
+		const successStr = parseField(text, "SUCCESS") ?? "NO";
+		const summary = parseField(text, "SUMMARY") ?? "Refactoring completed.";
+		const rollbackCommand = parseField(text, "ROLLBACK");
 
 		const filesModified = filesModifiedStr
 			.split(/[,\n]/)
@@ -429,23 +430,4 @@ export class RefactorAgent {
 		return !!(this.config.buildCommand ?? this.config.testCommand);
 	}
 
-	/**
-	 * Parse a labeled field from the agent's text response.
-	 */
-	private parseField(text: string, field: string): string | undefined {
-		const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(`^${escaped}:\\s*(.+?)$`, "im");
-		const match = text.match(regex);
-		return match ? match[1].trim() : undefined;
-	}
-
-	/**
-	 * Extract plain text from an agent message.
-	 */
-	private extractText(message: AgentMessage): string {
-		return message.content
-			.filter((p) => p.type === "text")
-			.map((p) => (p as { type: "text"; text: string }).text)
-			.join("\n");
-	}
 }

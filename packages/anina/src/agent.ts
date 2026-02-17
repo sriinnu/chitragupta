@@ -561,7 +561,6 @@ export class Agent implements TreeAgent {
       throw new Error("Mesh integration not enabled. Provide actorSystem in AgentConfig.");
     }
     const targetActorId = targetAgentId.startsWith("agent:") ? targetAgentId : `agent:${targetAgentId}`;
-    this.actorRef.tell(`agent:${this.id}`, { ...message as object }, { topic: "agent-message" });
     this.actorSystem.tell(`agent:${this.id}`, targetActorId, message);
   }
 

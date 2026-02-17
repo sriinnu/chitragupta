@@ -9,6 +9,7 @@
 import { SHODHAKA_PROFILE } from "@chitragupta/core";
 
 import { Agent } from "./agent.js";
+import { parseField, extractText } from "./agent-response-parser.js";
 import type { AgentConfig, AgentMessage, ToolHandler } from "./types.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -264,12 +265,12 @@ export class ResearchAgent {
 	 * Parse the agent's response into a structured ResearchResult.
 	 */
 	private parseResearchResponse(message: AgentMessage): ResearchResult {
-		const text = this.extractText(message);
+		const text = extractText(message);
 
-		const answer = this.parseField(text, "ANSWER") ?? text.slice(0, 500);
-		const confidenceStr = this.parseField(text, "CONFIDENCE") ?? "0.7";
-		const filesStr = this.parseField(text, "FILES EXAMINED") ?? "";
-		const relatedStr = this.parseField(text, "RELATED TOPICS") ?? "";
+		const answer = parseField(text, "ANSWER") ?? text.slice(0, 500);
+		const confidenceStr = parseField(text, "CONFIDENCE") ?? "0.7";
+		const filesStr = parseField(text, "FILES EXAMINED") ?? "";
+		const relatedStr = parseField(text, "RELATED TOPICS") ?? "";
 
 		// Parse confidence
 		const confidence = Math.max(0, Math.min(1, parseFloat(confidenceStr) || 0.7));
@@ -335,23 +336,4 @@ export class ResearchAgent {
 		return refs;
 	}
 
-	/**
-	 * Parse a labeled field from the agent's text response.
-	 */
-	private parseField(text: string, field: string): string | undefined {
-		const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(`^${escaped}:\\s*(.+?)$`, "im");
-		const match = text.match(regex);
-		return match ? match[1].trim() : undefined;
-	}
-
-	/**
-	 * Extract plain text from an agent message.
-	 */
-	private extractText(message: AgentMessage): string {
-		return message.content
-			.filter((p) => p.type === "text")
-			.map((p) => (p as { type: "text"; text: string }).text)
-			.join("\n");
-	}
 }

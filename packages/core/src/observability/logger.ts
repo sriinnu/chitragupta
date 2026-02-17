@@ -121,9 +121,11 @@ const LEVEL_COLORS: Record<LogLevel, string> = {
  */
 export class ConsoleTransport implements LogTransport {
 	private readonly useColors: boolean;
+	private readonly forceStderr: boolean;
 
-	constructor(opts?: { colors?: boolean }) {
+	constructor(opts?: { colors?: boolean; forceStderr?: boolean }) {
 		this.useColors = opts?.colors ?? (process.stdout.isTTY ?? false);
+		this.forceStderr = opts?.forceStderr ?? false;
 	}
 
 	write(entry: LogEntry): void {
@@ -161,7 +163,9 @@ export class ConsoleTransport implements LogTransport {
 			}
 		}
 
-		const stream = entry.level >= LogLevel.ERROR ? process.stderr : process.stdout;
+		const stream = this.forceStderr
+			? process.stderr
+			: (entry.level >= LogLevel.ERROR ? process.stderr : process.stdout);
 		stream.write(line + "\n");
 	}
 }
@@ -171,6 +175,12 @@ export class ConsoleTransport implements LogTransport {
  * Outputs one JSON object per line to stdout/stderr.
  */
 export class JsonTransport implements LogTransport {
+	private readonly forceStderr: boolean;
+
+	constructor(opts?: { forceStderr?: boolean }) {
+		this.forceStderr = opts?.forceStderr ?? false;
+	}
+
 	write(entry: LogEntry): void {
 		const obj: Record<string, unknown> = {
 			timestamp: entry.timestamp,
@@ -188,7 +198,9 @@ export class JsonTransport implements LogTransport {
 		if (entry.error) obj.error = entry.error;
 		if (entry.duration !== undefined) obj.duration = entry.duration;
 
-		const stream = entry.level >= LogLevel.ERROR ? process.stderr : process.stdout;
+		const stream = this.forceStderr
+			? process.stderr
+			: (entry.level >= LogLevel.ERROR ? process.stderr : process.stdout);
 		stream.write(JSON.stringify(obj) + "\n");
 	}
 }
