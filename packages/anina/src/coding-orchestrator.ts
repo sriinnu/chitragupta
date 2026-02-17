@@ -1348,11 +1348,6 @@ Rules:
 		}
 	}
 
-	private escapeForShell(str: string): string {
-		// Escape double quotes and backslashes for shell safety
-		return str.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
-	}
-
 	/** Clean up orchestrator stash entries after successful commit. */
 	private cleanupStash(): void {
 		try {

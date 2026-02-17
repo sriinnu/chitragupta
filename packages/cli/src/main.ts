@@ -43,8 +43,6 @@ import {
 import type { Session } from "@chitragupta/smriti/types";
 import { getAllTools } from "@chitragupta/yantra";
 
-import { PolicyEngine, STANDARD_PRESET } from "@chitragupta/dharma";
-import type { PolicyAction, PolicyContext } from "@chitragupta/dharma";
 import { CommHub } from "@chitragupta/sutra";
 
 import { KaalaBrahma } from "@chitragupta/anina";
@@ -75,7 +73,6 @@ import {
 	formatProviderSummary,
 	resolvePreferredProvider,
 	getBuiltinTools,
-	getActionType,
 	createEmbeddingProviderInstance,
 } from "./bootstrap.js";
 
@@ -210,6 +207,81 @@ export async function main(args: ParsedArgs): Promise<void> {
 		manas = new Manas();
 	} catch (e) {
 		log.debug("Manas unavailable", { error: String(e) });
+	}
+
+	// ─── 5b-0. Handle 'swapna' subcommand (Consolidation) ───────────────
+	if (args.command === "swapna") {
+		const targetDate = args.subcommand ?? new Date().toISOString().slice(0, 10);
+		process.stdout.write(`\n  Swapna — Memory Consolidation\n`);
+		process.stdout.write(`  Date: ${targetDate}\n\n`);
+
+		try {
+			const { ConsolidationEngine, VidhiEngine } = await import("@chitragupta/smriti");
+
+			process.stdout.write(`  [1/6] LOAD — Loading existing knowledge rules...\n`);
+			const consolidator = new ConsolidationEngine();
+			consolidator.load();
+
+			process.stdout.write(`  [2/6] REPLAY — Gathering recent sessions...\n`);
+			const recentMetas = listSessions(projectPath).slice(0, 10);
+			const recentSessions: Session[] = [];
+			for (const meta of recentMetas) {
+				try {
+					const s = loadSession(meta.id, projectPath);
+					if (s) recentSessions.push(s);
+				} catch { /* skip unloadable */ }
+			}
+			process.stdout.write(`    Found ${recentSessions.length} sessions to analyze.\n`);
+
+			if (recentSessions.length === 0) {
+				process.stdout.write(`\n  No sessions to consolidate. Run some sessions first.\n\n`);
+				process.exit(0);
+			}
+
+			process.stdout.write(`  [3/6] RECOMBINE — Extracting knowledge rules...\n`);
+			const result = consolidator.consolidate(recentSessions);
+
+			process.stdout.write(`  [4/6] CRYSTALLIZE — Decaying old rules, pruning weak ones...\n`);
+			consolidator.decayRules();
+			consolidator.pruneRules();
+
+				process.stdout.write(`  [5/6] PROCEDURALIZE — Extracting tool sequences into Vidhis...\n`);
+				let vidhiResult: { newVidhis: unknown[]; reinforced: unknown[] } | undefined;
+				try {
+					const vidhiEngine = new VidhiEngine({ project: projectPath });
+					vidhiResult = vidhiEngine.extract();
+				} catch { /* vidhi extraction is optional */ }
+
+			process.stdout.write(`  [6/6] COMPRESS — Persisting consolidated knowledge...\n`);
+			consolidator.save();
+
+			process.stdout.write(`\n  Swapna Consolidation Complete\n`);
+			process.stdout.write(`  Sessions analyzed:    ${result.sessionsAnalyzed}\n`);
+			process.stdout.write(`  New rules learned:    ${result.newRules.length}\n`);
+			process.stdout.write(`  Rules reinforced:     ${result.reinforcedRules.length}\n`);
+			process.stdout.write(`  Rules weakened:       ${result.weakenedRules.length}\n`);
+			process.stdout.write(`  Patterns detected:    ${result.patternsDetected.length}\n`);
+			if (vidhiResult) {
+				process.stdout.write(`  New vidhis:           ${vidhiResult.newVidhis.length}\n`);
+				process.stdout.write(`  Vidhis reinforced:    ${vidhiResult.reinforced.length}\n`);
+			}
+
+			if (result.newRules.length > 0) {
+				process.stdout.write(`\n  New rules:\n`);
+				for (const rule of result.newRules.slice(0, 10)) {
+					process.stdout.write(`    - [${rule.category}] ${rule.rule}\n`);
+				}
+				if (result.newRules.length > 10) {
+					process.stdout.write(`    ... and ${result.newRules.length - 10} more.\n`);
+				}
+			}
+			process.stdout.write(`\n`);
+		} catch (err) {
+			process.stderr.write(`\n  Error: ${err instanceof Error ? err.message : String(err)}\n\n`);
+			process.exit(1);
+		}
+
+		process.exit(0);
 	}
 
 	// ─── 5b. Handle 'serve' subcommand (HTTP API gateway) ───────────────
@@ -350,89 +422,10 @@ export async function main(args: ParsedArgs): Promise<void> {
 			bridge.registerToolsAsSkills(toolDefs);
 
 			// Load Agent Skills with candidate-set priorities + live-reload watchers
-			// Priority: skills-core=4, ecosystem/skills=3, skill-lab=2, skill-community=1
-			// Canonical structure per tier:
-			//   core/stable/community: <tier>/<skill-name>/SKILL.md
-			//   skill-lab lanes: <tier>/{auto|incubator}/<skill-name>/SKILL.md
 			try {
-				const { SkillDiscovery: SD } = await import("@chitragupta/vidhya-skills");
-				const chitraguptaRoot = path.resolve(
-					path.dirname(new URL(import.meta.url).pathname),
-					"..", "..", "..",
-				);
-				const ecosystemRoot = path.resolve(chitraguptaRoot, "..", "ecosystem");
-				const discovery = new SD();
-
-				const isAllowedSkillManifestPath = (tierDir: string, filePath: string): boolean => {
-					const rel = path.relative(tierDir, filePath);
-					if (rel.startsWith("..") || path.isAbsolute(rel)) return false;
-					const parts = rel.split(path.sep).filter(Boolean);
-					if (parts.length === 2 && parts[1].toLowerCase() === "skill.md") {
-						return true;
-					}
-					if (
-						path.basename(tierDir) === "skill-lab" &&
-						parts.length === 3 &&
-						(parts[0] === "auto" || parts[0] === "incubator") &&
-						parts[2].toLowerCase() === "skill.md"
-					) {
-						return true;
-					}
-					return false;
-				};
-
-				const loadTier = async (dir: string, priority: number) => {
-					const discovered = await discovery.discoverFromDirectory(dir);
-					let skippedNonFlat = 0;
-					for (const skill of discovered) {
-						const sp = skill.source?.type === "manual" ? (skill.source as { filePath?: string }).filePath : undefined;
-						if (!sp || !isAllowedSkillManifestPath(dir, sp)) {
-							skippedNonFlat += 1;
-							continue;
-						}
-						skillReg.registerWithPriority(skill, priority, sp);
-					}
-					if (skippedNonFlat > 0) {
-						log.debug("Agent skills skipped (non-flat path)", { dir, skippedNonFlat });
-					}
-				};
-
-				const watchTier = (dir: string, priority: number) => {
-					const cleanup = discovery.watchDirectory(dir, (event) => {
-						if (!isAllowedSkillManifestPath(dir, event.filePath)) return;
-						if (event.type === "removed") {
-							skillReg.unregisterBySourcePath(event.filePath);
-						} else if (event.manifest) {
-							skillReg.registerWithPriority(event.manifest, priority, event.filePath);
-						}
-					});
-					skillWatcherCleanups.push(cleanup);
-				};
-
-				// Tier 1: skills-core (project-local + builtin) — priority 4
-				for (const root of [projectPath, chitraguptaRoot]) {
-					const dir = path.resolve(root, "skills-core");
-					await loadTier(dir, 4);
-					watchTier(dir, 4);
-				}
-				// Tier 2: ecosystem/skills (approved, vetted) — priority 3
-				{
-					const dir = path.resolve(ecosystemRoot, "skills");
-					await loadTier(dir, 3);
-					watchTier(dir, 3);
-				}
-				// Tier 3: ecosystem/skill-lab (experimental) — priority 2
-				{
-					const dir = path.resolve(ecosystemRoot, "skill-lab");
-					await loadTier(dir, 2);
-					watchTier(dir, 2);
-				}
-				// Tier 4: ecosystem/skill-community (disabled by default) — priority 1
-				if (process.env.VAAYU_SKILL_COMMUNITY_ENABLED === "true") {
-					const dir = path.resolve(ecosystemRoot, "skill-community");
-					await loadTier(dir, 1);
-					watchTier(dir, 1);
-				}
+				const { loadSkillTiers } = await import("./shared-factories.js");
+				const tierResult = await loadSkillTiers({ projectPath, skillRegistry: skillReg });
+				skillWatcherCleanups.push(...tierResult.watcherCleanups);
 			} catch (e) { log.debug("Agent skill loading failed", { error: String(e) }); }
 
 			let scanner: InstanceType<typeof SurakshaScanner> | undefined;
@@ -479,27 +472,12 @@ export async function main(args: ParsedArgs): Promise<void> {
 				tools: servTools,
 			});
 
-			// Create KaalaBrahma for serve-mode lifecycle tracking
-			let servKaala: import("@chitragupta/anina").KaalaLifecycle | undefined;
-			try {
-				servKaala = new KaalaBrahma({
-					heartbeatInterval: 5000,
-					staleThreshold: 30000,
-					maxAgentDepth: 5,
-					maxSubAgents: 8,
-				}) as unknown as import("@chitragupta/anina").KaalaLifecycle;
-			} catch { /* best-effort */ }
-
-			// Create ActorSystem for serve-mode P2P mesh
-			let servActorSystem: import("@chitragupta/anina").MeshActorSystem | undefined;
-			let servActorSystemShutdown: (() => void) | undefined;
-			try {
-				const { ActorSystem } = await import("@chitragupta/sutra");
-				const sys = new ActorSystem({ maxMailboxSize: 5_000 });
-				sys.start();
-				servActorSystem = sys as unknown as import("@chitragupta/anina").MeshActorSystem;
-				servActorSystemShutdown = () => sys.shutdown();
-			} catch { /* best-effort */ }
+			// Create mesh infrastructure for serve-mode (KaalaBrahma, ActorSystem, Samiti, Lokapala)
+			const { createPolicyAdapter, createMeshInfrastructure } = await import("./shared-factories.js");
+			const servMesh = await createMeshInfrastructure();
+			const servKaala = servMesh.kaala;
+			const servActorSystem = servMesh.actorSystem;
+			const servActorSystemShutdown = servMesh.actorSystemShutdown;
 
 			// Create CommHub for serve-mode IPC
 			let servCommHub: import("@chitragupta/sutra").CommHub | undefined;
@@ -511,43 +489,11 @@ export async function main(args: ParsedArgs): Promise<void> {
 			} catch { /* best-effort */ }
 
 			// Create policy engine for serve-mode security
-			let servPolicyEngine: import("@chitragupta/anina").AgentConfig["policyEngine"] | undefined;
-			try {
-				const { PolicyEngine, STANDARD_PRESET } = await import("@chitragupta/dharma");
-				const preset = STANDARD_PRESET;
-				const engine = new PolicyEngine(preset.config);
-				for (const ps of preset.policySets) engine.addPolicySet(ps);
-
-				servPolicyEngine = {
-					check(toolName: string, toolArgs: Record<string, unknown>) {
-						const actionType = getActionType(toolName);
-						const action = {
-							type: actionType, tool: toolName, args: toolArgs,
-							filePath: (toolArgs.path ?? toolArgs.file_path ?? toolArgs.filePath) as string | undefined,
-							command: (toolArgs.command ?? toolArgs.cmd) as string | undefined,
-							content: (toolArgs.content ?? toolArgs.text) as string | undefined,
-							url: (toolArgs.url ?? toolArgs.uri) as string | undefined,
-						};
-						const context = {
-							sessionId: "coding-serve", agentId: "kartru", agentDepth: 0, projectPath,
-							totalCostSoFar: 0, costBudget: preset.config.costBudget,
-							filesModified: [] as string[], commandsRun: [] as string[], timestamp: Date.now(),
-						};
-						try {
-							for (const ps of preset.policySets) {
-								for (const rule of ps.rules) {
-									const verdict = rule.evaluate(action, context);
-									if (verdict && typeof verdict === "object" && "status" in verdict && !("then" in verdict)) {
-										const v = verdict as { status: string; reason: string };
-										if (v.status === "deny") return { allowed: false, reason: v.reason };
-									}
-								}
-							}
-						} catch { /* allow */ }
-						return { allowed: true };
-					},
-				};
-			} catch { /* dharma is optional */ }
+			const servPolicyEngine = await createPolicyAdapter({
+				sessionId: "coding-serve",
+				agentId: "kartru",
+				projectPath,
+			});
 
 			const servAgentConfig: AgentConfig = {
 				profile,
@@ -814,82 +760,10 @@ export async function main(args: ParsedArgs): Promise<void> {
 		bridge.registerToolsAsSkills(toolDefs);
 
 		// Load Agent Skills with candidate-set priorities + live-reload watchers
-		// Priority: skills-core=4, ecosystem/skills=3, skill-lab=2, skill-community=1
-		// Canonical structure per tier:
-		//   core/stable/community: <tier>/<skill-name>/SKILL.md
-		//   skill-lab lanes: <tier>/{auto|incubator}/<skill-name>/SKILL.md
 		try {
-			const { SkillDiscovery: SD } = await import("@chitragupta/vidhya-skills");
-			const chitraguptaRoot = path.resolve(
-				path.dirname(new URL(import.meta.url).pathname),
-				"..", "..", "..",
-			);
-			const ecosystemRoot = path.resolve(chitraguptaRoot, "..", "ecosystem");
-			const discovery = new SD();
-
-			const isAllowedSkillManifestPath = (tierDir: string, filePath: string): boolean => {
-				const rel = path.relative(tierDir, filePath);
-				if (rel.startsWith("..") || path.isAbsolute(rel)) return false;
-				const parts = rel.split(path.sep).filter(Boolean);
-				if (parts.length === 2 && parts[1].toLowerCase() === "skill.md") {
-					return true;
-				}
-				if (
-					path.basename(tierDir) === "skill-lab" &&
-					parts.length === 3 &&
-					(parts[0] === "auto" || parts[0] === "incubator") &&
-					parts[2].toLowerCase() === "skill.md"
-				) {
-					return true;
-				}
-				return false;
-			};
-
-			const loadTier = async (dir: string, priority: number) => {
-				const discovered = await discovery.discoverFromDirectory(dir);
-				for (const skill of discovered) {
-					const sp = skill.source?.type === "manual" ? (skill.source as { filePath?: string }).filePath : undefined;
-					if (!sp || !isAllowedSkillManifestPath(dir, sp)) continue;
-					skillRegistry.registerWithPriority(skill, priority, sp);
-				}
-			};
-
-			const watchTier = (dir: string, priority: number) => {
-				const cleanup = discovery.watchDirectory(dir, (event) => {
-					if (!isAllowedSkillManifestPath(dir, event.filePath)) return;
-					if (event.type === "removed") {
-						skillRegistry.unregisterBySourcePath(event.filePath);
-					} else if (event.manifest) {
-						skillRegistry.registerWithPriority(event.manifest, priority, event.filePath);
-					}
-				});
-				mcpSkillWatcherCleanups.push(cleanup);
-			};
-
-			// Tier 1: skills-core (project-local + builtin) — priority 4
-			for (const root of [projectPath, chitraguptaRoot]) {
-				const dir = path.resolve(root, "skills-core");
-				await loadTier(dir, 4);
-				watchTier(dir, 4);
-			}
-			// Tier 2: ecosystem/skills (approved, vetted) — priority 3
-			{
-				const dir = path.resolve(ecosystemRoot, "skills");
-				await loadTier(dir, 3);
-				watchTier(dir, 3);
-			}
-			// Tier 3: ecosystem/skill-lab (experimental) — priority 2
-			{
-				const dir = path.resolve(ecosystemRoot, "skill-lab");
-				await loadTier(dir, 2);
-				watchTier(dir, 2);
-			}
-			// Tier 4: ecosystem/skill-community (disabled by default) — priority 1
-			if (process.env.VAAYU_SKILL_COMMUNITY_ENABLED === "true") {
-				const dir = path.resolve(ecosystemRoot, "skill-community");
-				await loadTier(dir, 1);
-				watchTier(dir, 1);
-			}
+			const { loadSkillTiers } = await import("./shared-factories.js");
+			const tierResult = await loadSkillTiers({ projectPath, skillRegistry });
+			mcpSkillWatcherCleanups.push(...tierResult.watcherCleanups);
 		} catch {
 			// Agent skill loading is best-effort
 		}
@@ -979,72 +853,12 @@ export async function main(args: ParsedArgs): Promise<void> {
 	// ─── 7c. Wire dharma policy engine ──────────────────────────────────
 	let policyAdapter: AgentConfig["policyEngine"];
 	try {
-		const preset = STANDARD_PRESET;
-		const dharmaEngine = new PolicyEngine(preset.config);
-		for (const ps of preset.policySets) {
-			dharmaEngine.addPolicySet(ps);
-		}
-
-		// Synchronous adapter: builds a PolicyAction from tool name + args
-		// and evaluates rules synchronously (all built-in rules are sync).
-		//
-		// CRITICAL: getActionType() maps tool names to the correct PolicyAction
-		// type (shell_exec, file_read, file_write, file_delete, network_request)
-		// so that dharma security rules actually match and fire. Without this,
-		// all actions arrive as "tool_call" and every security rule is bypassed.
-		policyAdapter = {
-			check(toolName: string, args: Record<string, unknown>): { allowed: boolean; reason?: string } {
-				const actionType = getActionType(toolName);
-				const action: PolicyAction = {
-					type: actionType,
-					tool: toolName,
-					args,
-					filePath: (args.path ?? args.file_path ?? args.filePath) as string | undefined,
-					command: (args.command ?? args.cmd) as string | undefined,
-					content: (args.content ?? args.text) as string | undefined,
-					url: (args.url ?? args.uri) as string | undefined,
-				};
-				const context: PolicyContext = {
-					sessionId: "cli",
-					agentId: "root",
-					agentDepth: 0,
-					projectPath,
-					totalCostSoFar: 0,
-					costBudget: preset.config.costBudget,
-					filesModified: [],
-					commandsRun: [],
-					timestamp: Date.now(),
-				};
-
-				// Fire-and-forget async enforce; use synchronous rule evaluation as fallback
-				// Since all built-in dharma rules return sync PolicyVerdict, we can call
-				// evaluate() and handle the results synchronously via the returned value.
-				let blocked = false;
-				let reason: string | undefined;
-				try {
-					// Synchronously iterate rules — evaluate() may return a Promise,
-					// but built-in rules return plain PolicyVerdict objects.
-					const verdicts: Array<{ status: string; reason: string }> = [];
-					for (const ps of preset.policySets) {
-						for (const rule of ps.rules) {
-							const result = rule.evaluate(action, context);
-							// If the result is a plain object (not a Promise), use it directly
-							if (result && typeof result === "object" && "status" in result && !("then" in result)) {
-								verdicts.push(result as { status: string; reason: string });
-							}
-						}
-					}
-					const deny = verdicts.find((v) => v.status === "deny");
-					if (deny) {
-						blocked = true;
-						reason = deny.reason;
-					}
-				} catch {
-					// Rule evaluation failed — allow by default to avoid blocking the agent
-				}
-				return blocked ? { allowed: false, reason } : { allowed: true };
-			},
-		};
+		const { createPolicyAdapter } = await import("./shared-factories.js");
+		policyAdapter = await createPolicyAdapter({
+			sessionId: "cli",
+			agentId: "root",
+			projectPath,
+		});
 	} catch (e) {
 		log.debug("Dharma policy engine unavailable", { error: String(e) });
 	}

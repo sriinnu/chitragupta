@@ -26,6 +26,9 @@ mcp-state.json
 # Claude Code local config
 .claude/
 
+# Codex local config
+.codex/
+
 # Local machine-specific config
 .mcp.json
 settings.local.json

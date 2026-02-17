@@ -16,6 +16,7 @@
 import { ANVESHI_PROFILE } from "@chitragupta/core";
 
 import { Agent } from "./agent.js";
+import { parseField, extractText } from "./agent-response-parser.js";
 import { safeExecSync } from "./safe-exec.js";
 import type { AgentConfig, AgentMessage, ToolHandler } from "./types.js";
 
@@ -356,14 +357,14 @@ export class DebugAgent {
 	 * Parse the agent's response into a structured DebugResult.
 	 */
 	private parseDebugResponse(message: AgentMessage): DebugResult {
-		const text = this.extractText(message);
+		const text = extractText(message);
 
-		const rootCause = this.parseField(text, "ROOT CAUSE") ?? "Unable to determine root cause.";
-		const proposedFix = this.parseField(text, "PROPOSED FIX") ?? "No fix proposed.";
-		const confidenceStr = this.parseField(text, "CONFIDENCE") ?? "0.5";
-		const bugLocationStr = this.parseField(text, "BUG LOCATION");
-		const filesStr = this.parseField(text, "FILES INVESTIGATED") ?? "";
-		const fixAppliedStr = this.parseField(text, "FIX APPLIED");
+		const rootCause = parseField(text, "ROOT CAUSE") ?? "Unable to determine root cause.";
+		const proposedFix = parseField(text, "PROPOSED FIX") ?? "No fix proposed.";
+		const confidenceStr = parseField(text, "CONFIDENCE") ?? "0.5";
+		const bugLocationStr = parseField(text, "BUG LOCATION");
+		const filesStr = parseField(text, "FILES INVESTIGATED") ?? "";
+		const fixAppliedStr = parseField(text, "FIX APPLIED");
 
 		// Parse confidence
 		const confidence = Math.max(0, Math.min(1, parseFloat(confidenceStr) || 0.5));
@@ -394,18 +395,6 @@ export class DebugAgent {
 			fixApplied,
 			confidence,
 		};
-	}
-
-	/**
-	 * Parse a labeled field from the agent's text response.
-	 * Matches "FIELD: value" patterns, capturing everything after the colon.
-	 */
-	private parseField(text: string, field: string): string | undefined {
-		// Escape regex special chars in the field name
-		const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(`^${escaped}:\\s*(.+?)$`, "im");
-		const match = text.match(regex);
-		return match ? match[1].trim() : undefined;
 	}
 
 	/**
@@ -512,13 +501,4 @@ export class DebugAgent {
 		return !!(this.config.buildCommand ?? this.config.testCommand);
 	}
 
-	/**
-	 * Extract plain text from an agent message.
-	 */
-	private extractText(message: AgentMessage): string {
-		return message.content
-			.filter((p) => p.type === "text")
-			.map((p) => (p as { type: "text"; text: string }).text)
-			.join("\n");
-	}
 }

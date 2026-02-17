@@ -15,6 +15,7 @@
 import { PARIKSHAKA_PROFILE } from "@chitragupta/core";
 
 import { Agent } from "./agent.js";
+import { extractText } from "./agent-response-parser.js";
 import { safeExecSync, validateCommand } from "./safe-exec.js";
 import type { AgentConfig, AgentMessage, ToolHandler } from "./types.js";
 
@@ -311,7 +312,7 @@ export class ReviewAgent {
 	 * Parse the agent's response into a structured ReviewResult.
 	 */
 	private parseReviewResponse(message: AgentMessage, filesReviewed: string[]): ReviewResult {
-		const text = this.extractText(message);
+		const text = extractText(message);
 		const issues = this.parseIssues(text);
 		const summary = this.parseSummary(text);
 		const overallScore = this.parseScore(text, issues);
@@ -415,16 +416,6 @@ export class ReviewAgent {
 		if (lower.startsWith("perf")) return "performance";
 		if (lower.startsWith("test")) return "testing";
 		return "bugs"; // Default fallback
-	}
-
-	/**
-	 * Extract plain text from an agent message.
-	 */
-	private extractText(message: AgentMessage): string {
-		return message.content
-			.filter((p) => p.type === "text")
-			.map((p) => (p as { type: "text"; text: string }).text)
-			.join("\n");
 	}
 
 	/**

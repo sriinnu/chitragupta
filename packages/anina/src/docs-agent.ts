@@ -8,6 +8,7 @@
 import { LEKHAKA_PROFILE } from "@chitragupta/core";
 
 import { Agent } from "./agent.js";
+import { parseField, extractText } from "./agent-response-parser.js";
 import type { AgentConfig, AgentMessage, ToolHandler } from "./types.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -289,12 +290,12 @@ export class DocsAgent {
 	 * Parse the agent's response into a structured DocsResult.
 	 */
 	private parseDocsResponse(message: AgentMessage): DocsResult {
-		const text = this.extractText(message);
+		const text = extractText(message);
 
-		const filesModifiedStr = this.parseField(text, "FILES MODIFIED") ?? "";
-		const filesCreatedStr = this.parseField(text, "FILES CREATED") ?? "";
-		const summary = this.parseField(text, "SUMMARY") ?? "Documentation completed.";
-		const wordCountStr = this.parseField(text, "WORD COUNT") ?? "0";
+		const filesModifiedStr = parseField(text, "FILES MODIFIED") ?? "";
+		const filesCreatedStr = parseField(text, "FILES CREATED") ?? "";
+		const summary = parseField(text, "SUMMARY") ?? "Documentation completed.";
+		const wordCountStr = parseField(text, "WORD COUNT") ?? "0";
 
 		const filesModified = filesModifiedStr
 			.split(/[,\n]/)
@@ -316,23 +317,4 @@ export class DocsAgent {
 		};
 	}
 
-	/**
-	 * Parse a labeled field from the agent's text response.
-	 */
-	private parseField(text: string, field: string): string | undefined {
-		const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(`^${escaped}:\\s*(.+?)$`, "im");
-		const match = text.match(regex);
-		return match ? match[1].trim() : undefined;
-	}
-
-	/**
-	 * Extract plain text from an agent message.
-	 */
-	private extractText(message: AgentMessage): string {
-		return message.content
-			.filter((p) => p.type === "text")
-			.map((p) => (p as { type: "text"; text: string }).text)
-			.join("\n");
-	}
 }
