@@ -137,6 +137,14 @@ export interface CognitiveReport {
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
+/** Optional Triguna configuration passed through ChetanaConfig. */
+export interface ChetanaTrigunaConfig {
+	/** Whether to integrate Triguna health monitoring. Default: false. */
+	enabled: boolean;
+	/** Triguna config overrides (passed to Triguna constructor). */
+	trigunaOverrides?: Record<string, unknown>;
+}
+
 /** Configuration for the Chetana consciousness layer. */
 export interface ChetanaConfig {
 	/** Whether chetana is enabled. Default: true. */
@@ -173,6 +181,8 @@ export interface ChetanaConfig {
 	maxIntentions: number;
 	/** Maximum evidence entries per intention. Default: 20. */
 	maxEvidencePerIntention: number;
+	/** Optional Triguna health monitor integration. */
+	triguna?: ChetanaTrigunaConfig;
 }
 
 /** Cognitive priors on an AgentProfile — tunable personality knobs. */

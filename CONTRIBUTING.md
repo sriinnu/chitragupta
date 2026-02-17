@@ -23,7 +23,7 @@ cd chitragupta
 # Install dependencies
 pnpm install
 
-# Build all 14 packages (in dependency order)
+# Build all 15 packages (in dependency order)
 pnpm run build
 
 # Run all tests
@@ -57,7 +57,7 @@ pnpm run test:watch
 
 ## Project Structure
 
-Chitragupta is a TypeScript ESM monorepo with 14 packages under `packages/`:
+Chitragupta is a TypeScript ESM monorepo with 15 packages under `packages/`:
 
 | Package | What It Does | Internal Name |
 |---------|-------------|---------------|
@@ -75,6 +75,7 @@ Chitragupta is a TypeScript ESM monorepo with 14 packages under `packages/`:
 | `vidhya-skills` | Skills — trait vector matching, evolution, autonomous learning | Vidhya (Knowledge) |
 | `niyanta` | Orchestrator — multi-armed bandit, task routing, scaling | Niyanta (Director) |
 | `cli` | Entry Point — interactive CLI, HTTP server, MCP server | — |
+| `darpana` | LLM Proxy — mirrors Anthropic API to any provider | Darpana (Mirror) |
 
 ---
 
@@ -181,7 +182,7 @@ pnpm run test:coverage
 - **All tests must pass** — no exceptions
 - **New features require tests** — unit tests at minimum, E2E for complex flows
 - **Bug fixes require a regression test** — prove the fix works
-- Current stats: 248 test files, 9,121 tests, 0 failures
+- Current stats: 300 test files, 10,232 tests, 0 failures
 
 ### Test Structure
 

@@ -51,6 +51,14 @@ export interface ResearchAgentConfig {
 	commHub?: AgentConfig["commHub"];
 	/** Policy engine adapter. */
 	policyEngine?: AgentConfig["policyEngine"];
+	/** Samiti for ambient channel broadcasts. */
+	samiti?: AgentConfig["samiti"];
+	/** Lokapala guardians for tool call scanning. */
+	lokapala?: AgentConfig["lokapala"];
+	/** ActorSystem for P2P mesh communication. */
+	actorSystem?: AgentConfig["actorSystem"];
+	/** KaalaBrahma lifecycle manager. */
+	kaala?: AgentConfig["kaala"];
 }
 
 /** A structured research query. */
@@ -121,6 +129,10 @@ export class ResearchAgent {
 			workingDirectory: config.workingDirectory,
 			policyEngine: config.policyEngine,
 			commHub: config.commHub,
+			actorSystem: config.actorSystem,
+			samiti: config.samiti,
+			lokapala: config.lokapala,
+			kaala: config.kaala,
 		};
 
 		this.agent = new Agent(agentConfig);

@@ -32,6 +32,19 @@ export type {
 	NidraSnapshot,
 	PratyabhijnaContext,
 	PratyabhijnaConfig,
+	// Mesh structural types (compatible with @chitragupta/sutra)
+	MeshActorRef,
+	MeshActorBehavior,
+	MeshActorContextCompat,
+	MeshActorSystem,
+	MeshEnvelopeCompat,
+	MeshSamiti,
+	// Lokapala structural types
+	LokapalaFinding,
+	LokapalaGuardians,
+	// KaalaBrahma structural types
+	KaalaHeartbeat,
+	KaalaLifecycle,
 } from "./types.js";
 export { DEFAULT_NIDRA_CONFIG, DEFAULT_PRATYABHIJNA_CONFIG } from "./types.js";
 
@@ -160,6 +173,10 @@ export type {
 	TrigunaSerializedState,
 } from "./chetana/index.js";
 
+// ─── Triguna Actuation ──────────────────────────────────────────────────────
+export { TrigunaActuator } from "./triguna-actuator.js";
+export type { TrigunaActuatorConfig } from "./triguna-actuator.js";
+
 // ─── Safe Execution Utilities ────────────────────────────────────────────────
 export { safeExecSync, validateCommand, parseCommand } from "./safe-exec.js";
 
@@ -210,6 +227,10 @@ export type {
 	ManasFeatures,
 	ManasClassification,
 } from "./manas.js";
+
+// ─── Agent-Actor Bridge (Setu — mesh integration) ───────────────────────────
+export { createAgentBehavior, isAgentMeshMessage } from "./agent-actor-bridge.js";
+export type { AgentMeshMessage, AgentMeshReply } from "./agent-actor-bridge.js";
 
 // ─── Lokapala (लोकपाल — World Guardians) ────────────────────────────────────
 export { LokapalaController } from "./lokapala/index.js";

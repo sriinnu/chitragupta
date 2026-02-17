@@ -29,6 +29,14 @@ export interface CodingSetup {
 	tools: ToolHandler[];
 	additionalContext?: string;
 	policyEngine?: CodingPolicyEngine;
+	/** Samiti for ambient channel broadcasts. Threaded to all sub-agents. */
+	samiti?: import("@chitragupta/anina").MeshSamiti;
+	/** Lokapala guardians for tool call scanning. Threaded to all sub-agents. */
+	lokapala?: import("@chitragupta/anina").LokapalaGuardians;
+	/** ActorSystem for P2P mesh communication. Threaded to all sub-agents. */
+	actorSystem?: import("@chitragupta/anina").MeshActorSystem;
+	/** KaalaBrahma lifecycle manager. Threaded to all sub-agents. */
+	kaala?: import("@chitragupta/anina").KaalaLifecycle;
 	/** Coding defaults from settings.json. */
 	codingDefaults?: {
 		mode?: "full" | "execute" | "plan-only";
@@ -50,6 +58,8 @@ export interface CodingSetupOptions {
 	explicitProvider?: string;
 	/** Session ID for policy context (e.g. "coding-mcp", "coding-tui"). */
 	sessionId?: string;
+	/** External Samiti instance to inject (avoids creating a new one). */
+	samiti?: import("@chitragupta/anina").MeshSamiti;
 }
 
 /** Options for creating a CodingOrchestrator from a setup. */
@@ -174,12 +184,61 @@ export async function setupCodingEnvironment(
 		// dharma is optional — continue without policy engine
 	}
 
+	// Samiti for ambient channel broadcasts — use injected or create new
+	let samiti: import("@chitragupta/anina").MeshSamiti | undefined = options.samiti;
+	if (!samiti) {
+		try {
+			const { Samiti } = await import("@chitragupta/sutra");
+			samiti = new Samiti() as unknown as import("@chitragupta/anina").MeshSamiti;
+		} catch {
+			// Samiti is optional
+		}
+	}
+
+	// Lokapala for guardian scanning
+	let lokapala: import("@chitragupta/anina").LokapalaGuardians | undefined;
+	try {
+		const { LokapalaController } = await import("@chitragupta/anina");
+		lokapala = new LokapalaController() as unknown as import("@chitragupta/anina").LokapalaGuardians;
+	} catch {
+		// Lokapala is optional
+	}
+
+	// ActorSystem for P2P mesh
+	let actorSystem: import("@chitragupta/anina").MeshActorSystem | undefined;
+	try {
+		const { ActorSystem } = await import("@chitragupta/sutra");
+		const system = new ActorSystem({ maxMailboxSize: 5_000 });
+		system.start();
+		actorSystem = system as unknown as import("@chitragupta/anina").MeshActorSystem;
+	} catch {
+		// ActorSystem is optional
+	}
+
+	// KaalaBrahma for lifecycle tracking
+	let kaala: import("@chitragupta/anina").KaalaLifecycle | undefined;
+	try {
+		const { KaalaBrahma } = await import("@chitragupta/anina");
+		kaala = new KaalaBrahma({
+			heartbeatInterval: 5000,
+			staleThreshold: 30000,
+			maxAgentDepth: 5,
+			maxSubAgents: 8,
+		}) as unknown as import("@chitragupta/anina").KaalaLifecycle;
+	} catch {
+		// KaalaBrahma is optional
+	}
+
 	return {
 		providerId: resolved.providerId,
 		provider: resolved.provider,
 		tools,
 		additionalContext,
 		policyEngine,
+		samiti,
+		lokapala,
+		actorSystem,
+		kaala,
 		codingDefaults: settings.coding,
 	};
 }
@@ -206,6 +265,10 @@ export async function createCodingOrchestrator(
 		tools: options.setup.tools,
 		provider: options.setup.provider,
 		policyEngine: options.setup.policyEngine,
+		actorSystem: options.setup.actorSystem,
+		samiti: options.setup.samiti,
+		lokapala: options.setup.lokapala,
+		kaala: options.setup.kaala,
 		additionalContext: options.setup.additionalContext,
 		timeoutMs: options.timeoutMs ?? (cd.timeout ? cd.timeout * 1000 : 5 * 60 * 1000),
 		onProgress: options.onProgress,
@@ -287,6 +350,49 @@ export async function setupFromAgent(
 		};
 	} catch { /* dharma optional */ }
 
+	// Samiti for ambient channel broadcasts
+	let samiti: import("@chitragupta/anina").MeshSamiti | undefined;
+	try {
+		const { Samiti } = await import("@chitragupta/sutra");
+		samiti = new Samiti() as unknown as import("@chitragupta/anina").MeshSamiti;
+	} catch {
+		// Samiti is optional
+	}
+
+	// Lokapala for guardian scanning
+	let lokapala: import("@chitragupta/anina").LokapalaGuardians | undefined;
+	try {
+		const { LokapalaController } = await import("@chitragupta/anina");
+		lokapala = new LokapalaController() as unknown as import("@chitragupta/anina").LokapalaGuardians;
+	} catch {
+		// Lokapala is optional
+	}
+
+	// ActorSystem for P2P mesh
+	let actorSystem: import("@chitragupta/anina").MeshActorSystem | undefined;
+	try {
+		const { ActorSystem } = await import("@chitragupta/sutra");
+		const system = new ActorSystem({ maxMailboxSize: 5_000 });
+		system.start();
+		actorSystem = system as unknown as import("@chitragupta/anina").MeshActorSystem;
+	} catch {
+		// ActorSystem is optional
+	}
+
+	// KaalaBrahma for lifecycle tracking
+	let kaala: import("@chitragupta/anina").KaalaLifecycle | undefined;
+	try {
+		const { KaalaBrahma } = await import("@chitragupta/anina");
+		kaala = new KaalaBrahma({
+			heartbeatInterval: 5000,
+			staleThreshold: 30000,
+			maxAgentDepth: 5,
+			maxSubAgents: 8,
+		}) as unknown as import("@chitragupta/anina").KaalaLifecycle;
+	} catch {
+		// KaalaBrahma is optional
+	}
+
 	// Load coding defaults from settings
 	const { loadGlobalSettings } = await import("@chitragupta/core");
 	const settings = loadGlobalSettings();
@@ -297,6 +403,10 @@ export async function setupFromAgent(
 		tools,
 		additionalContext: contextParts.length > 0 ? contextParts.join("\n\n") : undefined,
 		policyEngine,
+		samiti,
+		lokapala,
+		actorSystem,
+		kaala,
 		codingDefaults: settings.coding,
 	};
 }

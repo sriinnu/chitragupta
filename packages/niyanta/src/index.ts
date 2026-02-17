@@ -1,6 +1,7 @@
 // @chitragupta/niyanta — Agent Orchestrator
 export * from "./types.js";
 export { Orchestrator, OrchestratorError } from "./orchestrator.js";
+export type { OrchestratorAgentConfig } from "./orchestrator.js";
 export { TaskRouter, jaccardSimilarity } from "./router.js";
 export {
 	roundRobinAssign,
@@ -72,3 +73,7 @@ export type {
 	VasanaInput,
 	DatabaseLike as KartavyaDatabaseLike,
 } from "./kartavya.js";
+
+// KartavyaDispatcher (Autonomous Action Executor)
+export { KartavyaDispatcher } from "./kartavya-dispatcher.js";
+export type { KartavyaDispatcherConfig, DispatchResult } from "./kartavya-dispatcher.js";
