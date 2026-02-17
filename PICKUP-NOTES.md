@@ -37,7 +37,7 @@ All 5 phases of the self-healing actuation layer are implemented and passing:
 ## What To Do Next
 
 ### Immediate
-- [ ] **`/svapna` CLI command** — expose Svapna consolidation as a CLI command
+- [ ] **`/svapna` CLI command** — expose Swapna consolidation as a CLI command
   - `chitragupta --consolidate [date]` or `chitragupta svapna [date]`
   - If no date: consolidate today. If date provided: consolidate that day
   - Could also be a MCP tool: `chitragupta_consolidate`
