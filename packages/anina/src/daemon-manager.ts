@@ -408,7 +408,7 @@ export class DaemonManager extends EventEmitter {
 		} as SkillSyncEvent);
 
 		try {
-			// Lazy-import vidhya-skills to avoid loading at startup
+			// Lazy-import vidhya-skills to avoid loading at startup (builds after anina)
 			const { SkillDiscovery } = await import("@chitragupta/vidhya-skills");
 			const { ApprovalQueue } = await import("@chitragupta/vidhya-skills");
 			const { validateSkill } = await import("@chitragupta/vidhya-skills");

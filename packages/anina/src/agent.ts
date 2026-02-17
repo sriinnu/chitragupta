@@ -39,12 +39,18 @@ import type {
   AgentMessage,
   AgentState,
   AgentTree,
+  KaalaLifecycle,
+  LokapalaGuardians,
+  MeshActorRef,
+  MeshActorSystem,
+  MeshSamiti,
   SpawnConfig,
   SubAgentResult,
   ToolHandler,
   ToolContext,
 } from "./types.js";
 import { MAX_SUB_AGENTS, MAX_AGENT_DEPTH } from "./types.js";
+import { createAgentBehavior } from "./agent-actor-bridge.js";
 
 import {
   getRoot,
@@ -106,6 +112,14 @@ export class Agent implements TreeAgent {
 
   private pendingInputs: Map<string, { resolve: (value: string) => void; reject: (error: Error) => void; timer?: ReturnType<typeof setTimeout> }> = new Map();
   private inputCounter: number = 0;
+
+  // ─── Mesh Integration (Sutra) ──────────────────────────────────
+
+  private actorSystem: MeshActorSystem | null = null;
+  private actorRef: MeshActorRef | null = null;
+  private samiti: MeshSamiti | null = null;
+  private lokapala: LokapalaGuardians | null = null;
+  private kaala: KaalaLifecycle | null = null;
 
   // ─── Tree Structure ──────────────────────────────────────────────
 
@@ -180,6 +194,49 @@ export class Agent implements TreeAgent {
         (event, data) => this.emit(event as AgentEventType, data),
       );
     }
+
+    // ─── Mesh: auto-register as actor ─────────────────────────────
+    if (config.actorSystem && config.enableMesh !== false) {
+      this.actorSystem = config.actorSystem;
+      this.samiti = config.samiti ?? null;
+      try {
+        const behavior = createAgentBehavior(this);
+        this.actorRef = config.actorSystem.spawn(`agent:${this.id}`, {
+          behavior,
+          expertise: [config.profile.id, this.purpose],
+          capabilities: config.tools?.map((t) => t.definition.name),
+        });
+        log.debug("agent registered in mesh", { agentId: this.id, actorId: `agent:${this.id}` });
+      } catch (err) {
+        log.warn("failed to register agent in mesh", { agentId: this.id, error: err instanceof Error ? err.message : String(err) });
+      }
+    } else {
+      this.samiti = config.samiti ?? null;
+    }
+
+    // ─── Lokapala: guardians for tool call scanning ────────────────
+    this.lokapala = config.lokapala ?? null;
+
+    // ─── KaalaBrahma: agent lifecycle tracking ───────────────────
+    this.kaala = config.kaala ?? null;
+    if (this.kaala) {
+      try {
+        this.kaala.registerAgent({
+          agentId: this.id,
+          lastBeat: Date.now(),
+          startedAt: Date.now(),
+          turnCount: 0,
+          tokenUsage: 0,
+          status: "alive",
+          parentId: parent?.id ?? null,
+          depth: this.depth,
+          purpose: this.purpose,
+          tokenBudget: 200_000,
+        });
+      } catch {
+        // KaalaBrahma registration is best-effort
+      }
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -235,6 +292,7 @@ export class Agent implements TreeAgent {
     try {
       const result = await this.runAgentLoop();
       this.agentStatus = "completed";
+      if (this.kaala) { try { this.kaala.markCompleted(this.id); } catch { /* best-effort */ } }
 
       if (this.memoryBridge && this.memorySessionId) {
         const textContent = extractTextFromMessage(result);
@@ -249,6 +307,7 @@ export class Agent implements TreeAgent {
       return result;
     } catch (err) {
       this.agentStatus = err instanceof AbortError ? "aborted" : "error";
+      if (this.kaala) { try { this.kaala.markError(this.id); } catch { /* best-effort */ } }
       throw err;
     } finally {
       this.state.isStreaming = false;
@@ -465,6 +524,93 @@ export class Agent implements TreeAgent {
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // PUBLIC API -- Mesh Communication (Sutra Integration)
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Get the ActorRef for this agent in the mesh.
+   * Returns null if mesh integration is not enabled.
+   */
+  getActorRef(): MeshActorRef | null {
+    return this.actorRef;
+  }
+
+  /**
+   * Get the ActorSystem this agent is registered in.
+   * Returns null if mesh integration is not enabled.
+   */
+  getActorSystem(): MeshActorSystem | null {
+    return this.actorSystem;
+  }
+
+  /**
+   * Get the Samiti instance for ambient channel communication.
+   * Returns null if Samiti is not configured.
+   */
+  getSamiti(): MeshSamiti | null {
+    return this.samiti;
+  }
+
+  /**
+   * Send a fire-and-forget message to another agent in the mesh.
+   * @param targetAgentId - The target agent's UUID (will be prefixed with "agent:").
+   * @param message - The message payload (should conform to AgentMeshMessage).
+   */
+  sendToAgent(targetAgentId: string, message: unknown): void {
+    if (!this.actorRef || !this.actorSystem) {
+      throw new Error("Mesh integration not enabled. Provide actorSystem in AgentConfig.");
+    }
+    const targetActorId = targetAgentId.startsWith("agent:") ? targetAgentId : `agent:${targetAgentId}`;
+    this.actorRef.tell(`agent:${this.id}`, { ...message as object }, { topic: "agent-message" });
+    this.actorSystem.tell(`agent:${this.id}`, targetActorId, message);
+  }
+
+  /**
+   * Send a request-reply message to another agent in the mesh.
+   * @param targetAgentId - The target agent's UUID (will be prefixed with "agent:").
+   * @param message - The message payload (should conform to AgentMeshMessage).
+   * @param timeoutMs - Timeout in milliseconds (default: 30000).
+   * @returns The reply envelope.
+   */
+  async askAgent(targetAgentId: string, message: unknown, timeoutMs?: number): Promise<unknown> {
+    if (!this.actorRef || !this.actorSystem) {
+      throw new Error("Mesh integration not enabled. Provide actorSystem in AgentConfig.");
+    }
+    const targetActorId = targetAgentId.startsWith("agent:") ? targetAgentId : `agent:${targetAgentId}`;
+    const reply = await this.actorSystem.ask(`agent:${this.id}`, targetActorId, message, {
+      timeout: timeoutMs ?? 30_000,
+    });
+    return reply.payload;
+  }
+
+  /**
+   * Broadcast a message to a Samiti ambient channel.
+   * @param channel - Channel name (e.g., "#security", "#performance").
+   * @param content - Human-readable message content.
+   * @param severity - Message severity (default: "info").
+   * @param category - Freeform category tag.
+   */
+  broadcastToChannel(
+    channel: string,
+    content: string,
+    severity: "info" | "warning" | "critical" = "info",
+    category: string = "agent-event",
+  ): void {
+    if (!this.samiti) return; // silently skip if no Samiti
+    try {
+      this.samiti.broadcast(channel, {
+        sender: this.id,
+        severity,
+        category,
+        content,
+        data: { agentId: this.id, purpose: this.purpose, depth: this.depth },
+      });
+    } catch (err) {
+      log.debug("samiti broadcast failed", { channel, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // PUBLIC API -- Sub-Agent Spawning
   // ═══════════════════════════════════════════════════════════════
 
@@ -493,6 +639,11 @@ export class Agent implements TreeAgent {
       // Inherit critical subsystem configs from parent
       policyEngine: this.config.policyEngine,
       commHub: this.config.commHub,
+      actorSystem: this.actorSystem ?? undefined,
+      samiti: this.samiti ?? undefined,
+      lokapala: this.lokapala ?? undefined,
+      kaala: this.kaala ?? undefined,
+      enableMesh: this.config.enableMesh,
       enableLearning: this.config.enableLearning,
       enableAutonomy: this.config.enableAutonomy,
       consecutiveFailureThreshold: this.config.consecutiveFailureThreshold,
@@ -611,6 +762,19 @@ export class Agent implements TreeAgent {
     }
     this.children = [];
 
+    // Clean up mesh registration
+    if (this.actorSystem && this.actorRef) {
+      try {
+        this.actorSystem.stop(`agent:${this.id}`);
+      } catch {
+        // Non-fatal — actor may already be stopped
+      }
+    }
+    this.actorRef = null;
+    this.actorSystem = null;
+    this.samiti = null;
+    this.kaala = null;
+
     // Null out subsystems to release memory
     this.memoryBridge = null;
     this.learningLoop = null;
@@ -653,6 +817,9 @@ export class Agent implements TreeAgent {
       turn++;
       this.emit("turn:start", { turn, maxTurns: this.maxTurns });
 
+      // KaalaBrahma: heartbeat per turn
+      if (this.kaala) { try { this.kaala.recordHeartbeat(this.id, { turnCount: turn }); } catch { /* best-effort */ } }
+
       const steering = this.steeringManager.getSteeringInstruction();
       if (steering) {
         const steerMsg = this.createMessage("system", [{ type: "text", text: steering }]);
@@ -670,6 +837,14 @@ export class Agent implements TreeAgent {
       const context = this.contextManager.buildContext(this.state);
       const streamOptions = this.buildStreamOptions();
       const result = await this.streamLLMResponse(context, streamOptions);
+
+      // KaalaBrahma: enrich heartbeat with token usage from LLM response
+      if (this.kaala && result.cost) {
+        try {
+          const tokenUsage = (result.cost.input ?? 0) + (result.cost.output ?? 0);
+          this.kaala.recordHeartbeat(this.id, { turnCount: turn, tokenUsage });
+        } catch { /* best-effort */ }
+      }
 
       const assistantMessage = this.createMessage("assistant", result.content, {
         model: this.state.model, cost: result.cost,
@@ -842,6 +1017,26 @@ export class Agent implements TreeAgent {
         // Chetana: update cognitive state after tool execution
         this.chetana?.afterToolExecution(call.name, true, Date.now() - toolStartTime, result.content);
 
+        // Lokapala: scan tool execution for security/performance/correctness issues
+        if (this.lokapala) {
+          try {
+            const findings = this.lokapala.afterToolExecution(call.name, args, result.content, Date.now() - toolStartTime);
+            for (const finding of findings) {
+              if (finding.severity === "critical" && this.samiti) {
+                this.samiti.broadcast(`#${finding.domain}`, {
+                  sender: this.id,
+                  severity: "critical",
+                  category: `guardian-${finding.guardianId}`,
+                  content: finding.title,
+                  data: finding,
+                });
+              }
+            }
+          } catch {
+            // Guardian scanning is best-effort
+          }
+        }
+
         const resultContent: ToolResultContent = {
           type: "tool_result", toolCallId: call.id, content: result.content, isError: result.isError,
         };
@@ -907,11 +1102,86 @@ export class Agent implements TreeAgent {
   private emit(event: AgentEventType, data: unknown): void {
     this.config.onEvent?.(event, data);
 
+    // Samiti: broadcast significant events to ambient channels
+    if (this.samiti) {
+      this.broadcastEventToSamiti(event, data);
+    }
+
     if (this.parentAgent && this.bubbleChildEvents) {
       this.parentAgent.emit("subagent:event", {
         sourceAgentId: this.id, sourcePurpose: this.purpose,
         sourceDepth: this.depth, originalEvent: event, data,
       });
+    }
+  }
+
+  /**
+   * Route agent events to appropriate Samiti channels.
+   * Only broadcasts significant events to avoid noise.
+   */
+  private broadcastEventToSamiti(event: AgentEventType, data: unknown): void {
+    if (!this.samiti) return;
+    try {
+      switch (event) {
+        case "tool:error": {
+          const d = data as { name?: string; error?: string };
+          this.samiti.broadcast("#correctness", {
+            sender: this.id,
+            severity: "warning",
+            category: "tool-error",
+            content: `Tool "${d.name}" failed: ${d.error}`,
+            data: { agentId: this.id, purpose: this.purpose, ...d },
+          });
+          break;
+        }
+        case "agent:abort": {
+          this.samiti.broadcast("#alerts", {
+            sender: this.id,
+            severity: "info",
+            category: "agent-abort",
+            content: `Agent "${this.purpose}" (${this.id}) aborted`,
+            data: { agentId: this.id, purpose: this.purpose },
+          });
+          break;
+        }
+        case "subagent:spawn": {
+          const d = data as { childId?: string; purpose?: string };
+          this.samiti.broadcast("#alerts", {
+            sender: this.id,
+            severity: "info",
+            category: "agent-spawn",
+            content: `Spawned sub-agent "${d.purpose}" (${d.childId})`,
+            data: { agentId: this.id, ...d },
+          });
+          break;
+        }
+        case "subagent:error": {
+          const d = data as { childId?: string; purpose?: string; error?: string };
+          this.samiti.broadcast("#correctness", {
+            sender: this.id,
+            severity: "warning",
+            category: "subagent-error",
+            content: `Sub-agent "${d.purpose}" failed: ${d.error}`,
+            data: { agentId: this.id, ...d },
+          });
+          break;
+        }
+        case "chetana:frustrated": {
+          this.samiti.broadcast("#alerts", {
+            sender: this.id,
+            severity: "warning",
+            category: "chetana-frustrated",
+            content: `Agent "${this.purpose}" is frustrated`,
+            data: { agentId: this.id, purpose: this.purpose },
+          });
+          break;
+        }
+        // Other events are too noisy for ambient channels
+        default:
+          break;
+      }
+    } catch {
+      // Samiti broadcast failures are non-fatal
     }
   }
 }

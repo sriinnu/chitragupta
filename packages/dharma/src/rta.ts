@@ -548,6 +548,68 @@ export class RtaEngine {
 
 	// ─── Internal ─────────────────────────────────────────────────────────
 
+	// ─── Persistence ─────────────────────────────────────────────────────
+
+	/**
+	 * Persist the in-memory audit log to SQLite (rta_audit table).
+	 * Uses duck-typed database interface to avoid importing smriti.
+	 */
+	persistAuditLog(db: RtaDatabaseLike): void {
+		if (this.auditLog.length === 0) return;
+
+		const stmt = db.prepare(`
+			INSERT INTO rta_audit (timestamp, rule_id, allowed, tool_name, reason, session_id)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`);
+
+		const insertMany = db.transaction((entries: RtaAuditEntry[]) => {
+			for (const entry of entries) {
+				stmt.run(
+					entry.timestamp,
+					entry.ruleId,
+					entry.allowed ? 1 : 0,
+					entry.toolName,
+					entry.reason ?? null,
+					entry.sessionId ?? null,
+				);
+			}
+		});
+
+		insertMany(this.auditLog);
+		this.auditLog.length = 0;
+	}
+
+	/**
+	 * Load denied entries from rta_audit for cross-session violation tracking.
+	 */
+	loadViolationHistory(db: RtaDatabaseLike, limit = 50): RtaAuditEntry[] {
+		const rows = db.prepare(`
+			SELECT timestamp, rule_id, allowed, tool_name, reason, session_id
+			FROM rta_audit
+			WHERE allowed = 0
+			ORDER BY timestamp DESC
+			LIMIT ?
+		`).all(limit) as Array<{
+			timestamp: number;
+			rule_id: string;
+			allowed: number;
+			tool_name: string;
+			reason: string | null;
+			session_id: string | null;
+		}>;
+
+		return rows.map((r) => ({
+			timestamp: r.timestamp,
+			ruleId: r.rule_id,
+			allowed: false,
+			toolName: r.tool_name,
+			reason: r.reason ?? undefined,
+			sessionId: r.session_id ?? undefined,
+		}));
+	}
+
+	// ─── Internal ─────────────────────────────────────────────────────────
+
 	private recordAudit(verdict: RtaVerdict, context: RtaContext): void {
 		// Evict oldest entries if we exceed the cap
 		if (this.auditLog.length >= MAX_AUDIT_LOG_SIZE) {
@@ -563,6 +625,19 @@ export class RtaEngine {
 			sessionId: context.sessionId,
 		});
 	}
+}
+
+/**
+ * Duck-typed database interface for Rta persistence.
+ * Matches the subset of better-sqlite3's Database used by Rta,
+ * avoiding a hard dependency on @chitragupta/smriti.
+ */
+export interface RtaDatabaseLike {
+	prepare(sql: string): {
+		run(...params: unknown[]): unknown;
+		all(...params: unknown[]): unknown[];
+	};
+	transaction<T>(fn: (args: T) => void): (args: T) => void;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

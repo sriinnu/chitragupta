@@ -13,7 +13,7 @@
 import type { DatabaseManager } from "./database.js";
 
 // Current schema versions — bump when adding migrations
-const AGENT_SCHEMA_VERSION = 3;
+const AGENT_SCHEMA_VERSION = 4;
 const GRAPH_SCHEMA_VERSION = 1;
 const VECTORS_SCHEMA_VERSION = 1;
 
@@ -245,6 +245,27 @@ export function initAgentSchema(dbm: DatabaseManager): void {
 		db.exec(`
 			-- Add metadata column for storing external system fields (e.g. Vaayu session data)
 			ALTER TABLE sessions ADD COLUMN metadata TEXT;
+		`);
+	}
+
+	// ─── Phase 4 migration: Rta audit log for cross-session safety tracking ──
+	if (currentVersion < 4) {
+		db.exec(`
+			CREATE TABLE IF NOT EXISTS rta_audit (
+				id          INTEGER PRIMARY KEY AUTOINCREMENT,
+				timestamp   INTEGER NOT NULL,
+				rule_id     TEXT NOT NULL,
+				allowed     INTEGER NOT NULL,  -- 0 = denied, 1 = allowed
+				tool_name   TEXT NOT NULL,
+				reason      TEXT,
+				session_id  TEXT,
+				project     TEXT,
+				created_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_rta_audit_timestamp ON rta_audit(timestamp DESC);
+			CREATE INDEX IF NOT EXISTS idx_rta_audit_rule_id ON rta_audit(rule_id);
+			CREATE INDEX IF NOT EXISTS idx_rta_audit_denied ON rta_audit(allowed) WHERE allowed = 0;
 		`);
 	}
 
