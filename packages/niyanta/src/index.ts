@@ -1,6 +1,7 @@
 // @chitragupta/niyanta — Agent Orchestrator
 export * from "./types.js";
 export { Orchestrator, OrchestratorError } from "./orchestrator.js";
+export type { OrchestratorAgentConfig } from "./orchestrator.js";
 export { TaskRouter, jaccardSimilarity } from "./router.js";
 export {
 	roundRobinAssign,

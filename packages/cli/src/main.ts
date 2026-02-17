@@ -439,6 +439,154 @@ export async function main(args: ParsedArgs): Promise<void> {
 			await (servVidyaOrchestrator as { initialize: () => Promise<void> }).initialize();
 		} catch (e) { log.debug("VidyaOrchestrator unavailable", { error: String(e) }); }
 
+		// ── Resolve provider & create server agent (lazy init) ──────
+		// Without an agent, POST /api/chat and WebSocket chat return 503.
+		// Resolve the provider (same priority as TUI mode) and create a
+		// fully-wired Agent so the HTTP API can handle chat requests.
+		// Cleanup references hoisted for shutdown handler scope
+		let servKaalaRef: { dispose(): void } | undefined;
+		let servActorShutdownRef: (() => void) | undefined;
+		let servCommHubDestroyRef: (() => void) | undefined;
+
+		const servResolved = resolvePreferredProvider(args.provider, settings, registry);
+		if (servResolved) {
+			const { providerId: servProviderId, provider: servProvider } = servResolved;
+			const servModelId = args.model ?? profile.preferredModel ?? settings.defaultModel ?? DEFAULT_FALLBACK_MODEL;
+			const servTools = getAllTools();
+
+			// Build minimal system prompt for the server agent
+			const servContextFiles = loadContextFiles(projectPath);
+			const servMemory = loadProjectMemory(projectPath);
+			const servSystemPrompt = buildSystemPrompt({
+				profile,
+				project,
+				contextFiles: servContextFiles,
+				memoryContext: servMemory ?? undefined,
+				tools: servTools,
+			});
+
+			// Create KaalaBrahma for serve-mode lifecycle tracking
+			let servKaala: import("@chitragupta/anina").KaalaLifecycle | undefined;
+			try {
+				servKaala = new KaalaBrahma({
+					heartbeatInterval: 5000,
+					staleThreshold: 30000,
+					maxAgentDepth: 5,
+					maxSubAgents: 8,
+				}) as unknown as import("@chitragupta/anina").KaalaLifecycle;
+			} catch { /* best-effort */ }
+
+			// Create ActorSystem for serve-mode P2P mesh
+			let servActorSystem: import("@chitragupta/anina").MeshActorSystem | undefined;
+			let servActorSystemShutdown: (() => void) | undefined;
+			try {
+				const { ActorSystem } = await import("@chitragupta/sutra");
+				const sys = new ActorSystem({ maxMailboxSize: 5_000 });
+				sys.start();
+				servActorSystem = sys as unknown as import("@chitragupta/anina").MeshActorSystem;
+				servActorSystemShutdown = () => sys.shutdown();
+			} catch { /* best-effort */ }
+
+			// Create CommHub for serve-mode IPC
+			let servCommHub: import("@chitragupta/sutra").CommHub | undefined;
+			let servCommHubDestroy: (() => void) | undefined;
+			try {
+				const { CommHub } = await import("@chitragupta/sutra");
+				servCommHub = new CommHub({ enableLogging: false });
+				servCommHubDestroy = () => servCommHub!.destroy();
+			} catch { /* best-effort */ }
+
+			// Create policy engine for serve-mode security
+			let servPolicyEngine: import("@chitragupta/anina").AgentConfig["policyEngine"] | undefined;
+			try {
+				const { PolicyEngine, STANDARD_PRESET } = await import("@chitragupta/dharma");
+				const preset = STANDARD_PRESET;
+				const engine = new PolicyEngine(preset.config);
+				for (const ps of preset.policySets) engine.addPolicySet(ps);
+
+				servPolicyEngine = {
+					check(toolName: string, toolArgs: Record<string, unknown>) {
+						const actionType = getActionType(toolName);
+						const action = {
+							type: actionType, tool: toolName, args: toolArgs,
+							filePath: (toolArgs.path ?? toolArgs.file_path ?? toolArgs.filePath) as string | undefined,
+							command: (toolArgs.command ?? toolArgs.cmd) as string | undefined,
+							content: (toolArgs.content ?? toolArgs.text) as string | undefined,
+							url: (toolArgs.url ?? toolArgs.uri) as string | undefined,
+						};
+						const context = {
+							sessionId: "coding-serve", agentId: "kartru", agentDepth: 0, projectPath,
+							totalCostSoFar: 0, costBudget: preset.config.costBudget,
+							filesModified: [] as string[], commandsRun: [] as string[], timestamp: Date.now(),
+						};
+						try {
+							for (const ps of preset.policySets) {
+								for (const rule of ps.rules) {
+									const verdict = rule.evaluate(action, context);
+									if (verdict && typeof verdict === "object" && "status" in verdict && !("then" in verdict)) {
+										const v = verdict as { status: string; reason: string };
+										if (v.status === "deny") return { allowed: false, reason: v.reason };
+									}
+								}
+							}
+						} catch { /* allow */ }
+						return { allowed: true };
+					},
+				};
+			} catch { /* dharma is optional */ }
+
+			const servAgentConfig: AgentConfig = {
+				profile,
+				providerId: servProviderId,
+				model: servModelId,
+				tools: servTools,
+				systemPrompt: servSystemPrompt,
+				thinkingLevel: profile.preferredThinking ?? settings.thinkingLevel ?? "medium",
+				workingDirectory: projectPath,
+				policyEngine: servPolicyEngine,
+				commHub: servCommHub,
+				actorSystem: servActorSystem,
+				samiti: servSamiti as unknown as import("@chitragupta/anina").MeshSamiti | undefined,
+				lokapala: servLokapala as unknown as import("@chitragupta/anina").LokapalaGuardians | undefined,
+				kaala: servKaala,
+				enableLearning: true,
+				enableAutonomy: true,
+				enableMemory: true,
+				project: projectPath,
+			};
+
+			const sAgent = new Agent(servAgentConfig);
+			sAgent.setProvider(servProvider);
+			serverAgent = sAgent;
+
+			// Register with KaalaBrahma
+			if (servKaala) {
+				try {
+					servKaala.registerAgent({
+						agentId: sAgent.id,
+						lastBeat: Date.now(),
+						startedAt: Date.now(),
+						turnCount: 0,
+						tokenUsage: 0,
+						status: "alive",
+						parentId: null,
+						depth: 0,
+						purpose: "HTTP server agent",
+						tokenBudget: 200_000,
+					});
+				} catch { /* best-effort */ }
+			}
+
+			// Expose cleanup refs to outer scope for shutdown handler
+			if (servKaala) servKaalaRef = servKaala as unknown as { dispose(): void };
+			if (servActorSystemShutdown) servActorShutdownRef = servActorSystemShutdown;
+			if (servCommHubDestroy) servCommHubDestroyRef = servCommHubDestroy;
+
+			log.info("Server agent created", { providerId: servProviderId, model: servModelId });
+		} else {
+			log.warn("No provider available — HTTP chat endpoints will return 503");
+		}
+
 		const server = createChitraguptaAPI({
 			getAgent: () => serverAgent,
 			getSession: () => serverSession,
@@ -451,6 +599,14 @@ export async function main(args: ParsedArgs): Promise<void> {
 				name: (t as unknown as Record<string, Record<string, string>>).definition?.name,
 				description: (t as unknown as Record<string, Record<string, string>>).definition?.description,
 			})),
+			prompt: serverAgent ? async (message: string) => {
+				const agent = serverAgent as Agent;
+				const result = await agent.prompt(message);
+				return result.content
+					.filter((p): p is { type: "text"; text: string } => p.type === "text")
+					.map((p) => p.text)
+					.join("");
+			} : undefined,
 			// Phase 1: Self-Evolution
 			getVasanaEngine: () => vasanaEngine,
 			getNidraDaemon: () => servNidraDaemon,
@@ -492,6 +648,14 @@ export async function main(args: ParsedArgs): Promise<void> {
 					if (servNidraDaemon) {
 						try { await (servNidraDaemon as { stop: () => Promise<void> }).stop(); } catch { /* best-effort */ }
 					}
+					// Dispose server agent
+					if (serverAgent && typeof (serverAgent as Agent).dispose === "function") {
+						try { (serverAgent as Agent).dispose(); } catch { /* best-effort */ }
+					}
+					// Clean up serve-mode infrastructure
+					if (servCommHubDestroyRef) { try { servCommHubDestroyRef(); } catch { /* best-effort */ } }
+					if (servActorShutdownRef) { try { servActorShutdownRef(); } catch { /* best-effort */ } }
+					if (servKaalaRef) { try { servKaalaRef.dispose(); } catch { /* best-effort */ } }
 					await server.stop();
 				};
 				cleanup().then(resolve).catch(resolve);
@@ -842,7 +1006,42 @@ export async function main(args: ParsedArgs): Promise<void> {
 		log.debug("CommHub unavailable", { error: String(e) });
 	}
 
-	// ─── 7d-ii. Wire SandeshaRouter (Input Routing for sub-agents) ──────
+	// ─── 7d-i. Wire ActorSystem (P2P mesh for agent-to-agent communication) ─
+	let actorSystem: import("@chitragupta/anina").MeshActorSystem | undefined;
+	let actorSystemShutdown: (() => void) | undefined;
+	try {
+		const { ActorSystem } = await import("@chitragupta/sutra");
+		const system = new ActorSystem({
+			maxMailboxSize: 5_000,
+			gossipIntervalMs: 5_000,
+			defaultAskTimeout: 5_000,
+		});
+		system.start();
+		actorSystem = system as unknown as import("@chitragupta/anina").MeshActorSystem;
+		actorSystemShutdown = () => system.shutdown();
+	} catch (e) {
+		log.debug("ActorSystem unavailable", { error: String(e) });
+	}
+
+	// ─── 7d-ii. Wire Samiti (ambient channel broadcasts) ─────────────
+	let samiti: import("@chitragupta/anina").MeshSamiti | undefined;
+	try {
+		const { Samiti } = await import("@chitragupta/sutra");
+		samiti = new Samiti() as unknown as import("@chitragupta/anina").MeshSamiti;
+	} catch (e) {
+		log.debug("Samiti unavailable", { error: String(e) });
+	}
+
+	// ─── 7d-ii. Wire Lokapala (Guardian Tool Scanning) ──────────────
+	let lokapala: import("@chitragupta/anina").LokapalaGuardians | undefined;
+	try {
+		const { LokapalaController } = await import("@chitragupta/anina");
+		lokapala = new LokapalaController() as unknown as import("@chitragupta/anina").LokapalaGuardians;
+	} catch (e) {
+		log.debug("Lokapala unavailable", { error: String(e) });
+	}
+
+	// ─── 7d-iii. Wire SandeshaRouter (Input Routing for sub-agents) ─────
 	let sandeshaRouter: InstanceType<typeof import("@chitragupta/sutra").SandeshaRouter> | undefined;
 	try {
 		const { SandeshaRouter } = await import("@chitragupta/sutra");
@@ -1044,6 +1243,10 @@ export async function main(args: ParsedArgs): Promise<void> {
 		workingDirectory: projectPath,
 		policyEngine: policyAdapter,
 		commHub,
+		actorSystem,
+		samiti,
+		lokapala,
+		kaala: kaala as unknown as import("@chitragupta/anina").KaalaLifecycle | undefined,
 		enableLearning: true,
 		enableAutonomy: true,
 		enableMemory: true,
@@ -1241,8 +1444,11 @@ export async function main(args: ParsedArgs): Promise<void> {
 		if (nidraDaemon) {
 			try { await nidraDaemon.stop(); } catch { /* best-effort */ }
 		}
+		// Dispose the root agent (releases internal resources, nulls infrastructure refs)
+		try { agent.dispose(); } catch { /* best-effort */ }
 		sandeshaRouter?.destroy();
 		commHubDestroy?.();
+		actorSystemShutdown?.();
 		kaala?.dispose();
 		messageBus?.destroy();
 		if (mcpShutdown) await mcpShutdown();

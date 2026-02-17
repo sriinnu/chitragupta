@@ -5,6 +5,7 @@
  */
 
 import { ChitraguptaError, createLogger } from "@chitragupta/core";
+import type { AgentProfile } from "@chitragupta/core";
 import type {
 	AgentInfo,
 	AgentSlot,
@@ -71,6 +72,39 @@ export class OrchestratorError extends ChitraguptaError {
 	}
 }
 
+// ─── Optional Agent Runtime Config ──────────────────────────────────────────
+
+/**
+ * Optional configuration for wiring the orchestrator to real agent instances.
+ * When provided, spawnAgent() creates actual Agent objects that can execute tasks.
+ */
+export interface OrchestratorAgentConfig {
+	/** ActorSystem for inter-agent mesh communication. */
+	actorSystem?: import("@chitragupta/sutra").ActorSystem;
+	/** Samiti for ambient channel communication. */
+	samiti?: import("@chitragupta/sutra").Samiti;
+	/** LLM provider definition to set on spawned agents. */
+	provider?: import("@chitragupta/swara").ProviderDefinition;
+	/** Default agent profile for spawned agents. */
+	defaultProfile?: AgentProfile;
+	/** Default model for spawned agents. */
+	defaultModel?: string;
+	/** Default provider ID for spawned agents. */
+	defaultProviderId?: string;
+	/**
+	 * Factory function to create an Agent for a given slot.
+	 * When provided, this overrides the default agent creation.
+	 * Return null to fall back to the default dummy AgentInstance.
+	 */
+	agentFactory?: (slotId: string, slot: import("./types.js").AgentSlot) => Promise<import("@chitragupta/anina").Agent | null> | import("@chitragupta/anina").Agent | null;
+	/**
+	 * Callback invoked when a task is assigned to a real agent.
+	 * The callback should call agent.prompt() or equivalent and return the result.
+	 * When not provided, the orchestrator only tracks task state without executing.
+	 */
+	taskExecutor?: (agent: import("@chitragupta/anina").Agent, task: import("./types.js").OrchestratorTask) => Promise<import("./types.js").TaskResult>;
+}
+
 // ─── Orchestrator ────────────────────────────────────────────────────────────
 
 /**
@@ -110,6 +144,10 @@ export class Orchestrator {
 	private readonly swarmContexts = new Map<string, SwarmContext>();
 	private readonly retryCount = new Map<string, number>();
 
+	// Agent runtime (optional — when wired to real agents)
+	private readonly agentConfig: OrchestratorAgentConfig | undefined;
+	private readonly realAgents = new Map<string, import("@chitragupta/anina").Agent>();
+
 	// Lifecycle
 	private running = false;
 	private paused = false;
@@ -133,9 +171,11 @@ export class Orchestrator {
 	constructor(
 		plan: OrchestrationPlan,
 		onEvent?: (event: OrchestratorEvent) => void,
+		agentConfig?: OrchestratorAgentConfig,
 	) {
 		this.plan = plan;
 		this.onEvent = onEvent ?? (() => {});
+		this.agentConfig = agentConfig;
 		this.router = new TaskRouter(plan.routing, plan.agents);
 
 		for (const slot of plan.agents) {
@@ -223,6 +263,11 @@ export class Orchestrator {
 			clearTimeout(this.processingTimer);
 			this.processingTimer = null;
 		}
+		// Dispose real agents
+		for (const agent of this.realAgents.values()) {
+			try { agent.dispose(); } catch { /* non-fatal */ }
+		}
+		this.realAgents.clear();
 	}
 
 	pause(): void { this.paused = true; }
@@ -251,6 +296,15 @@ export class Orchestrator {
 			});
 		}
 		return infos;
+	}
+
+	/**
+	 * Get the real Agent instance for an orchestrator agent ID.
+	 * Returns undefined if the agent was not created with a real Agent
+	 * (i.e., no agentFactory was provided or it returned null).
+	 */
+	getRealAgent(agentId: string): import("@chitragupta/anina").Agent | undefined {
+		return this.realAgents.get(agentId);
 	}
 
 	/**
@@ -361,6 +415,8 @@ export class Orchestrator {
 			task.status = "running";
 			this.tasks.set(task.id, task);
 			this.emit({ type: "task:assigned", taskId: task.id, agentId: assignedAgent.id });
+			// Execute task on real agent if available
+			this.executeOnRealAgent(assignedAgent.id, task);
 		} else {
 			const slotQueue = this.slotQueues.get(slotId) ?? [];
 			slotQueue.push(task);
@@ -532,6 +588,27 @@ export class Orchestrator {
 		slotSet.add(agentId);
 		this.slotAgents.set(slotId, slotSet);
 		this.emit({ type: "agent:spawned", agentSlot: slotId, agentId });
+
+		// Optionally create a real Agent instance via factory
+		if (this.agentConfig?.agentFactory) {
+			const slot = this.plan.agents.find((s) => s.id === slotId);
+			if (slot) {
+				const maybeAgent = this.agentConfig.agentFactory(slotId, slot);
+				if (maybeAgent && typeof (maybeAgent as Promise<unknown>).then === "function") {
+					(maybeAgent as Promise<import("@chitragupta/anina").Agent | null>).then((a) => {
+						if (a) {
+							this.realAgents.set(agentId, a);
+							log.debug("real agent created", { agentId, slotId });
+						}
+					}).catch((err) => {
+						log.warn("agent factory failed", { agentId, slotId, error: err instanceof Error ? err.message : String(err) });
+					});
+				} else if (maybeAgent) {
+					this.realAgents.set(agentId, maybeAgent as import("@chitragupta/anina").Agent);
+					log.debug("real agent created", { agentId, slotId });
+				}
+			}
+		}
 	}
 
 	private freeAgent(taskId: string): void {
@@ -550,10 +627,31 @@ export class Orchestrator {
 					nextTask.status = "running";
 					this.tasks.set(nextTask.id, nextTask);
 					this.emit({ type: "task:assigned", taskId: nextTask.id, agentId: agent.id });
+					// Execute next task on real agent if available
+					this.executeOnRealAgent(agent.id, nextTask);
 				}
 				break;
 			}
 		}
+	}
+
+	/**
+	 * Execute a task on a real Agent instance if one is available.
+	 * Falls back gracefully — if no real agent exists, the orchestrator
+	 * continues in state-tracking-only mode.
+	 */
+	private executeOnRealAgent(agentId: string, task: OrchestratorTask): void {
+		const realAgent = this.realAgents.get(agentId);
+		if (!realAgent || !this.agentConfig?.taskExecutor) return;
+
+		const executor = this.agentConfig.taskExecutor;
+		executor(realAgent, task)
+			.then((result) => {
+				this.handleCompletion(task.id, result);
+			})
+			.catch((err) => {
+				this.handleFailure(task.id, err instanceof Error ? err : new Error(String(err)));
+			});
 	}
 
 	private buildSlotStats(): Map<string, SlotStats> {

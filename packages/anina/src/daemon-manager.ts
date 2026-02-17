@@ -408,9 +408,12 @@ export class DaemonManager extends EventEmitter {
 		} as SkillSyncEvent);
 
 		try {
-			// Lazy-import vidhya-skills to avoid loading at startup
+			// Lazy-import vidhya-skills to avoid loading at startup (builds after anina)
+			// @ts-expect-error — vidhya-skills is a later-stage package; resolved at runtime
 			const { SkillDiscovery } = await import("@chitragupta/vidhya-skills");
+			// @ts-expect-error — vidhya-skills is a later-stage package; resolved at runtime
 			const { ApprovalQueue } = await import("@chitragupta/vidhya-skills");
+			// @ts-expect-error — vidhya-skills is a later-stage package; resolved at runtime
 			const { validateSkill } = await import("@chitragupta/vidhya-skills");
 			const { getChitraguptaHome } = await import("@chitragupta/core");
 

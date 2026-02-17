@@ -1430,10 +1430,14 @@ function createCodingAgentTool(projectPath: string): McpToolHandler {
 			try {
 				const { setupCodingEnvironment, createCodingOrchestrator } = await import("../coding-setup.js");
 
+				// Share the MCP server's Samiti singleton with the coding agent
+				const mcpSamiti = await getSamiti();
+
 				const setup = await setupCodingEnvironment({
 					projectPath,
 					explicitProvider: args.provider ? String(args.provider) : undefined,
 					sessionId: "coding-mcp",
+					samiti: mcpSamiti as any,
 				});
 				if (!setup) {
 					return {
