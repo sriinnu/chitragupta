@@ -2281,47 +2281,47 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	let daemonManagerRef: { touch(): void } | null = null;
 
 	const ensureSession = async () => {
-		if (mcpSessionId) return mcpSessionId;
-		try {
-			const { createSession } = await import("@chitragupta/smriti/session-store");
-			const session = createSession({
-				project: projectPath,
-				agent: "mcp",
-				model: "mcp-client",
-				title: `MCP session`,
-			});
-			mcpSessionId = session.meta.id;
+		if (!mcpSessionId) {
+				try {
+					const { createSession } = await import("@chitragupta/smriti/session-store");
+					const session = createSession({
+						project: projectPath,
+						agent: "mcp",
+						model: "mcp-client",
+						title: `MCP session`,
+					});
+					mcpSessionId = session.meta.id;
+				} catch (err) {
+					// Session recording is best-effort — don't break MCP if smriti fails
+					process.stderr.write(`[chitragupta] session init failed: ${err}\n`);
+				}
+			}
 
-				// Auto-inject provider context on first session creation
-				// so MCP clients get memory without calling chitragupta_context
-				if (!contextInjected && mcpSessionId) {
-					try {
-						const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
-						const ctx = await loadProviderContext(projectPath);
-						if (ctx.assembled.trim()) {
-							const { addTurn } = await import("@chitragupta/smriti/session-store");
+			// Auto-inject provider context on session initialization.
+			// Retries remain enabled until successful load/append.
+			if (!contextInjected && mcpSessionId) {
+				try {
+					const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
+					const ctx = await loadProviderContext(projectPath);
+					if (ctx.assembled.trim()) {
+						const { addTurn } = await import("@chitragupta/smriti/session-store");
 						await addTurn(mcpSessionId, projectPath, {
 							turnNumber: 0,
 							role: "assistant",
 							content: `[system:context] ${ctx.assembled}`,
 							agent: "mcp",
 							model: "mcp",
-							});
-							turnCounter++;
-						}
-						// Mark injected only after successful load/append.
-						// If loading fails transiently, keep retries enabled.
-						contextInjected = true;
-					} catch {
-						// Best-effort — context injection is optional
+						});
+						turnCounter++;
 					}
+					contextInjected = true;
+				} catch {
+					// Best-effort — context injection is optional
 				}
-		} catch (err) {
-			// Session recording is best-effort — don't break MCP if smriti fails
-			process.stderr.write(`[chitragupta] session init failed: ${err}\n`);
-		}
-		return mcpSessionId;
-	};
+			}
+
+			return mcpSessionId;
+		};
 
 	/** Extract user-facing text from tool arguments for fact extraction. */
 	function extractUserText(args: Record<string, unknown>): string | null {
