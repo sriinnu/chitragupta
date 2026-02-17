@@ -746,9 +746,11 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 						cumulativeCost += response.cost.total;
 					}
 
+					const assistantText = fullText.length > 0 ? fullText : extractText(response);
+
 					await persistExchange({
 					userMessage: message,
-					assistantText: fullText,
+					assistantText,
 					assistantContentParts: response.content as unknown as Array<Record<string, unknown>>,
 				});
 

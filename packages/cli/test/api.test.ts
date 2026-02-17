@@ -1163,5 +1163,25 @@ describe("ChitraguptaInstance", () => {
 
 			await instance.destroy();
 		});
+
+		it("persists assistant text from final response when stream text events are absent", async () => {
+			const instance = await createChitragupta();
+			const chunks: unknown[] = [];
+
+			for await (const chunk of instance.stream("No stream chunks")) {
+				chunks.push(chunk);
+			}
+
+			expect(chunks).toEqual([]);
+			expect(mocks.mockSession.turns.at(-1)?.role).toBe("assistant");
+			expect(mocks.mockSession.turns.at(-1)?.content).toBe("Hello!");
+
+			const assistantTurnCall = mocks.mockAddTurn.mock.calls.find(
+				(call) => call[2]?.role === "assistant",
+			);
+			expect(assistantTurnCall?.[2]?.content).toBe("Hello!");
+
+			await instance.destroy();
+		});
 	});
 });
