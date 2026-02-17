@@ -217,6 +217,14 @@ export interface CodingOrchestratorConfig {
 	onProgress?: (progress: OrchestratorProgress) => void;
 	/** CommHub for IPC. */
 	commHub?: AgentConfig["commHub"];
+	/** ActorSystem for P2P mesh communication. */
+	actorSystem?: AgentConfig["actorSystem"];
+	/** Samiti for ambient channel broadcasts. */
+	samiti?: AgentConfig["samiti"];
+	/** Lokapala guardians for tool call scanning. */
+	lokapala?: AgentConfig["lokapala"];
+	/** KaalaBrahma lifecycle manager. */
+	kaala?: AgentConfig["kaala"];
 	/** Policy engine adapter. */
 	policyEngine?: AgentConfig["policyEngine"];
 	/** Provider instance. Set by the caller (e.g. MCP tool) to enable LLM execution. */
@@ -574,6 +582,12 @@ export class CodingOrchestrator {
 			enableChetana: false,
 			enableLearning: false,
 			enableAutonomy: false,
+			commHub: this.config.commHub,
+			actorSystem: this.config.actorSystem,
+			samiti: this.config.samiti,
+			lokapala: this.config.lokapala,
+			kaala: this.config.kaala,
+			policyEngine: this.config.policyEngine,
 		};
 
 		this.planningAgent = new Agent(planningConfig);
@@ -1166,6 +1180,12 @@ Keep steps focused and actionable. Each step should describe a single coherent c
 			enableChetana: false,
 			enableLearning: false,
 			enableAutonomy: false,
+			policyEngine: this.config.policyEngine,
+			commHub: this.config.commHub,
+			actorSystem: this.config.actorSystem,
+			samiti: this.config.samiti,
+			lokapala: this.config.lokapala,
+			kaala: this.config.kaala,
 		});
 		commitAgent.setProvider(this.config.provider as import("@chitragupta/swara").ProviderDefinition);
 
@@ -1416,6 +1436,10 @@ Rules:
 			tools: this.config.tools,
 			policyEngine: this.config.policyEngine,
 			commHub: this.config.commHub,
+			actorSystem: this.config.actorSystem,
+			samiti: this.config.samiti,
+			lokapala: this.config.lokapala,
+			kaala: this.config.kaala,
 			additionalContext: this.config.additionalContext,
 			onEvent: this.config.onCodingEvent,
 		};
@@ -1445,6 +1469,10 @@ Rules:
 			tools: this.config.tools,
 			policyEngine: this.config.policyEngine,
 			commHub: this.config.commHub,
+			actorSystem: this.config.actorSystem,
+			samiti: this.config.samiti,
+			lokapala: this.config.lokapala,
+			kaala: this.config.kaala,
 		};
 
 		const agent = new DebugAgent(config);
@@ -1471,6 +1499,10 @@ Rules:
 			tools: this.config.tools,
 			policyEngine: this.config.policyEngine,
 			commHub: this.config.commHub,
+			actorSystem: this.config.actorSystem,
+			samiti: this.config.samiti,
+			lokapala: this.config.lokapala,
+			kaala: this.config.kaala,
 		};
 
 		const agent = new ReviewAgent(config);

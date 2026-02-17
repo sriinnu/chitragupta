@@ -41,6 +41,7 @@ import { BhavaSystem } from "./bhava.js";
 import { DhyanaSystem } from "./dhyana.js";
 import { AtmaDarshana } from "./atma-darshana.js";
 import { SankalpaSystem } from "./sankalpa.js";
+import { Triguna } from "./triguna.js";
 
 // ─── ChetanaController ──────────────────────────────────────────────────────
 
@@ -53,8 +54,11 @@ export class ChetanaController {
 	private dhyana: DhyanaSystem;
 	private atma: AtmaDarshana;
 	private sankalpa: SankalpaSystem;
+	private triguna: Triguna | null = null;
 	private config: ChetanaConfig;
 	private onEvent?: (event: string, data: unknown) => void;
+	/** Rolling error rate for Triguna observations. */
+	private recentToolResults: boolean[] = [];
 
 	constructor(
 		config?: Partial<ChetanaConfig>,
@@ -67,6 +71,19 @@ export class ChetanaController {
 		this.dhyana = new DhyanaSystem(this.config);
 		this.atma = new AtmaDarshana(this.config, onEvent);
 		this.sankalpa = new SankalpaSystem(this.config, onEvent);
+
+		// Integrate Triguna health monitor if configured
+		if (config?.triguna?.enabled) {
+			this.triguna = new Triguna(
+				config.triguna.trigunaOverrides as Partial<import("./triguna.js").TrigunaConfig> | undefined,
+				onEvent,
+			);
+		}
+	}
+
+	/** Get the Triguna subsystem (if integrated). */
+	getTriguna(): Triguna | null {
+		return this.triguna;
 	}
 
 	// ─── Per-Turn Lifecycle ─────────────────────────────────────────────────
@@ -144,6 +161,25 @@ export class ChetanaController {
 
 		// Sankalpa: check if tool result advances any intention
 		this.sankalpa.onToolResult(toolName, resultContent);
+
+		// Triguna: feed health observations from tool results
+		if (this.triguna) {
+			this.recentToolResults.push(success);
+			if (this.recentToolResults.length > 20) this.recentToolResults.shift();
+
+			const errorCount = this.recentToolResults.filter((r) => !r).length;
+			const total = this.recentToolResults.length;
+			// Normalize latency to [0,1] — 5s+ is max
+			const normalizedLatency = Math.min(latencyMs / 5000, 1);
+			this.triguna.update({
+				errorRate: total > 0 ? errorCount / total : 0,
+				latency: normalizedLatency,
+				successRate: total > 0 ? (total - errorCount) / total : 1,
+				tokenVelocity: 0, // Updated externally via agent heartbeat
+				loopCount: 0,     // Updated by agent loop detection
+				userSatisfaction: isUserCorrection ? 0.3 : 0.7,
+			});
+		}
 	}
 
 	// ─── External Signals ───────────────────────────────────────────────────

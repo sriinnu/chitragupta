@@ -8,15 +8,15 @@
 
 <p align="center">
   <a href="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml"><img src="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/tests-9%2C121-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-10%2C232-brightgreen" alt="Tests" />
   <img src="https://img.shields.io/badge/node-%3E%3D22-blue" alt="Node" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
-  <img src="https://img.shields.io/badge/packages-14-orange" alt="Packages" />
+  <img src="https://img.shields.io/badge/packages-15-orange" alt="Packages" />
 </p>
 
 ---
 
-Chitragupta is an AI agent platform that treats cognition as a first-class engineering discipline. It is a TypeScript ESM monorepo of 14 packages — a complete cognitive system with memory, identity, attention, affect, intention, self-reflection, deliberation, and self-evolution. Most of which runs at zero LLM cost.
+Chitragupta is an AI agent platform that treats cognition as a first-class engineering discipline. It is a TypeScript ESM monorepo of 15 packages — a complete cognitive system with memory, identity, attention, affect, intention, self-reflection, deliberation, and self-evolution. Most of which runs at zero LLM cost.
 
 It exposes a **CLI**, an **HTTP server**, an **MCP server**, and a **programmatic API**. It is designed to be consumed by other applications.
 
@@ -133,14 +133,16 @@ Once initialized, your AI agent automatically:
 - **Preserves work state** — when context compacts, the handover tool saves what you were doing
 - **Learns your patterns** — coding style, preferred approaches, recurring workflows
 
-### 25 MCP Tools
+### 32 MCP Tools
 
 | Category | Tools | What They Do |
 |----------|-------|-------------|
-| **Memory** | `chitragupta_memory_search`, `chitragupta_session_list`, `chitragupta_session_show` | Search & browse past sessions |
-| **Continuity** | `chitragupta_handover`, `chitragupta_prompt` | Context handover, agent delegation |
+| **Memory** | `chitragupta_memory_search`, `chitragupta_recall`, `chitragupta_context`, `chitragupta_session_list`, `chitragupta_session_show` | Search memory, recall decisions, browse sessions |
+| **Continuity** | `chitragupta_handover`, `chitragupta_record_conversation` | Context handover, conversation capture |
+| **Day Files** | `chitragupta_day_show`, `chitragupta_day_list`, `chitragupta_day_search` | Consolidated daily diaries across all projects |
 | **Collective** | `akasha_traces`, `akasha_deposit`, `samiti_channels`, `samiti_broadcast`, `sabha_deliberate` | Shared knowledge, multi-agent deliberation |
 | **Self-Awareness** | `vasana_tendencies`, `health_status`, `atman_report` | Learned patterns, health, identity |
+| **Agent** | `coding_agent`, `swara_marga_decide` | Autonomous coding, model routing |
 | **File & Shell** | `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `diff`, `watch`, `memory`, `session`, `project_analysis` | Full development toolkit |
 
 ### Manual Setup (if you prefer)
@@ -230,7 +232,7 @@ context persists          ← next session picks up where you left off
 
 ---
 
-## The 14 Packages
+## The 15 Packages
 
 | Package | What It Does | Internal Name | Meaning |
 |---------|-------------|---------------|---------|
@@ -248,8 +250,11 @@ context persists          ← next session picks up where you left off
 | [`@chitragupta/vidhya-skills`](./packages/vidhya-skills) | Skills — trait vector matching, evolution, security scanning, autonomous learning | Vidhya | Knowledge |
 | [`@chitragupta/niyanta`](./packages/niyanta) | Orchestrator — multi-armed bandit, task routing, agent evaluation, auto-scaling | Niyanta | Director |
 | [`@chitragupta/cli`](./packages/cli) | Entry Point — interactive CLI, HTTP server, MCP server, onboarding | — | — |
+| [`@chitragupta/darpana`](./packages/darpana) | LLM Proxy — mirrors Anthropic API to any provider, <5ms overhead, zero-config | Darpana | Mirror |
 
-Build order: `core -> swara -> anina -> smriti -> ui -> yantra -> dharma -> netra -> vayu -> sutra -> tantra -> vidhya-skills -> niyanta -> cli`
+> **npm:** Published as [`@yugenlab/chitragupta`](https://www.npmjs.com/package/@yugenlab/chitragupta) — `npm install -g @yugenlab/chitragupta`
+
+Build order: `core -> swara -> anina -> smriti -> ui -> yantra -> dharma -> netra -> vayu -> sutra -> tantra -> vidhya-skills -> niyanta -> cli` · `darpana` (standalone, depends on core only)
 
 ---
 
@@ -274,11 +279,11 @@ Plus 3 base profiles: `chitragupta` (bold, opinionated default), `friendly`, `mi
 
 | Metric | Value |
 |--------|-------|
-| Test files | 248 |
-| Total tests | 9,121 |
+| Test files | 300 |
+| Total tests | 10,232 |
 | Failures | 0 |
 | TypeScript errors | 0 |
-| Packages | 14 |
+| Packages | 15 |
 | p99 latency (load test) | 1.2ms at 500 RPS |
 | Security audit | 36 issues found and resolved |
 

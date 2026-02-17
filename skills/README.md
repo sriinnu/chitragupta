@@ -18,7 +18,7 @@ ecosystem/skill-lab/         # Experimental, sandboxed
 ecosystem/skill-community/   # External submissions, disabled by default
 ```
 
-See [ecosystem/SPECIFICATION.md](../../ecosystem/SPECIFICATION.md) for the full Vidya Skill Specification.
+See [`packages/vidhya-skills`](../packages/vidhya-skills) for the Vidya skill system implementation.
 
 ## Creating a New Skill
 

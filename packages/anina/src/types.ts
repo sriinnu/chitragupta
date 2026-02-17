@@ -16,6 +16,137 @@ import type {
 } from "@chitragupta/core";
 import type { ContentPart, StreamEvent, EmbeddingProvider } from "@chitragupta/swara";
 
+// ─── Mesh Structural Types ──────────────────────────────────────────────────
+// These are structural interfaces compatible with @chitragupta/sutra types.
+// Defined here to avoid a circular dependency (anina builds before sutra).
+// TypeScript's structural typing ensures real Sutra objects satisfy these.
+
+/** Structural interface for an actor reference (compatible with sutra ActorRef). */
+export interface MeshActorRef {
+	readonly actorId: string;
+	tell(from: string, payload: unknown, opts?: { priority?: number; topic?: string; ttl?: number }): void;
+	ask(from: string, payload: unknown, opts?: { priority?: number; topic?: string; ttl?: number; timeout?: number }): Promise<{ payload: unknown }>;
+}
+
+/** The behavior function an actor executes per message. */
+export type MeshActorBehavior = (
+	envelope: MeshEnvelopeCompat,
+	ctx: MeshActorContextCompat,
+) => void | Promise<void>;
+
+/** Structural interface for a mesh envelope (compatible with sutra MeshEnvelope). */
+export interface MeshEnvelopeCompat {
+	id: string;
+	from: string;
+	to: string;
+	type: "tell" | "ask" | "reply" | "signal";
+	topic?: string;
+	correlationId?: string;
+	payload: unknown;
+	priority: number;
+	timestamp: number;
+	ttl: number;
+	hops: string[];
+}
+
+/** Structural interface for actor context (compatible with sutra ActorContext). */
+export interface MeshActorContextCompat {
+	self: string;
+	reply(payload: unknown): void;
+	send(to: string, payload: unknown, opts?: { priority?: number; topic?: string; ttl?: number }): void;
+	ask(to: string, payload: unknown, opts?: { priority?: number; topic?: string; ttl?: number; timeout?: number }): Promise<{ payload: unknown }>;
+	become(behavior: MeshActorBehavior): void;
+	stop(): void;
+}
+
+/** Structural interface for an actor system (compatible with sutra ActorSystem). */
+export interface MeshActorSystem {
+	spawn(id: string, options: {
+		behavior: MeshActorBehavior;
+		expertise?: string[];
+		capabilities?: string[];
+		mailboxSize?: number;
+	}): MeshActorRef;
+	stop(actorId: string): boolean;
+	tell(from: string, to: string, payload: unknown, opts?: { priority?: number; topic?: string; ttl?: number }): void;
+	ask(from: string, to: string, payload: unknown, opts?: { priority?: number; topic?: string; ttl?: number; timeout?: number }): Promise<{ payload: unknown }>;
+}
+
+/** Structural interface for ambient channels (compatible with sutra Samiti). */
+export interface MeshSamiti {
+	broadcast(
+		channel: string,
+		message: {
+			sender: string;
+			severity: "info" | "warning" | "critical";
+			category: string;
+			content: string;
+			data?: unknown;
+			ttl?: number;
+		},
+	): unknown;
+}
+
+/** Finding from a Lokapala guardian scan. */
+export interface LokapalaFinding {
+	id: string;
+	guardianId: string;
+	domain: "security" | "performance" | "correctness";
+	severity: "info" | "warning" | "critical";
+	title: string;
+	description: string;
+	location?: string;
+	suggestion?: string;
+	confidence: number;
+	autoFixable: boolean;
+	timestamp: number;
+}
+
+/** Structural interface for Lokapala guardians (compatible with anina LokapalaController). */
+export interface LokapalaGuardians {
+	afterToolExecution(
+		toolName: string,
+		args: Record<string, unknown>,
+		output: string,
+		durationMs: number,
+	): LokapalaFinding[];
+}
+
+/** Heartbeat data for KaalaBrahma agent lifecycle tracking. */
+export interface KaalaHeartbeat {
+	agentId: string;
+	lastBeat: number;
+	startedAt: number;
+	turnCount: number;
+	tokenUsage: number;
+	status: "alive" | "stale" | "dead" | "killed" | "completed" | "error";
+	parentId: string | null;
+	depth: number;
+	purpose: string;
+	tokenBudget: number;
+}
+
+/** Status change callback for KaalaBrahma lifecycle events. */
+export type KaalaStatusChangeCallback = (agentId: string, oldStatus: string, newStatus: string) => void;
+
+/** Structural interface for KaalaBrahma (agent lifecycle manager). */
+export interface KaalaLifecycle {
+	registerAgent(heartbeat: KaalaHeartbeat): void;
+	recordHeartbeat(agentId: string, data?: Partial<KaalaHeartbeat>): void;
+	markCompleted(agentId: string): void;
+	markError(agentId: string): void;
+	/** Start periodic monitoring (healTree every heartbeatInterval). */
+	startMonitoring(): void;
+	/** Stop periodic monitoring. */
+	stopMonitoring(): void;
+	/** Subscribe to agent status changes. Returns unsubscribe function. */
+	onStatusChange(cb: KaalaStatusChangeCallback): () => void;
+	/** Detect and heal stale/dead agents, reap orphans. */
+	healTree(): unknown;
+	/** Get full tree health snapshot. */
+	getTreeHealth(): unknown;
+}
+
 // ─── Tool System ────────────────────────────────────────────────────────────
 // Canonical ToolHandler, ToolContext, ToolResult, and ToolDefinition are
 // defined in @chitragupta/core and re-exported here for backward compatibility.
@@ -165,6 +296,36 @@ export interface AgentConfig {
 		broadcast(from: string, topic: string, payload: unknown): void;
 		destroy(): void;
 	};
+	/**
+	 * ActorSystem instance for P2P mesh communication (Sutra actor mesh).
+	 * When provided, the agent auto-registers as an actor in the mesh,
+	 * enabling inter-agent communication via tell/ask.
+	 */
+	actorSystem?: MeshActorSystem;
+	/**
+	 * Samiti instance for ambient channel communication.
+	 * When provided, agent events are broadcast to relevant channels
+	 * (e.g., tool errors → #correctness, security findings → #security).
+	 */
+	samiti?: MeshSamiti;
+	/**
+	 * Lokapala guardians for real-time tool call scanning.
+	 * When provided, every tool execution is scanned for security, performance,
+	 * and correctness issues. Critical findings are broadcast to Samiti channels.
+	 */
+	lokapala?: LokapalaGuardians;
+	/**
+	 * KaalaBrahma lifecycle manager for agent tree tracking.
+	 * When provided, agents register/unregister with the lifecycle manager,
+	 * enabling heartbeat monitoring, stale detection, and kill cascades.
+	 */
+	kaala?: KaalaLifecycle;
+	/**
+	 * Enable mesh integration (ActorSystem + Samiti).
+	 * When true and actorSystem is provided, the agent auto-spawns as an actor.
+	 * Default: true (auto-enable when actorSystem is provided).
+	 */
+	enableMesh?: boolean;
 	/** Embedding provider for vector generation in memory subsystems. */
 	embeddingProvider?: EmbeddingProvider;
 	/** Enable the Chetana consciousness layer. Default: true (enabled). */

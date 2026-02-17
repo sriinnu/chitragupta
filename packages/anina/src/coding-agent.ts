@@ -87,6 +87,14 @@ export interface CodingAgentConfig {
 	commHub?: AgentConfig["commHub"];
 	/** Policy engine adapter. */
 	policyEngine?: AgentConfig["policyEngine"];
+	/** Samiti for ambient channel broadcasts. */
+	samiti?: AgentConfig["samiti"];
+	/** Lokapala guardians for tool call scanning. */
+	lokapala?: AgentConfig["lokapala"];
+	/** ActorSystem for P2P mesh communication. */
+	actorSystem?: AgentConfig["actorSystem"];
+	/** KaalaBrahma lifecycle manager. */
+	kaala?: AgentConfig["kaala"];
 	/**
 	 * Tool handlers to use. If not provided, the agent has no tools.
 	 * Use CODE_TOOL_NAMES to filter a full tool set to coding-relevant tools.
@@ -207,6 +215,10 @@ export class CodingAgent {
 			},
 			policyEngine: config.policyEngine,
 			commHub: config.commHub,
+			actorSystem: config.actorSystem,
+			samiti: config.samiti,
+			lokapala: config.lokapala,
+			kaala: config.kaala,
 		};
 
 		this.agent = new Agent(agentConfig);

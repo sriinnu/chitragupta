@@ -1,10 +1,12 @@
-# @chitragupta/cli
+# @yugenlab/chitragupta
 
 ![Logo](../../assets/logos/cli.svg)
 
 **CLI entry point for Chitragupta -- the front door to the entire system.**
 
-`@chitragupta/cli` is the unified entry point that wires together every other package into a coherent developer experience. It parses command-line arguments, detects the current project, loads context files, builds the system prompt with personality, and launches either interactive mode (the full terminal UI experience) or print mode (single-shot, pipe-friendly output). Beyond the interactive agent loop, it provides a full-featured HTTP server (Dvaara) with REST API, WebSocket support (Sandhana), OpenAPI 3.0 spec generation, an MCP server mode for Claude Code integration, a job queue (Karya) for async task execution, 12 subcommands, 13+ slash commands, and comprehensive route groups spanning skills, evolution, intelligence, collaboration, autonomy, and workflow management.
+> **npm**: `@yugenlab/chitragupta` · **monorepo workspace**: `@chitragupta/cli`
+
+`@yugenlab/chitragupta` is the unified entry point that wires together every other package into a coherent developer experience. It parses command-line arguments, detects the current project, loads context files, builds the system prompt with personality, and launches either interactive mode (the full terminal UI experience) or print mode (single-shot, pipe-friendly output). Beyond the interactive agent loop, it provides a full-featured HTTP server (Dvaara) with REST API, WebSocket support (Sandhana), OpenAPI 3.0 spec generation, an MCP server mode for Claude Code integration, a job queue (Karya) for async task execution, 12 subcommands, 13+ slash commands, and comprehensive route groups spanning skills, evolution, intelligence, collaboration, autonomy, and workflow management.
 
 ---
 
@@ -114,7 +116,7 @@ chitragupta --help
 ### Programmatic Usage
 
 ```typescript
-import { main } from "@chitragupta/cli";
+import { main } from "@yugenlab/chitragupta";
 
 // Launch Chitragupta programmatically
 await main();
@@ -123,8 +125,8 @@ await main();
 ### Argument Parsing
 
 ```typescript
-import { parseArgs, printHelp } from "@chitragupta/cli";
-import type { ParsedArgs } from "@chitragupta/cli";
+import { parseArgs, printHelp } from "@yugenlab/chitragupta";
+import type { ParsedArgs } from "@yugenlab/chitragupta";
 
 const args: ParsedArgs = parseArgs(process.argv.slice(2));
 
@@ -141,8 +143,8 @@ if (args.help) {
 ### Project Detection
 
 ```typescript
-import { detectProject } from "@chitragupta/cli";
-import type { ProjectInfo } from "@chitragupta/cli";
+import { detectProject } from "@yugenlab/chitragupta";
+import type { ProjectInfo } from "@yugenlab/chitragupta";
 
 const project: ProjectInfo = await detectProject("/path/to/project");
 
@@ -158,8 +160,8 @@ console.log(project.language);   // "typescript" | "javascript" | ...
 import {
   loadContextFiles,
   buildContextString,
-} from "@chitragupta/cli";
-import type { ContextFiles } from "@chitragupta/cli";
+} from "@yugenlab/chitragupta";
+import type { ContextFiles } from "@yugenlab/chitragupta";
 
 const ctx: ContextFiles = await loadContextFiles("/path/to/project");
 const contextStr = buildContextString(ctx);
@@ -174,8 +176,8 @@ const contextStr = buildContextString(ctx);
 import {
   buildSystemPrompt,
   buildWelcomeMessage,
-} from "@chitragupta/cli";
-import type { SystemPromptOptions } from "@chitragupta/cli";
+} from "@yugenlab/chitragupta";
+import type { SystemPromptOptions } from "@yugenlab/chitragupta";
 
 const options: SystemPromptOptions = {
   profile: chitraguptaProfile,
@@ -194,12 +196,12 @@ console.log(welcome);
 ### Modes
 
 ```typescript
-import { runInteractiveMode } from "@chitragupta/cli";
-import { runPrintMode } from "@chitragupta/cli";
+import { runInteractiveMode } from "@yugenlab/chitragupta";
+import { runPrintMode } from "@yugenlab/chitragupta";
 import type {
   InteractiveModeOptions,
   PrintModeOptions,
-} from "@chitragupta/cli";
+} from "@yugenlab/chitragupta";
 
 // Interactive: full TUI
 await runInteractiveMode({
@@ -231,7 +233,7 @@ The Dvaara (द्वार -- Gateway) HTTP server provides a REST API for exte
 - OpenAPI 3.0 spec at `/api/openapi.json`
 
 ```typescript
-import { ChitraguptaServer } from "@chitragupta/cli";
+import { ChitraguptaServer } from "@yugenlab/chitragupta";
 
 const server = new ChitraguptaServer({
   port: 3000,
@@ -319,7 +321,7 @@ chitragupta mcp-server
 CHITRAGUPTA_MCP_TRANSPORT=sse CHITRAGUPTA_MCP_PORT=3001 chitragupta mcp-server
 ```
 
-**Exposed MCP tools:** All 12 yantra tools + `memory_search` + `session_list` + `session_show` + `agent_prompt` (opt-in).
+**Exposed MCP tools:** 32 tools — 12 file/shell (yantra) + 20 Chitragupta-specific (memory, recall, day files, collective, self-awareness, coding agent, model routing).
 
 **MCP resource:** `chitragupta://memory/project` -- project memory content.
 
@@ -361,7 +363,7 @@ Slash commands switch the agent's personality and toolset mid-session.
 A comprehensive OpenAPI 3.0 spec is programmatically generated covering all registered API endpoints.
 
 ```typescript
-import { generateOpenAPISpec } from "@chitragupta/cli";
+import { generateOpenAPISpec } from "@yugenlab/chitragupta";
 
 const spec = generateOpenAPISpec();
 // Covers: core, sessions, memory, agents, auth, jobs, skills,
@@ -375,7 +377,7 @@ The spec is served at `GET /api/openapi.json` when the HTTP server is running.
 Real-time bidirectional communication channel for Vaayu and other connected clients.
 
 ```typescript
-import { WebSocketServer } from "@chitragupta/cli";
+import { WebSocketServer } from "@yugenlab/chitragupta";
 
 const ws = new WebSocketServer({
   port: 3001,
@@ -393,7 +395,7 @@ ws.onMessage((client, message) => {
 Async task execution with priority, status tracking, and result retrieval.
 
 ```typescript
-import { JobQueue } from "@chitragupta/cli";
+import { JobQueue } from "@yugenlab/chitragupta";
 
 const queue = new JobQueue({ maxConcurrency: 3, maxQueueSize: 100 });
 

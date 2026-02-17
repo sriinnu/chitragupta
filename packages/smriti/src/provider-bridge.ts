@@ -77,7 +77,22 @@ export async function loadProviderContext(
 		}
 	}
 
-	// 3. Load recent sessions for continuity
+	// 3. Load top vasanas (learned behavioral patterns)
+	let vasanaContext = "";
+	try {
+		const { VasanaEngine } = await import("./vasana-engine.js");
+		const engine = new VasanaEngine();
+		const vasanas = engine.getVasanas(project ?? "__global__", 5);
+		if (vasanas.length > 0) {
+			vasanaContext = vasanas.map((v) =>
+				`- ${v.tendency} (strength: ${(v.strength * 100).toFixed(0)}%): ${v.description}`,
+			).join("\n");
+		}
+	} catch {
+		// Best-effort
+	}
+
+	// 4. Load recent sessions for continuity
 	try {
 		const { listSessions, loadSession } = await import("./session-store.js");
 		const sessions = project
@@ -128,6 +143,11 @@ export async function loadProviderContext(
 	if (recentContext.trim()) {
 		parts.push("## Recent Sessions\n" + recentContext.trim());
 		itemCount += recentContext.split("\n").filter((l) => l.trim()).length;
+	}
+
+	if (vasanaContext.trim()) {
+		parts.push("## Behavioral Patterns\n" + vasanaContext.trim());
+		itemCount += vasanaContext.split("\n").filter((l) => l.trim()).length;
 	}
 
 	const assembled = parts.join("\n\n");
