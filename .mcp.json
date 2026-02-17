@@ -1,14 +1,16 @@
 {
 	"mcpServers": {
 		"chitragupta": {
-			"command": "node",
+			"command": "npx",
 			"args": [
-				"/Users/srinivaspendela/Sriinnu/Personal/AUriva/chitragupta/packages/cli/dist/mcp-entry.js",
+				"-y",
+				"-p",
+				"@yugenlab/chitragupta",
+				"chitragupta-mcp",
 				"--agent"
 			],
 			"env": {
-				"CHITRAGUPTA_MCP_AGENT": "true",
-				"CHITRAGUPTA_MCP_PROJECT": "/Users/srinivaspendela/Sriinnu/Personal/AUriva/chitragupta"
+				"CHITRAGUPTA_MCP_AGENT": "true"
 			}
 		}
 	}
