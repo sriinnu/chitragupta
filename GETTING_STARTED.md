@@ -26,7 +26,7 @@ cd chitragupta
 # Install all workspace dependencies
 pnpm install
 
-# Build all 14 packages (in dependency order)
+# Build all 15 packages (in dependency order)
 pnpm run build
 ```
 
@@ -196,7 +196,7 @@ Chitragupta exposes a clean programmatic API for use as a library -- no TUI, no 
 dependencies.
 
 ```typescript
-import { createChitragupta } from "@chitragupta/cli/api";
+import { createChitragupta } from "@yugenlab/chitragupta/api";
 
 // Create an instance with options
 const chitragupta = await createChitragupta({
@@ -409,7 +409,7 @@ Then point your client to `http://localhost:3001/sse`.
 
 ### Exposed MCP Capabilities
 
-**Tools** (12 built-in + 4 Chitragupta-specific):
+**Tools** (32 total — 12 file/shell + 20 Chitragupta-specific):
 - `read`, `write`, `edit` -- file operations
 - `bash` -- shell command execution
 - `grep`, `find`, `ls` -- search and navigation
@@ -417,9 +417,21 @@ Then point your client to `http://localhost:3001/sse`.
 - `memory`, `session` -- memory and session access
 - `project_analysis` -- codebase analysis
 - `chitragupta_memory_search` -- GraphRAG-backed memory search
+- `chitragupta_recall` -- unified search across all memory layers
+- `chitragupta_context` -- load persistent memory context
 - `chitragupta_session_list` -- list recent sessions
 - `chitragupta_session_show` -- display a session's contents
-- `chitragupta_prompt` -- delegate tasks to Chitragupta's agent (when `--agent` is enabled)
+- `chitragupta_handover` -- preserve work state across context limits
+- `chitragupta_record_conversation` -- capture conversation turns
+- `chitragupta_day_show`, `chitragupta_day_list`, `chitragupta_day_search` -- consolidated daily diaries
+- `akasha_traces`, `akasha_deposit` -- shared knowledge field
+- `samiti_channels`, `samiti_broadcast` -- ambient communication channels
+- `sabha_deliberate` -- multi-agent deliberation
+- `vasana_tendencies` -- learned behavioral patterns
+- `health_status` -- system health (Triguna)
+- `atman_report` -- full self-report
+- `coding_agent` -- autonomous coding agent
+- `swara_marga_decide` -- LLM routing decisions
 
 **Resources:**
 - `chitragupta://memory/project` -- project memory (MEMORY.md)
@@ -697,7 +709,7 @@ Add custom providers in your settings:
 
 ## Project Structure (for Contributors)
 
-Chitragupta is a monorepo with 14 packages under `packages/`:
+Chitragupta is a monorepo with 15 packages under `packages/`:
 
 | Package | npm Scope | Sanskrit Name | Purpose |
 |---------|-----------|---------------|---------|
@@ -715,6 +727,7 @@ Chitragupta is a monorepo with 14 packages under `packages/`:
 | `vidhya-skills` | `@chitragupta/vidhya-skills` | Knowledge | Skill discovery via Trait Vector Matching |
 | `niyanta` | `@chitragupta/niyanta` | Orchestrator | Multi-agent orchestration (bandit strategies) |
 | `cli` | `@chitragupta/cli` | -- | CLI binary, HTTP server, MCP server, programmatic API |
+| `darpana` | `@chitragupta/darpana` | Mirror | LLM API proxy — mirrors Anthropic API to any provider |
 
 ### Building and Testing
 
@@ -762,7 +775,7 @@ pnpm run dev
 
 ## What's Next
 
-- **Individual package READMEs** -- each of the 14 packages has its own README with
+- **Individual package READMEs** -- each of the 15 packages has its own README with
   full API documentation. See `packages/<name>/README.md`.
 - **Plugin development** -- create custom tools, commands, and themes as ESM modules
   in `~/.chitragupta/plugins/`.

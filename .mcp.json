@@ -4,13 +4,11 @@
 			"command": "npx",
 			"args": [
 				"-y",
-				"-p",
-				"@yugenlab/chitragupta",
 				"chitragupta-mcp",
-				"--agent"
+				"--stdio"
 			],
 			"env": {
-				"CHITRAGUPTA_MCP_AGENT": "true"
+				"CHITRAGUPTA_MCP_PROJECT": "/mnt/c/sriinnu/personal/Kaala-brahma/chitragupta"
 			}
 		}
 	}

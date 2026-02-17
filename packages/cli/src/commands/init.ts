@@ -201,19 +201,22 @@ function detectClient(projectRoot: string): ClientId | "unknown" {
 }
 
 /** Resolve the chitragupta MCP entry point path. */
-function resolveEntryPoint(): string {
+function resolveEntryPoint(projectRoot: string): string {
+	// Check if running from a local monorepo build (dev scenario).
+	// Skip paths outside the project root — they're likely npx cache dirs.
 	const monorepoEntry = path.resolve(
 		import.meta.dirname ?? __dirname,
 		"../../dist/mcp-entry.js",
 	);
-	if (fs.existsSync(monorepoEntry)) {
+	if (fs.existsSync(monorepoEntry) && monorepoEntry.startsWith(projectRoot)) {
 		return monorepoEntry;
 	}
 
+	// Check for a global npm install of @yugenlab/chitragupta
 	const globalEntry = path.join(
 		getChitraguptaHome(),
 		"node_modules",
-		"@chitragupta/cli",
+		"@yugenlab/chitragupta",
 		"dist",
 		"mcp-entry.js",
 	);
@@ -406,7 +409,7 @@ export async function run(args: string[] = []): Promise<void> {
 
 	// ─── Step 1: MCP Config ──────────────────────────────────────────────
 
-	const entryPoint = resolveEntryPoint();
+	const entryPoint = resolveEntryPoint(projectRoot);
 	const mcpResult = writeMcpConfig(projectRoot, clientDef, entryPoint);
 	const mcpRelative = path.relative(projectRoot, mcpResult.file);
 
@@ -459,7 +462,7 @@ export async function run(args: string[] = []): Promise<void> {
 
 	if (entryPoint.startsWith("npx:")) {
 		process.stdout.write(yellow("  Note: ") + "Using npx fallback. For faster startup:\n");
-		process.stdout.write(cyan("    npm install -g @chitragupta/cli\n"));
+		process.stdout.write(cyan("    npm install -g @yugenlab/chitragupta\n"));
 		process.stdout.write("\n");
 	}
 

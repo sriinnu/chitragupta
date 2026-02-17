@@ -1,8 +1,8 @@
 {
 	"mcpServers": {
 		"chitragupta": {
-			"command": "node",
-			"args": ["/mnt/c/sriinnu/personal/Kaala-brahma/chitragupta/packages/cli/dist/mcp-entry.js", "--stdio"],
+			"command": "npx",
+			"args": ["-y", "chitragupta-mcp", "--stdio"],
 			"env": {
 				"CHITRAGUPTA_MCP_PROJECT": "/mnt/c/sriinnu/personal/Kaala-brahma/chitragupta"
 			}

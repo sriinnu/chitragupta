@@ -33,7 +33,7 @@ Every MCP tool call:
 3. **FactExtractor runs immediately** on tool args → saves to `~/.chitragupta/memory/global.md`
 4. **autoExtractEvents** records high-level semantics (files changed, commits, decisions)
 
-**Status**: SOLID — All 25 MCP tools pass through `recordToolCall`. Facts persist in real-time.
+**Status**: SOLID — All 32 MCP tools pass through `recordToolCall`. Facts persist in real-time.
 
 ---
 

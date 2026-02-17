@@ -1,5 +1,7 @@
 # @chitragupta/darpana
 
+![Logo](../../assets/logos/darpana.svg)
+
 **Darpana** (दर्पण = mirror) — high-performance LLM API proxy that mirrors the Anthropic Messages API to any LLM provider.
 
 Use Claude Code, Cursor, or any Anthropic-compatible client with **any model** — OpenAI, Gemini, Groq, DeepSeek, Ollama, LM Studio, vLLM, or any OpenAI-compatible endpoint.
