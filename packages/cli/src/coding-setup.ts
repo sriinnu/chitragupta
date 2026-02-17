@@ -98,7 +98,6 @@ export async function setupCodingEnvironment(
 		resolvePreferredProvider,
 		getBuiltinTools,
 		loadProjectMemory,
-		getActionType,
 	} = await import("./bootstrap.js");
 
 	loadCredentials();
@@ -129,105 +128,16 @@ export async function setupCodingEnvironment(
 	const additionalContext = contextParts.length > 0 ? contextParts.join("\n\n") : undefined;
 
 	// ── Policy engine (dharma) ───────────────────────────────────
-	let policyEngine: CodingPolicyEngine | undefined;
-	try {
-		const { PolicyEngine, STANDARD_PRESET } = await import("@chitragupta/dharma");
-		const preset = STANDARD_PRESET;
-		const engine = new PolicyEngine(preset.config);
-		for (const ps of preset.policySets) {
-			engine.addPolicySet(ps);
-		}
+	const { createPolicyAdapter, createMeshInfrastructure } = await import("./shared-factories.js");
 
-		policyEngine = {
-			check(toolName: string, toolArgs: Record<string, unknown>): { allowed: boolean; reason?: string } {
-				const actionType = getActionType(toolName);
-				const action = {
-					type: actionType,
-					tool: toolName,
-					args: toolArgs,
-					filePath: (toolArgs.path ?? toolArgs.file_path ?? toolArgs.filePath) as string | undefined,
-					command: (toolArgs.command ?? toolArgs.cmd) as string | undefined,
-					content: (toolArgs.content ?? toolArgs.text) as string | undefined,
-					url: (toolArgs.url ?? toolArgs.uri) as string | undefined,
-				};
-				const context = {
-					sessionId,
-					agentId: "kartru",
-					agentDepth: 0,
-					projectPath,
-					totalCostSoFar: 0,
-					costBudget: preset.config.costBudget,
-					filesModified: [] as string[],
-					commandsRun: [] as string[],
-					timestamp: Date.now(),
-				};
+	const policyEngine = await createPolicyAdapter({
+		sessionId,
+		agentId: "kartru",
+		projectPath,
+	});
 
-				try {
-					for (const ps of preset.policySets) {
-						for (const rule of ps.rules) {
-							const verdict = rule.evaluate(action, context);
-							if (verdict && typeof verdict === "object" && "status" in verdict && !("then" in verdict)) {
-								const v = verdict as { status: string; reason: string };
-								if (v.status === "deny") {
-									return { allowed: false, reason: v.reason };
-								}
-							}
-						}
-					}
-				} catch {
-					// Rule evaluation failed — allow by default
-				}
-				return { allowed: true };
-			},
-		};
-	} catch {
-		// dharma is optional — continue without policy engine
-	}
-
-	// Samiti for ambient channel broadcasts — use injected or create new
-	let samiti: import("@chitragupta/anina").MeshSamiti | undefined = options.samiti;
-	if (!samiti) {
-		try {
-			const { Samiti } = await import("@chitragupta/sutra");
-			samiti = new Samiti() as unknown as import("@chitragupta/anina").MeshSamiti;
-		} catch {
-			// Samiti is optional
-		}
-	}
-
-	// Lokapala for guardian scanning
-	let lokapala: import("@chitragupta/anina").LokapalaGuardians | undefined;
-	try {
-		const { LokapalaController } = await import("@chitragupta/anina");
-		lokapala = new LokapalaController() as unknown as import("@chitragupta/anina").LokapalaGuardians;
-	} catch {
-		// Lokapala is optional
-	}
-
-	// ActorSystem for P2P mesh
-	let actorSystem: import("@chitragupta/anina").MeshActorSystem | undefined;
-	try {
-		const { ActorSystem } = await import("@chitragupta/sutra");
-		const system = new ActorSystem({ maxMailboxSize: 5_000 });
-		system.start();
-		actorSystem = system as unknown as import("@chitragupta/anina").MeshActorSystem;
-	} catch {
-		// ActorSystem is optional
-	}
-
-	// KaalaBrahma for lifecycle tracking
-	let kaala: import("@chitragupta/anina").KaalaLifecycle | undefined;
-	try {
-		const { KaalaBrahma } = await import("@chitragupta/anina");
-		kaala = new KaalaBrahma({
-			heartbeatInterval: 5000,
-			staleThreshold: 30000,
-			maxAgentDepth: 5,
-			maxSubAgents: 8,
-		}) as unknown as import("@chitragupta/anina").KaalaLifecycle;
-	} catch {
-		// KaalaBrahma is optional
-	}
+	// ── Mesh infrastructure (Samiti, Lokapala, ActorSystem, KaalaBrahma) ──
+	const mesh = await createMeshInfrastructure({ samiti: options.samiti });
 
 	return {
 		providerId: resolved.providerId,
@@ -235,10 +145,10 @@ export async function setupCodingEnvironment(
 		tools,
 		additionalContext,
 		policyEngine,
-		samiti,
-		lokapala,
-		actorSystem,
-		kaala,
+		samiti: mesh.samiti,
+		lokapala: mesh.lokapala,
+		actorSystem: mesh.actorSystem,
+		kaala: mesh.kaala,
 		codingDefaults: settings.coding,
 	};
 }
@@ -311,87 +221,16 @@ export async function setupFromAgent(
 	if (memory) contextParts.push(`--- Project Memory ---\n${memory}`);
 
 	// Policy engine
-	let policyEngine: CodingPolicyEngine | undefined;
-	try {
-		const { PolicyEngine, STANDARD_PRESET } = await import("@chitragupta/dharma");
-		const { getActionType } = await import("./bootstrap.js");
-		const preset = STANDARD_PRESET;
-		const engine = new PolicyEngine(preset.config);
-		for (const ps of preset.policySets) engine.addPolicySet(ps);
+	const { createPolicyAdapter, createMeshInfrastructure } = await import("./shared-factories.js");
 
-		policyEngine = {
-			check(toolName: string, toolArgs: Record<string, unknown>) {
-				const actionType = getActionType(toolName);
-				const action = {
-					type: actionType, tool: toolName, args: toolArgs,
-					filePath: (toolArgs.path ?? toolArgs.file_path ?? toolArgs.filePath) as string | undefined,
-					command: (toolArgs.command ?? toolArgs.cmd) as string | undefined,
-					content: (toolArgs.content ?? toolArgs.text) as string | undefined,
-					url: (toolArgs.url ?? toolArgs.uri) as string | undefined,
-				};
-				const context = {
-					sessionId: "coding-tui", agentId: "kartru", agentDepth: 0, projectPath,
-					totalCostSoFar: 0, costBudget: preset.config.costBudget,
-					filesModified: [] as string[], commandsRun: [] as string[], timestamp: Date.now(),
-				};
-				try {
-					for (const ps of preset.policySets) {
-						for (const rule of ps.rules) {
-							const verdict = rule.evaluate(action, context);
-							if (verdict && typeof verdict === "object" && "status" in verdict && !("then" in verdict)) {
-								const v = verdict as { status: string; reason: string };
-								if (v.status === "deny") return { allowed: false, reason: v.reason };
-							}
-						}
-					}
-				} catch { /* allow */ }
-				return { allowed: true };
-			},
-		};
-	} catch { /* dharma optional */ }
+	const policyEngine = await createPolicyAdapter({
+		sessionId: "coding-tui",
+		agentId: "kartru",
+		projectPath,
+	});
 
-	// Samiti for ambient channel broadcasts
-	let samiti: import("@chitragupta/anina").MeshSamiti | undefined;
-	try {
-		const { Samiti } = await import("@chitragupta/sutra");
-		samiti = new Samiti() as unknown as import("@chitragupta/anina").MeshSamiti;
-	} catch {
-		// Samiti is optional
-	}
-
-	// Lokapala for guardian scanning
-	let lokapala: import("@chitragupta/anina").LokapalaGuardians | undefined;
-	try {
-		const { LokapalaController } = await import("@chitragupta/anina");
-		lokapala = new LokapalaController() as unknown as import("@chitragupta/anina").LokapalaGuardians;
-	} catch {
-		// Lokapala is optional
-	}
-
-	// ActorSystem for P2P mesh
-	let actorSystem: import("@chitragupta/anina").MeshActorSystem | undefined;
-	try {
-		const { ActorSystem } = await import("@chitragupta/sutra");
-		const system = new ActorSystem({ maxMailboxSize: 5_000 });
-		system.start();
-		actorSystem = system as unknown as import("@chitragupta/anina").MeshActorSystem;
-	} catch {
-		// ActorSystem is optional
-	}
-
-	// KaalaBrahma for lifecycle tracking
-	let kaala: import("@chitragupta/anina").KaalaLifecycle | undefined;
-	try {
-		const { KaalaBrahma } = await import("@chitragupta/anina");
-		kaala = new KaalaBrahma({
-			heartbeatInterval: 5000,
-			staleThreshold: 30000,
-			maxAgentDepth: 5,
-			maxSubAgents: 8,
-		}) as unknown as import("@chitragupta/anina").KaalaLifecycle;
-	} catch {
-		// KaalaBrahma is optional
-	}
+	// Mesh infrastructure (Samiti, Lokapala, ActorSystem, KaalaBrahma)
+	const mesh = await createMeshInfrastructure();
 
 	// Load coding defaults from settings
 	const { loadGlobalSettings } = await import("@chitragupta/core");
@@ -403,10 +242,10 @@ export async function setupFromAgent(
 		tools,
 		additionalContext: contextParts.length > 0 ? contextParts.join("\n\n") : undefined,
 		policyEngine,
-		samiti,
-		lokapala,
-		actorSystem,
-		kaala,
+		samiti: mesh.samiti,
+		lokapala: mesh.lokapala,
+		actorSystem: mesh.actorSystem,
+		kaala: mesh.kaala,
 		codingDefaults: settings.coding,
 	};
 }

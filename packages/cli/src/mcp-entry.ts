@@ -26,6 +26,7 @@
 
 import { runMcpServerMode } from "./modes/mcp-server.js";
 import { loadCredentials } from "./bootstrap.js";
+import { configureLogging, ConsoleTransport } from "@chitragupta/core";
 
 // ─── Parse CLI Arguments ────────────────────────────────────────────────────
 
@@ -101,6 +102,15 @@ async function main(): Promise<void> {
 	loadCredentials();
 
 	const args = parseArgs(process.argv.slice(2));
+
+	// In stdio mode, ALL log output must go to stderr to keep stdout
+	// clean for JSON-RPC messages. Without this, DEBUG/INFO logs from
+	// NidraDaemon, DaemonManager, etc. corrupt the MCP protocol handshake.
+	if (args.transport === "stdio") {
+		configureLogging({
+			transports: [new ConsoleTransport({ forceStderr: true })],
+		});
+	}
 
 	await runMcpServerMode({
 		transport: args.transport,

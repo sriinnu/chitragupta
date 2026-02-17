@@ -382,13 +382,13 @@ export class DaemonManager extends EventEmitter {
 				() => this.runSkillScan(),
 				this.config.skillScanIntervalMs,
 			);
-			if (this.skillScanTimer && (this.skillScanTimer as any).unref) {
-				(this.skillScanTimer as any).unref();
+			if (this.skillScanTimer && typeof (this.skillScanTimer as NodeJS.Timeout).unref === "function") {
+				(this.skillScanTimer as NodeJS.Timeout).unref();
 			}
 		}, firstScanDelay);
 
-		if (this.skillScanTimer && (this.skillScanTimer as any).unref) {
-			(this.skillScanTimer as any).unref();
+		if (this.skillScanTimer && typeof (this.skillScanTimer as NodeJS.Timeout).unref === "function") {
+			(this.skillScanTimer as NodeJS.Timeout).unref();
 		}
 	}
 

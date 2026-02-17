@@ -122,6 +122,9 @@ export type {
 	ReviewIssueCompact,
 } from "./coding-orchestrator.js";
 
+// ─── Agent Response Parsing Utilities ────────────────────────────────────────
+export { parseField, extractText } from "./agent-response-parser.js";
+
 // ─── Review Agent (Parikshaka) ──────────────────────────────────────────────
 export { ReviewAgent, REVIEW_TOOL_NAMES } from "./review-agent.js";
 export type { ReviewAgentConfig, ReviewResult, ReviewIssue, ReviewFocus, ReviewSeverity } from "./review-agent.js";

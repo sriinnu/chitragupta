@@ -2315,6 +2315,103 @@ function formatVidhi(v: { name: string; steps: Array<{ toolName: string; descrip
 		`  Steps:\n${steps}`;
 }
 
+/**
+ * Create the `chitragupta_consolidate` tool — on-demand Swapna memory consolidation.
+ */
+function createConsolidateTool(projectPath: string): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_consolidate",
+			description:
+				"Run Swapna memory consolidation on demand. Analyzes recent sessions to extract " +
+				"knowledge rules (samskaras) and tool sequence procedures (vidhis). " +
+				"Returns a summary of new rules learned, rules reinforced, and patterns detected.",
+			inputSchema: {
+				type: "object" as const,
+				properties: {
+					sessionCount: {
+						type: "number",
+						description: "Number of recent sessions to analyze. Default: 10.",
+					},
+				},
+				required: [],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const sessionCount = typeof args.sessionCount === "number" ? args.sessionCount : 10;
+
+			try {
+				const { ConsolidationEngine, VidhiEngine } = await import("@chitragupta/smriti");
+				const { listSessions, loadSession } = await import("@chitragupta/smriti/session-store");
+
+				const consolidator = new ConsolidationEngine();
+				consolidator.load();
+
+				const recentMetas = listSessions(projectPath).slice(0, sessionCount);
+				const sessions: import("@chitragupta/smriti/types").Session[] = [];
+				for (const meta of recentMetas) {
+					try {
+						const s = loadSession(meta.id, projectPath);
+						if (s) sessions.push(s);
+					} catch { /* skip */ }
+				}
+
+				if (sessions.length === 0) {
+					return {
+						content: [{ type: "text", text: "No sessions found to consolidate." }],
+						_metadata: { action: "consolidate", sessions: 0 },
+					};
+				}
+
+				const result = consolidator.consolidate(sessions);
+				consolidator.decayRules();
+				consolidator.pruneRules();
+
+				let vidhiSummary = "";
+				try {
+					const vidhiEngine = new VidhiEngine({ project: projectPath });
+					const vr = vidhiEngine.extract();
+					vidhiSummary = `\nVidhis: ${vr.newVidhis.length} new, ${vr.reinforced.length} reinforced`;
+				} catch { /* optional */ }
+
+				consolidator.save();
+
+				const lines: string[] = [
+					`Swapna Consolidation Complete`,
+					`Sessions analyzed: ${result.sessionsAnalyzed}`,
+					`New rules: ${result.newRules.length}`,
+					`Rules reinforced: ${result.reinforcedRules.length}`,
+					`Rules weakened: ${result.weakenedRules.length}`,
+					`Patterns detected: ${result.patternsDetected.length}`,
+				];
+				if (vidhiSummary) lines.push(vidhiSummary.trim());
+
+				if (result.newRules.length > 0) {
+					lines.push("", "New rules:");
+					for (const rule of result.newRules.slice(0, 10)) {
+						lines.push(`  - [${rule.category}] ${rule.rule}`);
+					}
+				}
+
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					_metadata: {
+						action: "consolidate",
+						sessions: result.sessionsAnalyzed,
+						newRules: result.newRules.length,
+						reinforced: result.reinforcedRules.length,
+					},
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
 // ─── Server Entry Point ─────────────────────────────────────────────────────
 
 /**
@@ -2383,8 +2480,11 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	// Add provider context tool (memory injection on session start)
 	mcpTools.push(createContextTool(projectPath));
 
-	// Add vidhis tool (learned procedures from Svapna consolidation)
+	// Add vidhis tool (learned procedures from Swapna consolidation)
 	mcpTools.push(createVidhisTool(projectPath));
+
+	// Add consolidation tool (Swapna — on-demand memory consolidation)
+	mcpTools.push(createConsolidateTool(projectPath));
 
 	// ─── 2. Session recording ───────────────────────────────────────
 	// Lazy-init: create a session on the first tool call, record every

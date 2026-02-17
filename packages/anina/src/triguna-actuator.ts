@@ -138,9 +138,10 @@ export class TrigunaActuator {
 	private setMaxSubAgents(max: number): void {
 		if (!this.kaala) return;
 		try {
-			const kaalaAny = this.kaala as unknown as { setConfig(c: { maxSubAgents: number }): void };
-			if (typeof kaalaAny.setConfig === "function") {
-				kaalaAny.setConfig({ maxSubAgents: max });
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const kaala = this.kaala as any;
+			if (typeof kaala.setConfig === "function") {
+				kaala.setConfig({ maxSubAgents: max });
 			}
 		} catch { /* best-effort */ }
 	}
