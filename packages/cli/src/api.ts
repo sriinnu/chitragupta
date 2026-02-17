@@ -14,6 +14,7 @@
  */
 
 import crypto from "crypto";
+import path from "path";
 
 import {
 	loadGlobalSettings,
@@ -35,6 +36,7 @@ import {
 	createSession,
 	saveSession,
 	loadSession,
+	addTurn,
 } from "@chitragupta/smriti/session-store";
 import { searchMemory } from "@chitragupta/smriti/search";
 import type { Session } from "@chitragupta/smriti/types";
@@ -253,18 +255,26 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 	if (!options.noMemory) {
 		memoryContext = loadProjectMemory(projectPath);
 	}
+	let identityContext: string | undefined;
+	let skillContext: string | undefined;
+	const skillWatcherCleanups: Array<() => void> = [];
+	let checkpointManager: {
+		save: (sessionId: string, data: {
+			version: 1;
+			sessionId: string;
+			turns: unknown[];
+			metadata: Record<string, unknown>;
+			timestamp: number;
+		}) => Promise<unknown>;
+	} | undefined;
+	let nidraDaemon: {
+		start: () => void;
+		stop: () => Promise<void>;
+		touch: () => void;
+	} | undefined;
 
 	// ─── 7. Get built-in tools ────────────────────────────────────────
 	const tools: ToolHandler[] = getBuiltinTools();
-
-	// ─── 8. Build system prompt ───────────────────────────────────────
-	const systemPrompt = buildSystemPrompt({
-		profile,
-		project,
-		contextFiles,
-		memoryContext,
-		tools,
-	});
 
 	// ─── 9. Resolve thinking level ────────────────────────────────────
 	const thinkingLevel: ThinkingLevel =
@@ -356,6 +366,133 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 	// ─── 10b. Create embedding provider ────────────────────────────────
 	const embeddingProvider = await createEmbeddingProviderInstance();
 
+	// ─── 10c. Enrich context (identity + skills) and runtime helpers ───
+	if (!options.noMemory) {
+		try {
+			const { MemoryBridge } = await import("@chitragupta/anina");
+			const memoryBridge = new MemoryBridge({
+				enabled: true,
+				project: projectPath,
+				enableSmaran: true,
+				enableGraphRAG: true,
+				enableHybridSearch: true,
+				identityPath: projectPath,
+				embeddingProvider,
+			});
+			const identityCtx = memoryBridge.getIdentityContext();
+			if (identityCtx) {
+				const loaded = identityCtx.load().trim();
+				if (loaded.length > 0) {
+					identityContext = loaded;
+				}
+			}
+			const bridgedMemory = await memoryBridge.loadMemoryContext(projectPath, "api");
+			if (bridgedMemory?.trim().length) {
+				memoryContext = memoryContext
+					? `${memoryContext}\n\n${bridgedMemory}`
+					: bridgedMemory;
+			}
+		} catch {
+			// MemoryBridge context enrichment is best-effort
+		}
+	}
+
+	try {
+		const {
+			SkillRegistry,
+			VidyaBridge,
+			VidyaOrchestrator,
+		} = await import("@chitragupta/vidhya-skills");
+		const skillRegistry = new SkillRegistry();
+		const bridge = new VidyaBridge(skillRegistry);
+		bridge.registerToolsAsSkills(
+			tools.map((tool) => ({
+				name: tool.definition.name,
+				description: tool.definition.description,
+				inputSchema: tool.definition.inputSchema as Record<string, unknown>,
+			})),
+		);
+
+		try {
+			const { loadSkillTiers } = await import("./shared-factories.js");
+			const tierResult = await loadSkillTiers({ projectPath, skillRegistry });
+			skillWatcherCleanups.push(...tierResult.watcherCleanups);
+		} catch {
+			// Skill tier loading is optional
+		}
+
+		if (skillRegistry.size > 0) {
+			const allSkills = skillRegistry.getAll();
+			const tagCounts = new Map<string, number>();
+			for (const skill of allSkills) {
+				for (const tag of skill.tags) {
+					tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+				}
+			}
+			const topTags = [...tagCounts.entries()]
+				.sort((a, b) => b[1] - a[1])
+				.slice(0, 8)
+				.map(([tag, count]) => `${tag} (${count})`);
+			const lines = [
+				"## Skill Discovery",
+				"",
+				`${skillRegistry.size} skills registered via Trait Vector Matching (TVM).`,
+				"Tools are auto-discoverable through semantic matching, not exact name memorization.",
+			];
+			if (topTags.length > 0) {
+				lines.push("", `Skill domains: ${topTags.join(", ")}`);
+			}
+			skillContext = lines.join("\n");
+		}
+
+		try {
+			const stateDir = path.join(projectPath, ".chitragupta");
+			const vidyaOrchestrator = new VidyaOrchestrator(
+				{ registry: skillRegistry, bridge },
+				{
+					persistPath: path.join(stateDir, "vidya-state.json"),
+					enableAutoComposition: true,
+				},
+			);
+			await vidyaOrchestrator.initialize();
+		} catch {
+			// Vidya orchestration is best-effort for API mode
+		}
+	} catch {
+		// vidhya-skills package is optional
+	}
+
+	try {
+		const { CheckpointManager } = await import("@chitragupta/smriti");
+		checkpointManager = new CheckpointManager({
+			checkpointDir: path.join(projectPath, ".chitragupta", "checkpoints"),
+		});
+	} catch {
+		// Checkpoint manager is optional
+	}
+
+	try {
+		const { NidraDaemon } = await import("@chitragupta/anina");
+		nidraDaemon = new NidraDaemon({ project: projectPath });
+		nidraDaemon.start();
+	} catch {
+		// Nidra daemon is optional
+	}
+
+	const enrichedMemoryContext = memoryContext
+		? (skillContext ? `${memoryContext}\n\n${skillContext}` : memoryContext)
+		: skillContext;
+
+	// ─── 10d. Build system prompt ──────────────────────────────────────
+	const systemPrompt = buildSystemPrompt({
+		profile,
+		project,
+		contextFiles,
+		memoryContext: enrichedMemoryContext,
+		identityContext,
+		tools,
+	});
+
 	// ─── 11. Create the agent ─────────────────────────────────────────
 	const agentConfig: AgentConfig = {
 		profile,
@@ -367,6 +504,8 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 		workingDirectory: projectPath,
 		policyEngine: policyAdapter,
 		embeddingProvider,
+		enableMemory: !options.noMemory,
+		project: projectPath,
 	};
 
 	const agent = new Agent(agentConfig);
@@ -426,6 +565,76 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 
 	let destroyed = false;
 
+	const saveCheckpoint = async () => {
+		if (!checkpointManager) return;
+		try {
+				await checkpointManager.save(session.meta.id, {
+					version: 1,
+					sessionId: session.meta.id,
+					turns: [...agent.getMessages()],
+					metadata: {
+						model: modelId,
+						providerId,
+						updatedAt: new Date().toISOString(),
+					},
+					timestamp: Date.now(),
+				});
+		} catch {
+			// Checkpointing is best-effort
+		}
+	};
+
+	const persistTurn = async (turn: {
+		role: "user" | "assistant";
+		content: string;
+		agent?: string;
+		model?: string;
+		contentParts?: Array<Record<string, unknown>>;
+	}) => {
+		session.turns.push({
+			...turn,
+			turnNumber: session.turns.length + 1,
+		});
+		try {
+			await addTurn(session.meta.id, projectPath, {
+				...turn,
+				turnNumber: 0,
+			});
+		} catch {
+			try {
+				saveSession(session);
+			} catch {
+				// Session persistence is best-effort
+			}
+		}
+	};
+
+	const persistExchange = async (params: {
+		userMessage: string;
+		assistantText: string;
+		assistantContentParts?: Array<Record<string, unknown>>;
+	}) => {
+		await persistTurn({
+			role: "user",
+			content: params.userMessage,
+		});
+		await persistTurn({
+			role: "assistant",
+			agent: profile.id,
+			model: modelId,
+			content: params.assistantText,
+			contentParts: params.assistantContentParts,
+		});
+		if (nidraDaemon) {
+			try {
+				nidraDaemon.touch();
+			} catch {
+				// Nidra touch is best-effort
+			}
+		}
+		await saveCheckpoint();
+	};
+
 	const instance: ChitraguptaInstance = {
 		agent,
 
@@ -446,19 +655,10 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 				cumulativeCost += response.cost.total;
 			}
 
-			// Record turns into session
-			session.turns.push({
-				turnNumber: session.turns.length + 1,
-				role: "user",
-				content: message,
-			});
-			session.turns.push({
-				turnNumber: session.turns.length + 1,
-				role: "assistant",
-				agent: profile.id,
-				model: modelId,
-				content: text,
-				contentParts: response.content as unknown as Array<Record<string, unknown>>,
+			await persistExchange({
+				userMessage: message,
+				assistantText: text,
+				assistantContentParts: response.content as unknown as Array<Record<string, unknown>>,
 			});
 
 			return text;
@@ -541,24 +741,15 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 			});
 
 			// Run the prompt in the background and signal completion
-			const promptDone = agent.prompt(message).then((response) => {
-				if (response.cost) {
-					cumulativeCost += response.cost.total;
-				}
+				const promptDone = agent.prompt(message).then(async (response) => {
+					if (response.cost) {
+						cumulativeCost += response.cost.total;
+					}
 
-				// Record turns
-				session.turns.push({
-					turnNumber: session.turns.length + 1,
-					role: "user",
-					content: message,
-				});
-				session.turns.push({
-					turnNumber: session.turns.length + 1,
-					role: "assistant",
-					agent: profile.id,
-					model: modelId,
-					content: fullText,
-					contentParts: response.content as unknown as Array<Record<string, unknown>>,
+					await persistExchange({
+					userMessage: message,
+					assistantText: fullText,
+					assistantContentParts: response.content as unknown as Array<Record<string, unknown>>,
 				});
 
 				pushChunk(null); // Signal end
@@ -634,23 +825,45 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 			};
 		},
 
-		async destroy(): Promise<void> {
-			if (destroyed) return;
-			destroyed = true;
+			async destroy(): Promise<void> {
+				if (destroyed) return;
+				destroyed = true;
 
-			// Abort any running agent loop
-			agent.abort();
+				// Abort any running agent loop
+				agent.abort();
 
-			// Shutdown MCP servers
-			if (mcpShutdown) {
-				try {
-					await mcpShutdown();
-				} catch {
-					// Best-effort MCP cleanup
+				for (const cleanup of skillWatcherCleanups) {
+					try {
+						cleanup();
+					} catch {
+						// Skill watcher cleanup is best-effort
+					}
 				}
-			}
-		},
-	};
+
+				if (nidraDaemon) {
+					try {
+						await nidraDaemon.stop();
+					} catch {
+						// Nidra shutdown is best-effort
+					}
+				}
+
+				// Shutdown MCP servers
+				if (mcpShutdown) {
+					try {
+						await mcpShutdown();
+				} catch {
+						// Best-effort MCP cleanup
+					}
+				}
+
+				try {
+					saveSession(session);
+				} catch {
+					// Session save on shutdown is best-effort
+				}
+			},
+		};
 
 	return instance;
 }

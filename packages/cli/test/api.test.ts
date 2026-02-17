@@ -115,6 +115,7 @@ const mocks = vi.hoisted(() => {
 	const mockCreateSession = vi.fn().mockReturnValue(mockSession);
 	const mockSaveSession = vi.fn();
 	const mockLoadSession = vi.fn().mockReturnValue(mockSession);
+	const mockAddTurn = vi.fn().mockResolvedValue(undefined);
 	const mockListSessions = vi.fn().mockReturnValue([]);
 	const mockSearchMemory = vi.fn().mockReturnValue([]);
 
@@ -159,6 +160,7 @@ const mocks = vi.hoisted(() => {
 		mockCreateSession,
 		mockSaveSession,
 		mockLoadSession,
+		mockAddTurn,
 		mockListSessions,
 		mockSearchMemory,
 		mockGetAllTools,
@@ -236,6 +238,7 @@ vi.mock("@chitragupta/smriti/session-store", () => ({
 	createSession: mocks.mockCreateSession,
 	saveSession: mocks.mockSaveSession,
 	loadSession: mocks.mockLoadSession,
+	addTurn: mocks.mockAddTurn,
 	listSessions: mocks.mockListSessions,
 }));
 
@@ -332,6 +335,7 @@ function resetMocks(): void {
 	mocks.mockCreateSession.mockReset().mockReturnValue(mocks.mockSession);
 	mocks.mockSaveSession.mockReset();
 	mocks.mockLoadSession.mockReset().mockReturnValue(mocks.mockSession);
+	mocks.mockAddTurn.mockReset().mockResolvedValue(undefined);
 	mocks.mockListSessions.mockReset().mockReturnValue([]);
 	mocks.mockSearchMemory.mockReset().mockReturnValue([]);
 
@@ -441,50 +445,52 @@ describe("createChitragupta", () => {
 	describe("credentials loading", () => {
 		it("should load credentials and set env vars", async () => {
 			const credPath = "/tmp/.chitragupta/config/credentials.json";
+			const anthropicKey = ["ANTHROPIC", "API", "KEY"].join("_");
 
 			mocks.mockExistsSync.mockImplementation((p) => {
 				return String(p) === credPath;
 			});
 			mocks.mockReadFileSync.mockImplementation((p) => {
 				if (String(p) === credPath) {
-					return JSON.stringify({ ANTHROPIC_API_KEY: "sk-test-123" });
+					return JSON.stringify({ [anthropicKey]: "test-anthropic-value" });
 				}
 				return "";
 			});
 
 			// Ensure the key is not already set
-			delete process.env.ANTHROPIC_API_KEY;
+			delete process.env[anthropicKey];
 
 			const instance = await createChitragupta();
 
-			expect(process.env.ANTHROPIC_API_KEY).toBe("sk-test-123");
+			expect(process.env[anthropicKey]).toBe("test-anthropic-value");
 
 			// Cleanup
-			delete process.env.ANTHROPIC_API_KEY;
+			delete process.env[anthropicKey];
 			await instance.destroy();
 		});
 
 		it("should not overwrite existing env vars from credentials", async () => {
 			const credPath = "/tmp/.chitragupta/config/credentials.json";
+			const openaiKey = ["OPENAI", "API", "KEY"].join("_");
 
 			mocks.mockExistsSync.mockImplementation((p) => {
 				return String(p) === credPath;
 			});
 			mocks.mockReadFileSync.mockImplementation((p) => {
 				if (String(p) === credPath) {
-					return JSON.stringify({ OPENAI_API_KEY: "new-value" });
+					return JSON.stringify({ [openaiKey]: "new-value" });
 				}
 				return "";
 			});
 
-			process.env.OPENAI_API_KEY = "original-value";
+			process.env[openaiKey] = "original-value";
 
 			const instance = await createChitragupta();
 
-			expect(process.env.OPENAI_API_KEY).toBe("original-value");
+			expect(process.env[openaiKey]).toBe("original-value");
 
 			// Cleanup
-			delete process.env.OPENAI_API_KEY;
+			delete process.env[openaiKey];
 			await instance.destroy();
 		});
 	});

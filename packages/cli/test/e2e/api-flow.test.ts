@@ -158,6 +158,7 @@ const mocks = vi.hoisted(() => {
 	const mockCreateSession = vi.fn().mockReturnValue(mockSession);
 	const mockSaveSession = vi.fn();
 	const mockLoadSession = vi.fn().mockReturnValue(mockSession);
+	const mockAddTurn = vi.fn().mockResolvedValue(undefined);
 	const mockListSessions = vi.fn().mockReturnValue([]);
 	const mockSearchMemory = vi.fn().mockReturnValue([]);
 
@@ -202,6 +203,7 @@ const mocks = vi.hoisted(() => {
 		mockCreateSession,
 		mockSaveSession,
 		mockLoadSession,
+		mockAddTurn,
 		mockListSessions,
 		mockSearchMemory,
 		mockGetAllTools,
@@ -283,6 +285,7 @@ vi.mock("@chitragupta/smriti/session-store", () => ({
 	createSession: mocks.mockCreateSession,
 	saveSession: mocks.mockSaveSession,
 	loadSession: mocks.mockLoadSession,
+	addTurn: mocks.mockAddTurn,
 	listSessions: mocks.mockListSessions,
 }));
 
@@ -387,6 +390,7 @@ function resetAllMocks(): void {
 	mocks.mockCreateSession.mockReset().mockReturnValue(mocks.mockSession);
 	mocks.mockSaveSession.mockReset();
 	mocks.mockLoadSession.mockReset().mockReturnValue(mocks.mockSession);
+	mocks.mockAddTurn.mockReset().mockResolvedValue(undefined);
 	mocks.mockListSessions.mockReset().mockReturnValue([]);
 	mocks.mockSearchMemory.mockReset().mockReturnValue([]);
 
