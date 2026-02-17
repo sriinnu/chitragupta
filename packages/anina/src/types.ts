@@ -126,12 +126,25 @@ export interface KaalaHeartbeat {
 	tokenBudget: number;
 }
 
+/** Status change callback for KaalaBrahma lifecycle events. */
+export type KaalaStatusChangeCallback = (agentId: string, oldStatus: string, newStatus: string) => void;
+
 /** Structural interface for KaalaBrahma (agent lifecycle manager). */
 export interface KaalaLifecycle {
 	registerAgent(heartbeat: KaalaHeartbeat): void;
 	recordHeartbeat(agentId: string, data?: Partial<KaalaHeartbeat>): void;
 	markCompleted(agentId: string): void;
 	markError(agentId: string): void;
+	/** Start periodic monitoring (healTree every heartbeatInterval). */
+	startMonitoring(): void;
+	/** Stop periodic monitoring. */
+	stopMonitoring(): void;
+	/** Subscribe to agent status changes. Returns unsubscribe function. */
+	onStatusChange(cb: KaalaStatusChangeCallback): () => void;
+	/** Detect and heal stale/dead agents, reap orphans. */
+	healTree(): unknown;
+	/** Get full tree health snapshot. */
+	getTreeHealth(): unknown;
 }
 
 // ─── Tool System ────────────────────────────────────────────────────────────

@@ -73,3 +73,7 @@ export type {
 	VasanaInput,
 	DatabaseLike as KartavyaDatabaseLike,
 } from "./kartavya.js";
+
+// KartavyaDispatcher (Autonomous Action Executor)
+export { KartavyaDispatcher } from "./kartavya-dispatcher.js";
+export type { KartavyaDispatcherConfig, DispatchResult } from "./kartavya-dispatcher.js";

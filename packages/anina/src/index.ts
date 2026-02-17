@@ -173,6 +173,10 @@ export type {
 	TrigunaSerializedState,
 } from "./chetana/index.js";
 
+// ─── Triguna Actuation ──────────────────────────────────────────────────────
+export { TrigunaActuator } from "./triguna-actuator.js";
+export type { TrigunaActuatorConfig } from "./triguna-actuator.js";
+
 // ─── Safe Execution Utilities ────────────────────────────────────────────────
 export { safeExecSync, validateCommand, parseCommand } from "./safe-exec.js";
 

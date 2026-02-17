@@ -838,6 +838,14 @@ export class Agent implements TreeAgent {
       const streamOptions = this.buildStreamOptions();
       const result = await this.streamLLMResponse(context, streamOptions);
 
+      // KaalaBrahma: enrich heartbeat with token usage from LLM response
+      if (this.kaala && result.cost) {
+        try {
+          const tokenUsage = (result.cost.input ?? 0) + (result.cost.output ?? 0);
+          this.kaala.recordHeartbeat(this.id, { turnCount: turn, tokenUsage });
+        } catch { /* best-effort */ }
+      }
+
       const assistantMessage = this.createMessage("assistant", result.content, {
         model: this.state.model, cost: result.cost,
       });

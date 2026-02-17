@@ -2206,6 +2206,93 @@ function createContextTool(projectPath: string): McpToolHandler {
 	};
 }
 
+/**
+ * Create the `chitragupta_vidhis` tool — list/search learned procedures.
+ */
+function createVidhisTool(projectPath: string): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_vidhis",
+			description:
+				"List or search learned procedures (Vidhis) from Svapna consolidation. " +
+				"Vidhis are parameterized tool sequences that were extracted from repeated " +
+				"successful patterns across sessions. Returns procedure name, tool steps, " +
+				"trigger phrases, confidence, and success rate.",
+			inputSchema: {
+				type: "object" as const,
+				properties: {
+					query: {
+						type: "string",
+						description: "Optional search query to filter vidhis by trigger phrases or name. Omit to list all.",
+					},
+					limit: {
+						type: "number",
+						description: "Maximum results to return. Default: 10.",
+					},
+				},
+				required: [],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const query = args.query != null ? String(args.query) : undefined;
+			const limit = typeof args.limit === "number" ? args.limit : 10;
+
+			try {
+				const { VidhiEngine } = await import("@chitragupta/smriti");
+				const engine = new VidhiEngine({ project: projectPath });
+
+				if (query) {
+					// Try to match against trigger phrases
+					const matched = engine.match(query);
+					if (matched) {
+						const text = formatVidhi(matched);
+						return {
+							content: [{ type: "text", text: `Best match for "${query}":\n\n${text}` }],
+							_metadata: { action: "vidhis_search", matches: 1 },
+						};
+					}
+					return {
+						content: [{ type: "text", text: `No vidhis match "${query}".` }],
+						_metadata: { action: "vidhis_search", matches: 0 },
+					};
+				}
+
+				// List top vidhis ranked by Thompson Sampling
+				const vidhis = engine.getVidhis(projectPath, limit);
+				if (vidhis.length === 0) {
+					return {
+						content: [{ type: "text", text: "No learned procedures (vidhis) found. Procedures are extracted during Svapna consolidation from repeated successful tool sequences." }],
+						_metadata: { action: "vidhis_list", count: 0 },
+					};
+				}
+
+				const lines = vidhis.map((v, i) => `${i + 1}. ${formatVidhi(v)}`);
+				return {
+					content: [{ type: "text", text: `Learned Procedures (${vidhis.length}):\n\n${lines.join("\n\n")}` }],
+					_metadata: { action: "vidhis_list", count: vidhis.length },
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+					isError: true,
+				};
+			}
+		},
+	};
+}
+
+/** Format a single Vidhi for display. */
+function formatVidhi(v: { name: string; steps: Array<{ toolName: string; description: string }>; triggers: string[]; confidence: number; successRate: number; successCount: number; failureCount: number; parameterSchema: Record<string, { name: string; description: string }> }): string {
+	const steps = v.steps.map((s, i) => `  ${i + 1}. ${s.toolName}: ${s.description}`).join("\n");
+	const triggers = v.triggers.length > 0 ? v.triggers.join(", ") : "(none)";
+	const params = Object.keys(v.parameterSchema);
+	const paramStr = params.length > 0 ? params.join(", ") : "(none)";
+	return `**${v.name}** (confidence: ${(v.confidence * 100).toFixed(0)}%, success: ${(v.successRate * 100).toFixed(0)}%, ${v.successCount + v.failureCount} runs)\n` +
+		`  Triggers: ${triggers}\n` +
+		`  Parameters: ${paramStr}\n` +
+		`  Steps:\n${steps}`;
+}
+
 // ─── Server Entry Point ─────────────────────────────────────────────────────
 
 /**
@@ -2273,6 +2360,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 
 	// Add provider context tool (memory injection on session start)
 	mcpTools.push(createContextTool(projectPath));
+
+	// Add vidhis tool (learned procedures from Svapna consolidation)
+	mcpTools.push(createVidhisTool(projectPath));
 
 	// ─── 2. Session recording ───────────────────────────────────────
 	// Lazy-init: create a session on the first tool call, record every

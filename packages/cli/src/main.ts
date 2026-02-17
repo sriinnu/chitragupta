@@ -302,9 +302,23 @@ export async function main(args: ParsedArgs): Promise<void> {
 		// ── Phase 4: Autonomy modules ──────────────────────────────────
 		let servKartavyaEngine: unknown;
 		let servKalaChakra: unknown;
+		let servKartavyaDispatcher: { start(): void; stop(): void } | undefined;
 		try {
 			const { KartavyaEngine } = await import("@chitragupta/niyanta");
 			servKartavyaEngine = new KartavyaEngine();
+
+			// Wire KartavyaDispatcher for serve-mode autonomous actions
+			try {
+				const { KartavyaDispatcher } = await import("@chitragupta/niyanta");
+				const dispatcher = new KartavyaDispatcher(
+					servKartavyaEngine as InstanceType<typeof KartavyaEngine>,
+					servSamiti as unknown as ConstructorParameters<typeof KartavyaDispatcher>[1],
+					servRtaEngine as unknown as ConstructorParameters<typeof KartavyaDispatcher>[2],
+					{ enableCommandActions: false, workingDirectory: projectPath, project: projectPath },
+				);
+				dispatcher.start();
+				servKartavyaDispatcher = dispatcher;
+			} catch { /* best-effort */ }
 		} catch (e) { log.debug("KartavyaEngine unavailable", { error: String(e) }); }
 		try {
 			const { KalaChakra } = await import("@chitragupta/smriti");
@@ -577,6 +591,43 @@ export async function main(args: ParsedArgs): Promise<void> {
 				} catch { /* best-effort */ }
 			}
 
+			// Start KaalaBrahma monitoring in serve mode
+			if (servKaala) {
+				try {
+					(servKaala as unknown as { startMonitoring(): void }).startMonitoring();
+					if (servSamiti) {
+						(servKaala as unknown as { onStatusChange(cb: (agentId: string, oldS: string, newS: string) => void): () => void })
+							.onStatusChange((agentId, oldS, newS) => {
+								try {
+									(servSamiti as unknown as import("@chitragupta/anina").MeshSamiti).broadcast("#alerts", {
+										sender: "kaala-brahma",
+										severity: newS === "error" ? "warning" : "info",
+										category: "lifecycle",
+										content: `Agent ${agentId}: ${oldS} → ${newS}`,
+									});
+								} catch { /* best-effort */ }
+							});
+					}
+				} catch { /* best-effort */ }
+			}
+
+			// Wire deep-sleep handler for serve-mode NidraDaemon
+			if (servNidraDaemon) {
+				try {
+					(servNidraDaemon as { onDeepSleep(cb: () => Promise<void>): void }).onDeepSleep(async () => {
+						try {
+							const { DatabaseManager } = await import("@chitragupta/smriti");
+							const dbm = DatabaseManager.instance();
+							for (const dbName of ["agent", "graph", "vectors"] as const) {
+								try { const d = dbm.get(dbName); d.pragma("wal_checkpoint(TRUNCATE)"); d.exec("VACUUM"); } catch { /* best-effort */ }
+							}
+							try { dbm.get("agent").exec(`INSERT INTO turns_fts(turns_fts) VALUES('optimize')`); } catch { /* best-effort */ }
+							try { dbm.get("agent").exec(`DELETE FROM consolidation_log WHERE rowid NOT IN (SELECT rowid FROM consolidation_log ORDER BY created_at DESC LIMIT 100)`); } catch { /* best-effort */ }
+						} catch { /* best-effort */ }
+					});
+				} catch { /* best-effort */ }
+			}
+
 			// Expose cleanup refs to outer scope for shutdown handler
 			if (servKaala) servKaalaRef = servKaala as unknown as { dispose(): void };
 			if (servActorSystemShutdown) servActorShutdownRef = servActorSystemShutdown;
@@ -652,6 +703,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 					if (serverAgent && typeof (serverAgent as Agent).dispose === "function") {
 						try { (serverAgent as Agent).dispose(); } catch { /* best-effort */ }
 					}
+					// Stop KartavyaDispatcher
+					if (servKartavyaDispatcher) { try { servKartavyaDispatcher.stop(); } catch { /* best-effort */ } }
 					// Clean up serve-mode infrastructure
 					if (servCommHubDestroyRef) { try { servCommHubDestroyRef(); } catch { /* best-effort */ } }
 					if (servActorShutdownRef) { try { servActorShutdownRef(); } catch { /* best-effort */ } }
@@ -996,6 +1049,13 @@ export async function main(args: ParsedArgs): Promise<void> {
 		log.debug("Dharma policy engine unavailable", { error: String(e) });
 	}
 
+	// ─── 7c-ii. Wire RtaEngine (invariant safety layer) ─────────────────
+	let rtaEngine: import("@chitragupta/dharma").RtaEngine | undefined;
+	try {
+		const { RtaEngine } = await import("@chitragupta/dharma");
+		rtaEngine = new RtaEngine();
+	} catch { /* best-effort */ }
+
 	// ─── 7d. Wire sutra CommHub (IPC for sub-agent communication) ────────
 	let commHub: CommHub | undefined;
 	let commHubDestroy: (() => void) | undefined;
@@ -1063,9 +1123,36 @@ export async function main(args: ParsedArgs): Promise<void> {
 			maxAgentDepth: 5,
 			maxSubAgents: 8,
 		});
+
+		// Start monitoring — runs healTree() every heartbeatInterval
+		kaala.startMonitoring();
+
+		// Wire status change → Samiti #alerts broadcast
+		if (samiti) {
+			kaala.onStatusChange((agentId, oldStatus, newStatus) => {
+				try {
+					samiti.broadcast("#alerts", {
+						sender: "kaala-brahma",
+						severity: newStatus === "error" ? "warning" : "info",
+						category: "lifecycle",
+						content: `Agent ${agentId}: ${oldStatus} → ${newStatus}`,
+					});
+				} catch { /* best-effort */ }
+			});
+		}
 	} catch (e) {
 		log.debug("KaalaBrahma unavailable", { error: String(e) });
 	}
+
+	// ─── 7e-i. Wire TrigunaActuator (health → actuation bridge) ─────
+	let trigunaActuator: import("@chitragupta/anina").TrigunaActuator | undefined;
+	try {
+		const { TrigunaActuator } = await import("@chitragupta/anina");
+		trigunaActuator = new TrigunaActuator(
+			kaala as unknown as import("@chitragupta/anina").KaalaLifecycle | null ?? null,
+			samiti ?? null,
+		);
+	} catch { /* best-effort */ }
 
 	// ─── 7e-ii. Wire NidraDaemon (Background Sleep Cycle) ──────────
 	let nidraDaemon: InstanceType<typeof import("@chitragupta/anina").NidraDaemon> | undefined;
@@ -1111,12 +1198,48 @@ export async function main(args: ParsedArgs): Promise<void> {
 			}
 		});
 
-		// Deep sleep: run SQLite maintenance
+		// Deep sleep: comprehensive SQLite maintenance
 		nidraDaemon.onDeepSleep(async () => {
 			try {
 				const { DatabaseManager } = await import("@chitragupta/smriti");
-				const db = DatabaseManager.instance().get("agent");
-				db.pragma("wal_checkpoint(TRUNCATE)");
+				const dbm = DatabaseManager.instance();
+
+				// WAL checkpoint + VACUUM all 3 databases
+				for (const dbName of ["agent", "graph", "vectors"] as const) {
+					try {
+						const db = dbm.get(dbName);
+						db.pragma("wal_checkpoint(TRUNCATE)");
+						db.exec("VACUUM");
+					} catch { /* best-effort per db */ }
+				}
+
+				// FTS5 optimize (merge b-tree segments)
+				try {
+					const agentDb = dbm.get("agent");
+					agentDb.exec(`INSERT INTO turns_fts(turns_fts) VALUES('optimize')`);
+				} catch { /* FTS5 may not exist yet */ }
+
+				// Prune old consolidation_log entries (keep last 100)
+				try {
+					const agentDb = dbm.get("agent");
+					agentDb.exec(`
+						DELETE FROM consolidation_log WHERE rowid NOT IN (
+							SELECT rowid FROM consolidation_log ORDER BY created_at DESC LIMIT 100
+						)
+					`);
+				} catch { /* table may not exist */ }
+
+				// Persist Rta audit log if available
+				try {
+					if (rtaEngine) {
+						const { RtaEngine } = await import("@chitragupta/dharma");
+						if (rtaEngine instanceof RtaEngine) {
+							rtaEngine.persistAuditLog(dbm.get("agent"));
+						}
+					}
+				} catch { /* best-effort */ }
+
+				log.debug("Deep sleep maintenance complete");
 			} catch {
 				// Deep sleep maintenance is best-effort
 			}
@@ -1251,6 +1374,17 @@ export async function main(args: ParsedArgs): Promise<void> {
 		enableAutonomy: true,
 		enableMemory: true,
 		project: projectPath,
+		chetanaConfig: {
+			triguna: { enabled: true },
+		},
+		// Wire TrigunaActuator to agent's Triguna events via onEvent callback
+		onEvent: trigunaActuator
+			? (event, data) => {
+				if (event.startsWith("triguna:")) {
+					trigunaActuator!.handleEvent(event, data);
+				}
+			}
+			: undefined,
 	};
 
 	const agent = new Agent(agentConfig);
@@ -1443,6 +1577,13 @@ export async function main(args: ParsedArgs): Promise<void> {
 		for (const fn of mcpSkillWatcherCleanups) { try { fn(); } catch { /* best-effort */ } }
 		if (nidraDaemon) {
 			try { await nidraDaemon.stop(); } catch { /* best-effort */ }
+		}
+		// Persist Rta audit log before shutdown
+		if (rtaEngine) {
+			try {
+				const { DatabaseManager } = await import("@chitragupta/smriti");
+				rtaEngine.persistAuditLog(DatabaseManager.instance().get("agent"));
+			} catch { /* best-effort */ }
 		}
 		// Dispose the root agent (releases internal resources, nulls infrastructure refs)
 		try { agent.dispose(); } catch { /* best-effort */ }
