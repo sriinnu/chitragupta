@@ -172,6 +172,16 @@ find "$ROOT/dist" -name "*.js.map" -delete
 
 ok "dist/ ready"
 
+# ── Secret scan ───────────────────────────────────────────────────────
+info "Scanning dist/ for secrets..."
+SCAN_SCRIPT="$(cd "$ROOT/.." && pwd)/scripts/scan-dist.mjs"
+if [[ -f "$SCAN_SCRIPT" ]]; then
+	node "$SCAN_SCRIPT" "$ROOT/dist"
+	ok "Secret scan passed"
+else
+	warn "scan-dist.mjs not found, skipping secret scan"
+fi
+
 # ── Tests ─────────────────────────────────────────────────────────────
 if [[ "$SKIP_TESTS" == true ]]; then
 	warn "Skipping tests (--skip-tests)"
