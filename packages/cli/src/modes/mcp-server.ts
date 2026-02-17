@@ -41,6 +41,27 @@ export interface McpServerModeOptions {
 	enableAgent?: boolean;
 }
 
+// ─── Output Truncation ──────────────────────────────────────────────────────
+
+const MAX_OUTPUT_CHARS = 50_000;
+
+/**
+ * Truncate large MCP tool output to prevent blowing up client context windows.
+ * Keeps the head and tail of the content with a truncation notice in between.
+ */
+function truncateOutput(text: string, maxChars = MAX_OUTPUT_CHARS): string {
+	if (text.length <= maxChars) return text;
+	const headSize = Math.floor(maxChars * 0.6);
+	const tailSize = Math.floor(maxChars * 0.35);
+	const omitted = text.length - headSize - tailSize;
+	return (
+		text.slice(0, headSize) +
+		`\n\n--- [TRUNCATED: ${omitted.toLocaleString()} characters omitted. ` +
+		`Use turnLimit, limit, or date params to narrow results.] ---\n\n` +
+		text.slice(-tailSize)
+	);
+}
+
 // ─── Additional MCP Tools ───────────────────────────────────────────────────
 
 /**
@@ -108,7 +129,7 @@ function createMemorySearchTool(projectPath: string): McpToolHandler {
 				}).join("\n\n---\n\n");
 
 				return {
-					content: [{ type: "text", text: formatted }],
+					content: [{ type: "text", text: truncateOutput(formatted) }],
 				};
 			} catch (err) {
 				return {
@@ -225,8 +246,9 @@ function createSessionShowTool(projectPath: string): McpToolHandler {
 					`Turns: ${session.turns.length}`,
 				].join("\n");
 
+				const full = `${header}\n\n${"=".repeat(60)}\n\n${formatted}`;
 				return {
-					content: [{ type: "text", text: `${header}\n\n${"=".repeat(60)}\n\n${formatted}` }],
+					content: [{ type: "text", text: truncateOutput(full) }],
 				};
 			} catch (err) {
 				return {
@@ -1759,7 +1781,7 @@ function createHandoverTool(projectPath: string): McpToolHandler {
 				});
 
 				return {
-					content: [{ type: "text", text: sections.join("\n") }],
+					content: [{ type: "text", text: truncateOutput(sections.join("\n")) }],
 				};
 			} catch (err) {
 				return {
@@ -1932,7 +1954,7 @@ function createDayShowTool(): McpToolHandler {
 				}
 
 				return {
-					content: [{ type: "text", text: content }],
+					content: [{ type: "text", text: truncateOutput(content) }],
 					_metadata: { action: "day_show", date },
 				};
 			} catch (err) {
@@ -2052,7 +2074,7 @@ function createDaySearchTool(): McpToolHandler {
 				}
 
 				return {
-					content: [{ type: "text", text: lines.join("\n") }],
+					content: [{ type: "text", text: truncateOutput(lines.join("\n")) }],
 					_metadata: { action: "day_search", query },
 				};
 			} catch (err) {
@@ -2134,7 +2156,7 @@ function createRecallTool(): McpToolHandler {
 				}
 
 				return {
-					content: [{ type: "text", text: lines.join("\n") }],
+					content: [{ type: "text", text: truncateOutput(lines.join("\n")) }],
 					_metadata: { action: "recall", query, resultCount: results.length },
 				};
 			} catch (err) {
@@ -2189,7 +2211,7 @@ function createContextTool(projectPath: string): McpToolHandler {
 				}
 
 				return {
-					content: [{ type: "text", text: ctx.assembled }],
+					content: [{ type: "text", text: truncateOutput(ctx.assembled) }],
 					_metadata: { action: "context", itemCount: ctx.itemCount },
 				};
 			} catch (err) {
