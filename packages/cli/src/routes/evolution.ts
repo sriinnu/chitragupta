@@ -6,6 +6,8 @@
  * existing ChitraguptaServer via `server.route()`.
  */
 
+import fs from "node:fs";
+
 // ─── Duck-Typed Interfaces ──────────────────────────────────────────────────
 // Avoid hard import dependencies — the actual classes are structurally
 // compatible at runtime.
@@ -214,6 +216,108 @@ export function mountEvolutionRoutes(
 				return { status: 404, body: { error: `Vidhi not found: ${req.params.name}` } };
 			}
 			return { status: 200, body: vidhi };
+		} catch (err) {
+			return { status: 500, body: { error: `Failed: ${(err as Error).message}` } };
+		}
+	});
+
+	// ─── GET /api/consolidation/days ────────────────────────────────
+	server.route("GET", "/api/consolidation/days", async (req) => {
+		try {
+			const { listDayFiles } = await import("@chitragupta/smriti");
+			const limitRaw = req.query.limit ? Number.parseInt(req.query.limit, 10) : 30;
+			const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 365) : 30;
+			const dates = listDayFiles();
+			return {
+				status: 200,
+				body: {
+					dates: dates.slice(0, limit),
+					count: Math.min(dates.length, limit),
+					total: dates.length,
+				},
+			};
+		} catch (err) {
+			return { status: 500, body: { error: `Failed: ${(err as Error).message}` } };
+		}
+	});
+
+	// ─── GET /api/consolidation/days/:date ──────────────────────────
+	server.route("GET", "/api/consolidation/days/:date", async (req) => {
+		const date = req.params.date;
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+			return { status: 400, body: { error: "Invalid date. Expected YYYY-MM-DD." } };
+		}
+
+		try {
+			const { readDayFile } = await import("@chitragupta/smriti");
+			const markdown = readDayFile(date);
+			if (!markdown) {
+				return { status: 404, body: { error: `Consolidated day file not found: ${date}` } };
+			}
+			return { status: 200, body: { date, markdown } };
+		} catch (err) {
+			return { status: 500, body: { error: `Failed: ${(err as Error).message}` } };
+		}
+	});
+
+	// ─── GET /api/consolidation/reports ─────────────────────────────
+	server.route("GET", "/api/consolidation/reports", async (req) => {
+		try {
+			const { PeriodicConsolidation } = await import("@chitragupta/smriti");
+			const project = req.query.project ?? deps.getProjectPath();
+			const limitRaw = req.query.limit ? Number.parseInt(req.query.limit, 10) : 30;
+			const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 365) : 30;
+			const typeFilter = req.query.type;
+			if (typeFilter && typeFilter !== "monthly" && typeFilter !== "yearly") {
+				return { status: 400, body: { error: "Invalid type. Expected monthly or yearly." } };
+			}
+
+			const consolidation = new PeriodicConsolidation({ project });
+			const reports = consolidation
+				.listReports()
+				.filter((entry) => (typeFilter ? entry.type === typeFilter : true))
+				.slice(0, limit);
+
+			return {
+				status: 200,
+				body: {
+					project,
+					reports,
+					count: reports.length,
+				},
+			};
+		} catch (err) {
+			return { status: 500, body: { error: `Failed: ${(err as Error).message}` } };
+		}
+	});
+
+	// ─── GET /api/consolidation/reports/:type/:period ───────────────
+	server.route("GET", "/api/consolidation/reports/:type/:period", async (req) => {
+		const type = req.params.type === "monthly" || req.params.type === "yearly"
+			? req.params.type
+			: null;
+		if (!type) {
+			return { status: 400, body: { error: "Invalid type. Expected monthly or yearly." } };
+		}
+
+		const period = req.params.period;
+		if (type === "monthly" && !/^\d{4}-\d{2}$/.test(period)) {
+			return { status: 400, body: { error: "Invalid monthly period. Expected YYYY-MM." } };
+		}
+		if (type === "yearly" && !/^\d{4}$/.test(period)) {
+			return { status: 400, body: { error: "Invalid yearly period. Expected YYYY." } };
+		}
+
+		try {
+			const { PeriodicConsolidation } = await import("@chitragupta/smriti");
+			const project = req.query.project ?? deps.getProjectPath();
+			const consolidation = new PeriodicConsolidation({ project });
+			const filePath = consolidation.getReportPath(type, period);
+			if (!fs.existsSync(filePath)) {
+				return { status: 404, body: { error: `Report not found: ${type}/${period}` } };
+			}
+			const markdown = fs.readFileSync(filePath, "utf-8");
+			return { status: 200, body: { project, type, period, filePath, markdown } };
 		} catch (err) {
 			return { status: 500, body: { error: `Failed: ${(err as Error).message}` } };
 		}

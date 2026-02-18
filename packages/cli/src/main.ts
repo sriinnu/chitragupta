@@ -375,6 +375,28 @@ export async function main(args: ParsedArgs): Promise<void> {
 		let servKartavyaEngine: unknown;
 		let servKalaChakra: unknown;
 		let servKartavyaDispatcher: { start(): void; stop(): void } | undefined;
+		const serveToolHandlers = new Map<string, ToolHandler>(
+			getAllTools().map((tool) => [tool.definition.name, tool]),
+		);
+		const serveToolExecutor = async (toolName: string, toolArgs: Record<string, unknown>) => {
+			const handler = serveToolHandlers.get(toolName);
+			if (!handler) {
+				return { success: false, error: `Unknown tool: ${toolName}` };
+			}
+			try {
+				const result = await handler.execute(toolArgs ?? {}, {
+					sessionId: "kartavya-dispatcher",
+					workingDirectory: projectPath,
+				});
+				if (result.isError) {
+					return { success: false, error: result.content || `Tool "${toolName}" returned error` };
+				}
+				return { success: true, output: result.content ?? "ok" };
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				return { success: false, error: message };
+			}
+		};
 		try {
 			const { KartavyaEngine } = await import("@chitragupta/niyanta");
 			servKartavyaEngine = new KartavyaEngine();
@@ -386,7 +408,13 @@ export async function main(args: ParsedArgs): Promise<void> {
 					servKartavyaEngine as InstanceType<typeof KartavyaEngine>,
 					servSamiti as unknown as ConstructorParameters<typeof KartavyaDispatcher>[1],
 					servRtaEngine as unknown as ConstructorParameters<typeof KartavyaDispatcher>[2],
-					{ enableCommandActions: false, workingDirectory: projectPath, project: projectPath },
+					{
+						enableCommandActions: false,
+						workingDirectory: projectPath,
+						project: projectPath,
+						toolExecutor: serveToolExecutor,
+						vidhiEngine: vidhiEngine as any,
+					},
 				);
 				dispatcher.start();
 				servKartavyaDispatcher = dispatcher;
