@@ -20,7 +20,7 @@ function deepGet(obj: Record<string, unknown>, key: string): unknown {
 /**
  * Deep-set a nested value on an object using dot-notation keys.
  */
-function deepSet(obj: Record<string, unknown>, key: string, value: unknown): void {
+export function deepSet(obj: Record<string, unknown>, key: string, value: unknown): void {
 	const parts = key.split(".");
 	let current: Record<string, unknown> = obj;
 	for (let i = 0; i < parts.length - 1; i++) {
