@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import type { ToolHandler, ToolContext, ToolResult } from "./types.js";
+import { validatePath } from "./path-validation.js";
 import {
   type FileTypeCount,
   type DependencyInfo,
@@ -259,6 +260,12 @@ export const projectAnalysisTool: ToolHandler = {
         ? (args.path as string)
         : path.resolve(context.workingDirectory, args.path as string)
       : context.workingDirectory;
+
+    // Belt-and-suspenders: block sensitive paths
+    if (args.path) {
+      const pathError = validatePath(args.path as string, projectPath);
+      if (pathError) return pathError;
+    }
 
     const skipGit = args.skipGit === true;
     const skipDeps = args.skipDependencies === true;

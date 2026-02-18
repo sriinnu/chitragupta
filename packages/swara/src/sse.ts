@@ -93,6 +93,7 @@ export async function* parseSSEStream(
 			}
 		}
 	} finally {
+		try { await reader.cancel(); } catch { /* best-effort cancel */ }
 		reader.releaseLock();
 	}
 }

@@ -9,6 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ToolHandler, ToolContext, ToolResult } from "./types.js";
+import { validatePath } from "./path-validation.js";
 
 // ─── Myers Diff Algorithm ───────────────────────────────────────────────────
 
@@ -331,6 +332,8 @@ export const diffTool: ToolHandler = {
 		}
 
 		const resolvedA = resolvePath(fileAPath, context);
+		const pathErrorA = validatePath(fileAPath, resolvedA);
+		if (pathErrorA) return pathErrorA;
 		const ctxLines = (args.contextLines as number) || 3;
 
 		// Read file A
@@ -351,6 +354,8 @@ export const diffTool: ToolHandler = {
 
 		if (args.file_b) {
 			const resolvedB = resolvePath(args.file_b as string, context);
+			const pathErrorB = validatePath(args.file_b as string, resolvedB);
+			if (pathErrorB) return pathErrorB;
 			labelB = resolvedB;
 			try {
 				contentB = await fs.promises.readFile(resolvedB, "utf-8");

@@ -65,8 +65,9 @@ export function isValidProfile(obj: unknown): obj is AgentProfile {
 	return (
 		typeof p.id === "string" && p.id.length > 0 &&
 		typeof p.name === "string" && p.name.length > 0 &&
-		typeof p.description === "string" &&
-		typeof p.systemPrompt === "string"
+		typeof p.personality === "string" && p.personality.length > 0 &&
+		Array.isArray(p.expertise) &&
+		typeof p.voice === "string"
 	);
 }
 
