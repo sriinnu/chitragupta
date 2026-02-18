@@ -35,11 +35,20 @@ export interface TrigunaActuatorConfig {
 	normalMaxSubAgents: number;
 	/** Max sub-agents when degraded (tamas/rajas alert). Default: 4. */
 	degradedMaxSubAgents: number;
+	/** Kaala monitoring interval in normal mode. Default: 5000ms. */
+	normalHeartbeatIntervalMs: number;
+	/** Kaala monitoring interval when rajas is high. Default: 8000ms. */
+	rajasHeartbeatIntervalMs: number;
+	/** Kaala monitoring interval when tamas is high. Default: 12000ms. */
+	tamasHeartbeatIntervalMs: number;
 }
 
 const DEFAULT_ACTUATOR_CONFIG: TrigunaActuatorConfig = {
 	normalMaxSubAgents: 8,
 	degradedMaxSubAgents: 4,
+	normalHeartbeatIntervalMs: 5000,
+	rajasHeartbeatIntervalMs: 8000,
+	tamasHeartbeatIntervalMs: 12000,
 };
 
 /**
@@ -92,6 +101,8 @@ export class TrigunaActuator {
 
 		// Reduce agent spawning capacity
 		this.setMaxSubAgents(this.config.degradedMaxSubAgents);
+		// Slow monitor cadence under degradation to reduce churn.
+		this.setHeartbeatInterval(this.config.tamasHeartbeatIntervalMs);
 
 		// Broadcast degradation warning
 		this.broadcast(
@@ -104,6 +115,8 @@ export class TrigunaActuator {
 	private onRajasAlert(data: { rajas: number; message: string }): void {
 		// Reduce agent spawning to cool down hyperactivity
 		this.setMaxSubAgents(this.config.degradedMaxSubAgents);
+		// Slightly slow cadence while hyperactive to curb oscillation.
+		this.setHeartbeatInterval(this.config.rajasHeartbeatIntervalMs);
 
 		// Broadcast hyperactivity warning
 		this.broadcast(
@@ -116,6 +129,8 @@ export class TrigunaActuator {
 	private onSattvaDominant(data: { sattva: number; message: string }): void {
 		// Restore normal agent capacity
 		this.setMaxSubAgents(this.config.normalMaxSubAgents);
+		// Restore normal monitor cadence once stable.
+		this.setHeartbeatInterval(this.config.normalHeartbeatIntervalMs);
 
 		// Broadcast health confirmation
 		this.broadcast(
@@ -142,6 +157,18 @@ export class TrigunaActuator {
 			const kaala = this.kaala as any;
 			if (typeof kaala.setConfig === "function") {
 				kaala.setConfig({ maxSubAgents: max });
+			}
+		} catch { /* best-effort */ }
+	}
+
+	private setHeartbeatInterval(ms: number): void {
+		if (!this.kaala) return;
+		try {
+			const interval = Number.isFinite(ms) ? Math.max(1000, Math.floor(ms)) : 5000;
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const kaala = this.kaala as any;
+			if (typeof kaala.setConfig === "function") {
+				kaala.setConfig({ heartbeatInterval: interval });
 			}
 		} catch { /* best-effort */ }
 	}

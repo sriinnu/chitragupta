@@ -48,14 +48,8 @@ coverage/
 # Lock files (pnpm is canonical)
 package-lock.json
 
-# Spec docs (local only — not pushed)
-CHITRAGUPTA_MASTER_SPEC.md
-PERFORMANCE_SPEC.md
-SMRITI_EVOLUTION_SPEC.md
-/ARCHITECTURE.md
-TODO.md
-discussion.md
-AUDIT_REPORT.md
+# Work-in-progress docs (local only — not pushed)
+work-in-progress/
 
 # Scratch / generation scripts
 _data.json

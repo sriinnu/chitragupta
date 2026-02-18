@@ -271,6 +271,8 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 		start: () => void;
 		stop: () => Promise<void>;
 		touch: () => void;
+		onDream: (cb: (progress: (...args: unknown[]) => void) => Promise<void>) => void;
+		onDeepSleep: (cb: () => Promise<void>) => void;
 	} | undefined;
 
 	// ─── 7. Get built-in tools ────────────────────────────────────────
@@ -471,10 +473,158 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 		// Checkpoint manager is optional
 	}
 
+	// ─── 10c-ii. Wire CommHub + Samiti (observability broadcasts) ────
+	let commHub: AgentConfig["commHub"] | undefined;
+	let commHubDestroy: (() => void) | undefined;
+	let samiti: AgentConfig["samiti"] | undefined;
+	try {
+		const { CommHub, Samiti } = await import("@chitragupta/sutra");
+		const hub = new CommHub({ enableLogging: false });
+		commHub = hub as unknown as AgentConfig["commHub"];
+		commHubDestroy = () => hub.destroy();
+		samiti = new Samiti() as unknown as AgentConfig["samiti"];
+	} catch {
+		// CommHub/Samiti are optional
+	}
+
+	// ─── 10c-iii. Wire KaalaBrahma (agent tree lifecycle) ────────────
+	let kaala: AgentConfig["kaala"] | undefined;
+	let kaalaStopMonitoring: (() => void) | undefined;
+	try {
+		const { KaalaBrahma } = await import("@chitragupta/anina");
+		const k = new KaalaBrahma({
+			heartbeatInterval: 5000,
+			staleThreshold: 30000,
+			maxAgentDepth: 5,
+			maxSubAgents: 8,
+		});
+		k.startMonitoring();
+		kaala = k as unknown as AgentConfig["kaala"];
+		kaalaStopMonitoring = () => k.stopMonitoring();
+
+		if (samiti) {
+			k.onStatusChange((agentId: string, oldStatus: string, newStatus: string) => {
+				try {
+					samiti!.broadcast("#alerts", {
+						sender: "kaala-brahma",
+						severity: newStatus === "error" ? "warning" as const : "info" as const,
+						category: "lifecycle",
+						content: `Agent ${agentId}: ${oldStatus} → ${newStatus}`,
+					});
+				} catch { /* best-effort */ }
+			});
+		}
+	} catch {
+		// KaalaBrahma is optional
+	}
+
+	// ─── 10c-iv. Wire TrigunaActuator (health → actuation bridge) ────
+	try {
+		const { TrigunaActuator } = await import("@chitragupta/anina");
+		new TrigunaActuator(
+			(kaala as unknown as import("@chitragupta/anina").KaalaLifecycle) ?? null,
+			samiti ?? null,
+		);
+	} catch {
+		// TrigunaActuator is optional
+	}
+
+	// ─── 10c-v. Wire Lokapala (guardian tool scanning) ───────────────
+	let lokapala: AgentConfig["lokapala"] | undefined;
+	try {
+		const { LokapalaController } = await import("@chitragupta/anina");
+		lokapala = new LokapalaController() as unknown as AgentConfig["lokapala"];
+	} catch {
+		// Lokapala is optional
+	}
+
+	// ─── 10c-vi. Wire RtaEngine (invariant safety + audit) ──────────
+	let rtaEngine: { persistAuditLog?: (db: unknown) => void } | undefined;
+	try {
+		const { RtaEngine } = await import("@chitragupta/dharma");
+		rtaEngine = new RtaEngine() as unknown as { persistAuditLog?: (db: unknown) => void };
+	} catch {
+		// RtaEngine is optional
+	}
+
+	// ─── 10c-vii. Wire NidraDaemon (background sleep cycle) ─────────
 	try {
 		const { NidraDaemon } = await import("@chitragupta/anina");
-		nidraDaemon = new NidraDaemon({ project: projectPath });
-		nidraDaemon.start();
+		const nidra = new NidraDaemon({ project: projectPath });
+		nidraDaemon = nidra as unknown as typeof nidraDaemon;
+		nidraDaemon!.start();
+
+		// Dream phase: consolidate recent sessions
+		nidra.onDream(async (progress) => {
+			try {
+				const { ConsolidationEngine } = await import("@chitragupta/smriti");
+				progress("REPLAY", 0.1);
+				const consolidator = new ConsolidationEngine();
+				consolidator.load();
+				progress("RECOMBINE", 0.3);
+
+				const { listSessions: ls, loadSession: ld } = await import("@chitragupta/smriti/session-store");
+				const recentMetas = ls(projectPath).slice(0, 5);
+				const recentSessions: Session[] = [];
+				for (const meta of recentMetas) {
+					try {
+						const s = ld(meta.id, projectPath);
+						if (s) recentSessions.push(s);
+					} catch { /* skip unloadable */ }
+				}
+
+				if (recentSessions.length > 0) {
+					progress("CRYSTALLIZE", 0.5);
+					consolidator.consolidate(recentSessions);
+					progress("PROCEDURALIZE", 0.7);
+					consolidator.decayRules();
+					consolidator.pruneRules();
+					progress("COMPRESS", 0.9);
+					consolidator.save();
+				}
+				progress("COMPRESS", 1.0);
+			} catch {
+				// Dream consolidation is best-effort
+			}
+		});
+
+		// Deep sleep: SQLite maintenance
+		nidra.onDeepSleep(async () => {
+			try {
+				const { DatabaseManager } = await import("@chitragupta/smriti");
+				const dbm = DatabaseManager.instance();
+
+				for (const dbName of ["agent", "graph", "vectors"] as const) {
+					try {
+						const db = dbm.get(dbName);
+						db.pragma("wal_checkpoint(TRUNCATE)");
+						db.exec("VACUUM");
+					} catch { /* best-effort per db */ }
+				}
+
+				try {
+					const agentDb = dbm.get("agent");
+					agentDb.exec(`INSERT INTO turns_fts(turns_fts) VALUES('optimize')`);
+				} catch { /* FTS5 may not exist yet */ }
+
+				try {
+					const agentDb = dbm.get("agent");
+					agentDb.exec(`
+						DELETE FROM consolidation_log WHERE rowid NOT IN (
+							SELECT rowid FROM consolidation_log ORDER BY created_at DESC LIMIT 100
+						)
+					`);
+				} catch { /* table may not exist */ }
+
+				if (rtaEngine?.persistAuditLog) {
+					try {
+						rtaEngine.persistAuditLog(dbm.get("agent"));
+					} catch { /* best-effort */ }
+				}
+			} catch {
+				// Deep sleep maintenance is best-effort
+			}
+		});
 	} catch {
 		// Nidra daemon is optional
 	}
@@ -506,6 +656,10 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 		embeddingProvider,
 		enableMemory: !options.noMemory,
 		project: projectPath,
+		commHub,
+		samiti,
+		lokapala,
+		kaala,
 	};
 
 	const agent = new Agent(agentConfig);
@@ -842,11 +996,29 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 					}
 				}
 
+				// Stop KaalaBrahma monitoring
+				if (kaalaStopMonitoring) {
+					try {
+						kaalaStopMonitoring();
+					} catch {
+						// KaalaBrahma cleanup is best-effort
+					}
+				}
+
 				if (nidraDaemon) {
 					try {
 						await nidraDaemon.stop();
 					} catch {
 						// Nidra shutdown is best-effort
+					}
+				}
+
+				// Destroy CommHub
+				if (commHubDestroy) {
+					try {
+						commHubDestroy();
+					} catch {
+						// CommHub cleanup is best-effort
 					}
 				}
 
