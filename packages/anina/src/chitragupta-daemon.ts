@@ -16,6 +16,8 @@
  *   4. Vasana (pattern detection) crystallizes behaviors
  */
 
+import fs from "node:fs";
+import path from "node:path";
 import { EventEmitter } from "node:events";
 import { NidraDaemon } from "./nidra-daemon.js";
 import type { NidraConfig, NidraState } from "./types.js";
@@ -38,6 +40,8 @@ export interface ChitraguptaDaemonConfig {
 	monthlyConsolidationHour: number;
 	/** Hour for yearly consolidation (Jan 1). Default: 4. */
 	yearlyConsolidationHour: number;
+	/** Retain day files for this many months before archiving. Default: 6. */
+	dayFileRetentionMonths: number;
 }
 
 /** Daemon state snapshot. */
@@ -68,6 +72,7 @@ const DEFAULT_CONFIG: ChitraguptaDaemonConfig = {
 	backfillOnStartup: true,
 	monthlyConsolidationHour: 3,
 	yearlyConsolidationHour: 4,
+	dayFileRetentionMonths: 6,
 };
 
 // ─── Daemon ─────────────────────────────────────────────────────────────────
@@ -472,8 +477,64 @@ export class ChitraguptaDaemon extends EventEmitter {
 				const { backfillConsolidationIndices } = await import("@chitragupta/smriti/consolidation-indexer");
 				await backfillConsolidationIndices();
 			} catch { /* best-effort */ }
+
+			// Archive old day files based on retention policy.
+			await this.archiveOldDayFiles();
 		} catch {
 			// Best-effort — don't break startup
+		}
+	}
+
+	/**
+	 * Archive day files older than the retention window.
+	 * Files move from `<home>/days/YYYY/MM/DD.md` to `<home>/archive/days/YYYY/MM/DD.md`.
+	 */
+	async archiveOldDayFiles(): Promise<number> {
+		if (this.config.dayFileRetentionMonths <= 0) return 0;
+
+		try {
+			const { listDayFiles, getDayFilePath } = await import("@chitragupta/smriti/day-consolidation");
+			const { getChitraguptaHome } = await import("@chitragupta/core");
+			const cutoff = new Date();
+			cutoff.setMonth(cutoff.getMonth() - this.config.dayFileRetentionMonths);
+			cutoff.setHours(0, 0, 0, 0);
+			const home = getChitraguptaHome();
+
+			let archived = 0;
+			for (const date of listDayFiles()) {
+				const parts = date.split("-").map((v) => Number.parseInt(v, 10));
+				if (parts.length !== 3 || parts.some((value) => !Number.isFinite(value))) continue;
+				const dayTs = new Date(parts[0], parts[1] - 1, parts[2]).getTime();
+				if (dayTs >= cutoff.getTime()) continue;
+
+				const sourcePath = getDayFilePath(date);
+				if (!fs.existsSync(sourcePath)) continue;
+
+				const [year, month, day] = date.split("-");
+				const archivePath = path.join(home, "archive", "days", year, month, `${day}.md`);
+				fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+
+				try {
+					fs.renameSync(sourcePath, archivePath);
+				} catch {
+					fs.copyFileSync(sourcePath, archivePath);
+					fs.unlinkSync(sourcePath);
+				}
+				archived += 1;
+			}
+
+			if (archived > 0) {
+				this.emit("consolidation", {
+					type: "progress",
+					date: this.formatDate(new Date()),
+					phase: "archive-days",
+					detail: `${archived} day files archived (> ${this.config.dayFileRetentionMonths} months old)`,
+				});
+			}
+
+			return archived;
+		} catch {
+			return 0;
 		}
 	}
 

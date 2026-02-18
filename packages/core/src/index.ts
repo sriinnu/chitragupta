@@ -10,6 +10,7 @@ export {
 	loadGlobalSettings,
 	saveGlobalSettings,
 	loadProjectConfig,
+	deepSet,
 } from "./config.js";
 export { CHITRAGUPTA_PROFILE, MINIMAL_PROFILE, FRIENDLY_PROFILE, KARTRU_PROFILE, PARIKSHAKA_PROFILE, ANVESHI_PROFILE, SHODHAKA_PROFILE, PARIKARTRU_PROFILE, LEKHAKA_PROFILE, BUILT_IN_PROFILES, resolveProfile } from "./agent-profile.js";
 

@@ -9,6 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ToolHandler, ToolContext, ToolResult } from "./types.js";
+import { validatePath } from "./path-validation.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -197,6 +198,12 @@ export const watchTool: ToolHandler = {
 				? (args.path as string)
 				: path.resolve(context.workingDirectory, args.path as string)
 			: context.workingDirectory;
+
+		// Belt-and-suspenders: block sensitive paths
+		if (args.path) {
+			const pathError = validatePath(args.path as string, watchPath);
+			if (pathError) return pathError;
+		}
 
 		const durationMs = Math.min(
 			(args.durationMs as number) || 5_000,

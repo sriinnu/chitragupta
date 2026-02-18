@@ -69,8 +69,9 @@ describe("isValidProfile", () => {
 		expect(isValidProfile({
 			id: "test",
 			name: "Test Profile",
-			description: "A test profile",
-			systemPrompt: "You are a test agent",
+			personality: "A helpful assistant",
+			expertise: ["testing"],
+			voice: "professional",
 		})).toBe(true);
 	});
 
@@ -87,16 +88,16 @@ describe("isValidProfile", () => {
 	it("should reject missing required fields", () => {
 		expect(isValidProfile({ id: "test" })).toBe(false);
 		expect(isValidProfile({ id: "test", name: "Test" })).toBe(false);
-		expect(isValidProfile({ id: "test", name: "Test", description: "d" })).toBe(false);
+		expect(isValidProfile({ id: "test", name: "Test", personality: "p" })).toBe(false);
 	});
 
 	it("should reject empty id or name", () => {
-		expect(isValidProfile({ id: "", name: "Test", description: "d", systemPrompt: "p" })).toBe(false);
-		expect(isValidProfile({ id: "test", name: "", description: "d", systemPrompt: "p" })).toBe(false);
+		expect(isValidProfile({ id: "", name: "Test", personality: "p", expertise: [], voice: "v" })).toBe(false);
+		expect(isValidProfile({ id: "test", name: "", personality: "p", expertise: [], voice: "v" })).toBe(false);
 	});
 
 	it("should reject non-string fields", () => {
-		expect(isValidProfile({ id: 1, name: "Test", description: "d", systemPrompt: "p" })).toBe(false);
+		expect(isValidProfile({ id: 1, name: "Test", personality: "p", expertise: [], voice: "v" })).toBe(false);
 	});
 });
 
@@ -196,7 +197,7 @@ describe("loadCustomProfiles", () => {
 		// Valid profile
 		fs.writeFileSync(
 			path.join(profilesDir, "test.json"),
-			JSON.stringify({ id: "test", name: "Test", description: "d", systemPrompt: "p" }),
+			JSON.stringify({ id: "test", name: "Test", personality: "helpful", expertise: ["testing"], voice: "casual" }),
 		);
 
 		// Invalid profile (missing fields)

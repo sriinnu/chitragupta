@@ -86,6 +86,26 @@ export {
 } from "./session-export.js";
 export type { ExportedSession, ExportedMessage, ExportedToolCall } from "./session-export.js";
 
+// Cross-machine sync (day files + memory files)
+export {
+	createCrossMachineSnapshot,
+	writeCrossMachineSnapshot,
+	readCrossMachineSnapshot,
+	importCrossMachineSnapshot,
+	getCrossMachineSyncStatus,
+} from "./cross-machine-sync.js";
+export type {
+	CrossMachineFileKind,
+	CrossMachineImportStrategy,
+	CrossMachineSnapshotFile,
+	CrossMachineSnapshot,
+	CrossMachineSnapshotOptions,
+	CrossMachineImportOptions,
+	CrossMachineSyncTotals,
+	CrossMachineImportResult,
+	CrossMachineSyncStatus,
+} from "./cross-machine-sync.js";
+
 // Branching
 export { branchSession, getSessionTree } from "./branch.js";
 

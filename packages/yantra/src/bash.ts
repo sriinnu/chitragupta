@@ -9,6 +9,7 @@
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 import type { ToolHandler, ToolContext, ToolResult } from "./types.js";
+import { validatePath } from "./path-validation.js";
 
 /** Configurable limits for the bash tool. */
 export interface BashConfig {
@@ -28,10 +29,12 @@ export function configureBash(config: BashConfig): void {
 	_bashConfig = { ...DEFAULT_BASH_CONFIG, ...config };
 }
 
-function resolveCwd(cwd: string | undefined, context: ToolContext): string {
+function resolveCwd(cwd: string | undefined, context: ToolContext): string | ToolResult {
 	if (!cwd) return context.workingDirectory;
-	if (path.isAbsolute(cwd)) return cwd;
-	return path.resolve(context.workingDirectory, cwd);
+	const resolved = path.isAbsolute(cwd) ? cwd : path.resolve(context.workingDirectory, cwd);
+	const pathError = validatePath(cwd, resolved);
+	if (pathError) return pathError;
+	return resolved;
 }
 
 // ─── Environment Fortress ───────────────────────────────────────────────────
@@ -149,7 +152,9 @@ export const bashTool: ToolHandler = {
 			}
 		}
 
-		const cwd = resolveCwd(args.cwd as string | undefined, context);
+		const cwdResult = resolveCwd(args.cwd as string | undefined, context);
+		if (typeof cwdResult === "object") return cwdResult; // ToolResult error
+		const cwd = cwdResult;
 		const timeout = (args.timeout as number) || _bashConfig.defaultTimeout;
 
 		return new Promise<ToolResult>((resolve) => {

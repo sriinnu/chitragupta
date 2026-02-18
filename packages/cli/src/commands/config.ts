@@ -8,6 +8,7 @@ import {
 	loadGlobalSettings,
 	saveGlobalSettings,
 	getChitraguptaHome,
+	deepSet,
 } from "@chitragupta/core";
 import type { ChitraguptaSettings } from "@chitragupta/core";
 import {
@@ -145,20 +146,3 @@ function flattenObject(
 	return entries;
 }
 
-/**
- * Deep-set a value in an object using dot-notation keys.
- */
-function deepSet(obj: Record<string, unknown>, key: string, value: unknown): void {
-	const parts = key.split(".");
-	let current: Record<string, unknown> = obj;
-
-	for (let i = 0; i < parts.length - 1; i++) {
-		const part = parts[i];
-		if (current[part] == null || typeof current[part] !== "object") {
-			current[part] = {};
-		}
-		current = current[part] as Record<string, unknown>;
-	}
-
-	current[parts[parts.length - 1]] = value;
-}

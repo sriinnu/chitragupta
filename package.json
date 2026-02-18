@@ -37,6 +37,7 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",
+		"benchmark:consolidation": "tsx scripts/benchmark-consolidation.ts",
 		"chitragupta": "tsx packages/cli/src/cli.ts",
 		"start:serve": "tsx packages/cli/src/cli.ts serve --port 3141",
 		"start:mcp": "tsx packages/cli/src/cli.ts mcp-server --transport sse --port 3001",

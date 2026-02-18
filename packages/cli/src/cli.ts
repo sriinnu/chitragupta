@@ -238,6 +238,12 @@ async function handleSubcommand(command: string, subcommand: string | undefined,
 			break;
 		}
 
+		case "sync": {
+			const sync = await import("./commands/sync.js");
+			await sync.runSyncCommand(subcommand, rest);
+			break;
+		}
+
 		case "serve": {
 			const port = opts?.port ?? 3000;
 			const host = opts?.host ?? "localhost";

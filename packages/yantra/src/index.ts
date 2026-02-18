@@ -117,6 +117,9 @@ export {
 } from "./framework-detectors.js";
 export type { FileTypeCount, DependencyInfo, LargestFile } from "./framework-detectors.js";
 
+// ─── Path Validation ────────────────────────────────────────────────────────
+export { validatePath } from "./path-validation.js";
+
 // ─── Sandbox (Kshetra) ─────────────────────────────────────────────────────
 
 export { Sandbox } from "./sandbox.js";
