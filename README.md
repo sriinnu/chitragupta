@@ -48,6 +48,7 @@ Each is backed by Vedic source texts AND published research papers. Each maps to
 ## Quick Glossary
 
 Chitragupta uses Sanskrit names internally — each captures the *essence* of what a module does. Here's the quick map:
+For external docs/onboarding, prefer the English names first.
 
 | English Name | Internal Name | What It Means |
 |-------------|---------------|---------------|
