@@ -7,6 +7,7 @@
  * @module api
  */
 
+import { route } from "preact-router";
 import { token, clearToken, getAuthHeaders } from "./signals/auth.js";
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -64,7 +65,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
 
 	if (response.status === 401) {
 		clearToken();
-		window.location.hash = "#/pair";
+		route("/pair");
 		throw new ApiError(401, { error: "Unauthorized" });
 	}
 
