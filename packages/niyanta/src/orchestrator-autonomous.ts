@@ -24,46 +24,32 @@ import type {
 	OrchestratorTask,
 	OrchestratorStats,
 	TaskResult,
-	TaskMetrics,
 } from "./types.js";
+import {
+	ALL_STRATEGIES,
+	computeReward as computeRewardFn,
+	estimateComplexity as estimateComplexityFn,
+	normalizeAgentCount,
+	normalizeLatency,
+	getMemoryPressure,
+	getRecentErrorRate,
+	evaluateStrategyBan as evaluateBan,
+	pruneExpiredBans,
+	getAllPerformanceRecords,
+} from "./autonomous-decisions.js";
+import type {
+	TaskPerformanceRecord,
+	StrategyBan,
+	RewardWeights,
+	BanConfig,
+} from "./autonomous-decisions.js";
+
+// Re-export types that were moved to autonomous-decisions.ts
+export type {
+	TaskPerformanceRecord, StrategyBan, RewardWeights, BanConfig,
+} from "./autonomous-decisions.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
-
-/** Per-task outcome data recorded for performance tracking. */
-export interface TaskPerformanceRecord {
-	/** The task ID. */
-	taskId: string;
-	/** The strategy used for this task. */
-	strategy: OrchestratorStrategy;
-	/** Whether the task succeeded. */
-	success: boolean;
-	/** Computed reward in [0, 1]. */
-	reward: number;
-	/** Actual duration in milliseconds. */
-	durationMs: number;
-	/** Actual cost incurred. */
-	cost: number;
-	/** Expected duration used for speed bonus (ms). */
-	expectedDurationMs: number;
-	/** Budget cost used for cost bonus. */
-	budgetCost: number;
-	/** Timestamp when the outcome was recorded. */
-	recordedAt: number;
-}
-
-/** Temporary strategy ban info. */
-export interface StrategyBan {
-	/** The banned strategy. */
-	strategy: OrchestratorStrategy;
-	/** Why the strategy was banned. */
-	reason: string;
-	/** When the ban was imposed (ms since epoch). */
-	bannedAt: number;
-	/** When the ban expires (ms since epoch). */
-	expiresAt: number;
-	/** Failure rate at the time of banning. */
-	failureRate: number;
-}
 
 /** Configuration for the autonomous orchestrator. */
 export interface AutonomousOrchestratorConfig {
@@ -111,25 +97,6 @@ const DEFAULT_BAN_MIN_TASKS = 10;
 const DEFAULT_BAN_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_AUTO_SAVE_INTERVAL = 10;
 
-/** All strategies eligible for selection. */
-const ALL_STRATEGIES: OrchestratorStrategy[] = [
-	"round-robin", "least-loaded", "specialized",
-	"hierarchical", "swarm", "competitive",
-];
-
-/** Keyword-to-complexity mappings for task analysis. */
-const COMPLEXITY_KEYWORDS: Record<string, number> = {
-	refactor: 0.8, rewrite: 0.9, migrate: 0.85, optimize: 0.7,
-	test: 0.5, analyze: 0.6, fix: 0.4, bug: 0.4,
-	review: 0.5, document: 0.3, format: 0.2, lint: 0.2,
-	implement: 0.7, design: 0.8, architect: 0.9,
-};
-
-/** Priority-to-complexity weight. */
-const PRIORITY_COMPLEXITY: Record<string, number> = {
-	critical: 0.9, high: 0.7, normal: 0.5, low: 0.3, background: 0.1,
-};
-
 // ─── Autonomous Orchestrator ────────────────────────────────────────────────
 
 /**
@@ -150,7 +117,7 @@ const PRIORITY_COMPLEXITY: Record<string, number> = {
  */
 export class AutonomousOrchestrator {
 	private readonly bandit: StrategyBandit;
-	private readonly performanceTracker: Map<string, TaskPerformanceRecord[]>;
+	private readonly performanceTracker: Map<OrchestratorStrategy, TaskPerformanceRecord[]>;
 	private readonly bans: Map<OrchestratorStrategy, StrategyBan>;
 	private readonly config: Required<AutonomousOrchestratorConfig>;
 	private tasksSinceLastSave = 0;
@@ -176,7 +143,6 @@ export class AutonomousOrchestrator {
 
 		this.bandit.setMode(this.config.banditMode);
 
-		// Initialize performance tracker for all strategies
 		for (const strategy of ALL_STRATEGIES) {
 			this.performanceTracker.set(strategy, []);
 		}
@@ -186,42 +152,25 @@ export class AutonomousOrchestrator {
 
 	/**
 	 * Select the best strategy for a task using the bandit.
-	 * Builds context features from the task and current orchestrator state.
 	 * Respects active bans, falling back to round-robin if all are banned.
-	 *
-	 * @param task - The task to select a strategy for.
-	 * @param stats - Current orchestrator statistics.
-	 * @returns The selected strategy.
 	 */
 	selectStrategy(task: OrchestratorTask, stats: OrchestratorStats): OrchestratorStrategy {
-		this.pruneExpiredBans();
-
+		pruneExpiredBans(this.bans);
 		const available = ALL_STRATEGIES.filter((s) => !this.bans.has(s));
-
-		// If all strategies are banned, fall back to round-robin
-		if (available.length === 0) {
-			return "round-robin";
-		}
+		if (available.length === 0) return "round-robin";
 
 		const context: BanditContext = {
 			taskComplexity: this.estimateComplexity(task),
-			agentCount: this.normalizeAgentCount(stats.activeAgents),
-			memoryPressure: this.getMemoryPressure(),
-			avgLatency: this.normalizeLatency(stats.averageLatency),
-			errorRate: this.getRecentErrorRate(),
+			agentCount: normalizeAgentCount(stats.activeAgents),
+			memoryPressure: getMemoryPressure(),
+			avgLatency: normalizeLatency(stats.averageLatency),
+			errorRate: getRecentErrorRate(getAllPerformanceRecords(this.performanceTracker)),
 		};
 
-		// Use the bandit to select, but filter to only available strategies.
-		// If the bandit picks a banned strategy, keep re-selecting up to
-		// 20 times, then fall back to the first available.
 		for (let attempt = 0; attempt < 20; attempt++) {
 			const selected = this.bandit.selectStrategy(context);
-			if (available.includes(selected)) {
-				return selected;
-			}
+			if (available.includes(selected)) return selected;
 		}
-
-		// Bandit persistently picks banned strategies; fall back
 		return available[0];
 	}
 
@@ -230,17 +179,8 @@ export class AutonomousOrchestrator {
 	/**
 	 * Record the outcome of a completed task. Computes reward, updates
 	 * the bandit, tracks performance, and checks for strategy bans.
-	 * Triggers auto-save if the interval is reached.
-	 *
-	 * @param task - The completed task.
-	 * @param result - The task's result.
-	 * @param strategy - The strategy that was used.
 	 */
-	recordOutcome(
-		task: OrchestratorTask,
-		result: TaskResult,
-		strategy: OrchestratorStrategy,
-	): void {
+	recordOutcome(task: OrchestratorTask, result: TaskResult, strategy: OrchestratorStrategy): void {
 		const metrics = result.metrics;
 		const durationMs = metrics
 			? (metrics.endTime - metrics.startTime)
@@ -254,38 +194,28 @@ export class AutonomousOrchestrator {
 
 		const reward = this.computeReward(result.success, durationMs, expectedDuration, cost, budgetCost);
 
-		// Build context for the bandit's LinUCB update
 		const context: BanditContext = {
 			taskComplexity: this.estimateComplexity(task),
-			agentCount: 0.5, // normalized mid-point as a safe fallback
-			memoryPressure: this.getMemoryPressure(),
-			avgLatency: this.normalizeLatency(durationMs),
-			errorRate: this.getRecentErrorRate(),
+			agentCount: 0.5,
+			memoryPressure: getMemoryPressure(),
+			avgLatency: normalizeLatency(durationMs),
+			errorRate: getRecentErrorRate(getAllPerformanceRecords(this.performanceTracker)),
 		};
 
 		this.bandit.recordReward(strategy, reward, context);
 
-		// Track performance
 		const record: TaskPerformanceRecord = {
-			taskId: task.id,
-			strategy,
-			success: result.success,
-			reward,
-			durationMs,
-			cost,
-			expectedDurationMs: expectedDuration,
-			budgetCost,
-			recordedAt: Date.now(),
+			taskId: task.id, strategy, success: result.success, reward,
+			durationMs, cost, expectedDurationMs: expectedDuration,
+			budgetCost, recordedAt: Date.now(),
 		};
 
 		const records = this.performanceTracker.get(strategy) ?? [];
 		records.push(record);
 		this.performanceTracker.set(strategy, records);
 
-		// Check if strategy should be banned
-		this.evaluateStrategyBan(strategy);
+		evaluateBan(strategy, records, this.banConfig, this.bans);
 
-		// Auto-save
 		this.tasksSinceLastSave++;
 		if (
 			this.config.autoSaveInterval > 0 &&
@@ -293,154 +223,57 @@ export class AutonomousOrchestrator {
 			this.tasksSinceLastSave >= this.config.autoSaveInterval
 		) {
 			this.tasksSinceLastSave = 0;
-			this.saveState(this.config.autoSavePath).catch(() => {
-				// Best-effort save; do not propagate errors
-			});
+			this.saveState(this.config.autoSavePath).catch(() => {});
 		}
 	}
 
-	// ─── Reward Computation ─────────────────────────────────────────────
+	// ─── Delegated Computations ─────────────────────────────────────────
 
-	/**
-	 * Compute the reward for a task outcome.
-	 *
-	 * ```
-	 * reward = successWeight * success
-	 *        + speedWeight * max(0, 1 - actualTime/expectedTime)
-	 *        + costWeight * max(0, 1 - actualCost/budgetCost)
-	 * ```
-	 *
-	 * @param success - Whether the task succeeded.
-	 * @param actualMs - Actual duration in ms.
-	 * @param expectedMs - Expected duration in ms.
-	 * @param actualCost - Actual cost incurred.
-	 * @param budgetCost - Budget cost threshold.
-	 * @returns Reward in [0, 1].
-	 */
+	/** @see computeReward in autonomous-decisions.ts */
 	computeReward(
-		success: boolean,
-		actualMs: number,
-		expectedMs: number,
-		actualCost: number,
-		budgetCost: number,
+		success: boolean, actualMs: number, expectedMs: number,
+		actualCost: number, budgetCost: number,
 	): number {
-		const successComponent = success ? 1.0 : 0.0;
-		const speedBonus = expectedMs > 0
-			? Math.max(0, 1 - actualMs / expectedMs)
-			: 0;
-		const costBonus = budgetCost > 0
-			? Math.max(0, 1 - actualCost / budgetCost)
-			: 0;
-
-		const raw =
-			this.config.successWeight * successComponent +
-			this.config.speedWeight * speedBonus +
-			this.config.costWeight * costBonus;
-
-		return Math.max(0, Math.min(1, raw));
+		return computeRewardFn(this.rewardWeights, success, actualMs, expectedMs, actualCost, budgetCost);
 	}
 
-	// ─── Task Complexity Estimation ─────────────────────────────────────
-
-	/**
-	 * Estimate complexity of a task from its description, dependencies,
-	 * priority, and keyword analysis.
-	 *
-	 * Components (each normalized to [0, 1]):
-	 * - Description length (longer = more complex)
-	 * - Dependency count
-	 * - Priority weight
-	 * - Keyword-based complexity
-	 *
-	 * @param task - The task to analyze.
-	 * @returns Estimated complexity in [0, 1].
-	 */
+	/** @see estimateComplexity in autonomous-decisions.ts */
 	estimateComplexity(task: OrchestratorTask): number {
-		// Description length component (0 → 0, 500+ chars → 1)
-		const descLength = Math.min(1, (task.description?.length ?? 0) / 500);
-
-		// Dependency count component (0 → 0, 5+ deps → 1)
-		const depCount = Math.min(1, (task.dependencies?.length ?? 0) / 5);
-
-		// Priority weight
-		const priorityWeight = PRIORITY_COMPLEXITY[task.priority] ?? 0.5;
-
-		// Keyword analysis: scan description for known complexity keywords
-		const descLower = (task.description ?? "").toLowerCase();
-		let keywordScore = 0;
-		let keywordMatches = 0;
-		for (const [keyword, weight] of Object.entries(COMPLEXITY_KEYWORDS)) {
-			if (descLower.includes(keyword)) {
-				keywordScore += weight;
-				keywordMatches++;
-			}
-		}
-		const keywordComponent = keywordMatches > 0
-			? keywordScore / keywordMatches
-			: 0.5;
-
-		// Weighted combination
-		const complexity =
-			0.25 * descLength +
-			0.20 * depCount +
-			0.25 * priorityWeight +
-			0.30 * keywordComponent;
-
-		return Math.max(0, Math.min(1, complexity));
+		return estimateComplexityFn(task);
 	}
 
 	// ─── Strategy Ban Management ────────────────────────────────────────
 
-	/**
-	 * Get all currently active strategy bans.
-	 *
-	 * @returns Array of active bans (expired bans are pruned first).
-	 */
+	/** Get all currently active strategy bans. */
 	getActiveBans(): StrategyBan[] {
-		this.pruneExpiredBans();
+		pruneExpiredBans(this.bans);
 		return [...this.bans.values()];
 	}
 
-	/**
-	 * Manually lift a strategy ban.
-	 *
-	 * @param strategy - The strategy to unban.
-	 * @returns `true` if a ban was removed, `false` if not banned.
-	 */
+	/** Manually lift a strategy ban. Returns `true` if a ban was removed. */
 	unbanStrategy(strategy: OrchestratorStrategy): boolean {
 		return this.bans.delete(strategy);
 	}
 
 	// ─── Performance History ────────────────────────────────────────────
 
-	/**
-	 * Get performance records for a specific strategy.
-	 *
-	 * @param strategy - The strategy to query.
-	 * @returns Array of performance records, or empty if no data.
-	 */
+	/** Get performance records for a specific strategy. */
 	getPerformanceHistory(strategy: OrchestratorStrategy): TaskPerformanceRecord[] {
 		return [...(this.performanceTracker.get(strategy) ?? [])];
 	}
 
-	/**
-	 * Get the bandit's per-strategy statistics.
-	 */
+	/** Get the bandit's per-strategy statistics. */
 	getBanditStats() {
 		return this.bandit.getStats();
 	}
 
 	// ─── Persistence ────────────────────────────────────────────────────
 
-	/**
-	 * Serialize bandit state and performance history to a JSON file.
-	 *
-	 * @param path - File path to write.
-	 */
+	/** Serialize bandit state and performance history to a JSON file. */
 	async saveState(path: string): Promise<void> {
 		const state: PersistedState = {
 			banditState: this.bandit.serialize(),
-			performanceHistory: this.getAllPerformanceRecords(),
+			performanceHistory: getAllPerformanceRecords(this.performanceTracker),
 			bans: [...this.bans.values()],
 			savedAt: Date.now(),
 		};
@@ -451,18 +284,12 @@ export class AutonomousOrchestrator {
 		await writeFile(path, json, "utf-8");
 	}
 
-	/**
-	 * Restore bandit state and performance history from a saved JSON file.
-	 * Warm-starts the bandit so it does not need to re-explore.
-	 *
-	 * @param path - File path to read.
-	 */
+	/** Restore bandit state and performance history from a saved JSON file. */
 	async loadState(path: string): Promise<void> {
 		let raw: string;
 		try {
 			raw = await readFile(path, "utf-8");
 		} catch {
-			// File does not exist — start fresh
 			return;
 		}
 
@@ -470,17 +297,14 @@ export class AutonomousOrchestrator {
 		try {
 			state = JSON.parse(raw) as PersistedState;
 		} catch {
-			return; // Corrupted state file — start fresh
+			return;
 		}
 
-		// Restore bandit state
 		if (state.banditState) {
 			this.bandit.deserialize(state.banditState);
 		}
 
-		// Restore performance history
 		if (state.performanceHistory) {
-			// Clear existing records
 			for (const strategy of ALL_STRATEGIES) {
 				this.performanceTracker.set(strategy, []);
 			}
@@ -491,7 +315,6 @@ export class AutonomousOrchestrator {
 			}
 		}
 
-		// Restore bans that haven't expired
 		if (state.bans) {
 			const now = Date.now();
 			for (const ban of state.bans) {
@@ -502,110 +325,23 @@ export class AutonomousOrchestrator {
 		}
 	}
 
-	// ─── Internal: Error Rate ───────────────────────────────────────────
+	// ─── Internal Accessors ─────────────────────────────────────────────
 
-	/**
-	 * Compute the recent error rate across all strategies.
-	 * Considers the last 50 records globally.
-	 */
-	private getRecentErrorRate(): number {
-		const allRecords = this.getAllPerformanceRecords();
-		if (allRecords.length === 0) return 0;
-
-		// Take the last 50 records
-		const recent = allRecords
-			.sort((a, b) => b.recordedAt - a.recordedAt)
-			.slice(0, 50);
-
-		const failures = recent.filter((r) => !r.success).length;
-		return failures / recent.length;
+	/** Reward weights derived from config. */
+	private get rewardWeights(): RewardWeights {
+		return {
+			successWeight: this.config.successWeight,
+			speedWeight: this.config.speedWeight,
+			costWeight: this.config.costWeight,
+		};
 	}
 
-	/**
-	 * Normalize active agent count to [0, 1].
-	 * Assumes a practical maximum of 20 agents.
-	 */
-	private normalizeAgentCount(count: number): number {
-		return Math.min(1, count / 20);
-	}
-
-	/**
-	 * Normalize latency to [0, 1].
-	 * Uses a sigmoid-like mapping: 60s → ~0.86, 120s → ~0.95.
-	 */
-	private normalizeLatency(latencyMs: number): number {
-		// Logistic: 1 / (1 + e^(-k*(x-mid)))
-		// k=0.05, mid=30000 (30 seconds)
-		const k = 0.00005;
-		const mid = 30_000;
-		return 1 / (1 + Math.exp(-k * (latencyMs - mid)));
-	}
-
-	/**
-	 * Estimate current memory pressure using heap usage.
-	 * Falls back to 0.5 if process.memoryUsage is unavailable.
-	 */
-	private getMemoryPressure(): number {
-		try {
-			const usage = process.memoryUsage();
-			// Ratio of heap used to heap total
-			return usage.heapUsed / usage.heapTotal;
-		} catch {
-			return 0.5;
-		}
-	}
-
-	// ─── Internal: Strategy Ban Evaluation ──────────────────────────────
-
-	/**
-	 * Evaluate whether a strategy should be banned based on recent
-	 * failure rate. A strategy is banned if it exceeds the failure
-	 * threshold over the last `banMinTasks` outcomes.
-	 */
-	private evaluateStrategyBan(strategy: OrchestratorStrategy): void {
-		// Don't re-ban an already banned strategy
-		if (this.bans.has(strategy)) return;
-
-		const records = this.performanceTracker.get(strategy) ?? [];
-		if (records.length < this.config.banMinTasks) return;
-
-		// Consider only the most recent banMinTasks records
-		const recent = records.slice(-this.config.banMinTasks);
-		const failures = recent.filter((r) => !r.success).length;
-		const failureRate = failures / recent.length;
-
-		if (failureRate > this.config.banFailureThreshold) {
-			const now = Date.now();
-			this.bans.set(strategy, {
-				strategy,
-				reason: `Failure rate ${(failureRate * 100).toFixed(1)}% exceeds threshold ${(this.config.banFailureThreshold * 100).toFixed(1)}%`,
-				bannedAt: now,
-				expiresAt: now + this.config.banDurationMs,
-				failureRate,
-			});
-		}
-	}
-
-	/**
-	 * Remove expired bans.
-	 */
-	private pruneExpiredBans(): void {
-		const now = Date.now();
-		for (const [strategy, ban] of this.bans) {
-			if (ban.expiresAt <= now) {
-				this.bans.delete(strategy);
-			}
-		}
-	}
-
-	/**
-	 * Get all performance records across all strategies, sorted by time.
-	 */
-	private getAllPerformanceRecords(): TaskPerformanceRecord[] {
-		const all: TaskPerformanceRecord[] = [];
-		for (const records of this.performanceTracker.values()) {
-			all.push(...records);
-		}
-		return all.sort((a, b) => a.recordedAt - b.recordedAt);
+	/** Ban config thresholds derived from config. */
+	private get banConfig(): BanConfig {
+		return {
+			banFailureThreshold: this.config.banFailureThreshold,
+			banMinTasks: this.config.banMinTasks,
+			banDurationMs: this.config.banDurationMs,
+		};
 	}
 }

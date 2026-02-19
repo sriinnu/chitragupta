@@ -11,41 +11,29 @@
  *   notification    — broadcast via Samiti
  */
 
-import { execSync } from "node:child_process";
-
 import type {
 	Kartavya,
 	KartavyaAction,
 	TriggerContext,
 } from "./kartavya.js";
 import { KartavyaEngine } from "./kartavya.js";
+import {
+	dispatchNotification,
+	dispatchCommand,
+	dispatchToolSequence,
+	dispatchVidhi,
+} from "./dispatcher-handlers.js";
+import type {
+	DispatcherSamiti,
+	DispatcherRta,
+	DispatcherVidhiEngine,
+	DispatchDeps,
+} from "./dispatcher-handlers.js";
+
+// Re-export handler interfaces for consumers
+export type { DispatcherSamiti, DispatcherRta, DispatcherVidhiEngine } from "./dispatcher-handlers.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
-
-/** Duck-typed Samiti interface for broadcasting notifications. */
-interface DispatcherSamiti {
-	broadcast(
-		channel: string,
-		message: {
-			sender: string;
-			severity: "info" | "warning" | "critical";
-			category: string;
-			content: string;
-			data?: unknown;
-		},
-	): unknown;
-}
-
-/** Duck-typed Rta check interface. */
-interface DispatcherRta {
-	check(context: {
-		toolName: string;
-		args: Record<string, unknown>;
-		workingDirectory: string;
-		sessionId?: string;
-		project?: string;
-	}): { allowed: boolean; reason?: string };
-}
 
 /** Result of executing a single kartavya action. */
 export interface DispatchResult {
@@ -68,11 +56,6 @@ export type ToolExecutor = (
 	toolName: string,
 	args: Record<string, unknown>,
 ) => Promise<ToolExecResult>;
-
-/** Duck-typed VidhiEngine interface for resolving vidhis by name. */
-interface DispatcherVidhiEngine {
-	match(query: string): { name: string; steps: Array<{ toolName: string; args: Record<string, unknown> }> } | null;
-}
 
 /** Configuration for the KartavyaDispatcher. */
 export interface KartavyaDispatcherConfig {
@@ -109,11 +92,10 @@ const DEFAULT_DISPATCHER_CONFIG: KartavyaDispatcherConfig = {
  */
 export class KartavyaDispatcher {
 	private readonly engine: KartavyaEngine;
-	private readonly samiti: DispatcherSamiti | null;
-	private readonly rta: DispatcherRta | null;
 	private readonly config: KartavyaDispatcherConfig;
+	private readonly deps: DispatchDeps;
 	private timer: ReturnType<typeof setInterval> | null = null;
-	private activeExecutions = 0;
+	private readonly activeExecutions = { count: 0 };
 	private readonly results: DispatchResult[] = [];
 
 	constructor(
@@ -123,27 +105,26 @@ export class KartavyaDispatcher {
 		config?: Partial<KartavyaDispatcherConfig>,
 	) {
 		this.engine = engine;
-		this.samiti = samiti;
-		this.rta = rta;
 		this.config = { ...DEFAULT_DISPATCHER_CONFIG, ...config };
+		this.deps = {
+			samiti,
+			rta,
+			config: this.config,
+			activeExecutions: this.activeExecutions,
+		};
 	}
 
-	/**
-	 * Start the periodic evaluation loop.
-	 */
+	/** Start the periodic evaluation loop. */
 	start(): void {
 		if (this.timer) return;
 		this.timer = setInterval(() => {
 			this.evaluate().catch(() => { /* best-effort */ });
 		}, this.config.evaluationIntervalMs);
 
-		// Run first evaluation immediately
 		this.evaluate().catch(() => { /* best-effort */ });
 	}
 
-	/**
-	 * Stop the evaluation loop.
-	 */
+	/** Stop the evaluation loop. */
 	stop(): void {
 		if (this.timer) {
 			clearInterval(this.timer);
@@ -151,16 +132,12 @@ export class KartavyaDispatcher {
 		}
 	}
 
-	/**
-	 * Get recent dispatch results.
-	 */
+	/** Get recent dispatch results. */
 	getResults(limit = 20): DispatchResult[] {
 		return this.results.slice(-limit);
 	}
 
-	/**
-	 * Evaluate triggers and dispatch matching kartavya actions.
-	 */
+	/** Evaluate triggers and dispatch matching kartavya actions. */
 	async evaluate(): Promise<DispatchResult[]> {
 		const context: TriggerContext = {
 			now: Date.now(),
@@ -173,15 +150,13 @@ export class KartavyaDispatcher {
 		const dispatched: DispatchResult[] = [];
 
 		for (const kartavya of matched) {
-			if (this.activeExecutions >= this.config.maxConcurrent) break;
+			if (this.activeExecutions.count >= this.config.maxConcurrent) break;
 
 			try {
 				const result = await this.dispatch(kartavya);
 				dispatched.push(result);
 				this.results.push(result);
-				// Keep result ring buffer bounded
 				if (this.results.length > 100) this.results.shift();
-
 				this.engine.recordExecution(kartavya.id, result.success, result.result);
 			} catch (err) {
 				const failResult: DispatchResult = {
@@ -202,291 +177,18 @@ export class KartavyaDispatcher {
 	// ─── Internal ─────────────────────────────────────────────────────────
 
 	private async dispatch(kartavya: Kartavya): Promise<DispatchResult> {
-		const { action } = kartavya;
-
-		switch (action.type) {
-			case "notification":
-				return this.dispatchNotification(kartavya);
-			case "command":
-				return this.dispatchCommand(kartavya);
-			case "tool_sequence":
-				return this.dispatchToolSequence(kartavya);
-			case "vidhi":
-				return this.dispatchVidhi(kartavya);
+		switch (kartavya.action.type) {
+			case "notification": return dispatchNotification(kartavya, this.deps);
+			case "command": return dispatchCommand(kartavya, this.deps);
+			case "tool_sequence": return dispatchToolSequence(kartavya, this.deps);
+			case "vidhi": return dispatchVidhi(kartavya, this.deps);
 			default:
-				return {
-					kartavyaId: kartavya.id,
-					action,
-					success: false,
-					error: `Unknown action type: ${(action as { type: string }).type}`,
-				};
-		}
-	}
-
-	private dispatchNotification(kartavya: Kartavya): DispatchResult {
-		const message = kartavya.action.payload?.message as string ?? kartavya.description;
-		const channel = kartavya.action.payload?.channel as string ?? "#kartavya";
-		const severity = kartavya.action.payload?.severity as string ?? "info";
-
-		if (this.samiti) {
-			this.samiti.broadcast(channel, {
-				sender: "kartavya-dispatcher",
-				severity: (severity === "warning" || severity === "critical" ? severity : "info") as "info" | "warning" | "critical",
-				category: "kartavya",
-				content: message,
-			});
-		}
-
-		return {
-			kartavyaId: kartavya.id,
-			action: kartavya.action,
-			success: true,
-			result: `Broadcast to ${channel}: ${message}`,
-		};
-	}
-
-	private dispatchCommand(kartavya: Kartavya): DispatchResult {
-		if (!this.config.enableCommandActions) {
-			return {
-				kartavyaId: kartavya.id,
-				action: kartavya.action,
-				success: false,
-				error: "Command actions are disabled (enableCommandActions: false)",
-			};
-		}
-
-		const command = kartavya.action.payload?.command as string;
-		if (!command) {
-			return {
-				kartavyaId: kartavya.id,
-				action: kartavya.action,
-				success: false,
-				error: "No command specified in action payload",
-			};
-		}
-
-		// Rta safety check FIRST
-		if (this.rta) {
-			const verdict = this.rta.check({
-				toolName: "bash",
-				args: { command },
-				workingDirectory: this.config.workingDirectory,
-				project: this.config.project,
-			});
-
-			if (!verdict.allowed) {
 				return {
 					kartavyaId: kartavya.id,
 					action: kartavya.action,
 					success: false,
-					error: `Rta blocked: ${verdict.reason}`,
+					error: `Unknown action type: ${(kartavya.action as { type: string }).type}`,
 				};
-			}
 		}
-
-		// Execute via child_process (sync for simplicity, with timeout)
-		try {
-			const output = execSync(command, {
-				cwd: this.config.workingDirectory,
-				timeout: 30_000,
-				encoding: "utf-8",
-				maxBuffer: 1_000_000,
-			});
-
-			return {
-				kartavyaId: kartavya.id,
-				action: kartavya.action,
-				success: true,
-				result: output.slice(0, 500),
-			};
-		} catch (err) {
-			return {
-				kartavyaId: kartavya.id,
-				action: kartavya.action,
-				success: false,
-				error: String(err).slice(0, 500),
-			};
-		}
-	}
-
-	private async dispatchToolSequence(kartavya: Kartavya): Promise<DispatchResult> {
-		const tools = kartavya.action.payload?.tools as Array<{ name: string; args: Record<string, unknown> }> | undefined;
-		if (!tools || tools.length === 0) {
-			return {
-				kartavyaId: kartavya.id,
-				action: kartavya.action,
-				success: false,
-				error: "No tools specified in tool_sequence payload",
-			};
-		}
-
-		const executor = this.config.toolExecutor;
-		if (!executor) {
-			// No executor injected — fall back to broadcast-only
-			if (this.samiti) {
-				this.samiti.broadcast("#kartavya", {
-					sender: "kartavya-dispatcher",
-					severity: "info",
-					category: "kartavya",
-					content: `Tool sequence triggered (no executor): ${tools.map((t) => t.name).join(" → ")} (${kartavya.name})`,
-				});
-			}
-			return {
-				kartavyaId: kartavya.id,
-				action: kartavya.action,
-				success: true,
-				result: `Tool sequence broadcast (no executor): ${tools.map((t) => t.name).join(" → ")}`,
-			};
-		}
-
-		// Execute tools sequentially, Rta-check each one
-		const outputs: string[] = [];
-		for (const tool of tools) {
-			if (this.rta) {
-				const verdict = this.rta.check({
-					toolName: tool.name,
-					args: tool.args ?? {},
-					workingDirectory: this.config.workingDirectory,
-					project: this.config.project,
-				});
-				if (!verdict.allowed) {
-					return {
-						kartavyaId: kartavya.id,
-						action: kartavya.action,
-						success: false,
-						error: `Rta blocked tool "${tool.name}": ${verdict.reason}`,
-					};
-				}
-			}
-
-			this.activeExecutions++;
-			try {
-				const result = await executor(tool.name, tool.args ?? {});
-				if (!result.success) {
-					return {
-						kartavyaId: kartavya.id,
-						action: kartavya.action,
-						success: false,
-						error: `Tool "${tool.name}" failed: ${result.error ?? "unknown error"}`,
-					};
-				}
-				outputs.push(`${tool.name}: ${(result.output ?? "ok").slice(0, 200)}`);
-			} finally {
-				this.activeExecutions--;
-			}
-		}
-
-		if (this.samiti) {
-			this.samiti.broadcast("#kartavya", {
-				sender: "kartavya-dispatcher",
-				severity: "info",
-				category: "kartavya",
-				content: `Tool sequence complete: ${tools.map((t) => t.name).join(" → ")} (${kartavya.name})`,
-			});
-		}
-
-		return {
-			kartavyaId: kartavya.id,
-			action: kartavya.action,
-			success: true,
-			result: outputs.join("\n"),
-		};
-	}
-
-	private async dispatchVidhi(kartavya: Kartavya): Promise<DispatchResult> {
-		const vidhiName = kartavya.action.payload?.vidhi as string;
-		if (!vidhiName) {
-			return {
-				kartavyaId: kartavya.id,
-				action: kartavya.action,
-				success: false,
-				error: "No vidhi name specified in payload",
-			};
-		}
-
-		const vidhiEngine = this.config.vidhiEngine;
-		const executor = this.config.toolExecutor;
-
-		if (!vidhiEngine || !executor) {
-			// No engine or executor — fall back to broadcast-only
-			if (this.samiti) {
-				this.samiti.broadcast("#kartavya", {
-					sender: "kartavya-dispatcher",
-					severity: "info",
-					category: "kartavya",
-					content: `Vidhi triggered (no engine/executor): ${vidhiName} (${kartavya.name})`,
-				});
-			}
-			return {
-				kartavyaId: kartavya.id,
-				action: kartavya.action,
-				success: true,
-				result: `Vidhi broadcast (no engine/executor): ${vidhiName}`,
-			};
-		}
-
-		// Resolve vidhi by name
-		const vidhi = vidhiEngine.match(vidhiName);
-		if (!vidhi) {
-			return {
-				kartavyaId: kartavya.id,
-				action: kartavya.action,
-				success: false,
-				error: `Vidhi "${vidhiName}" not found`,
-			};
-		}
-
-		// Execute each step, Rta-check each tool
-		const outputs: string[] = [];
-		for (const step of vidhi.steps) {
-			if (this.rta) {
-				const verdict = this.rta.check({
-					toolName: step.toolName,
-					args: step.args ?? {},
-					workingDirectory: this.config.workingDirectory,
-					project: this.config.project,
-				});
-				if (!verdict.allowed) {
-					return {
-						kartavyaId: kartavya.id,
-						action: kartavya.action,
-						success: false,
-						error: `Rta blocked vidhi step "${step.toolName}": ${verdict.reason}`,
-					};
-				}
-			}
-
-			this.activeExecutions++;
-			try {
-				const result = await executor(step.toolName, step.args ?? {});
-				if (!result.success) {
-					return {
-						kartavyaId: kartavya.id,
-						action: kartavya.action,
-						success: false,
-						error: `Vidhi step "${step.toolName}" failed: ${result.error ?? "unknown error"}`,
-					};
-				}
-				outputs.push(`${step.toolName}: ${(result.output ?? "ok").slice(0, 200)}`);
-			} finally {
-				this.activeExecutions--;
-			}
-		}
-
-		if (this.samiti) {
-			this.samiti.broadcast("#kartavya", {
-				sender: "kartavya-dispatcher",
-				severity: "info",
-				category: "kartavya",
-				content: `Vidhi "${vidhiName}" complete: ${vidhi.steps.map((s) => s.toolName).join(" → ")}`,
-			});
-		}
-
-		return {
-			kartavyaId: kartavya.id,
-			action: kartavya.action,
-			success: true,
-			result: `Vidhi "${vidhiName}" executed: ${outputs.join("\n")}`,
-		};
 	}
 }
