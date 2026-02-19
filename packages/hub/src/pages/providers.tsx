@@ -11,15 +11,18 @@ import { apiGet, apiPost, apiPut, apiDelete } from "../api.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
-/** Provider entry from the API. */
+/** Provider entry from the API (backend shape). */
 interface ProviderEntry {
 	id: string;
 	type: string;
+	apiKey: string;
 	endpoint: string;
 	models: string[];
-	status: "active" | "inactive" | "error";
-	lastTestedAt?: string;
-	latency?: number;
+}
+
+/** Wrapped providers list response from the API. */
+interface ProvidersResponse {
+	providers: ProviderEntry[];
 }
 
 /** Form data for creating or editing a provider. */
@@ -42,11 +45,8 @@ interface TestResult {
 
 const PROVIDER_TYPES = ["anthropic", "openai", "google", "ollama", "openrouter", "custom"];
 
-const STATUS_COLORS: Record<string, string> = {
-	active: "#22c55e",
-	inactive: "#8888a0",
-	error: "#ef4444",
-};
+/** Default colour for provider status indicator (no status from backend). */
+const DEFAULT_STATUS_COLOR = "#8888a0";
 
 const EMPTY_FORM: ProviderForm = { id: "", type: "anthropic", apiKey: "", endpoint: "", models: "" };
 
@@ -70,8 +70,8 @@ export function Providers(): preact.JSX.Element {
 
 	const refresh = useCallback(async () => {
 		try {
-			const data = await apiGet<ProviderEntry[]>("/api/providers");
-			setProviders(data);
+			const data = await apiGet<ProvidersResponse>("/api/providers");
+			setProviders(data.providers ?? []);
 		} catch {
 			// best-effort
 		}
@@ -174,7 +174,7 @@ export function Providers(): preact.JSX.Element {
 							width: "10px",
 							height: "10px",
 							borderRadius: "50%",
-							background: STATUS_COLORS[p.status] ?? "#8888a0",
+							background: DEFAULT_STATUS_COLOR,
 							flexShrink: 0,
 						}}
 					/>
@@ -182,7 +182,6 @@ export function Providers(): preact.JSX.Element {
 						<div style={{ color: "#e8e8ed", fontSize: "14px", fontWeight: 600 }}>{p.id}</div>
 						<div style={{ color: "#8888a0", fontSize: "12px" }}>
 							{p.type} | {p.models.join(", ") || "no models"}
-							{p.latency !== undefined && ` | ${p.latency}ms`}
 						</div>
 					</div>
 					<div style={{ display: "flex", gap: "6px" }}>

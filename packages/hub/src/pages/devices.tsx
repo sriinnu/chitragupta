@@ -11,13 +11,38 @@ import { apiGet, apiDelete, apiPost } from "../api.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
-/** Paired device entry from the API. */
+/** Paired device entry normalized for the frontend. */
 interface DeviceEntry {
 	id: string;
 	name: string;
 	browser: string;
 	pairedAt: string;
 	lastSeen: string;
+}
+
+/** Raw device entry as returned by the backend (timestamps are Unix ms). */
+interface RawDeviceEntry {
+	id: string;
+	name: string;
+	browser: string;
+	pairedAt: number;
+	lastSeen: number;
+}
+
+/** Wrapped devices response from the API. */
+interface DevicesResponse {
+	devices: RawDeviceEntry[];
+}
+
+/** Convert a raw device entry (Unix ms timestamps) to a normalized entry (ISO strings). */
+function normalizeDevice(raw: RawDeviceEntry): DeviceEntry {
+	return {
+		id: raw.id,
+		name: raw.name,
+		browser: raw.browser,
+		pairedAt: new Date(raw.pairedAt).toISOString(),
+		lastSeen: new Date(raw.lastSeen).toISOString(),
+	};
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -54,8 +79,8 @@ export function Devices(): preact.JSX.Element {
 
 	const refresh = useCallback(async () => {
 		try {
-			const data = await apiGet<DeviceEntry[]>("/api/pair/devices");
-			setDevices(data);
+			const data = await apiGet<DevicesResponse>("/api/pair/devices");
+			setDevices((data.devices ?? []).map(normalizeDevice));
 		} catch {
 			// best-effort
 		}
