@@ -182,61 +182,67 @@ export class SvapnaConsolidation {
 
 		this.logCycle("running");
 
-		report("REPLAY", 0);
-		const replayResult = await this.replay();
-		report("REPLAY", 1);
+		try {
+			report("REPLAY", 0);
+			const replayResult = await this.replay();
+			report("REPLAY", 1);
 
-		report("RECOMBINE", 0);
-		const recombineResult = await this.recombine(replayResult.highSurpriseTurns);
-		report("RECOMBINE", 1);
+			report("RECOMBINE", 0);
+			const recombineResult = await this.recombine(replayResult.highSurpriseTurns);
+			report("RECOMBINE", 1);
 
-		report("CRYSTALLIZE", 0);
-		const crystallizeResult = await this.crystallize();
-		report("CRYSTALLIZE", 1);
+			report("CRYSTALLIZE", 0);
+			const crystallizeResult = await this.crystallize();
+			report("CRYSTALLIZE", 1);
 
-		report("PROCEDURALIZE", 0);
-		const proceduralizeResult = await this.proceduralize();
-		report("PROCEDURALIZE", 1);
+			report("PROCEDURALIZE", 0);
+			const proceduralizeResult = await this.proceduralize();
+			report("PROCEDURALIZE", 1);
 
-		report("COMPRESS", 0);
-		const compressResult = await this.compress();
-		report("COMPRESS", 1);
+			report("COMPRESS", 0);
+			const compressResult = await this.compress();
+			report("COMPRESS", 1);
 
-		const totalDurationMs = performance.now() - cycleStart;
+			const totalDurationMs = performance.now() - cycleStart;
 
-		const result: SvapnaResult = {
-			phases: {
-				replay: {
-					turnsScored: replayResult.turnsScored,
-					highSurprise: replayResult.highSurprise,
-					durationMs: replayResult.durationMs,
+			const result: SvapnaResult = {
+				phases: {
+					replay: {
+						turnsScored: replayResult.turnsScored,
+						highSurprise: replayResult.highSurprise,
+						durationMs: replayResult.durationMs,
+					},
+					recombine: {
+						associations: recombineResult.associations.length,
+						crossSessions: recombineResult.crossSessions,
+						durationMs: recombineResult.durationMs,
+					},
+					crystallize: {
+						vasanasCreated: crystallizeResult.vasanasCreated,
+						vasanasReinforced: crystallizeResult.vasanasReinforced,
+						durationMs: crystallizeResult.durationMs,
+					},
+					proceduralize: {
+						vidhisCreated: proceduralizeResult.vidhisCreated,
+						durationMs: proceduralizeResult.durationMs,
+					},
+					compress: {
+						tokensCompressed: compressResult.tokensCompressed,
+						compressionRatio: compressResult.compressionRatio,
+						durationMs: compressResult.durationMs,
+					},
 				},
-				recombine: {
-					associations: recombineResult.associations.length,
-					crossSessions: recombineResult.crossSessions,
-					durationMs: recombineResult.durationMs,
-				},
-				crystallize: {
-					vasanasCreated: crystallizeResult.vasanasCreated,
-					vasanasReinforced: crystallizeResult.vasanasReinforced,
-					durationMs: crystallizeResult.durationMs,
-				},
-				proceduralize: {
-					vidhisCreated: proceduralizeResult.vidhisCreated,
-					durationMs: proceduralizeResult.durationMs,
-				},
-				compress: {
-					tokensCompressed: compressResult.tokensCompressed,
-					compressionRatio: compressResult.compressionRatio,
-					durationMs: compressResult.durationMs,
-				},
-			},
-			totalDurationMs,
-			cycleId: this.cycleId,
-		};
+				totalDurationMs,
+				cycleId: this.cycleId,
+			};
 
-		this.logCycle("success", result);
-		return result;
+			this.logCycle("success", result);
+			return result;
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			this.logCycle("failed");
+			throw new Error(`Svapna cycle ${this.cycleId} failed: ${msg}`, { cause: err });
+		}
 	}
 
 	// ── Phase Delegates ─────────────────────────────────────────────────
@@ -356,13 +362,69 @@ export class SvapnaConsolidation {
 		const targetTokens = Math.floor(totalOriginalTokens * 0.7);
 		let compressedTotal = 0;
 
-		if (budgetTotal > 0) {
+		// Compute per-turn budgets and apply Memora-style harmonic compression
+		const updateStmt = agentDb.prepare(
+			`UPDATE turns SET content = ? WHERE id = ?`,
+		);
+		const insertRuleStmt = agentDb.prepare(
+			`INSERT INTO consolidation_rules
+			 (project, category, rule_text, source_sessions, confidence, created_at, updated_at)
+			 VALUES (?, 'abstraction', ?, ?, ?, ?, ?)`,
+		);
+
+		const compressBatch = agentDb.transaction(() => {
 			for (let i = 0; i < n; i++) {
-				const budget = Math.floor((rawBudgets[i] / budgetTotal) * targetTokens);
-				compressedTotal += Math.min(budget, chunks[i].tokenCount);
+				const budget = budgetTotal > 0
+					? Math.floor((rawBudgets[i] / budgetTotal) * targetTokens)
+					: Math.floor(targetTokens / n);
+				const turnTokens = chunks[i].tokenCount;
+				const allocated = Math.min(budget, turnTokens);
+				compressedTotal += allocated;
+
+				// Only compress turns where budget < 60% of original tokens
+				if (turnTokens > 20 && allocated < turnTokens * 0.6) {
+					const turn = turns[i];
+					const gist = this.generateGist(turn.content, allocated);
+					const cueAnchors = this.extractCueAnchors(turn.content);
+
+					// Write compressed abstraction back to the turn
+					updateStmt.run(gist, turn.id);
+
+					// Store abstraction as a consolidation rule for auditability
+					insertRuleStmt.run(
+						this.config.project, gist,
+						JSON.stringify([turn.session_id]),
+						chunks[i].relevance, Date.now(), Date.now(),
+					);
+
+					// Store cue anchors as GraphRAG metadata for retrieval
+					if (cueAnchors.length > 0) {
+						try {
+							const graphDb = this.db.get("graph");
+							const upsertNode = graphDb.prepare(
+								`INSERT OR REPLACE INTO nodes (id, type, label, content, metadata)
+								 VALUES (?, 'concept', ?, ?, ?)`,
+							);
+							for (const cue of cueAnchors) {
+								upsertNode.run(
+									`cue-${turn.id}-${cue.slice(0, 20)}`,
+									cue,
+									gist.slice(0, 200),
+									JSON.stringify({ source: `turn:${turn.id}`, cycle: this.cycleId }),
+								);
+							}
+						} catch {
+							// GraphRAG cue anchors are best-effort
+						}
+					}
+				}
 			}
-		} else {
-			compressedTotal = targetTokens;
+		});
+
+		try {
+			compressBatch();
+		} catch {
+			// Compression write-back is best-effort — don't fail the cycle
 		}
 
 		const compressionRatio = totalOriginalTokens > 0 ? compressedTotal / totalOriginalTokens : 1.0;
@@ -371,6 +433,64 @@ export class SvapnaConsolidation {
 	}
 
 	// ── Private Helpers ──────────────────────────────────────────────────
+
+	/**
+	 * Generate a compressed gist (abstraction) of turn content.
+	 * Uses extractive summarization: keeps the first and last sentences,
+	 * plus any sentences containing tool calls or decisions.
+	 */
+	private generateGist(content: string, tokenBudget: number): string {
+		const sentences = content.split(/(?<=[.!?\n])\s+/).filter((s) => s.trim().length > 0);
+		if (sentences.length <= 2) return content;
+
+		// Always keep first and last sentence as framing
+		const kept: string[] = [sentences[0]];
+
+		// Keep sentences with high signal (tool calls, decisions, errors)
+		const signalPattern = /\b(error|decided|created|modified|fixed|found|returned|result|output)\b/i;
+		for (let i = 1; i < sentences.length - 1; i++) {
+			if (signalPattern.test(sentences[i])) {
+				kept.push(sentences[i]);
+			}
+		}
+
+		kept.push(sentences[sentences.length - 1]);
+
+		// Truncate to budget
+		let gist = kept.join(" ");
+		const words = gist.split(/\s+/);
+		const wordBudget = Math.max(5, Math.floor(tokenBudget * 0.75)); // ~0.75 words per token
+		if (words.length > wordBudget) {
+			gist = words.slice(0, wordBudget).join(" ") + "…";
+		}
+
+		return `[compressed] ${gist}`;
+	}
+
+	/**
+	 * Extract cue anchors (trigger phrases) from turn content.
+	 * These serve as retrieval hooks in GraphRAG for finding compressed turns.
+	 */
+	private extractCueAnchors(content: string): string[] {
+		const anchors: string[] = [];
+		const lower = content.toLowerCase();
+
+		// Extract verb-object phrases as cue anchors
+		const voPattern = /\b(create|fix|refactor|implement|add|remove|update|debug|test|deploy|configure)\s+(\w+(?:\s+\w+)?)\b/gi;
+		let match: RegExpExecArray | null;
+		while ((match = voPattern.exec(lower)) !== null) {
+			anchors.push(match[0].trim());
+		}
+
+		// Extract file paths as cue anchors
+		const pathPattern = /[\w\-]+\.(?:ts|js|py|rs|go|java|tsx|jsx|json|yaml|toml)\b/gi;
+		while ((match = pathPattern.exec(content)) !== null) {
+			anchors.push(match[0]);
+		}
+
+		// Deduplicate and limit
+		return [...new Set(anchors)].slice(0, 5);
+	}
 
 	/** Classify epistemological source (Pramana) of a turn's content. */
 	private classifyPramana(content: string, calls: SessionToolCall[]): PramanaType {

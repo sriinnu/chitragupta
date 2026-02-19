@@ -158,6 +158,7 @@ export class VidhiEngine {
 
 			if (existingVidhi) {
 				// Reinforce: merge new source sessions, bump confidence
+				const oldSize = existingVidhi.learnedFrom.length;
 				const mergedSessions = new Set([
 					...existingVidhi.learnedFrom,
 					...agg.instances.map((i) => i.sessionId),
@@ -165,7 +166,7 @@ export class VidhiEngine {
 				existingVidhi.learnedFrom = [...mergedSessions];
 				existingVidhi.confidence = Math.min(
 					1.0,
-					existingVidhi.confidence + 0.05 * (mergedSessions.size - existingVidhi.learnedFrom.length),
+					existingVidhi.confidence + 0.05 * (mergedSessions.size - oldSize),
 				);
 				existingVidhi.updatedAt = Date.now();
 				this.persist(existingVidhi);
