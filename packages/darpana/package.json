@@ -29,7 +29,7 @@
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
 	"bin": {
-		"darpana": "dist/bin/darpana.js"
+		"darpana": "bin/darpana.js"
 	},
 	"exports": {
 		".": {
@@ -48,6 +48,7 @@
 		"start": "node dist/bin/darpana.js"
 	},
 	"files": [
+		"bin",
 		"dist",
 		"README.md"
 	],
