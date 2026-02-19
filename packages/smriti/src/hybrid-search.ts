@@ -212,7 +212,7 @@ export class HybridSearchEngine {
 		const rankings: Array<{
 			source: "bm25" | "vector" | "graphrag";
 			weight: number;
-			results: Array<{ id: string; title: string; content: string }>;
+			results: Array<{ id: string; title: string; content: string; timestamp?: number }>;
 		}> = [];
 
 		// Run all enabled rankers in parallel
@@ -229,6 +229,7 @@ export class HybridSearchEngine {
 							id: meta.id,
 							title: meta.title,
 							content: `${meta.title} [${meta.tags.join(", ")}] agent:${meta.agent}`,
+							timestamp: meta.created ? Date.parse(meta.created) : undefined,
 						})),
 					});
 				})(),
@@ -310,6 +311,10 @@ export class HybridSearchEngine {
 					if (doc.content.length > existing.content.length) {
 						existing.content = doc.content;
 					}
+					// Propagate timestamp if not yet set
+					if (existing.timestamp === undefined && doc.timestamp !== undefined) {
+						existing.timestamp = doc.timestamp;
+					}
 				} else {
 					const sources = new Set<"bm25" | "vector" | "graphrag">();
 					sources.add(ranking.source);
@@ -320,6 +325,7 @@ export class HybridSearchEngine {
 						score: rrfContribution,
 						sources,
 						ranks: { [ranking.source]: rank + 1 },
+						timestamp: doc.timestamp,
 					});
 				}
 			}
