@@ -222,6 +222,10 @@ export type {
 	SkillSyncEvent,
 } from "./daemon-manager.js";
 
+// SelfDiscovery (Atma-Bodha — capability scanning at daemon start)
+export { SelfDiscovery } from "./self-discovery.js";
+export type { CapabilityManifest, DiscoveredProvider, SkillSummary, MemorySummary, SystemResources } from "./self-discovery.js";
+
 // Pratyabhijna (self-recognition on session start)
 export { Pratyabhijna } from "./pratyabhijna.js";
 
