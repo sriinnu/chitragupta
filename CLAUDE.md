@@ -36,3 +36,23 @@
 - `vasana_tendencies` — learned behavioral patterns
 - `health_status` — system health (Triguna)
 - `atman_report` — full self-report
+
+## Context Window Management 
+- When working with sub-agents/Task tools, proactively monitor context window usage. If more than 5 parallel agents are running, summarize and commit progress before spawning additional agents. Never let the orchestrating conversation exceed 80% of context capacity.
+- 
+## Language & Code Standards  
+- This is a TypeScript monorepo, with swift for ios/macos. Always use TypeScript idioms (strict types, no `any`, proper null vs undefined handling). When editing files, check for and fix import statements — never create duplicate imports. After multi-file changes, run the full test suite before reporting completion.
+- no code more then 450 lines of code.
+- jsdocs must, and comments as needed.
+
+## Verification Standards section 
+- When verifying sync, diff, or state claims (e.g., 'repos are in sync', 'all tests pass', 'build succeeded'), always show concrete evidence — actual command output, commit hashes, or file diffs. Never claim completion without proof.
+-
+## Testing section 
+- When editing test files after changing source code field names, types, or APIs, always grep for all usages of the old names/signatures across the entire test suite and update them in the same pass. Never change source without updating corresponding tests.
+- 
+## Communication
+When the user asks about status or progress, clarify the scope of their question before answering. For example, 'updated package.json?' might mean startup scripts, not dependencies. When ambiguous, ask.
+
+# multi-file recfactors
+When we go to refactor any module. Rules: (1) change no more than 5 files per round, (2) run tests after each file change, (3) if any test fails, fix it before moving to the next file, (4) show me a summary after each round before proceeding.
