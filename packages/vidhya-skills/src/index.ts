@@ -304,7 +304,7 @@ export type {
 } from "./vidya-orchestrator.js";
 
 // ── Skill Crystallization (स्फटीकरण) — Vidhi → Skill Pipeline ──────────────
-export { SkillCrystallizer, DEFAULT_CRYSTALLIZATION_CONFIG, CRYSTALLIZATION_HARD_CEILINGS } from "./crystallization.js";
+export { SkillCrystallizer, DEFAULT_CRYSTALLIZATION_CONFIG, CRYSTALLIZATION_HARD_CEILINGS, promoteMatureVidhis } from "./crystallization.js";
 export type {
 	VidhiLike,
 	CrystallizationConfig,
