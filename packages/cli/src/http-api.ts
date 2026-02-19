@@ -1,5 +1,5 @@
 /**
- * Pre-configured API factory — assembles all route modules onto a ChitraguptaServer.
+ * Pre-configured API factory -- assembles all route modules onto a ChitraguptaServer.
  * @module http-api
  */
 
@@ -10,6 +10,9 @@ import { mountJobRoutes } from "./http-routes-jobs.js";
 import { mountMemoryRoutes } from "./http-routes-memory.js";
 import { mountAgentRoutes } from "./http-routes-agents.js";
 import { mountDynamicRoutes, wireWebSocket } from "./http-routes-ws.js";
+import { mountBudgetRoutes } from "./routes/budget.js";
+import { mountSettingsRoutes } from "./routes/settings.js";
+import { mountModelRoutes } from "./routes/models.js";
 
 /**
  * Create a pre-configured server with all Chitragupta API routes.
@@ -25,6 +28,17 @@ export function createChitraguptaAPI(deps: ApiDeps, config?: ServerConfig): Chit
 	const jobRunner = mountJobRoutes(server, deps, config);
 	mountMemoryRoutes(server);
 	mountAgentRoutes(server, deps);
+
+	// Budget, settings, and model routes
+	if (deps.getBudgetTracker) {
+		mountBudgetRoutes(server, deps.getBudgetTracker as () => undefined);
+	}
+	mountSettingsRoutes(server);
+	mountModelRoutes(server, {
+		listProviders: deps.listProviders,
+		getTuriyaRouter: deps.getTuriyaRouter as (() => { getState(): Record<string, unknown> } | undefined) | undefined,
+	});
+
 	mountDynamicRoutes(server, deps, config);
 
 	// Wire WebSocket chat handlers (overrides server.start)
