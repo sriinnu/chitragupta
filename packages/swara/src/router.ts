@@ -245,12 +245,17 @@ export class ModelRouter {
 		}
 	}
 
-	/** Replace the current tier set. */
+	/**
+	 * Replace router tiers at runtime.
+	 *
+	 * Use this for explicit admin updates; avoid mutating tiers during an
+	 * in-flight request stream.
+	 */
 	setTiers(tiers: ModelTier[]): void {
 		this.tiers = [...tiers];
 	}
 
-	/** Get a copy of the current tier set. */
+	/** Return a defensive copy of the active tier configuration. */
 	getTiers(): ModelTier[] {
 		return [...this.tiers];
 	}

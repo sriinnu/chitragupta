@@ -307,17 +307,22 @@ export class MargaPipeline {
 		}
 	}
 
-	/** Replace the binding set. */
+	/**
+	 * Replace runtime task bindings.
+	 *
+	 * This is intended for controlled reconfiguration (CLI/admin flow), not
+	 * per-request mutation.
+	 */
 	setBindings(bindings: TaskModelBinding[]): void {
 		this.bindings = [...bindings];
 	}
 
-	/** Get current bindings. */
+	/** Return a defensive copy of current task bindings. */
 	getBindings(): TaskModelBinding[] {
 		return [...this.bindings];
 	}
 
-	/** Get the binding for a specific task type. */
+	/** Resolve the effective binding for one task type, if configured. */
 	getBindingFor(taskType: TaskType): TaskModelBinding | undefined {
 		return this.bindings.find((b) => b.taskType === taskType);
 	}
