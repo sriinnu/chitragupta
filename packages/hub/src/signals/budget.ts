@@ -15,17 +15,31 @@ import { apiGet } from "../api.js";
 export interface BudgetStatusData {
 	sessionCost: number;
 	dailyCost: number;
-	monthlyCost: number;
 	sessionLimit: number;
 	dailyLimit: number;
-	warningThreshold: number;
-	activeSessions: number;
+	sessionWarning: boolean;
+	sessionExceeded: boolean;
+	dailyWarning: boolean;
+	dailyExceeded: boolean;
+	canProceed: { allowed: boolean; reason?: string };
 }
 
 /** A single day's cost entry for the history chart. */
 export interface DailyCost {
 	date: string;
 	cost: number;
+}
+
+/** Raw history entry shape returned by the backend. */
+interface RawHistoryEntry {
+	date: string;
+	totalCost: number;
+	entries: unknown[];
+}
+
+/** Wrapped response shape from GET /api/budget/history. */
+interface BudgetHistoryResponse {
+	history: RawHistoryEntry[];
 }
 
 // ── Signals ───────────────────────────────────────────────────────
@@ -51,9 +65,9 @@ export const sessionCostFormatted = computed<string>(
 	() => `$${(budgetStatus.value?.sessionCost ?? 0).toFixed(4)}`,
 );
 
-/** Formatted monthly cost string. */
-export const monthlyCostFormatted = computed<string>(
-	() => `$${(budgetStatus.value?.monthlyCost ?? 0).toFixed(2)}`,
+/** Whether the session budget warning threshold has been reached. */
+export const sessionWarning = computed<boolean>(
+	() => budgetStatus.value?.sessionWarning ?? false,
 );
 
 // ── Fetchers ──────────────────────────────────────────────────────
@@ -80,8 +94,11 @@ export async function fetchBudgetStatus(): Promise<void> {
  */
 export async function fetchBudgetHistory(): Promise<void> {
 	try {
-		const data = await apiGet<DailyCost[]>("/api/budget/history");
-		budgetHistory.value = data;
+		const data = await apiGet<BudgetHistoryResponse>("/api/budget/history");
+		budgetHistory.value = (data.history ?? []).map((entry) => ({
+			date: entry.date,
+			cost: entry.totalCost,
+		}));
 	} catch {
 		// History fetch is best-effort; signal retains last value
 	}

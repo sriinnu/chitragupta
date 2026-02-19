@@ -22,6 +22,11 @@ interface MemoryEntry {
 	timestamp?: string;
 }
 
+/** Wrapped memory search response from the API. */
+interface MemorySearchResponse {
+	results: MemoryEntry[];
+}
+
 /** Available filter categories. */
 type CategoryFilter = "all" | "rules" | "patterns" | "sessions";
 
@@ -59,8 +64,8 @@ export function Memory(): preact.JSX.Element {
 			if (category !== "all") {
 				params.set("category", category);
 			}
-			const data = await apiGet<MemoryEntry[]>(`/api/memory/search?${params.toString()}`);
-			setResults(data);
+			const data = await apiGet<MemorySearchResponse>(`/api/memory/search?${params.toString()}`);
+			setResults(data.results ?? []);
 		} catch {
 			setResults([]);
 		} finally {

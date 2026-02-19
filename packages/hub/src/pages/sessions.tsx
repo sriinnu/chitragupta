@@ -46,6 +46,16 @@ interface SessionDetail {
 	createdAt: string;
 }
 
+/** Wrapped sessions list response from the API. */
+interface SessionsListResponse {
+	sessions: SessionSummary[];
+}
+
+/** Wrapped session detail response from the API. */
+interface SessionDetailResponse {
+	session: SessionDetail;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────
 
 /** Format milliseconds as a human-readable duration. */
@@ -87,8 +97,8 @@ export function Sessions(): preact.JSX.Element {
 	const [loading, setLoading] = useState(true);
 
 	useEffect(() => {
-		void apiGet<SessionSummary[]>("/api/sessions")
-			.then(setSessions)
+		void apiGet<SessionsListResponse>("/api/sessions")
+			.then((data) => setSessions(data.sessions ?? []))
 			.catch(() => {})
 			.finally(() => setLoading(false));
 	}, []);
@@ -102,8 +112,8 @@ export function Sessions(): preact.JSX.Element {
 		setSelectedId(id);
 		setDetail(null);
 		try {
-			const d = await apiGet<SessionDetail>(`/api/sessions/${id}`);
-			setDetail(d);
+			const resp = await apiGet<SessionDetailResponse>(`/api/sessions/${id}`);
+			setDetail(resp.session);
 		} catch {
 			// Failed to load detail
 		}

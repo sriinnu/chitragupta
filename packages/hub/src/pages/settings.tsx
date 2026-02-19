@@ -12,23 +12,42 @@ import { apiGet, apiPut } from "../api.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
-/** Application settings shape from the API. */
+/**
+ * Application settings shape matching the backend ChitraguptaSettings.
+ * Budget and memory settings are nested objects on the backend.
+ */
 interface AppSettings {
 	defaultProvider: string;
 	defaultModel: string;
-	providerPriority: string[];
-	maxSessionCost: number;
-	maxDailyCost: number;
-	warningThreshold: number;
-	memoryAutoSave: boolean;
-	memorySearchDepth: number;
+	budget: {
+		maxSessionCost: number;
+		maxDailyCost: number;
+		warningThreshold: number;
+	};
+	memory: {
+		autoSave: boolean;
+		searchDepth: number;
+	};
 	theme: string;
 }
 
-/** Available providers for the dropdown. */
-interface ProviderOption {
+/** Wrapped settings response from the API. */
+interface SettingsResponse {
+	settings: AppSettings;
+}
+
+/** Raw provider entry from the providers list endpoint. */
+interface RawProviderEntry {
 	id: string;
-	name: string;
+	type: string;
+	apiKey: string;
+	endpoint: string;
+	models: string[];
+}
+
+/** Wrapped providers list response from the API. */
+interface ProvidersListResponse {
+	providers: RawProviderEntry[];
 }
 
 // ── Constants ─────────────────────────────────────────────────────
@@ -38,12 +57,15 @@ const THEMES = ["dark", "light", "system"];
 const DEFAULT_SETTINGS: AppSettings = {
 	defaultProvider: "",
 	defaultModel: "",
-	providerPriority: [],
-	maxSessionCost: 1.0,
-	maxDailyCost: 10.0,
-	warningThreshold: 0.8,
-	memoryAutoSave: true,
-	memorySearchDepth: 5,
+	budget: {
+		maxSessionCost: 1.0,
+		maxDailyCost: 10.0,
+		warningThreshold: 0.8,
+	},
+	memory: {
+		autoSave: true,
+		searchDepth: 5,
+	},
 	theme: "dark",
 };
 
@@ -58,15 +80,19 @@ const DEFAULT_SETTINGS: AppSettings = {
  */
 export function Settings(): preact.JSX.Element {
 	const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
-	const [providers, setProviders] = useState<ProviderOption[]>([]);
+	const [providers, setProviders] = useState<Array<{ id: string; name: string }>>([]);
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
 	const [saved, setSaved] = useState(false);
 
 	useEffect(() => {
 		void Promise.all([
-			apiGet<AppSettings>("/api/settings").catch(() => DEFAULT_SETTINGS),
-			apiGet<ProviderOption[]>("/api/providers").catch(() => []),
+			apiGet<SettingsResponse>("/api/settings")
+				.then((data) => data.settings)
+				.catch(() => DEFAULT_SETTINGS),
+			apiGet<ProvidersListResponse>("/api/providers")
+				.then((data) => (data.providers ?? []).map((p) => ({ id: p.id, name: p.id })))
+				.catch((): Array<{ id: string; name: string }> => []),
 		]).then(([s, p]) => {
 			setSettings(s);
 			setProviders(p);
@@ -74,15 +100,29 @@ export function Settings(): preact.JSX.Element {
 		});
 	}, []);
 
+	/** Update a top-level settings field. */
 	const update = useCallback(<K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
 		setSaved(false);
 		setSettings((prev) => ({ ...prev, [key]: value }));
 	}, []);
 
+	/** Update a nested budget field. */
+	const updateBudget = useCallback(<K extends keyof AppSettings["budget"]>(key: K, value: AppSettings["budget"][K]) => {
+		setSaved(false);
+		setSettings((prev) => ({ ...prev, budget: { ...prev.budget, [key]: value } }));
+	}, []);
+
+	/** Update a nested memory field. */
+	const updateMemory = useCallback(<K extends keyof AppSettings["memory"]>(key: K, value: AppSettings["memory"][K]) => {
+		setSaved(false);
+		setSettings((prev) => ({ ...prev, memory: { ...prev.memory, [key]: value } }));
+	}, []);
+
 	const handleSave = useCallback(async () => {
 		setSaving(true);
 		try {
-			await apiPut("/api/settings", settings);
+			const data = await apiPut<SettingsResponse>("/api/settings", settings);
+			setSettings(data.settings);
 			setSaved(true);
 		} catch {
 			// Save error
@@ -124,54 +164,40 @@ export function Settings(): preact.JSX.Element {
 						style={inputStyle}
 					/>
 				</Label>
-				<Label text="Provider Priority (comma-separated)">
-					<input
-						type="text"
-						value={settings.providerPriority.join(", ")}
-						onInput={(e) =>
-							update(
-								"providerPriority",
-								(e.target as HTMLInputElement).value.split(",").map((s) => s.trim()).filter(Boolean),
-							)
-						}
-						placeholder="anthropic, openai, ollama"
-						style={inputStyle}
-					/>
-				</Label>
 			</Section>
 
 			{/* Budget section */}
 			<Section title="Budget">
-				<Label text={`Max Session Cost: $${settings.maxSessionCost.toFixed(2)}`}>
+				<Label text={`Max Session Cost: $${settings.budget.maxSessionCost.toFixed(2)}`}>
 					<input
 						type="range"
 						min="0.1"
 						max="20"
 						step="0.1"
-						value={settings.maxSessionCost}
-						onInput={(e) => update("maxSessionCost", parseFloat((e.target as HTMLInputElement).value))}
+						value={settings.budget.maxSessionCost}
+						onInput={(e) => updateBudget("maxSessionCost", parseFloat((e.target as HTMLInputElement).value))}
 						style={{ width: "100%" }}
 					/>
 				</Label>
-				<Label text={`Max Daily Cost: $${settings.maxDailyCost.toFixed(2)}`}>
+				<Label text={`Max Daily Cost: $${settings.budget.maxDailyCost.toFixed(2)}`}>
 					<input
 						type="range"
 						min="1"
 						max="100"
 						step="1"
-						value={settings.maxDailyCost}
-						onInput={(e) => update("maxDailyCost", parseFloat((e.target as HTMLInputElement).value))}
+						value={settings.budget.maxDailyCost}
+						onInput={(e) => updateBudget("maxDailyCost", parseFloat((e.target as HTMLInputElement).value))}
 						style={{ width: "100%" }}
 					/>
 				</Label>
-				<Label text={`Warning Threshold: ${Math.round(settings.warningThreshold * 100)}%`}>
+				<Label text={`Warning Threshold: ${Math.round(settings.budget.warningThreshold * 100)}%`}>
 					<input
 						type="range"
 						min="0.1"
 						max="1"
 						step="0.05"
-						value={settings.warningThreshold}
-						onInput={(e) => update("warningThreshold", parseFloat((e.target as HTMLInputElement).value))}
+						value={settings.budget.warningThreshold}
+						onInput={(e) => updateBudget("warningThreshold", parseFloat((e.target as HTMLInputElement).value))}
 						style={{ width: "100%" }}
 					/>
 				</Label>
@@ -183,22 +209,22 @@ export function Settings(): preact.JSX.Element {
 					<div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
 						<input
 							type="checkbox"
-							checked={settings.memoryAutoSave}
-							onChange={(e) => update("memoryAutoSave", (e.target as HTMLInputElement).checked)}
+							checked={settings.memory.autoSave}
+							onChange={(e) => updateMemory("autoSave", (e.target as HTMLInputElement).checked)}
 						/>
 						<span style={{ color: "#8888a0", fontSize: "13px" }}>
-							{settings.memoryAutoSave ? "Enabled" : "Disabled"}
+							{settings.memory.autoSave ? "Enabled" : "Disabled"}
 						</span>
 					</div>
 				</Label>
-				<Label text={`Search Depth: ${settings.memorySearchDepth}`}>
+				<Label text={`Search Depth: ${settings.memory.searchDepth}`}>
 					<input
 						type="range"
 						min="1"
 						max="20"
 						step="1"
-						value={settings.memorySearchDepth}
-						onInput={(e) => update("memorySearchDepth", parseInt((e.target as HTMLInputElement).value, 10))}
+						value={settings.memory.searchDepth}
+						onInput={(e) => updateMemory("searchDepth", parseInt((e.target as HTMLInputElement).value, 10))}
 						style={{ width: "100%" }}
 					/>
 				</Label>

@@ -24,6 +24,11 @@ interface SkillEntry {
 	usageCount?: number;
 }
 
+/** Wrapped skills response from the API. */
+interface SkillsResponse {
+	skills: SkillEntry[];
+}
+
 // ── Constants ─────────────────────────────────────────────────────
 
 const STATUS_STYLES: Record<string, { bg: string; color: string }> = {
@@ -48,8 +53,8 @@ export function Skills(): preact.JSX.Element {
 
 	const refresh = useCallback(async () => {
 		try {
-			const data = await apiGet<SkillEntry[]>("/api/skills");
-			setSkills(data);
+			const data = await apiGet<SkillsResponse>("/api/skills");
+			setSkills(data.skills ?? []);
 		} catch {
 			// best-effort
 		}
