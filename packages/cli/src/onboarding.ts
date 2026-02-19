@@ -260,9 +260,16 @@ export async function runOnboarding(): Promise<OnboardingResult> {
 		fs.mkdirSync(path.join(home, dir), { recursive: true });
 	}
 
-	// 7. Done
+	// 7. Done — show quick-start guide with daemon recommendation
 	stdout.write("\n");
-	stdout.write(`  ${green(bold("You're ready."))} Try: ${cyan("chitragupta 'Hello'")}\n\n`);
+	stdout.write(`  ${green(bold("You're ready."))}\n\n`);
+	stdout.write(`  ${bold("Quick start:")}\n`);
+	stdout.write(`    ${cyan("chitragupta 'Hello'")}            ${dim("— start a conversation")}\n`);
+	stdout.write(`    ${cyan("chitragupta daemon start")}       ${dim("— enable background daemon")}\n`);
+	stdout.write(`    ${cyan("chitragupta daemon status")}      ${dim("— check daemon health")}\n`);
+	stdout.write("\n");
+	stdout.write(`  ${dim("The daemon runs memory consolidation, self-healing, and")}\n`);
+	stdout.write(`  ${dim("skill discovery in the background. Recommended for daily use.")}\n\n`);
 
 	return { provider: provider.id, model: provider.defaultModel, completed: true };
 }
