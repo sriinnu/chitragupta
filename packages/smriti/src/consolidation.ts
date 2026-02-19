@@ -217,7 +217,8 @@ export class ConsolidationEngine {
 		// Phase 4: Enforce maxRules limit (keep highest confidence)
 		enforceMaxRules(this.rules, this.config.maxRules);
 
-		// Prune dead rules (confidence decayed below threshold)
+		// Decay unreinforced rules and prune dead ones
+		this.decayRules();
 		this.pruneRules();
 
 		// Record in history
@@ -233,6 +234,9 @@ export class ConsolidationEngine {
 		if (this.history.length > MAX_HISTORY_ENTRIES) {
 			this.history = this.history.slice(-MAX_HISTORY_ENTRIES);
 		}
+
+		// Persist consolidated state so callers don't need to call save() manually
+		this.save();
 
 		return {
 			newRules,
