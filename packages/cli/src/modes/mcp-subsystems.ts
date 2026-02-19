@@ -172,11 +172,11 @@ export async function getChetana(): Promise<ChetanaControllerLike> {
 	return _chetana;
 }
 
-/** Lazily create or return the SoulManager singleton. */
+/** Lazily create or return the SoulManager singleton (loads persisted souls from disk). */
 export async function getSoulManager(): Promise<SoulManagerLike> {
 	if (!_soulManager) {
 		const { SoulManager } = await import("@chitragupta/anina");
-		_soulManager = new SoulManager() as unknown as SoulManagerLike;
+		_soulManager = new SoulManager({ persist: true }) as unknown as SoulManagerLike;
 	}
 	return _soulManager;
 }

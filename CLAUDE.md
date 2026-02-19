@@ -54,5 +54,50 @@
 ## Communication
 When the user asks about status or progress, clarify the scope of their question before answering. For example, 'updated package.json?' might mean startup scripts, not dependencies. When ambiguous, ask.
 
-# multi-file recfactors
+# Multi-File Refactors
 When we go to refactor any module. Rules: (1) change no more than 5 files per round, (2) run tests after each file change, (3) if any test fails, fix it before moving to the next file, (4) show me a summary after each round before proceeding.
+
+# Parallel Sessions & Git Worktrees
+
+## The Problem
+Multiple Claude Code sessions sharing the same git working directory will collide — `git checkout` in one session changes HEAD for ALL sessions. Commits from different sessions end up on whichever branch was last checked out. This has caused data loss and merge confusion.
+
+## The Rule
+**NEVER run parallel sessions in the same working directory.** Always use git worktrees.
+
+## Worktree Setup (Master Orchestrator)
+When preparing branches for parallel sessions, the master must:
+
+```bash
+# 1. Create branches from main
+git checkout main
+git branch audit/smriti-refactor
+git branch audit/niyanta-fix
+
+# 2. Create worktrees — each session gets its own directory
+git worktree add ../.worktrees/smriti-refactor audit/smriti-refactor
+git worktree add ../.worktrees/niyanta-fix audit/niyanta-fix
+
+# 3. Write TASK.md instructions into each worktree
+# Each worktree is a fully independent working directory
+```
+
+## Session Launch
+- Main session stays in the repo root (on main or its own branch)
+- Each parallel session opens its **worktree directory**, NOT the main repo
+- Session 1: `cd ../.worktrees/smriti-refactor` → works on smriti
+- Session 2: `cd ../.worktrees/niyanta-fix` → works on niyanta
+- Each has its own HEAD, staging area, and working tree — zero collision risk
+
+## Post-Session Merge (Master Orchestrator)
+After all sessions report completion:
+1. Switch to main: `git checkout main`
+2. Merge each branch: `git merge audit/smriti-refactor --no-edit`
+3. Run full test suite: `npx vitest run`
+4. Clean up worktrees: `git worktree remove ../.worktrees/smriti-refactor`
+5. Delete merged branches: `git branch -d audit/smriti-refactor`
+
+## Worktree Directory
+All worktrees live in `../.worktrees/` (gitignored). Never commit worktree directories.
+
+See **AGENTS.md** for full orchestration protocol.
