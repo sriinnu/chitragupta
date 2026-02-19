@@ -8,12 +8,30 @@
  * by detecting recurring patterns, extracting reusable rules, compressing
  * episodic memories into semantic knowledge, and tracking what the system
  * has learned over time.
+ *
+ * Pattern detection logic lives in ./consolidation-phases.ts.
+ * Scoring, hashing, and merge logic lives in ./consolidation-scoring.ts.
  */
 
-import type { Session, SessionTurn, SessionToolCall } from "./types.js";
+import type { Session } from "./types.js";
 import { getChitraguptaHome } from "@chitragupta/core";
 import fs from "fs";
 import path from "path";
+
+import {
+	detectToolSequences,
+	detectPreferences,
+	detectDecisions,
+	detectCorrections,
+	detectConventions,
+} from "./consolidation-phases.js";
+
+import {
+	generateRuleId,
+	mergeWithExisting,
+	patternToRule,
+	enforceMaxRules,
+} from "./consolidation-scoring.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -119,176 +137,10 @@ const DEFAULT_CONFIG: ConsolidationConfig = {
 /** Maximum consolidation history entries to retain. */
 const MAX_HISTORY_ENTRIES = 100;
 
-/** Minimum text similarity score to consider two rules as matching. */
-const SIMILARITY_THRESHOLD = 0.8;
-
 /** All rule categories for iteration. */
 const ALL_CATEGORIES: RuleCategory[] = [
 	"preference", "workflow", "decision", "correction",
 	"convention", "tool-pattern", "domain-knowledge", "relationship",
-];
-
-// ─── FNV-1a Hash ────────────────────────────────────────────────────────────
-
-/** FNV-1a offset basis for 32-bit. */
-const FNV_OFFSET = 0x811c9dc5;
-/** FNV-1a prime for 32-bit. */
-const FNV_PRIME = 0x01000193;
-
-/**
- * Compute a 32-bit FNV-1a hash of the input string, returned as a
- * zero-padded hex string.
- *
- * @param input - The string to hash.
- * @returns An 8-character hex string.
- */
-function fnv1a(input: string): string {
-	let hash = FNV_OFFSET;
-	for (let i = 0; i < input.length; i++) {
-		hash ^= input.charCodeAt(i);
-		hash = Math.imul(hash, FNV_PRIME);
-	}
-	// Convert to unsigned 32-bit then to hex
-	return (hash >>> 0).toString(16).padStart(8, "0");
-}
-
-/**
- * Generate a deterministic rule ID from category and normalized rule text.
- * The same rule always produces the same ID.
- *
- * @param category - The rule category.
- * @param ruleText - The rule text (will be normalized).
- * @returns A deterministic rule ID string.
- */
-function generateRuleId(category: RuleCategory, ruleText: string): string {
-	const normalized = ruleText.toLowerCase().trim().replace(/\s+/g, " ");
-	return `rule-${category}-${fnv1a(category + ":" + normalized)}`;
-}
-
-// ─── Text Similarity ────────────────────────────────────────────────────────
-
-/**
- * Compute bigram-based Dice coefficient similarity between two strings.
- * Returns a value in [0, 1] where 1 means identical bigram sets.
- *
- * This is a lightweight alternative to cosine similarity that works well
- * for short natural-language rule descriptions without needing embeddings.
- *
- * @param a - First string.
- * @param b - Second string.
- * @returns Similarity score in [0, 1].
- */
-function textSimilarity(a: string, b: string): number {
-	const normalize = (s: string) => s.toLowerCase().trim().replace(/\s+/g, " ");
-	const na = normalize(a);
-	const nb = normalize(b);
-
-	if (na === nb) return 1.0;
-	if (na.length < 2 || nb.length < 2) return 0.0;
-
-	const bigrams = (s: string): Map<string, number> => {
-		const map = new Map<string, number>();
-		for (let i = 0; i < s.length - 1; i++) {
-			const bg = s.substring(i, i + 2);
-			map.set(bg, (map.get(bg) ?? 0) + 1);
-		}
-		return map;
-	};
-
-	const bga = bigrams(na);
-	const bgb = bigrams(nb);
-
-	let intersection = 0;
-	for (const [bg, count] of bga) {
-		intersection += Math.min(count, bgb.get(bg) ?? 0);
-	}
-
-	const totalA = na.length - 1;
-	const totalB = nb.length - 1;
-
-	return (2 * intersection) / (totalA + totalB);
-}
-
-// ─── Pattern Detection Helpers ──────────────────────────────────────────────
-
-/** Extract tool call names from a session's turns, in order. */
-function extractToolSequence(session: Session): string[] {
-	const tools: string[] = [];
-	for (const turn of session.turns) {
-		if (turn.toolCalls) {
-			for (const tc of turn.toolCalls) {
-				tools.push(tc.name);
-			}
-		}
-	}
-	return tools;
-}
-
-/** Extract n-grams of the given size from a sequence. */
-function ngrams(sequence: string[], n: number): string[] {
-	const result: string[] = [];
-	for (let i = 0; i <= sequence.length - n; i++) {
-		result.push(sequence.slice(i, i + n).join(" -> "));
-	}
-	return result;
-}
-
-/** Extract all user-role content from a session. */
-function extractUserContent(session: Session): string[] {
-	return session.turns
-		.filter((t) => t.role === "user")
-		.map((t) => t.content);
-}
-
-/** Extract all assistant-role content from a session. */
-function extractAssistantContent(session: Session): string[] {
-	return session.turns
-		.filter((t) => t.role === "assistant")
-		.map((t) => t.content);
-}
-
-// ─── Regex Patterns for Detection ───────────────────────────────────────────
-
-/** Patterns that indicate user preferences. */
-const PREFERENCE_PATTERNS = [
-	/\bi prefer\b/i,
-	/\balways use\b/i,
-	/\bnever use\b/i,
-	/\buse (\w+) instead of (\w+)/i,
-	/\bdon'?t use\b/i,
-	/\bi like\b/i,
-	/\bi want\b/i,
-	/\bplease always\b/i,
-	/\bplease never\b/i,
-	/\blet'?s stick with\b/i,
-	/\bmy preference is\b/i,
-];
-
-/** Patterns that indicate architectural/design decisions. */
-const DECISION_PATTERNS = [
-	/\blet'?s use\b/i,
-	/\bdecided to\b/i,
-	/\bgoing with\b/i,
-	/\bswitched to\b/i,
-	/\bwe'?ll go with\b/i,
-	/\bthe decision is\b/i,
-	/\bwe chose\b/i,
-	/\bthe approach is\b/i,
-	/\bwe'?re using\b/i,
-	/\blet'?s go with\b/i,
-];
-
-/** Patterns that indicate the user is correcting the agent. */
-const CORRECTION_PATTERNS = [
-	/\bno,?\s+(?:not|use|it should|that'?s wrong)/i,
-	/\bthat'?s (?:wrong|incorrect|not right)\b/i,
-	/\bactually,?\s/i,
-	/\binstead,?\s/i,
-	/\bshould be\b/i,
-	/\bnot (\w+),?\s+(?:but|use)\b/i,
-	/\bwrong\b.*\bshould\b/i,
-	/\bfix (?:that|this|it)\b/i,
-	/\bchange (?:that|this|it) to\b/i,
 ];
 
 // ─── ConsolidationEngine ────────────────────────────────────────────────────
@@ -339,11 +191,11 @@ export class ConsolidationEngine {
 		const timestamp = new Date().toISOString();
 
 		// Phase 1: Detect all patterns across sessions
-		const toolPatterns = this.detectToolSequences(sessions);
-		const preferencePatterns = this.detectPreferences(sessions);
-		const decisionPatterns = this.detectDecisions(sessions);
-		const correctionPatterns = this.detectCorrections(sessions);
-		const conventionPatterns = this.detectConventions(sessions);
+		const toolPatterns = detectToolSequences(sessions, this.config.minObservations);
+		const preferencePatterns = detectPreferences(sessions);
+		const decisionPatterns = detectDecisions(sessions);
+		const correctionPatterns = detectCorrections(sessions);
+		const conventionPatterns = detectConventions(sessions, this.config.minObservations);
 
 		const allPatterns: DetectedPattern[] = [
 			...toolPatterns,
@@ -356,14 +208,14 @@ export class ConsolidationEngine {
 		// Phase 2: Convert patterns to candidate rules (only those meeting minObservations)
 		const candidateRules: KnowledgeRule[] = allPatterns
 			.filter((p) => p.frequency >= this.config.minObservations)
-			.map((p) => this.patternToRule(p, sessions, timestamp));
+			.map((p) => patternToRule(p, sessions, timestamp));
 
 		// Phase 3: Merge with existing rules
 		const { newRules, reinforcedRules, weakenedRules } =
-			this.mergeWithExisting(candidateRules, allPatterns);
+			mergeWithExisting(candidateRules, allPatterns, this.rules);
 
 		// Phase 4: Enforce maxRules limit (keep highest confidence)
-		this.enforceMaxRules();
+		enforceMaxRules(this.rules, this.config.maxRules);
 
 		// Prune dead rules (confidence decayed below threshold)
 		this.pruneRules();
@@ -587,435 +439,6 @@ export class ConsolidationEngine {
 		};
 	}
 
-	// ── Pattern Detection (Private) ───────────────────────────────────────
-
-	/**
-	 * Detect recurring tool call sequences across sessions using n-gram analysis.
-	 *
-	 * Extracts tool call names from each session in order, then finds 2-gram,
-	 * 3-gram, and 4-gram sequences that appear in multiple sessions.
-	 *
-	 * @param sessions - Sessions to analyze.
-	 * @returns Detected tool-sequence patterns.
-	 */
-	private detectToolSequences(sessions: Session[]): DetectedPattern[] {
-		const patterns: DetectedPattern[] = [];
-
-		// For each n-gram size, count how many sessions contain each n-gram
-		for (const n of [2, 3, 4]) {
-			const ngramSessionCount = new Map<string, Set<string>>();
-			const ngramEvidence = new Map<string, string[]>();
-
-			for (const session of sessions) {
-				const toolSeq = extractToolSequence(session);
-				if (toolSeq.length < n) continue;
-
-				const sessionNgrams = new Set(ngrams(toolSeq, n));
-				for (const ng of sessionNgrams) {
-					if (!ngramSessionCount.has(ng)) {
-						ngramSessionCount.set(ng, new Set());
-						ngramEvidence.set(ng, []);
-					}
-					ngramSessionCount.get(ng)!.add(session.meta.id);
-					ngramEvidence.get(ng)!.push(
-						`Session "${session.meta.title}": ${ng}`,
-					);
-				}
-			}
-
-			for (const [ng, sessionIds] of ngramSessionCount) {
-				if (sessionIds.size >= this.config.minObservations) {
-					patterns.push({
-						type: "tool-sequence",
-						description: `Recurring tool sequence: ${ng}`,
-						evidence: ngramEvidence.get(ng) ?? [],
-						frequency: sessionIds.size,
-						confidence: Math.min(1.0, sessionIds.size / (sessions.length * 0.5)),
-					});
-				}
-			}
-		}
-
-		return patterns;
-	}
-
-	/**
-	 * Detect user preference signals from session content.
-	 *
-	 * Scans user messages for explicit preference keywords ("I prefer",
-	 * "always use", "never use", corrections like "no, use X").
-	 *
-	 * @param sessions - Sessions to analyze.
-	 * @returns Detected preference patterns.
-	 */
-	private detectPreferences(sessions: Session[]): DetectedPattern[] {
-		const patterns: DetectedPattern[] = [];
-		const preferenceHits = new Map<string, { sessions: Set<string>; evidence: string[] }>();
-
-		for (const session of sessions) {
-			const userContent = extractUserContent(session);
-			for (const content of userContent) {
-				for (const pattern of PREFERENCE_PATTERNS) {
-					const match = content.match(pattern);
-					if (match) {
-						// Use the matched sentence as a normalized key
-						const sentence = extractSentenceContaining(content, match.index ?? 0);
-						const key = sentence.toLowerCase().trim();
-
-						if (!preferenceHits.has(key)) {
-							preferenceHits.set(key, { sessions: new Set(), evidence: [] });
-						}
-						const hit = preferenceHits.get(key)!;
-						hit.sessions.add(session.meta.id);
-						hit.evidence.push(
-							`Session "${session.meta.title}": "${sentence}"`,
-						);
-					}
-				}
-			}
-		}
-
-		for (const [key, hit] of preferenceHits) {
-			patterns.push({
-				type: "preference",
-				description: `User preference: ${key}`,
-				evidence: hit.evidence,
-				frequency: hit.sessions.size,
-				confidence: Math.min(1.0, hit.sessions.size / Math.max(sessions.length * 0.3, 1)),
-			});
-		}
-
-		return patterns;
-	}
-
-	/**
-	 * Detect architectural and design decisions from session content.
-	 *
-	 * Looks for phrases like "let's use X", "decided to", "going with",
-	 * "switched to" in user messages.
-	 *
-	 * @param sessions - Sessions to analyze.
-	 * @returns Detected decision patterns.
-	 */
-	private detectDecisions(sessions: Session[]): DetectedPattern[] {
-		const patterns: DetectedPattern[] = [];
-		const decisionHits = new Map<string, { sessions: Set<string>; evidence: string[] }>();
-
-		for (const session of sessions) {
-			const userContent = extractUserContent(session);
-			for (const content of userContent) {
-				for (const pattern of DECISION_PATTERNS) {
-					const match = content.match(pattern);
-					if (match) {
-						const sentence = extractSentenceContaining(content, match.index ?? 0);
-						const key = sentence.toLowerCase().trim();
-
-						if (!decisionHits.has(key)) {
-							decisionHits.set(key, { sessions: new Set(), evidence: [] });
-						}
-						const hit = decisionHits.get(key)!;
-						hit.sessions.add(session.meta.id);
-						hit.evidence.push(
-							`Session "${session.meta.title}": "${sentence}"`,
-						);
-					}
-				}
-			}
-		}
-
-		for (const [key, hit] of decisionHits) {
-			patterns.push({
-				type: "decision",
-				description: `Decision: ${key}`,
-				evidence: hit.evidence,
-				frequency: hit.sessions.size,
-				confidence: Math.min(1.0, hit.sessions.size / Math.max(sessions.length * 0.3, 1)),
-			});
-		}
-
-		return patterns;
-	}
-
-	/**
-	 * Detect correction patterns where the user corrected the agent.
-	 *
-	 * These are high-value learning signals: "no, not X, use Y",
-	 * "that's wrong", "actually...", "should be...", etc.
-	 *
-	 * @param sessions - Sessions to analyze.
-	 * @returns Detected correction patterns.
-	 */
-	private detectCorrections(sessions: Session[]): DetectedPattern[] {
-		const patterns: DetectedPattern[] = [];
-		const correctionHits = new Map<string, { sessions: Set<string>; evidence: string[] }>();
-
-		for (const session of sessions) {
-			const userContent = extractUserContent(session);
-			for (const content of userContent) {
-				for (const pattern of CORRECTION_PATTERNS) {
-					const match = content.match(pattern);
-					if (match) {
-						const sentence = extractSentenceContaining(content, match.index ?? 0);
-						const key = sentence.toLowerCase().trim();
-
-						if (!correctionHits.has(key)) {
-							correctionHits.set(key, { sessions: new Set(), evidence: [] });
-						}
-						const hit = correctionHits.get(key)!;
-						hit.sessions.add(session.meta.id);
-						hit.evidence.push(
-							`Session "${session.meta.title}": "${sentence}"`,
-						);
-					}
-				}
-			}
-		}
-
-		for (const [key, hit] of correctionHits) {
-			patterns.push({
-				type: "correction",
-				description: `Correction: ${key}`,
-				evidence: hit.evidence,
-				frequency: hit.sessions.size,
-				confidence: Math.min(
-					1.0,
-					// Corrections get a confidence boost — they are high-value signals
-					hit.sessions.size / Math.max(sessions.length * 0.2, 1),
-				),
-			});
-		}
-
-		return patterns;
-	}
-
-	/**
-	 * Detect code conventions from sessions.
-	 *
-	 * Analyzes tool call results and user content for naming patterns
-	 * (camelCase, snake_case), file organization patterns, and consistent
-	 * error handling approaches.
-	 *
-	 * @param sessions - Sessions to analyze.
-	 * @returns Detected convention patterns.
-	 */
-	private detectConventions(sessions: Session[]): DetectedPattern[] {
-		const patterns: DetectedPattern[] = [];
-		const conventionHits = new Map<string, { sessions: Set<string>; evidence: string[] }>();
-
-		// Detect naming conventions from file paths in tool calls
-		const fileExtCounts = new Map<string, { sessions: Set<string>; evidence: string[] }>();
-
-		for (const session of sessions) {
-			for (const turn of session.turns) {
-				if (!turn.toolCalls) continue;
-				for (const tc of turn.toolCalls) {
-					// Check for file extension patterns in tool inputs
-					const extMatch = tc.input.match(/\.([a-z]{1,5})\b/gi);
-					if (extMatch) {
-						for (const ext of extMatch) {
-							const extLower = ext.toLowerCase();
-							if (!fileExtCounts.has(extLower)) {
-								fileExtCounts.set(extLower, { sessions: new Set(), evidence: [] });
-							}
-							const hit = fileExtCounts.get(extLower)!;
-							hit.sessions.add(session.meta.id);
-							hit.evidence.push(
-								`Session "${session.meta.title}": tool ${tc.name} used ${extLower}`,
-							);
-						}
-					}
-
-					// Check for import style conventions
-					if (tc.name === "edit" || tc.name === "write") {
-						if (tc.input.includes('from "') || tc.input.includes("from '")) {
-							const importKey = tc.input.includes(".js")
-								? "esm-imports-with-js-extension"
-								: "imports-without-extension";
-							if (!conventionHits.has(importKey)) {
-								conventionHits.set(importKey, { sessions: new Set(), evidence: [] });
-							}
-							const hit = conventionHits.get(importKey)!;
-							hit.sessions.add(session.meta.id);
-							hit.evidence.push(
-								`Session "${session.meta.title}": ${importKey} in ${tc.name} call`,
-							);
-						}
-					}
-				}
-			}
-		}
-
-		// Convert hits to patterns
-		for (const [key, hit] of conventionHits) {
-			if (hit.sessions.size >= this.config.minObservations) {
-				patterns.push({
-					type: "convention",
-					description: `Convention: ${key}`,
-					evidence: hit.evidence,
-					frequency: hit.sessions.size,
-					confidence: Math.min(1.0, hit.sessions.size / Math.max(sessions.length * 0.3, 1)),
-				});
-			}
-		}
-
-		return patterns;
-	}
-
-	// ── Merge Logic (Private) ─────────────────────────────────────────────
-
-	/**
-	 * Merge candidate rules with existing rules.
-	 *
-	 * For each candidate:
-	 * - If it matches an existing rule (text similarity >= 0.8), reinforce it.
-	 * - If no match is found, add it as a new rule.
-	 *
-	 * Also checks for contradiction: if new patterns contradict existing rules,
-	 * the existing rules are weakened.
-	 *
-	 * @param candidates - New candidate rules from pattern detection.
-	 * @param allPatterns - All detected patterns (for contradiction checking).
-	 * @returns Object with new, reinforced, and weakened rule arrays.
-	 */
-	private mergeWithExisting(
-		candidates: KnowledgeRule[],
-		allPatterns: DetectedPattern[],
-	): {
-		newRules: KnowledgeRule[];
-		reinforcedRules: KnowledgeRule[];
-		weakenedRules: KnowledgeRule[];
-	} {
-		const newRules: KnowledgeRule[] = [];
-		const reinforcedRules: KnowledgeRule[] = [];
-		const weakenedRules: KnowledgeRule[] = [];
-
-		for (const candidate of candidates) {
-			let bestMatch: KnowledgeRule | null = null;
-			let bestSimilarity = 0;
-
-			for (const existing of this.rules.values()) {
-				const sim = textSimilarity(candidate.rule, existing.rule);
-				if (sim > bestSimilarity) {
-					bestSimilarity = sim;
-					bestMatch = existing;
-				}
-			}
-
-			if (bestMatch && bestSimilarity >= SIMILARITY_THRESHOLD) {
-				// Reinforce existing rule
-				bestMatch.observationCount += candidate.observationCount;
-				bestMatch.confidence = Math.min(
-					1.0,
-					bestMatch.confidence + 0.1 * candidate.observationCount,
-				);
-				bestMatch.lastReinforcedAt = candidate.lastReinforcedAt;
-				// Merge source sessions
-				const sessionSet = new Set([
-					...bestMatch.sourceSessionIds,
-					...candidate.sourceSessionIds,
-				]);
-				bestMatch.sourceSessionIds = [...sessionSet];
-				// Merge tags
-				const tagSet = new Set([...bestMatch.tags, ...candidate.tags]);
-				bestMatch.tags = [...tagSet];
-				reinforcedRules.push({ ...bestMatch });
-			} else {
-				// New rule — add it
-				this.rules.set(candidate.id, candidate);
-				newRules.push({ ...candidate });
-			}
-		}
-
-		// Check for contradictions: correction patterns may weaken existing rules
-		for (const pattern of allPatterns) {
-			if (pattern.type === "correction") {
-				for (const existing of this.rules.values()) {
-					// If a correction mentions content similar to an existing rule's text,
-					// and the correction seems to contradict it, weaken the rule
-					const correctionText = pattern.description.toLowerCase();
-					const ruleText = existing.rule.toLowerCase();
-
-					// Simple heuristic: if the correction contains "not" + words from the rule
-					if (correctionText.includes("not") || correctionText.includes("wrong")) {
-						const ruleWords = ruleText.split(/\s+/).filter((w) => w.length > 3);
-						const matchingWords = ruleWords.filter((w) => correctionText.includes(w));
-						if (matchingWords.length >= 2 && !reinforcedRules.some((r) => r.id === existing.id)) {
-							existing.confidence = Math.max(0, existing.confidence - 0.15);
-							weakenedRules.push({ ...existing });
-						}
-					}
-				}
-			}
-		}
-
-		return { newRules, reinforcedRules, weakenedRules };
-	}
-
-	/**
-	 * Convert a detected pattern into a candidate KnowledgeRule.
-	 *
-	 * @param pattern - The detected pattern.
-	 * @param sessions - Sessions that were analyzed (for extracting IDs).
-	 * @param timestamp - Current timestamp.
-	 * @returns A KnowledgeRule candidate.
-	 */
-	private patternToRule(
-		pattern: DetectedPattern,
-		sessions: Session[],
-		timestamp: string,
-	): KnowledgeRule {
-		const categoryMap: Record<DetectedPattern["type"], RuleCategory> = {
-			"tool-sequence": "workflow",
-			"preference": "preference",
-			"decision": "decision",
-			"correction": "correction",
-			"convention": "convention",
-		};
-
-		const category = categoryMap[pattern.type];
-		const id = generateRuleId(category, pattern.description);
-
-		// Extract session IDs from evidence
-		const sessionIds = sessions
-			.filter((s) =>
-				pattern.evidence.some((e) => e.includes(s.meta.title)),
-			)
-			.map((s) => s.meta.id);
-
-		return {
-			id,
-			rule: pattern.description,
-			derivation: `Detected from ${pattern.frequency} session(s): ${pattern.evidence.slice(0, 3).join("; ")}`,
-			category,
-			observationCount: pattern.frequency,
-			confidence: pattern.confidence,
-			sourceSessionIds: sessionIds,
-			createdAt: timestamp,
-			lastReinforcedAt: timestamp,
-			tags: [pattern.type, category],
-		};
-	}
-
-	/**
-	 * Enforce the maximum rules limit by removing lowest-confidence rules.
-	 */
-	private enforceMaxRules(): void {
-		if (this.rules.size <= this.config.maxRules) return;
-
-		const sorted = [...this.rules.entries()]
-			.sort(([, a], [, b]) => b.confidence - a.confidence);
-
-		const toKeep = new Set(
-			sorted.slice(0, this.config.maxRules).map(([id]) => id),
-		);
-
-		for (const id of this.rules.keys()) {
-			if (!toKeep.has(id)) {
-				this.rules.delete(id);
-			}
-		}
-	}
-
 	/**
 	 * Get the storage directory path for consolidation state.
 	 *
@@ -1024,62 +447,4 @@ export class ConsolidationEngine {
 	private getStoragePath(): string {
 		return this.config.storagePath ?? path.join(getChitraguptaHome(), "consolidation");
 	}
-}
-
-// ─── Utility Functions ──────────────────────────────────────────────────────
-
-/**
- * Extract the sentence containing the character at the given index.
- * Splits on true sentence-ending punctuation or newlines, returning
- * the segment that contains the match position.
- *
- * Avoids splitting on dots that are part of file extensions (e.g., ".js",
- * ".ts"), path separators ("./"), or decimal numbers ("3.14").
- *
- * @param text - The full text to extract from.
- * @param index - The character index of the match.
- * @returns The sentence containing the match.
- */
-function extractSentenceContaining(text: string, index: number): string {
-	// Find true sentence boundaries — dots followed by a space and uppercase,
-	// or followed by end-of-string. Exclamation/question marks and newlines
-	// are always sentence boundaries.
-	const breaks: number[] = [];
-
-	for (let i = 0; i < text.length; i++) {
-		const ch = text[i];
-		if (ch === "\n" || ch === "!" || ch === "?") {
-			breaks.push(i);
-		} else if (ch === ".") {
-			// Only treat a dot as a sentence boundary if it looks like true
-			// end-of-sentence punctuation, not a file extension or path dot.
-			const prev = i > 0 ? text[i - 1] : "";
-			const next = i < text.length - 1 ? text[i + 1] : "";
-
-			// Dot is a sentence boundary if followed by space+uppercase or end-of-string
-			const followedBySpaceUpper = next === " " && i + 2 < text.length && /[A-Z]/.test(text[i + 2]);
-			const atEnd = i === text.length - 1;
-			// Dot is NOT a sentence boundary if preceded/followed by a word char (file ext)
-			// or preceded by / or . (path component)
-			const isFilePath = prev === "/" || prev === "." || /[a-zA-Z0-9]/.test(next);
-
-			if ((followedBySpaceUpper || atEnd) && !isFilePath) {
-				breaks.push(i);
-			}
-		}
-	}
-
-	let start = 0;
-	let end = text.length;
-
-	for (const b of breaks) {
-		if (b < index) {
-			start = b + 1;
-		} else {
-			end = b;
-			break;
-		}
-	}
-
-	return text.substring(start, end).trim();
 }
