@@ -20,6 +20,7 @@ const {
 	// crypto
 	mockCreateHash,
 	mockRandomUUID,
+	mockRandomInt,
 	// @chitragupta/core
 	mockLoadGlobalSettings,
 	mockLoadProjectConfig,
@@ -242,6 +243,7 @@ const {
 			}),
 		}),
 		mockRandomUUID: vi.fn().mockReturnValue("00000000-0000-0000-0000-000000000001"),
+		mockRandomInt: vi.fn().mockImplementation((max: number) => Math.floor(Math.random() * max)),
 		// @chitragupta/core
 		mockLoadGlobalSettings: vi.fn().mockReturnValue({
 			defaultProvider: "anthropic",
@@ -352,9 +354,11 @@ vi.mock("crypto", () => ({
 	default: {
 		createHash: mockCreateHash,
 		randomUUID: mockRandomUUID,
+		randomInt: mockRandomInt,
 	},
 	createHash: mockCreateHash,
 	randomUUID: mockRandomUUID,
+	randomInt: mockRandomInt,
 }));
 
 vi.mock("@chitragupta/core", () => ({
