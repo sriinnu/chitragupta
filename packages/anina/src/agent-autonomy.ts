@@ -1,42 +1,16 @@
-/**
- * @chitragupta/anina — Autonomous Agent Wrapper.
- *
- * Makes the agent self-healing and self-aware — like the Vedic concept of
- * "Atman" (self), the system becomes conscious of its own performance and
- * evolves through experience.
- *
- * ## Self-Healing Error Recovery
- *
- * Errors are classified as:
- * - **Transient** (network, timeout, rate limit): exponential backoff retry
- *   with jitter, up to 3 attempts.
- * - **Fatal** (invalid input, permission denied): surface immediately.
- * - **Unknown**: treated as transient on first occurrence, fatal on repeat.
- *
- * ## Context Corruption Recovery
- *
- * If the messages array is malformed (e.g., missing roles, broken tool
- * result chains), the agent rebuilds from the last known good state by
- * scanning backward for the last structurally valid prefix.
- *
- * ## Health Monitoring
- *
- * Tracks response latency, token usage per turn, error rate, and compaction
- * frequency. Emits warning events when metrics cross thresholds.
- *
- * ## Graceful Degradation
- *
- * - Model unavailable: queue messages, retry with backoff
- * - Memory corrupted: fall back to in-memory only mode
- * - Tools failing consistently: temporarily disable, notify user
- *
- * @packageDocumentation
- */
+/** @chitragupta/anina — Autonomous Agent Wrapper (self-healing, self-aware). */
 
 import type { AgentState, AgentMessage, ToolResult } from "./types.js";
 import { CompactionMonitor } from "./context-compaction-informational.js";
 import { estimateTotalTokens } from "./context-compaction.js";
 import { LearningLoop } from "./learning-loop.js";
+import {
+	classifyError as classifyErrorFn,
+	withRetry as withRetryFn,
+	recoverContext as recoverContextFn,
+	checkHealthThresholds as checkHealthThresholdsFn,
+	type TurnMetrics,
+} from "./autonomy-recovery.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -105,64 +79,8 @@ export type AutonomyEventListener = (
 	data: Record<string, unknown>,
 ) => void;
 
-// ─── Error Classification ───────────────────────────────────────────────────
-
-/** Transient error patterns (network, timeout, rate limit). */
-const TRANSIENT_PATTERNS = [
-	/timeout/i,
-	/ECONNREFUSED/i,
-	/ECONNRESET/i,
-	/ETIMEDOUT/i,
-	/ENOTFOUND/i,
-	/rate.?limit/i,
-	/429/,
-	/503/,
-	/502/,
-	/504/,
-	/too many requests/i,
-	/network/i,
-	/fetch failed/i,
-	/socket hang up/i,
-	/EPIPE/i,
-];
-
-/** Fatal error patterns (invalid input, permission, auth). */
-const FATAL_PATTERNS = [
-	/invalid.*input/i,
-	/permission denied/i,
-	/unauthorized/i,
-	/forbidden/i,
-	/401/,
-	/403/,
-	/invalid.*api.?key/i,
-	/authentication/i,
-	/not found.*model/i,
-	/invalid.*model/i,
-	/context.*length.*exceeded/i,
-];
-
-/**
- * Classify an error as transient, fatal, or unknown.
- *
- * Transient errors are retryable (network glitches, rate limits, timeouts).
- * Fatal errors should be surfaced immediately (bad input, auth failures).
- * Unknown errors default to cautious retry behavior.
- *
- * @param error - The error to classify.
- * @returns The error classification.
- */
-export function classifyError(error: Error): "transient" | "fatal" | "unknown" {
-	const message = error.message + (error.cause ? ` ${String(error.cause)}` : "");
-
-	for (const pattern of FATAL_PATTERNS) {
-		if (pattern.test(message)) return "fatal";
-	}
-	for (const pattern of TRANSIENT_PATTERNS) {
-		if (pattern.test(message)) return "transient";
-	}
-
-	return "unknown";
-}
+// Re-export classifyError for backward compatibility
+export const classifyError = classifyErrorFn;
 
 // ─── Default Config ─────────────────────────────────────────────────────────
 
@@ -175,18 +93,6 @@ const DEFAULT_CONFIG: AutoHealConfig = {
 	toolDisableThreshold: 5,
 	contextLimit: 128_000,
 };
-
-// ─── Internal Tracking ──────────────────────────────────────────────────────
-
-interface TurnMetrics {
-	startTime: number;
-	endTime: number;
-	latencyMs: number;
-	tokensBefore: number;
-	tokensAfter: number;
-	hadError: boolean;
-	errorType?: "transient" | "fatal" | "unknown";
-}
 
 interface ToolFailureTracker {
 	consecutiveFailures: number;
@@ -254,11 +160,7 @@ export class AutonomousAgent {
 
 	// ─── Event System ───────────────────────────────────────────────
 
-	/**
-	 * Register a listener for autonomy events.
-	 *
-	 * @param listener - Callback for autonomy events.
-	 */
+	/** Register a listener for autonomy events. */
 	onEvent(listener: AutonomyEventListener): void {
 		this.eventListeners.push(listener);
 	}
@@ -276,23 +178,13 @@ export class AutonomousAgent {
 
 	// ─── Core Hooks ─────────────────────────────────────────────────
 
-	/**
-	 * Called before each turn — snapshot state for recovery.
-	 *
-	 * @param state - Current agent state.
-	 */
+	/** Called before each turn — snapshot state for recovery. */
 	beforeTurn(state: AgentState): void {
 		// Snapshot the messages for corruption recovery
 		this.lastGoodMessages = state.messages.map((m) => ({ ...m }));
 	}
 
-	/**
-	 * Called after each turn — check if compaction is needed, record metrics.
-	 *
-	 * @param state - Current agent state after the turn.
-	 * @param contextLimit - Context window size in tokens (overrides config).
-	 * @returns Possibly compacted agent state.
-	 */
+	/** Called after each turn — check if compaction is needed, record metrics. */
 	afterTurn(
 		state: AgentState,
 		contextLimit?: number,
@@ -321,14 +213,7 @@ export class AutonomousAgent {
 		return { ...state, messages: result.messages };
 	}
 
-	/**
-	 * Record a completed turn's metrics.
-	 *
-	 * @param latencyMs - Turn response latency in milliseconds.
-	 * @param state - Agent state after the turn.
-	 * @param hadError - Whether the turn encountered an error.
-	 * @param errorType - Classification of the error if one occurred.
-	 */
+	/** Record a completed turn's metrics. */
 	recordTurnMetrics(
 		latencyMs: number,
 		state: AgentState,
@@ -359,22 +244,12 @@ export class AutonomousAgent {
 
 	// ─── Tool Tracking ──────────────────────────────────────────────
 
-	/**
-	 * Called when a tool is about to be used — start timing.
-	 *
-	 * @param toolName - Name of the tool.
-	 */
+	/** Called when a tool is about to be used. */
 	onToolStart(toolName: string): void {
 		this.learningLoop.markToolStart(toolName);
 	}
 
-	/**
-	 * Called when a tool completes — record for learning and failure tracking.
-	 *
-	 * @param toolName - Name of the tool.
-	 * @param args - Arguments passed to the tool.
-	 * @param result - The tool result.
-	 */
+	/** Called when a tool completes — record for learning and failure tracking. */
 	onToolUsed(
 		toolName: string,
 		args: Record<string, unknown>,
@@ -418,29 +293,17 @@ export class AutonomousAgent {
 		}
 	}
 
-	/**
-	 * Called when user provides feedback (accept/reject).
-	 *
-	 * @param turnId - The unique turn identifier.
-	 * @param accepted - Whether the user accepted the output.
-	 */
+	/** Called when user provides feedback (accept/reject). */
 	onUserFeedback(turnId: string, accepted: boolean): void {
 		this.learningLoop.recordFeedback(turnId, accepted);
 	}
 
-	/**
-	 * Check if a tool is currently disabled due to repeated failures.
-	 *
-	 * @param toolName - Name of the tool.
-	 * @returns True if the tool is disabled.
-	 */
+	/** Check if a tool is currently disabled due to repeated failures. */
 	isToolDisabled(toolName: string): boolean {
 		return this.toolFailures.get(toolName)?.disabled ?? false;
 	}
 
-	/**
-	 * Get all currently disabled tools.
-	 */
+	/** Get all currently disabled tools. */
 	getDisabledTools(): string[] {
 		const disabled: string[] = [];
 		for (const [name, tracker] of this.toolFailures) {
@@ -451,137 +314,47 @@ export class AutonomousAgent {
 
 	// ─── Error Recovery ─────────────────────────────────────────────
 
-	/**
-	 * Execute an async operation with self-healing error recovery.
-	 *
-	 * Transient errors are retried with exponential backoff and jitter.
-	 * Fatal errors are thrown immediately.
-	 * Unknown errors are retried once, then treated as fatal.
-	 *
-	 * @param operation - The async operation to execute.
-	 * @returns The operation result.
-	 * @throws The error if all retries are exhausted or error is fatal.
-	 */
+	/** Execute an async operation with self-healing error recovery. */
 	async withRetry<T>(operation: () => Promise<T>): Promise<T> {
-		let lastError: Error | null = null;
-
-		for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
-			try {
-				return await operation();
-			} catch (err) {
-				const error = err instanceof Error ? err : new Error(String(err));
-				lastError = error;
-
-				const classification = classifyError(error);
-				this.emit("autonomy:error_classified", {
-					error: error.message,
-					classification,
-					attempt,
-				});
-
-				if (classification === "fatal") {
-					throw error;
-				}
-
-				if (classification === "unknown") {
-					// Track unknown errors — escalate to fatal on repeat
-					const key = error.message.slice(0, 100);
-					const count = (this.unknownErrorCounts.get(key) ?? 0) + 1;
-					this.unknownErrorCounts.set(key, count);
-
-					if (count >= 3) {
-						throw error;
-					}
-				}
-
-				if (attempt < this.config.maxRetries) {
-					const delay = this.computeBackoffDelay(attempt);
-					this.emit("autonomy:retry", {
-						attempt: attempt + 1,
-						maxRetries: this.config.maxRetries,
-						delayMs: delay,
-						error: error.message,
-						classification,
-					});
-					await this.sleep(delay);
-				}
-			}
-		}
-
-		throw lastError ?? new Error("Retry exhausted with no error captured");
+		return withRetryFn(operation, {
+			maxRetries: this.config.maxRetries,
+			baseDelayMs: this.config.baseDelayMs,
+			maxDelayMs: this.config.maxDelayMs,
+			unknownErrorCounts: this.unknownErrorCounts,
+			onClassified: (error, classification, attempt) => {
+				this.emit("autonomy:error_classified", { error: error.message, classification, attempt });
+			},
+			onRetry: (attempt, delayMs, error, classification) => {
+				this.emit("autonomy:retry", { attempt, maxRetries: this.config.maxRetries, delayMs, error: error.message, classification });
+			},
+		});
 	}
 
-	/**
-	 * Recover from context corruption by restoring the last known good state.
-	 *
-	 * Scans the current messages backward to find the last structurally valid
-	 * prefix (proper role alternation, matched tool calls/results). If no
-	 * valid prefix is found, falls back to the last snapshot.
-	 *
-	 * @param state - The potentially corrupted agent state.
-	 * @returns The recovered state.
-	 */
+	/** Recover from context corruption by restoring the last known good state. */
 	recoverContext(state: AgentState): AgentState {
-		const validPrefix = this.findValidMessagePrefix(state.messages);
-
-		if (validPrefix.length === state.messages.length) {
-			// No corruption detected
-			return state;
-		}
-
-		if (validPrefix.length > 0) {
-			this.emit("autonomy:context_recovered", {
-				method: "prefix_scan",
-				originalLength: state.messages.length,
-				recoveredLength: validPrefix.length,
-			});
-			return { ...state, messages: validPrefix };
-		}
-
-		// Fall back to last known good state
-		if (this.lastGoodMessages) {
-			this.emit("autonomy:context_recovered", {
-				method: "snapshot_restore",
-				originalLength: state.messages.length,
-				recoveredLength: this.lastGoodMessages.length,
-			});
-			return { ...state, messages: [...this.lastGoodMessages] };
-		}
-
-		// Nuclear option: start fresh with just the system prompt
-		this.emit("autonomy:context_recovered", {
-			method: "fresh_start",
-			originalLength: state.messages.length,
-			recoveredLength: 0,
+		return recoverContextFn(state, {
+			lastGoodMessages: this.lastGoodMessages,
+			onRecovered: (method, originalLength, recoveredLength) => {
+				this.emit("autonomy:context_recovered", { method, originalLength, recoveredLength });
+			},
 		});
-		return { ...state, messages: [] };
 	}
 
 	// ─── Health Monitoring ──────────────────────────────────────────
 
-	/**
-	 * Get a comprehensive health report for the agent.
-	 *
-	 * @param state - Current agent state for token estimation.
-	 * @returns Complete health metrics snapshot.
-	 */
+	/** Get a comprehensive health report for the agent. */
 	getHealthReport(state: AgentState): AgentHealthReport {
 		const recentTurns = this.turnMetrics.slice(-50);
 		const avgLatency = recentTurns.length > 0
-			? recentTurns.reduce((sum, t) => sum + t.latencyMs, 0) / recentTurns.length
-			: 0;
-
+			? recentTurns.reduce((sum, t) => sum + t.latencyMs, 0) / recentTurns.length : 0;
 		const errorCount = recentTurns.filter((t) => t.hadError).length;
-		const errorRate = recentTurns.length > 0 ? errorCount / recentTurns.length : 0;
-
 		const currentTokens = estimateTotalTokens(state);
 		const disabledTools = this.getDisabledTools();
-
 		return {
 			avgLatencyMs: Math.round(avgLatency),
 			currentTokens,
 			contextUtilization: currentTokens / this.config.contextLimit,
-			errorRate,
+			errorRate: recentTurns.length > 0 ? errorCount / recentTurns.length : 0,
 			compactionCount: this.compactionCount,
 			lastCompactionTier: this.lastCompactionTier,
 			disabledToolCount: disabledTools.length,
@@ -596,11 +369,7 @@ export class AutonomousAgent {
 
 	// ─── Graceful Degradation ───────────────────────────────────────
 
-	/**
-	 * Enter degraded mode with the given reason.
-	 *
-	 * @param reason - Human-readable reason for degradation.
-	 */
+	/** Enter degraded mode with the given reason. */
 	enterDegradedMode(reason: string): void {
 		if (!this.degradationReasons.includes(reason)) {
 			this.degradationReasons.push(reason);
@@ -612,11 +381,7 @@ export class AutonomousAgent {
 		});
 	}
 
-	/**
-	 * Attempt to exit degraded mode by removing a reason.
-	 *
-	 * @param reason - The reason to remove.
-	 */
+	/** Attempt to exit degraded mode by removing a reason. */
 	exitDegradedMode(reason: string): void {
 		this.degradationReasons = this.degradationReasons.filter((r) => r !== reason);
 		if (this.degradationReasons.length === 0) {
@@ -633,107 +398,15 @@ export class AutonomousAgent {
 		return this.degraded;
 	}
 
-	// ─── Private: Backoff ───────────────────────────────────────────
-
-	/**
-	 * Compute exponential backoff delay with jitter.
-	 *
-	 *     delay = min(baseDelay * 2^attempt + jitter, maxDelay)
-	 *     jitter = random(0, baseDelay)
-	 *
-	 * The jitter prevents thundering herd when multiple agents retry
-	 * simultaneously against a rate-limited endpoint.
-	 */
-	private computeBackoffDelay(attempt: number): number {
-		const exponential = this.config.baseDelayMs * Math.pow(2, attempt);
-		const jitter = Math.random() * this.config.baseDelayMs;
-		return Math.min(exponential + jitter, this.config.maxDelayMs);
-	}
-
-	/** Sleep for the given duration. */
-	private sleep(ms: number): Promise<void> {
-		return new Promise((resolve) => setTimeout(resolve, ms));
-	}
-
-	// ─── Private: Message Validation ────────────────────────────────
-
-	/**
-	 * Find the longest valid prefix of messages.
-	 *
-	 * A valid message sequence follows these rules:
-	 * 1. Each message has an id, role, content array, and timestamp.
-	 * 2. tool_result messages must follow a message containing tool_call parts.
-	 * 3. No consecutive system messages (except at the start).
-	 */
-	private findValidMessagePrefix(messages: AgentMessage[]): AgentMessage[] {
-		const valid: AgentMessage[] = [];
-		let lastHadToolCalls = false;
-
-		for (const msg of messages) {
-			// Structural validation
-			if (!msg.id || !msg.role || !Array.isArray(msg.content)) {
-				break;
-			}
-			if (typeof msg.timestamp !== "number" || msg.timestamp <= 0) {
-				break;
-			}
-
-			// tool_result must follow a tool_call
-			if (msg.role === "tool_result" && !lastHadToolCalls) {
-				break;
-			}
-
-			// Track whether this message has tool calls
-			lastHadToolCalls = msg.content.some((p) => p.type === "tool_call");
-
-			valid.push(msg);
-		}
-
-		return valid;
-	}
-
-	// ─── Private: Health Threshold Checks ───────────────────────────
-
-	/**
-	 * Check health metrics against configured thresholds and emit warnings.
-	 */
+	/** Check health metrics against configured thresholds. */
 	private checkHealthThresholds(state: AgentState): void {
-		const recentTurns = this.turnMetrics.slice(-20);
-		if (recentTurns.length < 3) return;
-
-		// Check error rate
-		const errorCount = recentTurns.filter((t) => t.hadError).length;
-		const errorRate = errorCount / recentTurns.length;
-		if (errorRate >= this.config.errorRateWarningThreshold) {
-			this.emit("autonomy:health_warning", {
-				metric: "error_rate",
-				value: errorRate,
-				threshold: this.config.errorRateWarningThreshold,
-				message: `Error rate ${(errorRate * 100).toFixed(0)}% exceeds threshold`,
-			});
-		}
-
-		// Check latency
-		const avgLatency = recentTurns.reduce((s, t) => s + t.latencyMs, 0) / recentTurns.length;
-		if (avgLatency >= this.config.latencyWarningMs) {
-			this.emit("autonomy:health_warning", {
-				metric: "latency",
-				value: avgLatency,
-				threshold: this.config.latencyWarningMs,
-				message: `Average latency ${Math.round(avgLatency)}ms exceeds threshold`,
-			});
-		}
-
-		// Check context utilization
-		const tokens = estimateTotalTokens(state);
-		const utilization = tokens / this.config.contextLimit;
-		if (utilization >= 0.85) {
-			this.emit("autonomy:health_warning", {
-				metric: "context_utilization",
-				value: utilization,
-				threshold: 0.85,
-				message: `Context ${(utilization * 100).toFixed(0)}% full`,
-			});
-		}
+		checkHealthThresholdsFn(this.turnMetrics.slice(-20), estimateTotalTokens(state), {
+			errorRateWarningThreshold: this.config.errorRateWarningThreshold,
+			latencyWarningMs: this.config.latencyWarningMs,
+			contextLimit: this.config.contextLimit,
+			onWarning: (metric, value, threshold, message) => {
+				this.emit("autonomy:health_warning", { metric, value, threshold, message });
+			},
+		});
 	}
 }

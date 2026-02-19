@@ -1,47 +1,19 @@
-/**
- * @chitragupta/anina — Kartru (कर्तृ) — Coding Agent.
- *
- * A preconfigured agent specialized for code tasks:
- * - Auto-selects code-relevant tools (read, write, edit, bash, grep, find, ls, diff)
- * - Code-focused system prompt with conventions awareness
- * - Self-validation loop: after edits, checks compilation and tests
- * - Can be spawned as a sub-agent or used standalone
- *
- * In Vedic grammar, kartru is the agent of action — the one who DOES.
- * A coding agent is the doer — it reads, writes, edits, tests, and ships code.
- */
+/** @chitragupta/anina — Kartru (कर्तृ) — Coding Agent. */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve as pathResolve } from "node:path";
+import { existsSync } from "node:fs";
+import { resolve as pathResolve } from "node:path";
 
 import { KARTRU_PROFILE } from "@chitragupta/core";
 
 import { Agent } from "./agent.js";
+import { detectProjectConventions } from "./coding-agent-conventions.js";
 import { safeExecSync } from "./safe-exec.js";
 import type { AgentConfig, AgentMessage, ToolHandler } from "./types.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-/**
- * Tool names relevant for coding tasks.
- * Use this to filter a full tool set down to what a coding agent needs.
- *
- * @example
- * ```ts
- * import { getAllTools } from "@chitragupta/yantra";
- * const codeTools = getAllTools().filter(t => CODE_TOOL_NAMES.has(t.definition.name));
- * ```
- */
-export const CODE_TOOL_NAMES = new Set([
-	"read",
-	"write",
-	"edit",
-	"bash",
-	"grep",
-	"find",
-	"ls",
-	"diff",
-]);
+/** Tool names relevant for coding tasks. */
+export const CODE_TOOL_NAMES = new Set(["read", "write", "edit", "bash", "grep", "find", "ls", "diff"]);
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -59,51 +31,24 @@ export type CodingAgentEvent =
 
 /** Configuration for creating a coding agent. */
 export interface CodingAgentConfig {
-	/** Provider ID to use. Default: "anthropic". */
 	providerId?: string;
-	/** Model ID. Default: "claude-sonnet-4-5-20250929". */
 	modelId?: string;
-	/** Working directory for the project. */
 	workingDirectory: string;
-	/** Language/framework hints for conventions. */
 	language?: string;
-	/** Test command to run after edits. */
 	testCommand?: string;
-	/** Build/compile command. */
 	buildCommand?: string;
-	/** Lint command. */
 	lintCommand?: string;
-	/** Whether to auto-validate after edits. Default: true. */
 	autoValidate?: boolean;
-	/** Maximum validation retries. Default: 3. */
 	maxValidationRetries?: number;
-	/** Parent agent (if spawning as sub-agent). */
 	parentAgent?: Agent;
-	/** Additional system prompt context. */
 	additionalContext?: string;
-	/**
-	 * CommHub for IPC. Uses the same inline shape as AgentConfig.commHub.
-	 */
 	commHub?: AgentConfig["commHub"];
-	/** Policy engine adapter. */
 	policyEngine?: AgentConfig["policyEngine"];
-	/** Samiti for ambient channel broadcasts. */
 	samiti?: AgentConfig["samiti"];
-	/** Lokapala guardians for tool call scanning. */
 	lokapala?: AgentConfig["lokapala"];
-	/** ActorSystem for P2P mesh communication. */
 	actorSystem?: AgentConfig["actorSystem"];
-	/** KaalaBrahma lifecycle manager. */
 	kaala?: AgentConfig["kaala"];
-	/**
-	 * Tool handlers to use. If not provided, the agent has no tools.
-	 * Use CODE_TOOL_NAMES to filter a full tool set to coding-relevant tools.
-	 */
 	tools?: ToolHandler[];
-	/**
-	 * Event callback for streaming execution progress.
-	 * Called with tool calls, thinking, file operations, and validation results.
-	 */
 	onEvent?: (event: CodingAgentEvent) => void;
 }
 
@@ -350,227 +295,18 @@ export class CodingAgent {
 		};
 	}
 
-	/**
-	 * Auto-detect project conventions from the working directory.
-	 * Checks: package.json scripts, tsconfig.json, .eslintrc, biome.json, etc.
-	 */
+	/** Auto-detect project conventions from the working directory. */
 	async detectConventions(): Promise<ProjectConventions> {
-		const dir = this.config.workingDirectory;
-		const conventions: ProjectConventions = {
-			language: this.config.language ?? "unknown",
-			indentation: "tabs",
-			indentWidth: 2,
-			moduleSystem: "unknown",
-			hasTypeScript: false,
-		};
-
-		// ─── Package manager detection ──────────────────────────────────
-		if (existsSync(join(dir, "pnpm-lock.yaml")) || existsSync(join(dir, "pnpm-workspace.yaml")))
-			conventions.packageManager = "pnpm";
-		else if (existsSync(join(dir, "yarn.lock")))
-			conventions.packageManager = "yarn";
-		else if (existsSync(join(dir, "bun.lockb")) || existsSync(join(dir, "bun.lock")))
-			conventions.packageManager = "bun";
-		else if (existsSync(join(dir, "package-lock.json")))
-			conventions.packageManager = "npm";
-
-		const runPrefix = conventions.packageManager === "pnpm" ? "pnpm" :
-			conventions.packageManager === "yarn" ? "yarn" :
-			conventions.packageManager === "bun" ? "bun" : "npm";
-
-		// ─── Monorepo detection ─────────────────────────────────────────
-		if (
-			existsSync(join(dir, "pnpm-workspace.yaml")) ||
-			existsSync(join(dir, "lerna.json")) ||
-			existsSync(join(dir, "nx.json"))
-		) {
-			conventions.isMonorepo = true;
-		}
-
-		// ─── package.json detection ──────────────────────────────────────
-		const pkgPath = join(dir, "package.json");
-		if (existsSync(pkgPath)) {
-			try {
-				const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as Record<string, unknown>;
-
-				if (conventions.language === "unknown") {
-					conventions.language = "javascript";
-				}
-
-				// Module system
-				const typeField = pkg.type as string | undefined;
-				conventions.moduleSystem = typeField === "module" ? "esm" : typeField === "commonjs" ? "commonjs" : "unknown";
-
-				// Yarn workspaces monorepo
-				if (pkg.workspaces && !conventions.isMonorepo) {
-					conventions.isMonorepo = true;
-				}
-
-				// Scripts
-				const scripts = pkg.scripts as Record<string, string> | undefined;
-				if (scripts) {
-					if (scripts.test && scripts.test !== "echo \"Error: no test specified\" && exit 1") {
-						conventions.testCommand = `${runPrefix} test`;
-					}
-					if (scripts.build) {
-						conventions.buildCommand = `${runPrefix} run build`;
-					}
-					if (scripts.lint) {
-						conventions.lintCommand = `${runPrefix} run lint`;
-					}
-				}
-
-				// Framework detection (expanded)
-				const deps = { ...(pkg.dependencies as Record<string, string> ?? {}), ...(pkg.devDependencies as Record<string, string> ?? {}) };
-				if (deps.next) conventions.framework = "next.js";
-				else if (deps.nuxt) conventions.framework = "nuxt";
-				else if (deps.remix || deps["@remix-run/node"]) conventions.framework = "remix";
-				else if (deps.astro) conventions.framework = "astro";
-				else if (deps["@angular/core"]) conventions.framework = "angular";
-				else if (deps.react) conventions.framework = "react";
-				else if (deps.vue) conventions.framework = "vue";
-				else if (deps.svelte) conventions.framework = "svelte";
-				else if (deps["@nestjs/core"]) conventions.framework = "nest.js";
-				else if (deps.hono) conventions.framework = "hono";
-				else if (deps.express) conventions.framework = "express";
-				else if (deps.fastify) conventions.framework = "fastify";
-				else if (deps.koa) conventions.framework = "koa";
-				else if (deps.elysia) conventions.framework = "elysia";
-
-				// Test framework detection
-				if (deps.vitest) conventions.testFramework = "vitest";
-				else if (deps.jest || deps["@jest/core"]) conventions.testFramework = "jest";
-				else if (deps.mocha) conventions.testFramework = "mocha";
-				else if (deps.ava) conventions.testFramework = "ava";
-				else if (deps.tap || deps["@tapjs/core"]) conventions.testFramework = "tap";
-
-				// Formatter detection
-				if (deps.prettier) conventions.formatter = "prettier";
-				else if (deps["@biomejs/biome"]) conventions.formatter = "biome";
-			} catch {
-				// Malformed package.json — continue with defaults
-			}
-		}
-
-		// ─── TypeScript detection + tsconfig parsing ────────────────────
-		const tsconfigPath = join(dir, "tsconfig.json");
-		if (existsSync(tsconfigPath)) {
-			conventions.hasTypeScript = true;
-			if (conventions.language === "javascript" || conventions.language === "unknown") {
-				conventions.language = "typescript";
-			}
-
-			try {
-				// Strip comments from tsconfig (JSON with comments)
-				const raw = readFileSync(tsconfigPath, "utf-8")
-					.replace(/\/\/.*$/gm, "")
-					.replace(/\/\*[\s\S]*?\*\//g, "")
-					.replace(/,(\s*[}\]])/g, "$1"); // trailing commas
-				const tsconfig = JSON.parse(raw) as Record<string, unknown>;
-				const compilerOptions = tsconfig.compilerOptions as Record<string, unknown> | undefined;
-				if (compilerOptions) {
-					// Strictness detection
-					if (compilerOptions.strict === true) {
-						conventions.tsStrictness = "strict";
-					} else if (compilerOptions.noImplicitAny === true || compilerOptions.strictNullChecks === true) {
-						conventions.tsStrictness = "moderate";
-					} else {
-						conventions.tsStrictness = "loose";
-					}
-					// Target
-					if (typeof compilerOptions.target === "string") {
-						conventions.tsTarget = compilerOptions.target;
-					}
-				}
-			} catch {
-				// tsconfig parse error — continue with defaults
-			}
-		}
-
-		// ─── Indentation detection (sample a source file) ────────────────
-		const sampleFile = this.findSampleSourceFile(dir, conventions.hasTypeScript);
-		if (sampleFile) {
-			try {
-				const content = readFileSync(sampleFile, "utf-8");
-				const lines = content.split("\n").filter((l) => l.length > 0 && l !== l.trimStart());
-
-				if (lines.length > 0) {
-					const tabLines = lines.filter((l) => l.startsWith("\t")).length;
-					const spaceLines = lines.length - tabLines;
-
-					if (tabLines > spaceLines) {
-						conventions.indentation = "tabs";
-						conventions.indentWidth = 2; // Tab width is editor-dependent, default 2
-					} else {
-						conventions.indentation = "spaces";
-						// Detect most common space indent width
-						const widths = lines
-							.filter((l) => l.startsWith(" "))
-							.map((l) => {
-								const match = l.match(/^( +)/);
-								return match ? match[1].length : 0;
-							})
-							.filter((w) => w > 0);
-
-						if (widths.length > 0) {
-							// Find the GCD of the first few indent widths as the base
-							const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
-							const detected = widths.slice(0, 20).reduce(gcd);
-							conventions.indentWidth = detected > 0 && detected <= 8 ? detected : 2;
-						}
-					}
-				}
-			} catch {
-				// Can't read file — keep defaults
-			}
-		}
-
-		// ─── Linter detection ────────────────────────────────────────────
-		if (existsSync(join(dir, "biome.json")) || existsSync(join(dir, "biome.jsonc"))) {
-			if (!conventions.lintCommand) conventions.lintCommand = `${runPrefix === "npm" ? "npx" : runPrefix} biome check .`;
-		} else if (
-			existsSync(join(dir, ".eslintrc")) ||
-			existsSync(join(dir, ".eslintrc.js")) ||
-			existsSync(join(dir, ".eslintrc.json")) ||
-			existsSync(join(dir, ".eslintrc.yml")) ||
-			existsSync(join(dir, "eslint.config.js")) ||
-			existsSync(join(dir, "eslint.config.mjs")) ||
-			existsSync(join(dir, "eslint.config.ts"))
-		) {
-			if (!conventions.lintCommand) conventions.lintCommand = `${runPrefix === "npm" ? "npx" : runPrefix} eslint .`;
-		}
-
-		// ─── Formatter detection (file-based) ───────────────────────────
-		if (!conventions.formatter) {
-			if (existsSync(join(dir, ".prettierrc")) || existsSync(join(dir, ".prettierrc.json")) ||
-				existsSync(join(dir, ".prettierrc.js")) || existsSync(join(dir, "prettier.config.js"))) {
-				conventions.formatter = "prettier";
-			}
-		}
-
-		// ─── Test pattern detection ─────────────────────────────────────
-		if (existsSync(join(dir, "__tests__"))) {
-			conventions.testPattern = "__tests__";
-		} else if (existsSync(join(dir, "test"))) {
-			conventions.testPattern = "test";
-		} else if (existsSync(join(dir, "tests"))) {
-			conventions.testPattern = "tests";
-		} else if (existsSync(join(dir, "src", "__tests__"))) {
-			conventions.testPattern = "src/__tests__";
-		} else {
-			// Infer from test framework config
-			if (conventions.testFramework === "vitest" || conventions.testFramework === "jest") {
-				conventions.testPattern = "**/*.test.{ts,tsx,js,jsx}";
-			}
-		}
-
-		// Apply config overrides
-		if (this.config.testCommand) conventions.testCommand = this.config.testCommand;
-		if (this.config.buildCommand) conventions.buildCommand = this.config.buildCommand;
-		if (this.config.lintCommand) conventions.lintCommand = this.config.lintCommand;
-
-		this.conventions = conventions;
-		return conventions;
+		this.conventions = detectProjectConventions(
+			this.config.workingDirectory,
+			this.config.language,
+			{
+				testCommand: this.config.testCommand,
+				buildCommand: this.config.buildCommand,
+				lintCommand: this.config.lintCommand,
+			},
+		);
+		return this.conventions;
 	}
 
 	/** Get the underlying agent instance. */
@@ -593,177 +329,87 @@ export class CodingAgent {
 		return this.conventions;
 	}
 
-	// ─── Private Helpers ─────────────────────────────────────────────────────
-
-	/**
-	 * Forward agent events to the caller's onEvent callback.
-	 * Maps raw agent event types to typed CodingAgentEvent objects.
-	 */
+	/** Forward agent events to the caller's onEvent callback. */
 	private forwardEvent(event: string, data: unknown): void {
 		const cb = this.config.onEvent;
 		if (!cb) return;
-
 		const d = data as Record<string, unknown>;
-
 		switch (event) {
 			case "stream:tool_call": {
-				const name = (d.name as string) ?? "unknown";
 				let args: Record<string, unknown> = {};
-				try {
-					args = JSON.parse((d.arguments as string) ?? "{}") as Record<string, unknown>;
-				} catch { /* skip */ }
-				cb({ type: "tool_call", name, args });
+				try { args = JSON.parse((d.arguments as string) ?? "{}") as Record<string, unknown>; } catch { /* skip */ }
+				cb({ type: "tool_call", name: (d.name as string) ?? "unknown", args });
 				break;
 			}
-			case "tool:done": {
-				const name = (d.name as string) ?? "unknown";
-				const durationMs = (d.durationMs as number) ?? 0;
-				cb({ type: "tool_done", name, durationMs });
+			case "tool:done":
+				cb({ type: "tool_done", name: (d.name as string) ?? "unknown", durationMs: (d.durationMs as number) ?? 0 });
 				break;
-			}
-			case "stream:thinking": {
-				const text = (d.text as string) ?? "";
-				if (text) cb({ type: "thinking", text });
-				break;
-			}
-			case "stream:text": {
-				const text = (d.text as string) ?? "";
-				if (text) cb({ type: "text", text });
-				break;
-			}
+			case "stream:thinking": { const t = (d.text as string) ?? ""; if (t) cb({ type: "thinking", text: t }); break; }
+			case "stream:text": { const t = (d.text as string) ?? ""; if (t) cb({ type: "text", text: t }); break; }
 		}
 	}
 
-	/**
-	 * Track file operations from agent events.
-	 * Monitors tool:done events for write/edit tool calls.
-	 */
+	/** Track file operations (write/edit) from agent events. */
 	private trackFileOperations(event: string, data: unknown): void {
-		if (event !== "tool:done" && event !== "stream:tool_call") return;
-
-		const eventData = data as Record<string, unknown>;
-		const toolName = eventData.name as string | undefined;
-		if (!toolName) return;
-
-		if (event === "stream:tool_call") {
-			// Parse the arguments from the tool call to extract file paths
-			const argsStr = eventData.arguments as string | undefined;
-			if (!argsStr) return;
-
-			try {
-				const args = JSON.parse(argsStr) as Record<string, unknown>;
-				const rawPath = (args.path ?? args.file_path ?? args.file) as string | undefined;
-				if (!rawPath) return;
-
-				// Normalize path to prevent tracking of traversal paths
-				const filePath = pathResolve(rawPath);
-
-				if (toolName === "write") {
-					// Check if the file exists to determine create vs modify
-					if (existsSync(filePath)) {
-						this.filesModified.add(filePath);
-					} else {
-						this.filesCreated.add(filePath);
-					}
-				} else if (toolName === "edit") {
-					this.filesModified.add(filePath);
-				}
-			} catch {
-				// Malformed arguments — skip tracking
+		if (event !== "stream:tool_call") return;
+		const d = data as Record<string, unknown>;
+		const toolName = d.name as string | undefined;
+		if (!toolName || (toolName !== "write" && toolName !== "edit")) return;
+		const argsStr = d.arguments as string | undefined;
+		if (!argsStr) return;
+		try {
+			const args = JSON.parse(argsStr) as Record<string, unknown>;
+			const rawPath = (args.path ?? args.file_path ?? args.file) as string | undefined;
+			if (!rawPath) return;
+			const filePath = pathResolve(rawPath);
+			if (toolName === "write") {
+				(existsSync(filePath) ? this.filesModified : this.filesCreated).add(filePath);
+			} else {
+				this.filesModified.add(filePath);
 			}
-		}
+		} catch { /* malformed arguments */ }
 	}
 
-	/**
-	 * Build an enriched task prompt that includes conventions context.
-	 */
+	/** Build an enriched task prompt with conventions context. */
 	private buildTaskPrompt(task: string): string {
-		const parts: string[] = [];
-
-		parts.push(task);
-
+		const parts: string[] = [task];
 		if (this.conventions) {
+			const c = this.conventions;
 			const ctx: string[] = ["\n\n--- Project Context ---"];
-
-			ctx.push(`Language: ${this.conventions.language}`);
-			ctx.push(`Module system: ${this.conventions.moduleSystem}`);
-			ctx.push(`Indentation: ${this.conventions.indentation}${this.conventions.indentation === "spaces" ? ` (width ${this.conventions.indentWidth})` : ""}`);
-
-			if (this.conventions.hasTypeScript) {
-				ctx.push(`TypeScript: yes${this.conventions.tsStrictness ? ` (${this.conventions.tsStrictness})` : ""}${this.conventions.tsTarget ? `, target: ${this.conventions.tsTarget}` : ""}`);
-			}
-			if (this.conventions.framework) ctx.push(`Framework: ${this.conventions.framework}`);
-			if (this.conventions.isMonorepo) ctx.push(`Monorepo: yes (${this.conventions.packageManager ?? "unknown"})`);
-			else if (this.conventions.packageManager) ctx.push(`Package manager: ${this.conventions.packageManager}`);
-			if (this.conventions.testFramework) ctx.push(`Test framework: ${this.conventions.testFramework}`);
-			if (this.conventions.testPattern) ctx.push(`Test location: ${this.conventions.testPattern}`);
-			if (this.conventions.formatter) ctx.push(`Formatter: ${this.conventions.formatter}`);
-			if (this.conventions.buildCommand) ctx.push(`Build: ${this.conventions.buildCommand}`);
-			if (this.conventions.testCommand) ctx.push(`Test: ${this.conventions.testCommand}`);
-			if (this.conventions.lintCommand) ctx.push(`Lint: ${this.conventions.lintCommand}`);
-
+			ctx.push(`Language: ${c.language}`, `Module system: ${c.moduleSystem}`);
+			ctx.push(`Indentation: ${c.indentation}${c.indentation === "spaces" ? ` (width ${c.indentWidth})` : ""}`);
+			if (c.hasTypeScript) ctx.push(`TypeScript: yes${c.tsStrictness ? ` (${c.tsStrictness})` : ""}${c.tsTarget ? `, target: ${c.tsTarget}` : ""}`);
+			if (c.framework) ctx.push(`Framework: ${c.framework}`);
+			if (c.isMonorepo) ctx.push(`Monorepo: yes (${c.packageManager ?? "unknown"})`);
+			else if (c.packageManager) ctx.push(`Package manager: ${c.packageManager}`);
+			if (c.testFramework) ctx.push(`Test framework: ${c.testFramework}`);
+			if (c.testPattern) ctx.push(`Test location: ${c.testPattern}`);
+			if (c.formatter) ctx.push(`Formatter: ${c.formatter}`);
+			if (c.buildCommand) ctx.push(`Build: ${c.buildCommand}`);
+			if (c.testCommand) ctx.push(`Test: ${c.testCommand}`);
+			if (c.lintCommand) ctx.push(`Lint: ${c.lintCommand}`);
 			ctx.push(`Working directory: ${this.config.workingDirectory}`);
-
 			parts.push(ctx.join("\n"));
 		}
-
 		if (this.config.additionalContext) {
 			parts.push(`\n\n--- Additional Context ---\n${this.config.additionalContext}`);
 		}
-
 		return parts.join("");
 	}
 
-	/**
-	 * Check whether any validation commands are configured.
-	 */
+	/** Check whether any validation commands are configured. */
 	private hasValidationCommands(): boolean {
-		return !!(
-			this.config.buildCommand ??
-			this.config.testCommand ??
-			this.config.lintCommand ??
-			this.conventions?.buildCommand ??
-			this.conventions?.testCommand ??
-			this.conventions?.lintCommand
-		);
+		return !!(this.config.buildCommand ?? this.config.testCommand ?? this.config.lintCommand ??
+			this.conventions?.buildCommand ?? this.conventions?.testCommand ?? this.conventions?.lintCommand);
 	}
 
-	/**
-	 * Extract a summary string from the last agent response.
-	 */
+	/** Extract a summary string from the last agent response. */
 	private extractSummary(message: AgentMessage | null): string {
 		if (!message) return "No response from agent.";
-
-		const textParts = message.content
+		const fullText = message.content
 			.filter((p) => p.type === "text")
-			.map((p) => (p as { type: "text"; text: string }).text);
-
-		const fullText = textParts.join("\n");
-
-		// Take the first ~500 chars as a summary
-		if (fullText.length <= 500) return fullText;
-		return fullText.slice(0, 497) + "...";
-	}
-
-	/**
-	 * Find a sample source file in the working directory to detect indentation.
-	 */
-	private findSampleSourceFile(dir: string, isTypeScript: boolean): string | null {
-		// Try common source directories
-		const extensions = isTypeScript ? [".ts", ".tsx"] : [".js", ".jsx", ".ts", ".tsx"];
-		const searchDirs = ["src", "lib", "app", "."];
-
-		for (const subDir of searchDirs) {
-			const searchPath = join(dir, subDir);
-			if (!existsSync(searchPath)) continue;
-
-			for (const ext of extensions) {
-				// Try index file first, then scan for any matching file
-				const indexFile = join(searchPath, `index${ext}`);
-				if (existsSync(indexFile)) return indexFile;
-			}
-		}
-
-		return null;
+			.map((p) => (p as { type: "text"; text: string }).text)
+			.join("\n");
+		return fullText.length <= 500 ? fullText : fullText.slice(0, 497) + "...";
 	}
 }
