@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { MargaPipeline } from "../../src/router-pipeline.js";
 import type { MargaPipelineConfig, PipelineDecision } from "../../src/router-pipeline.js";
 import { classifyTaskType, HYBRID_BINDINGS } from "../../src/router-task-type.js";
@@ -129,6 +130,12 @@ async function collectStream(stream: AsyncIterable<StreamEvent>): Promise<Stream
 	return events;
 }
 
+function loadFixture(name: string): string[] {
+	return JSON.parse(
+		readFileSync(new URL(`../fixtures/${name}`, import.meta.url), "utf8"),
+	) as string[];
+}
+
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 describe("Routing Pipeline E2E", () => {
@@ -191,6 +198,15 @@ describe("Routing Pipeline E2E", () => {
 
 			expect(decision.taskType).toBe("smalltalk");
 			expect(decision.skipLLM).toBe(true);
+		});
+
+		it("should not classify mixed greeting+action corpus as smalltalk", () => {
+			const pipeline = createTestPipeline();
+			const phrases = loadFixture("smalltalk-plus-actions.json");
+			for (const phrase of phrases) {
+				const decision = pipeline.classify(userContext(phrase, true));
+				expect(decision.taskType).not.toBe("smalltalk");
+			}
 		});
 
 		it("should classify summarization requests", () => {
