@@ -76,4 +76,7 @@ export type {
 
 // KartavyaDispatcher (Autonomous Action Executor)
 export { KartavyaDispatcher } from "./kartavya-dispatcher.js";
-export type { KartavyaDispatcherConfig, DispatchResult, ToolExecutor, ToolExecResult } from "./kartavya-dispatcher.js";
+export type {
+	KartavyaDispatcherConfig, DispatchResult, ToolExecutor, ToolExecResult,
+	DispatcherSamiti, DispatcherRta, DispatcherVidhiEngine,
+} from "./kartavya-dispatcher.js";

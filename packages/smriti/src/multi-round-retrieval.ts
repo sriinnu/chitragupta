@@ -1,8 +1,8 @@
 /**
- * @chitragupta/smriti — Anveshana (अन्वेषण) — Multi-Round Retrieval Engine.
+ * @chitragupta/smriti -- Anveshana -- Multi-Round Retrieval Engine.
  *
  * In Vedic tradition, anveshana is the disciplined investigation that goes
- * beyond surface observation — asking deeper questions until truth is found.
+ * beyond surface observation -- asking deeper questions until truth is found.
  *
  * Complex queries like "What architecture decisions did we make about auth
  * that affected the API layer?" cannot be answered by a single retrieval pass.
@@ -18,12 +18,38 @@
  *   6. Optionally run follow-up rounds based on result gaps
  *   7. Apply adaptive termination when improvement plateaus
  *
- * The decomposer is purely heuristic — no LLM calls. Fast and free.
+ * The decomposer is purely heuristic -- no LLM calls. Fast and free.
+ *
+ * Query decomposition, complexity detection, and follow-up generation live
+ * in ./query-decomposition.ts (extracted to keep each file under 450 LOC).
  */
 
 import type { HybridSearchEngine, HybridSearchResult } from "./hybrid-search.js";
+import {
+	isComplexQuery,
+	decomposeQuery,
+	generateFollowUpQueries,
+} from "./query-decomposition.js";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+// Re-export decomposition utilities so downstream consumers can still
+// import everything from this module (preserves backward compatibility).
+export {
+	isComplexQuery,
+	decomposeQuery,
+	generateFollowUpQueries,
+	clampSubQueries,
+	extractKeyTerms,
+	extractListEntities,
+	positionalWeight,
+	specificityBonus,
+	CONJUNCTIONS,
+	TEMPORAL,
+	COMPARATIVE,
+	CAUSAL,
+	COMPLEXITY_WORD_THRESHOLD,
+} from "./query-decomposition.js";
+
+// ---- Types -------------------------------------------------------------------
 
 /** A decomposed sub-query with its purpose. */
 export interface SubQuery {
@@ -86,8 +112,7 @@ interface SearchStats {
 	improvementPerRound: number[];
 }
 
-// ─── Constants ──────────────────────────────────────────────────────────────
-
+// ---- Constants ---------------------------------------------------------------
 const DEFAULT_CONFIG: MultiRoundConfig = {
 	maxSubQueries: 4,
 	maxRounds: 3,
@@ -97,34 +122,7 @@ const DEFAULT_CONFIG: MultiRoundConfig = {
 	adaptiveTermination: true,
 };
 
-/** Words that signal compound/relative clause structures. */
-const CONJUNCTIONS = /\b(and|or|but|that|which|who|where|when|while|although)\b/i;
-
-/** Temporal markers for time-scoped queries. */
-const TEMPORAL = /\b(when|before|after|last\s+(?:time|week|month|year|day)|yesterday|recently|earlier|previously|ago|since|until)\b/i;
-
-/** Comparative structures. */
-const COMPARATIVE = /\b(vs\.?|versus|compared?\s+to|difference\s+between|between\s+\w+\s+and)\b/i;
-
-/** Causal structures. */
-const CAUSAL = /\b(why|because|caused?\s*(?:by)?|led\s+to|resulted?\s+in|reason\s+for|due\s+to)\b/i;
-
-/** Minimum word count for complexity consideration. */
-const COMPLEXITY_WORD_THRESHOLD = 8;
-
-/** Positional weight decay for sub-queries: w(i) = max(0.4, 1.0 - 0.2 * i). */
-const positionalWeight = (index: number): number =>
-	Math.max(0.4, 1.0 - 0.2 * index);
-
-/** Specificity bonus: longer sub-queries get higher weight. */
-const specificityBonus = (query: string): number => {
-	const words = query.trim().split(/\s+/).length;
-	if (words >= 5) return 0.1;
-	if (words >= 3) return 0.05;
-	return 0;
-};
-
-// ─── AnveshanaEngine ────────────────────────────────────────────────────────
+// ---- AnveshanaEngine ---------------------------------------------------------
 
 /**
  * Anveshana -- Multi-Round Retrieval Engine.
@@ -181,7 +179,7 @@ export class AnveshanaEngine {
 	 */
 	async search(query: string): Promise<MultiRoundResult[]> {
 		// Simple queries bypass decomposition entirely.
-		if (!this.isComplexQuery(query)) {
+		if (!isComplexQuery(query)) {
 			const hybridResults = await this.hybridSearch.search(query);
 			const results = hybridResults.map((r: HybridSearchResult) => ({
 				id: r.id,
@@ -201,14 +199,13 @@ export class AnveshanaEngine {
 			return results.slice(0, this.config.maxResults);
 		}
 
-		// ─── Complex query: decompose and iterate ─────────────────────────
-
+		// -- Complex query: decompose and iterate
 		const subQueries = this.decompose(query);
 		const allRounds: RoundResult[] = [];
 		const improvementPerRound: number[] = [];
 		let previousTopScore = 0;
 
-		// Round 1: run all initial sub-queries
+		// Round 1: run all initial sub-queries.
 		const round0Results = await this.executeRound(subQueries, 0);
 		allRounds.push(...round0Results);
 
@@ -276,185 +273,34 @@ export class AnveshanaEngine {
 	/**
 	 * Decompose a complex query into sub-queries.
 	 *
-	 * Uses purely heuristic decomposition (no LLM):
-	 *   - Splits on conjunctions ("and", "or", "that", "which")
-	 *   - Detects comparative structures ("vs", "compared to")
-	 *   - Detects causal structures ("why", "because", "led to")
-	 *   - Extracts multi-entity lists ("auth, sessions, and tokens")
-	 *   - Always includes the original query with weight 1.0
+	 * Delegates to the standalone `decomposeQuery` function from
+	 * query-decomposition.ts.
 	 *
 	 * @param query - The user's search query.
 	 * @returns Array of weighted sub-queries.
 	 */
 	decompose(query: string): SubQuery[] {
-		const trimmed = query.trim();
-		if (!trimmed) return [];
-
-		const subQueries: SubQuery[] = [];
-
-		// The original query always participates with maximum weight.
-		subQueries.push({
-			query: trimmed,
-			intent: "original query",
-			weight: 1.0,
-		});
-
-		// If the query is too simple for meaningful decomposition, return as-is.
-		if (!this.isComplexQuery(trimmed)) return subQueries;
-
-		// ─── Comparative decomposition ────────────────────────────────────
-		const comparativeMatch = trimmed.match(
-			/^(.+?)\s+(?:vs\.?|versus|compared?\s+to)\s+(.+)$/i,
-		);
-		if (comparativeMatch) {
-			const [, left, right] = comparativeMatch;
-			subQueries.push(
-				{
-					query: left.trim(),
-					intent: "comparative left side",
-					weight: positionalWeight(subQueries.length),
-				},
-				{
-					query: right.trim(),
-					intent: "comparative right side",
-					weight: positionalWeight(subQueries.length + 1),
-				},
-			);
-			return this.clampSubQueries(subQueries);
-		}
-
-		// ─── "difference between X and Y" decomposition ──────────────────
-		const diffBetween = trimmed.match(
-			/difference\s+between\s+(.+?)\s+and\s+(.+)/i,
-		);
-		if (diffBetween) {
-			const [, left, right] = diffBetween;
-			subQueries.push(
-				{
-					query: left.trim(),
-					intent: "comparison entity A",
-					weight: positionalWeight(subQueries.length),
-				},
-				{
-					query: right.trim(),
-					intent: "comparison entity B",
-					weight: positionalWeight(subQueries.length + 1),
-				},
-			);
-			return this.clampSubQueries(subQueries);
-		}
-
-		// ─── Causal decomposition ─────────────────────────────────────────
-		if (CAUSAL.test(trimmed)) {
-			const causalParts = trimmed.split(CAUSAL).filter((s) => s.trim());
-			for (const part of causalParts) {
-				const cleaned = part.trim();
-				if (cleaned.length >= 3 && cleaned !== trimmed) {
-					subQueries.push({
-						query: cleaned,
-						intent: "causal component",
-						weight: positionalWeight(subQueries.length),
-					});
-				}
-			}
-			if (subQueries.length > 1) {
-				return this.clampSubQueries(subQueries);
-			}
-		}
-
-		// ─── Multi-entity list decomposition ─────────────────────────────
-		// "auth, sessions, and tokens" → three sub-queries
-		const listMatch = trimmed.match(
-			/^(.*?)(\b\w+(?:\s+\w+)?)(?:,\s*(\b\w+(?:\s+\w+)?))+(?:,?\s*and\s+(\b\w+(?:\s+\w+)?))\b(.*)$/i,
-		);
-		if (listMatch) {
-			// Use a simpler extraction: find comma-separated items with optional trailing "and"
-			const entityParts = this.extractListEntities(trimmed);
-			if (entityParts.length >= 2) {
-				for (const entity of entityParts) {
-					subQueries.push({
-						query: entity.trim(),
-						intent: "list entity",
-						weight: positionalWeight(subQueries.length),
-					});
-				}
-				return this.clampSubQueries(subQueries);
-			}
-		}
-
-		// ─── Conjunction splitting ─────────────────────────────────────────
-		if (CONJUNCTIONS.test(trimmed)) {
-			const parts = trimmed
-				.split(CONJUNCTIONS)
-				.map((s) => s.trim())
-				.filter((s) => s.length >= 3);
-
-			for (const part of parts) {
-				// Skip if the part is just a conjunction itself.
-				if (/^(and|or|but|that|which|who|where|when|while|although)$/i.test(part)) {
-					continue;
-				}
-				if (part !== trimmed) {
-					subQueries.push({
-						query: part,
-						intent: "conjunction component",
-						weight: positionalWeight(subQueries.length),
-					});
-				}
-			}
-		}
-
-		return this.clampSubQueries(subQueries);
+		return decomposeQuery(query, this.config.maxSubQueries);
 	}
 
 	/**
 	 * Determine if a query is complex enough to warrant decomposition.
 	 *
-	 * Returns true when:
-	 * - Query has > 8 words
-	 * - Query contains conjunctions (and, or, that, which)
-	 * - Query contains temporal markers (when, before, after, last time)
-	 * - Query contains comparison words (vs, compared to)
-	 * - Query contains multiple quoted terms
-	 * - Query contains multiple named entities (capitalized words)
+	 * Delegates to the standalone `isComplexQuery` function from
+	 * query-decomposition.ts.
 	 *
 	 * @param query - The query to evaluate.
 	 * @returns True if the query warrants multi-round decomposition.
 	 */
 	isComplexQuery(query: string): boolean {
-		const trimmed = query.trim();
-		const words = trimmed.split(/\s+/);
-
-		// Word count threshold
-		if (words.length > COMPLEXITY_WORD_THRESHOLD) return true;
-
-		// Conjunction presence
-		if (CONJUNCTIONS.test(trimmed)) return true;
-
-		// Temporal markers
-		if (TEMPORAL.test(trimmed)) return true;
-
-		// Comparative structures
-		if (COMPARATIVE.test(trimmed)) return true;
-
-		// Multiple quoted terms: "term1" ... "term2"
-		const quotedTerms = trimmed.match(/["'][^"']+["']/g);
-		if (quotedTerms && quotedTerms.length >= 2) return true;
-
-		// Multiple named entities (capitalized words not at sentence start)
-		const capitalizedWords = words
-			.slice(1) // skip first word (sentence-initial capitals don't count)
-			.filter((w) => /^[A-Z][a-z]/.test(w));
-		if (capitalizedWords.length >= 2) return true;
-
-		return false;
+		return isComplexQuery(query);
 	}
 
 	/**
 	 * Generate follow-up sub-queries based on gaps in current results.
 	 *
-	 * Examines what concepts from the original query are not well-represented
-	 * in the current results and generates targeted sub-queries for those gaps.
+	 * Delegates to the standalone `generateFollowUpQueries` function from
+	 * query-decomposition.ts.
 	 *
 	 * @param originalQuery - The user's original search query.
 	 * @param currentResults - Results accumulated so far.
@@ -466,40 +312,12 @@ export class AnveshanaEngine {
 		currentResults: MultiRoundResult[],
 		previousSubQueries: SubQuery[],
 	): SubQuery[] {
-		const followUps: SubQuery[] = [];
-
-		// Extract key terms from the original query.
-		const queryTerms = this.extractKeyTerms(originalQuery);
-		const previousQueryTexts = new Set(
-			previousSubQueries.map((sq) => sq.query.toLowerCase()),
+		return generateFollowUpQueries(
+			originalQuery,
+			currentResults,
+			previousSubQueries,
+			this.config.maxSubQueries,
 		);
-
-		// Build a content bag from current results for gap detection.
-		const contentBag = currentResults
-			.map((r) => `${r.title} ${r.content}`)
-			.join(" ")
-			.toLowerCase();
-
-		// Find terms not well-represented in current results.
-		for (const term of queryTerms) {
-			const lowerTerm = term.toLowerCase();
-
-			// Skip if already queried.
-			if (previousQueryTexts.has(lowerTerm)) continue;
-
-			// Skip if the term appears in the result content.
-			if (contentBag.includes(lowerTerm)) continue;
-
-			// This term is a gap — generate a targeted sub-query.
-			followUps.push({
-				query: term,
-				intent: `follow-up for missing concept: ${term}`,
-				weight: 0.6, // Follow-ups have lower weight than initial decomposition.
-			});
-		}
-
-		// Limit follow-up sub-queries.
-		return followUps.slice(0, Math.max(1, this.config.maxSubQueries - previousSubQueries.length));
 	}
 
 	/**
@@ -595,7 +413,7 @@ export class AnveshanaEngine {
 		return this.lastStats;
 	}
 
-	// ─── Private helpers ──────────────────────────────────────────────────────
+	// ---- Private helpers ------------------------------------------------------
 
 	/**
 	 * Execute a retrieval round: run hybrid search for each sub-query in parallel.
@@ -628,75 +446,5 @@ export class AnveshanaEngine {
 
 		await Promise.all(tasks);
 		return roundResults;
-	}
-
-	/**
-	 * Clamp sub-queries to the configured maximum, preserving the original
-	 * query (always first) and highest-weighted decompositions.
-	 */
-	private clampSubQueries(subQueries: SubQuery[]): SubQuery[] {
-		if (subQueries.length <= this.config.maxSubQueries) return subQueries;
-
-		// Always keep the original query (index 0).
-		const original = subQueries[0];
-		const rest = subQueries
-			.slice(1)
-			.sort((a, b) => b.weight - a.weight)
-			.slice(0, this.config.maxSubQueries - 1);
-
-		return [original, ...rest];
-	}
-
-	/**
-	 * Extract key terms from a query for gap analysis.
-	 *
-	 * Filters out stop words and short words, keeping meaningful terms
-	 * that represent concepts the user is asking about.
-	 */
-	private extractKeyTerms(query: string): string[] {
-		const stopWords = new Set([
-			"a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-			"have", "has", "had", "do", "does", "did", "will", "would", "could",
-			"should", "may", "might", "shall", "can", "need", "must",
-			"in", "on", "at", "to", "for", "of", "with", "by", "from", "about",
-			"into", "through", "during", "before", "after", "above", "below",
-			"between", "under", "again", "further", "then", "once",
-			"and", "or", "but", "nor", "not", "so", "yet", "both", "either",
-			"neither", "each", "every", "all", "any", "few", "more", "most",
-			"other", "some", "such", "no", "only", "same", "than", "too", "very",
-			"what", "which", "who", "whom", "this", "that", "these", "those",
-			"how", "when", "where", "why",
-			"we", "us", "our", "i", "me", "my", "you", "your", "he", "she",
-			"it", "its", "they", "them", "their",
-		]);
-
-		return query
-			.split(/[\s,;]+/)
-			.map((w) => w.replace(/[^\w-]/g, ""))
-			.filter((w) => w.length >= 3 && !stopWords.has(w.toLowerCase()));
-	}
-
-	/**
-	 * Extract comma-separated list entities from a query.
-	 *
-	 * Handles patterns like:
-	 *   "authentication, authorization, and session management"
-	 *   "REST, GraphQL, or gRPC"
-	 */
-	private extractListEntities(query: string): string[] {
-		// Look for "X, Y, and/or Z" patterns.
-		const listPattern = /([^,]+(?:,\s*[^,]+)*,?\s*(?:and|or)\s+[^,]+)/i;
-		const match = query.match(listPattern);
-
-		if (!match) return [];
-
-		const listPortion = match[1];
-		// Split on commas and "and"/"or".
-		const entities = listPortion
-			.split(/,\s*|\s+(?:and|or)\s+/i)
-			.map((s) => s.trim())
-			.filter((s) => s.length >= 2);
-
-		return entities.length >= 2 ? entities : [];
 	}
 }

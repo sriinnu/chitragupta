@@ -3,7 +3,7 @@
  *
  * Sync model:
  * - Export creates a portable JSON snapshot containing `days/` and/or `memory/`.
- * - Import applies the snapshot with explicit conflict strategy.
+ * - Import applies the snapshot with explicit conflict strategy (see sync-import.ts).
  * - Default strategy is safe (non-destructive): day-file conflicts are copied to
  *   `sync-conflicts/` and local files are preserved.
  * - Memory conflicts merge entries (local-first, remote deduplicated).
@@ -16,12 +16,27 @@ import crypto from "node:crypto";
 import { getChitraguptaHome, SessionError } from "@chitragupta/core";
 import { getDayFilePath, listDayFiles } from "./day-consolidation.js";
 
-const SNAPSHOT_VERSION = 1 as const;
-const ENTRY_SEPARATOR = "\n---\n\n";
+// Re-export importCrossMachineSnapshot from the extracted module so that
+// index.ts (and all downstream consumers) continue to work unchanged.
+export { importCrossMachineSnapshot } from "./sync-import.js";
 
+/* ------------------------------------------------------------------ */
+/*  Constants                                                          */
+/* ------------------------------------------------------------------ */
+
+const SNAPSHOT_VERSION = 1 as const;
+
+/* ------------------------------------------------------------------ */
+/*  Public types                                                       */
+/* ------------------------------------------------------------------ */
+
+/** The two categories of files tracked by cross-machine sync. */
 export type CrossMachineFileKind = "day" | "memory";
+
+/** Conflict-resolution strategy when importing day files. */
 export type CrossMachineImportStrategy = "safe" | "preferRemote" | "preferLocal";
 
+/** A single file entry inside a {@link CrossMachineSnapshot}. */
 export interface CrossMachineSnapshotFile {
 	path: string;
 	kind: CrossMachineFileKind;
@@ -31,6 +46,7 @@ export interface CrossMachineSnapshotFile {
 	mtimeMs: number;
 }
 
+/** Portable JSON snapshot produced by {@link createCrossMachineSnapshot}. */
 export interface CrossMachineSnapshot {
 	version: 1;
 	exportedAt: string;
@@ -42,17 +58,20 @@ export interface CrossMachineSnapshot {
 	files: CrossMachineSnapshotFile[];
 }
 
+/** Options for {@link createCrossMachineSnapshot}. */
 export interface CrossMachineSnapshotOptions {
 	includeDays?: boolean;
 	includeMemory?: boolean;
 	maxDays?: number;
 }
 
+/** Options for {@link importCrossMachineSnapshot}. */
 export interface CrossMachineImportOptions {
 	strategy?: CrossMachineImportStrategy;
 	dryRun?: boolean;
 }
 
+/** Aggregate counters returned after a sync import. */
 export interface CrossMachineSyncTotals {
 	files: number;
 	created: number;
@@ -63,6 +82,7 @@ export interface CrossMachineSyncTotals {
 	errors: number;
 }
 
+/** Detailed result of {@link importCrossMachineSnapshot}. */
 export interface CrossMachineImportResult {
 	importedAt: string;
 	sourceExportedAt: string;
@@ -74,6 +94,7 @@ export interface CrossMachineImportResult {
 	errorPaths: string[];
 }
 
+/** Summary returned by {@link getCrossMachineSyncStatus}. */
 export interface CrossMachineSyncStatus {
 	home: string;
 	daysCount: number;
@@ -85,6 +106,10 @@ export interface CrossMachineSyncStatus {
 	lastImportTotals?: CrossMachineSyncTotals;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Internal types                                                     */
+/* ------------------------------------------------------------------ */
+
 interface CrossMachineSyncState {
 	lastExportAt?: string;
 	lastExportPath?: string;
@@ -93,10 +118,19 @@ interface CrossMachineSyncState {
 	lastImportTotals?: CrossMachineSyncTotals;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Internal helpers                                                   */
+/* ------------------------------------------------------------------ */
+
+/** SHA-256 hex digest of a UTF-8 string. */
 function sha256(content: string): string {
 	return crypto.createHash("sha256").update(content, "utf-8").digest("hex");
 }
 
+/**
+ * Convert an absolute path to a portable POSIX-style relative path
+ * anchored at the Chitragupta home directory.
+ */
 function toPortablePath(absPath: string, home: string): string {
 	const rel = path.relative(home, absPath);
 	if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
@@ -105,16 +139,10 @@ function toPortablePath(absPath: string, home: string): string {
 	return rel.split(path.sep).join("/");
 }
 
-function resolveSnapshotPath(relPath: string, home: string): string {
-	const normalizedRel = relPath.replaceAll("\\", "/");
-	const abs = path.resolve(home, normalizedRel);
-	const homeWithSep = home.endsWith(path.sep) ? home : `${home}${path.sep}`;
-	if (abs !== home && !abs.startsWith(homeWithSep)) {
-		throw new SessionError(`Snapshot path escapes Chitragupta home: ${relPath}`);
-	}
-	return abs;
-}
-
+/**
+ * Recursively list all `.md` files under a memory root directory.
+ * Returns an empty array if the directory does not exist.
+ */
 function listMemoryFiles(memoryRoot: string): string[] {
 	if (!fs.existsSync(memoryRoot)) return [];
 	const stack = [memoryRoot];
@@ -144,6 +172,7 @@ function listMemoryFiles(memoryRoot: string): string[] {
 	return files.sort();
 }
 
+/** Read the persisted sync-state JSON, returning `{}` on any failure. */
 function readSyncState(home: string): CrossMachineSyncState {
 	const statePath = path.join(home, "sync-state.json");
 	try {
@@ -156,6 +185,7 @@ function readSyncState(home: string): CrossMachineSyncState {
 	}
 }
 
+/** Patch the persisted sync-state with the provided fields. */
 function writeSyncState(home: string, patch: Partial<CrossMachineSyncState>): void {
 	const statePath = path.join(home, "sync-state.json");
 	const next = { ...readSyncState(home), ...patch };
@@ -163,50 +193,7 @@ function writeSyncState(home: string, patch: Partial<CrossMachineSyncState>): vo
 	fs.writeFileSync(statePath, JSON.stringify(next, null, "\t"), "utf-8");
 }
 
-function splitMemory(content: string): { header: string; entries: string[] } {
-	const normalized = content.replaceAll("\r\n", "\n");
-	const parts = normalized.split(ENTRY_SEPARATOR);
-	if (parts.length <= 1) {
-		return { header: normalized.trimEnd(), entries: [] };
-	}
-	const header = (parts[0] ?? "").trimEnd();
-	const entries = parts.slice(1).map((entry) => entry.trim()).filter(Boolean);
-	return { header, entries };
-}
-
-function mergeMemory(localContent: string, remoteContent: string): string {
-	const localTrimmed = localContent.trim();
-	const remoteTrimmed = remoteContent.trim();
-	if (!localTrimmed) return remoteTrimmed ? `${remoteTrimmed}\n` : "";
-	if (!remoteTrimmed) return localContent.endsWith("\n") ? localContent : `${localContent}\n`;
-	if (localContent === remoteContent) return localContent;
-
-	const local = splitMemory(localContent);
-	const remote = splitMemory(remoteContent);
-	if (local.entries.length === 0 && remote.entries.length === 0) {
-		if (localContent.includes(remoteContent)) return localContent;
-		if (remoteContent.includes(localContent)) return remoteContent;
-		return `${localContent.trimEnd()}\n\n---\n\n${remoteContent.trim()}\n`;
-	}
-
-	const header = local.header || remote.header || "# Memory";
-	const seen = new Set<string>();
-	const mergedEntries: string[] = [];
-	for (const entry of [...local.entries, ...remote.entries]) {
-		const key = sha256(entry.replace(/\s+/g, " ").trim().toLowerCase());
-		if (seen.has(key)) continue;
-		seen.add(key);
-		mergedEntries.push(entry.trim());
-	}
-
-	let merged = header.trimEnd();
-	if (mergedEntries.length > 0) {
-		merged += ENTRY_SEPARATOR + mergedEntries.join(ENTRY_SEPARATOR);
-	}
-	if (!merged.endsWith("\n")) merged += "\n";
-	return merged;
-}
-
+/** Runtime assertion that an unknown value is a valid {@link CrossMachineSnapshot}. */
 function assertSnapshot(value: unknown): asserts value is CrossMachineSnapshot {
 	if (!value || typeof value !== "object") {
 		throw new SessionError("Invalid sync snapshot: expected object");
@@ -238,6 +225,16 @@ function assertSnapshot(value: unknown): asserts value is CrossMachineSnapshot {
 	}
 }
 
+/* ------------------------------------------------------------------ */
+/*  Public API — snapshot creation, writing, reading, status           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Create a portable cross-machine snapshot of day files and/or memory files.
+ *
+ * @param options - Controls which categories to include and optional day-file cap.
+ * @returns A snapshot object ready for serialisation via {@link writeCrossMachineSnapshot}.
+ */
 export function createCrossMachineSnapshot(options?: CrossMachineSnapshotOptions): CrossMachineSnapshot {
 	const includeDays = options?.includeDays ?? true;
 	const includeMemory = options?.includeMemory ?? true;
@@ -305,6 +302,13 @@ export function createCrossMachineSnapshot(options?: CrossMachineSnapshotOptions
 	};
 }
 
+/**
+ * Serialise a snapshot to disk and update the local sync-state.
+ *
+ * @param snapshot - The snapshot to write.
+ * @param outputPath - Destination file path (parent directories created automatically).
+ * @returns The resolved absolute path of the written file.
+ */
 export function writeCrossMachineSnapshot(snapshot: CrossMachineSnapshot, outputPath: string): string {
 	assertSnapshot(snapshot);
 	const resolved = path.resolve(outputPath);
@@ -317,6 +321,12 @@ export function writeCrossMachineSnapshot(snapshot: CrossMachineSnapshot, output
 	return resolved;
 }
 
+/**
+ * Read and validate a snapshot JSON file from disk.
+ *
+ * @param snapshotPath - Path to the snapshot JSON file.
+ * @returns The validated snapshot object.
+ */
 export function readCrossMachineSnapshot(snapshotPath: string): CrossMachineSnapshot {
 	const resolved = path.resolve(snapshotPath);
 	const raw = fs.readFileSync(resolved, "utf-8");
@@ -325,6 +335,9 @@ export function readCrossMachineSnapshot(snapshotPath: string): CrossMachineSnap
 	return parsed;
 }
 
+/**
+ * Return a summary of the local sync state: file counts, last export/import metadata.
+ */
 export function getCrossMachineSyncStatus(): CrossMachineSyncStatus {
 	const home = getChitraguptaHome();
 	const state = readSyncState(home);
@@ -335,120 +348,5 @@ export function getCrossMachineSyncStatus(): CrossMachineSyncStatus {
 		daysCount,
 		memoryCount,
 		...state,
-	};
-}
-
-function writeTextFile(filePath: string, content: string): void {
-	fs.mkdirSync(path.dirname(filePath), { recursive: true });
-	fs.writeFileSync(filePath, content, "utf-8");
-}
-
-function createConflictPath(conflictRoot: string, relPath: string): string {
-	const ext = path.extname(relPath);
-	const base = ext ? relPath.slice(0, -ext.length) : relPath;
-	const remoteName = `${base}.remote${ext || ".md"}`;
-	return path.join(conflictRoot, remoteName);
-}
-
-export function importCrossMachineSnapshot(
-	source: string | CrossMachineSnapshot,
-	options?: CrossMachineImportOptions,
-): CrossMachineImportResult {
-	const snapshot = typeof source === "string" ? readCrossMachineSnapshot(source) : source;
-	assertSnapshot(snapshot);
-
-	const home = getChitraguptaHome();
-	const strategy = options?.strategy ?? "safe";
-	const dryRun = options?.dryRun ?? false;
-	const importedAt = new Date().toISOString();
-	const conflictRoot = path.join(home, "sync-conflicts", importedAt.replace(/[:.]/g, "-"));
-
-	const totals: CrossMachineSyncTotals = {
-		files: snapshot.files.length,
-		created: 0,
-		updated: 0,
-		merged: 0,
-		skipped: 0,
-		conflicts: 0,
-		errors: 0,
-	};
-	const changedPaths: string[] = [];
-	const conflictPaths: string[] = [];
-	const errorPaths: string[] = [];
-
-	for (const file of snapshot.files) {
-		try {
-			const contentHash = sha256(file.content);
-			if (contentHash !== file.sha256) {
-				totals.errors += 1;
-				errorPaths.push(file.path);
-				continue;
-			}
-
-			const targetPath = resolveSnapshotPath(file.path, home);
-			if (!fs.existsSync(targetPath)) {
-				if (!dryRun) writeTextFile(targetPath, file.content);
-				totals.created += 1;
-				changedPaths.push(file.path);
-				continue;
-			}
-
-			const localContent = fs.readFileSync(targetPath, "utf-8");
-			if (localContent === file.content || sha256(localContent) === file.sha256) {
-				totals.skipped += 1;
-				continue;
-			}
-
-			if (file.kind === "memory") {
-				const merged = mergeMemory(localContent, file.content);
-				if (merged === localContent) {
-					totals.skipped += 1;
-					continue;
-				}
-				if (!dryRun) writeTextFile(targetPath, merged);
-				totals.merged += 1;
-				changedPaths.push(file.path);
-				continue;
-			}
-
-			// Day files: explicit strategy-based conflict handling.
-			if (strategy === "preferRemote") {
-				if (!dryRun) writeTextFile(targetPath, file.content);
-				totals.updated += 1;
-				changedPaths.push(file.path);
-				continue;
-			}
-			if (strategy === "preferLocal") {
-				totals.skipped += 1;
-				continue;
-			}
-
-			const conflictPath = createConflictPath(conflictRoot, file.path);
-			if (!dryRun) writeTextFile(conflictPath, file.content);
-			totals.conflicts += 1;
-			conflictPaths.push(toPortablePath(conflictPath, home));
-		} catch {
-			totals.errors += 1;
-			errorPaths.push(file.path);
-		}
-	}
-
-	if (!dryRun) {
-		writeSyncState(home, {
-			lastImportAt: importedAt,
-			lastImportSource: snapshot.source.machine,
-			lastImportTotals: totals,
-		});
-	}
-
-	return {
-		importedAt,
-		sourceExportedAt: snapshot.exportedAt,
-		strategy,
-		dryRun,
-		totals,
-		changedPaths,
-		conflictPaths,
-		errorPaths,
 	};
 }

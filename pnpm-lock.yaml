@@ -110,18 +110,9 @@ importers:
 
   packages/niyanta:
     dependencies:
-      '@chitragupta/anina':
-        specifier: workspace:*
-        version: link:../anina
       '@chitragupta/core':
         specifier: workspace:*
         version: link:../core
-      '@chitragupta/sutra':
-        specifier: workspace:*
-        version: link:../sutra
-      '@chitragupta/swara':
-        specifier: workspace:*
-        version: link:../swara
 
   packages/smriti:
     dependencies:
