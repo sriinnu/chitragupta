@@ -17,6 +17,7 @@ import {
 	fetchBudgetStatus,
 	fetchBudgetHistory,
 } from "../signals/budget.js";
+import { Welcome } from "../components/welcome.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -103,6 +104,7 @@ export function Overview(): preact.JSX.Element {
 
 	return (
 		<div>
+			<Welcome />
 			<h1 style={{ fontSize: "20px", color: "#e8e8ed", marginBottom: "20px" }}>
 				Overview
 			</h1>

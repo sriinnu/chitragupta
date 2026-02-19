@@ -170,9 +170,26 @@ export function Pairing(): preact.JSX.Element {
 			<h2 style={{ color: "#e8e8ed", marginBottom: "4px", fontSize: "20px" }}>
 				Pair This Device
 			</h2>
-			<p style={{ color: "#8888a0", fontSize: "13px", marginBottom: "24px" }}>
+			<p style={{ color: "#8888a0", fontSize: "13px", marginBottom: "12px" }}>
 				Verify your identity to connect this browser to Chitragupta.
 			</p>
+			<div
+				style={{
+					background: "rgba(99,102,241,0.08)",
+					border: "1px solid rgba(99,102,241,0.2)",
+					borderRadius: "6px",
+					padding: "10px 14px",
+					fontSize: "12px",
+					color: "#8888a0",
+					marginBottom: "20px",
+					lineHeight: 1.5,
+				}}
+			>
+				Look at your terminal where{" "}
+				<code style={{ color: "#6366f1" }}>chitragupta serve</code>{" "}
+				is running. It shows a passphrase, number code, and icons.
+				Pick any method below and enter the matching challenge.
+			</div>
 
 			{error && (
 				<div
