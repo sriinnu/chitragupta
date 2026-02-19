@@ -20,18 +20,25 @@ import {
 
 // ── Types ─────────────────────────────────────────────────────────
 
-/** Health check entry from /api/health/deep. */
-interface HealthEntry {
-	component: string;
-	status: "healthy" | "degraded" | "unhealthy";
-	latency?: number;
+/** Health check result for a single check from /api/health/deep. */
+interface HealthCheckResult {
+	status: "UP" | "DOWN" | "DEGRADED";
 	message?: string;
+	duration?: number;
 }
 
-/** Deep health response from the API. */
+/** Deep health response from the API (HealthReport shape). */
 interface DeepHealth {
 	status: string;
-	components: HealthEntry[];
+	timestamp: string;
+	version: string;
+	uptime: number;
+	checks: Record<string, HealthCheckResult>;
+}
+
+/** Wrapped sessions list response from the API. */
+interface SessionsResponse {
+	sessions: SessionSummary[];
 }
 
 /** Session summary returned by the sessions list endpoint. */
@@ -47,11 +54,11 @@ interface SessionSummary {
 
 // ── Helpers ───────────────────────────────────────────────────────
 
-/** Health status to colour mapping. */
+/** Health status to colour mapping (matches HealthStatus enum from core). */
 const HEALTH_COLORS: Record<string, string> = {
-	healthy: "#22c55e",
-	degraded: "#eab308",
-	unhealthy: "#ef4444",
+	UP: "#22c55e",
+	DEGRADED: "#eab308",
+	DOWN: "#ef4444",
 };
 
 /** Format a date string to a short local representation. */
@@ -85,7 +92,9 @@ export function Overview(): preact.JSX.Element {
 		void fetchBudgetStatus();
 		void fetchBudgetHistory();
 		void apiGet<DeepHealth>("/api/health/deep").then(setHealth).catch(() => {});
-		void apiGet<SessionSummary[]>("/api/sessions?limit=5").then(setSessions).catch(() => {});
+		void apiGet<SessionsResponse>("/api/sessions?limit=5")
+			.then((data) => setSessions(data.sessions ?? []))
+			.catch(() => {});
 	}, []);
 
 	const budget = budgetStatus.value;
@@ -121,14 +130,14 @@ export function Overview(): preact.JSX.Element {
 					sparklineData={costData.slice(-7)}
 				/>
 				<StatCard
-					title="Monthly Cost"
-					value={`$${(budget?.monthlyCost ?? 0).toFixed(2)}`}
-					trend={budget && budget.monthlyCost > 1 ? "up" : "flat"}
+					title="Session Warning"
+					value={budget?.sessionWarning ? "Warning" : "OK"}
+					trend={budget?.sessionWarning ? "up" : "flat"}
 				/>
 				<StatCard
-					title="Active Sessions"
-					value={budget?.activeSessions ?? 0}
-					trend="flat"
+					title="Can Proceed"
+					value={budget?.canProceed?.allowed ? "Yes" : "No"}
+					trend={budget?.canProceed?.allowed === false ? "up" : "flat"}
 				/>
 			</div>
 
@@ -172,9 +181,9 @@ export function Overview(): preact.JSX.Element {
 						System Health
 					</h3>
 					<div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
-						{health.components.map((c) => (
+						{Object.entries(health.checks).map(([name, c]) => (
 							<div
-								key={c.component}
+								key={name}
 								style={{
 									display: "flex",
 									alignItems: "center",
@@ -191,7 +200,7 @@ export function Overview(): preact.JSX.Element {
 										display: "inline-block",
 									}}
 								/>
-								<span style={{ color: "#e8e8ed" }}>{c.component}</span>
+								<span style={{ color: "#e8e8ed" }}>{name}</span>
 							</div>
 						))}
 					</div>

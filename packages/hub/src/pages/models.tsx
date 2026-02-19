@@ -12,7 +12,7 @@ import { apiGet } from "../api.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
-/** Model entry from the catalog endpoint. */
+/** Model entry normalized for the frontend. */
 interface ModelEntry {
 	id: string;
 	name: string;
@@ -21,6 +21,27 @@ interface ModelEntry {
 	outputPrice: number;
 	capabilities: string[];
 	contextWindow?: number;
+}
+
+/** Raw model entry as returned by the backend. */
+interface RawModelEntry {
+	id: string;
+	provider: string;
+	displayName: string;
+	capabilities: string[];
+	pricing: { inputPer1k: number; outputPer1k: number };
+	contextWindow?: number;
+}
+
+/** Wrapped models response from the API. */
+interface ModelsResponse {
+	models: RawModelEntry[];
+	count: number;
+}
+
+/** Wrapped router response from the API. */
+interface RouterResponse {
+	router: RouterState;
 }
 
 /** Router state from the Turiya endpoint. */
@@ -46,11 +67,24 @@ export function Models(): preact.JSX.Element {
 	const [loading, setLoading] = useState(true);
 
 	useEffect(() => {
-		void apiGet<ModelEntry[]>("/api/models")
-			.then(setModels)
+		void apiGet<ModelsResponse>("/api/models")
+			.then((data) => {
+				const mapped = (data.models ?? []).map((m) => ({
+					id: m.id,
+					name: m.displayName,
+					provider: m.provider,
+					inputPrice: m.pricing.inputPer1k,
+					outputPrice: m.pricing.outputPer1k,
+					capabilities: m.capabilities,
+					contextWindow: m.contextWindow,
+				}));
+				setModels(mapped);
+			})
 			.catch(() => {})
 			.finally(() => setLoading(false));
-		void apiGet<RouterState>("/api/models/router").then(setRouter).catch(() => {});
+		void apiGet<RouterResponse>("/api/models/router")
+			.then((data) => setRouter(data.router))
+			.catch(() => {});
 	}, []);
 
 	const toggleCompare = useCallback((id: string) => {
