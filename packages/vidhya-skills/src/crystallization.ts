@@ -871,7 +871,7 @@ export function promoteMatureVidhis(vidhis: VidhiLike[]): {
 		minVidhiConfidence: 0.8,
 		minSuccessRate: 0.7,
 		minExecutions: 5,
-		autoApproveClean: true,
+		autoRegister: true,
 	});
 
 	const results = crystallizer.crystallize(vidhis);
