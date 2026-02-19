@@ -24,7 +24,7 @@ The new **Turiya** meta-observer brings intelligent model routing to the stack: 
 - **SSE parsing** -- Robust server-sent events parser for streaming responses
 - **Resilient streaming** -- `resilientStream()` combines retry, circuit breaker, and rate limiting in one call
 - **Turiya meta-observer** -- LinUCB contextual bandit for intelligent 4-tier model routing with Thompson Sampling feedback
-- **Marga pipeline** -- Task-type classification (14 types) + complexity analysis + model selection in a single zero-cost call
+- **Marga pipeline** -- Task-type classification (15 types) + complexity analysis + model selection in a single zero-cost call
 - **Embedding providers** -- Unified embedding interface across Ollama and OpenAI with batch support
 - **Process pool** -- Bounded concurrent CLI process execution with FIFO queuing and graceful shutdown
 - **Environment detection** -- Auto-detect GPU, inference backends, and API keys for optimal provider selection
@@ -46,7 +46,7 @@ The new **Turiya** meta-observer brings intelligent model routing to the stack: 
 ├── turiya.ts             ★ NEW — Turiya meta-observer (LinUCB contextual bandit)
 ├── router.ts             ModelRouter — tier-based routing with auto-escalation
 ├── router-classifier.ts  classifyComplexity() — pattern-based complexity scoring
-├── router-task-type.ts   classifyTaskType() — 14 task-type detection (Pravritti)
+├── router-task-type.ts   classifyTaskType() — 15 task-type detection (Pravritti)
 ├── router-pipeline.ts    MargaPipeline — unified intent → complexity → model pipeline
 ├── embeddings.ts         Ollama & OpenAI embedding providers with batch support
 ├── env-detection.ts      GPU, backend, and API key detection
@@ -263,8 +263,8 @@ Pravritti detects WHAT the user wants -- not just how hard it is:
 ```typescript
 import { classifyTaskType, MargaPipeline, HYBRID_BINDINGS } from "@chitragupta/swara";
 
-// 14 task types: chat, code-gen, reasoning, search, embedding, vision,
-//   tool-exec, heartbeat, summarize, translate, memory, file-op, api-call, compaction
+// 15 task types: chat, code-gen, reasoning, search, embedding, vision,
+//   tool-exec, heartbeat, smalltalk, summarize, translate, memory, file-op, api-call, compaction
 
 const taskType = classifyTaskType(context);
 // -> { type: "code-gen", resolution: "llm-with-tools", confidence: 0.9 }

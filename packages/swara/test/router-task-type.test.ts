@@ -26,11 +26,11 @@ function ctx(text: string, opts?: { tools?: Array<{ name: string }>; images?: bo
 	};
 }
 
-// ─── All 14 task types ───────────────────────────────────────────────────────
+// ─── All 15 task types ───────────────────────────────────────────────────────
 
 const ALL_TASK_TYPES: TaskType[] = [
 	"chat", "code-gen", "reasoning", "search", "embedding", "vision",
-	"tool-exec", "heartbeat", "summarize", "translate", "memory",
+	"tool-exec", "heartbeat", "smalltalk", "summarize", "translate", "memory",
 	"file-op", "api-call", "compaction",
 ];
 
@@ -38,10 +38,18 @@ const ALL_TASK_TYPES: TaskType[] = [
 
 describe("classifyTaskType (Pravritti)", () => {
 	describe("heartbeat", () => {
-		it("should classify 'ping' as heartbeat with cheapest-llm resolution", () => {
+		it("should classify 'ping' as heartbeat with local-compute resolution", () => {
 			const result = classifyTaskType(ctx("ping"));
 			expect(result.type).toBe("heartbeat");
-			expect(result.resolution).toBe("cheapest-llm");
+			expect(result.resolution).toBe("local-compute");
+		});
+	});
+
+	describe("smalltalk", () => {
+		it("should classify check-ins as smalltalk with local-compute resolution", () => {
+			const result = classifyTaskType(ctx("how are you doing today"));
+			expect(result.type).toBe("smalltalk");
+			expect(result.resolution).toBe("local-compute");
 		});
 	});
 
@@ -148,14 +156,14 @@ describe("classifyTaskType (Pravritti)", () => {
 
 	describe("chat fallback", () => {
 		it("should classify general chat as chat when no stronger signal fires", () => {
-			const result = classifyTaskType(ctx("how are you doing today"));
+			const result = classifyTaskType(ctx("Tell me something interesting about stars"));
 			expect(result.type).toBe("chat");
 			expect(result.resolution).toBe("llm");
 		});
 	});
 
 	describe("RESOLUTION_MAP completeness", () => {
-		it("should have entries for all 14 task types", () => {
+		it("should have entries for all 15 task types", () => {
 			for (const taskType of ALL_TASK_TYPES) {
 				expect(RESOLUTION_MAP).toHaveProperty(taskType);
 			}

@@ -160,9 +160,10 @@ describe("margaDecide — task type detection", () => {
 		expect(d.taskType).toBe("code-gen");
 	});
 
-	it("should classify chat/greeting tasks", () => {
+	it("should classify greeting/check-in tasks as smalltalk", () => {
 		const d = decide("Hello, how are you today?");
-		expect(d.taskType).toBe("chat");
+		expect(d.taskType).toBe("smalltalk");
+		expect(d.skipLLM).toBe(true);
 	});
 
 	it("should classify reasoning tasks", () => {

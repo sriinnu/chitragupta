@@ -60,14 +60,14 @@ export interface MargaDecision {
 	/** Selected model ID (e.g. "claude-sonnet-4-5-20250929", "llama3.2:3b"). */
 	modelId: string;
 
-	/** Detected task type (14 discrete categories). */
+	/** Detected task type (15 discrete categories). */
 	taskType: TaskType;
 	/** How the task should be resolved. */
 	resolution: ResolutionPath;
 	/** Detected complexity tier. */
 	complexity: TaskComplexity;
 
-	/** Whether the task can skip LLM entirely (search, memory, file-op, etc.). */
+	/** Whether the task can skip LLM entirely (search, memory, file-op, smalltalk, etc.). */
 	skipLLM: boolean;
 
 	/**
@@ -190,7 +190,7 @@ export function margaDecide(request: MargaDecideRequest): MargaDecision {
 	// Step 10: Default temperature based on task type
 	const temperature = taskTypeResult.type === "code-gen" ? 0.2
 		: taskTypeResult.type === "reasoning" ? 0.5
-		: taskTypeResult.type === "chat" ? 0.7
+		: taskTypeResult.type === "chat" || taskTypeResult.type === "smalltalk" ? 0.7
 		: 0.4;
 
 	const decisionTimeMs = performance.now() - startMs;

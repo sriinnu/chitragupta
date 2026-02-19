@@ -32,7 +32,8 @@ export type TaskType =
 	| "embedding"   // Text → vector → EMBEDDING MODEL (not chat model)
 	| "vision"      // Image analysis → MULTIMODAL LLM
 	| "tool-exec"   // Direct tool execution → TOOL ONLY (no LLM)
-	| "heartbeat"   // Health check, ping, status → CHEAPEST possible
+	| "heartbeat"   // Health check, ping, status → LOCAL deterministic ack
+	| "smalltalk"   // Greeting/check-in/ack → LOCAL deterministic reply
 	| "summarize"   // Compress, summarize, extract → LLM
 	| "translate"   // Language translation → LLM
 	| "memory"      // Memory recall, session lookup → LOCAL ONLY (no LLM, no cloud)
@@ -61,7 +62,8 @@ export const RESOLUTION_MAP: Record<TaskType, ResolutionPath> = {
 	"embedding":   "embedding",
 	"vision":      "llm",
 	"tool-exec":   "tool-only",
-	"heartbeat":   "cheapest-llm",
+	"heartbeat":   "local-compute",
+	"smalltalk":   "local-compute",
 	"summarize":   "llm",
 	"translate":   "llm",
 	"memory":      "local-compute",
@@ -116,7 +118,10 @@ const CODE_PATTERNS = /\b(function|class|import|export|implement|code|write\s+a|
 const REASONING_PATTERNS = /\b(analyze|compare|evaluate|design|trade-?offs?|pros?\s+and\s+cons?|architecture|investigate|explain\s+why|how\s+does|should\s+we|recommend|strategy|approach|plan|review)\b/i;
 const SUMMARIZE_PATTERNS = /\b(summarize|summary|tldr|tl;dr|condense|compress|key\s+points|brief|overview|recap|digest|extract\s+the)\b/i;
 const TRANSLATE_PATTERNS = /\b(translate|translation|in\s+spanish|in\s+french|in\s+german|in\s+hindi|in\s+japanese|to\s+english|from\s+english|localize|i18n)\b/i;
-const HEARTBEAT_PATTERNS = /^(ping|health|status|alive|heartbeat|are\s+you\s+there|hello|hi|hey|ok|ack)\s*[\?\!]?\s*$/i;
+const HEARTBEAT_PATTERNS = /^(ping|health|status|alive|heartbeat|are\s+you\s+there)\s*[\?\!]?\s*$/i;
+const SMALLTALK_PATTERNS = /\b(hi|hello|hey|hii+|heyy+|yo|sup|wassup|hru|how\s+(?:are|r)\s+(?:you|u)|how(?:'s|\s+is)\s+it\s+going|hola|bonjour|hallo|ciao|ola|namaste|namaskar(?:am|a)?|vanakkam|merhaba|nasilsin|nasilsiniz|kaise\s+ho|kya\s+haal(?:\s+hai)?|como\s+estas|que\s+tal|comment\s+ca\s+va|comment\s+allez(?:[-\s]+vous)?|ca\s+va|wie\s+geht(?:s|es)(?:\s+dir)?|tudo\s+bem|bagunava|bagunnava|bagunnara|ela\s+undh?i|ela\s+unnav(?:u)?|ela\s+unnaru|all\s+good(?:\s+ha)?|thanks?|thank\s*you|thx|gracias|danke|merci|dhanyavad(?:alu)?|shukriya|vale|de\s+acuerdo|compris|entendu|alles\s+klar|in\s+ordnung|verstanden|theek\s+hai|anladim|tamam|ok(?:ay)?|ack)\b/i;
+const SMALLTALK_SCRIPT_PATTERNS = /(привет|здравствуйте|как\s+дела|спасибо|مرحبا|السلام\s+عليكم|كيف\s+حالك|شكرا|你好|你好吗|谢谢|こんにちは|お元気ですか|ありがとう|안녕하세요|잘\s*지내세요|감사합니다|नमस्ते|धन्यवाद|నమస్తే|హలో|హాయ్)/u;
+const SMALLTALK_ACTION_GUARD = /\b(weather|forecast|clima|tiempo|wetter|pogoda|meteo|rain|snow|temperature|temp|router|network|wifi|device|client|connected|lan|scan|time|clock|remind|note|notes|search|find|nearest|hospital|train|rail|journey|memory|session|provider|model|set|delete|forget|clear|music|play|transcrib|calendar|event|todo|joke|funny|meme|story|poem|quote|news|latest|top|tell\s+me|who\s+are\s+you|what\s+are\s+you|what\s+can\s+you\s+do|run|execute|install|debug|code|review|translate|translation|localize|i18n|summarize|summary|tldr|tl;dr|condense|compress)\b/i;
 const TOOL_PATTERNS = /\b(run\s+the|execute|call|invoke|use\s+the\s+tool|bash|shell|terminal|command|mkdir|npm|git|pip|docker)\b/i;
 const MEMORY_PATTERNS = /\b(remember|recall|what\s+did\s+(i|we)|last\s+session|previous\s+conversation|my\s+preference|session\s+history|show\s+memory|list\s+sessions|search\s+sessions|what\s+do\s+you\s+know\s+about\s+me)\b/i;
 const FILE_OP_PATTERNS = /\b(read\s+file|write\s+file|list\s+files|show\s+files|cat\s+|head\s+|tail\s+|ls\s+|find\s+files|grep\s+for|open\s+file|create\s+file|delete\s+file|rename\s+file|move\s+file|copy\s+file)\b/i;
@@ -130,6 +135,15 @@ const TYPE_SIGNALS: TypeSignal[] = [
 		weight: 10,
 		label: "heartbeat/ping pattern",
 		test: (text) => HEARTBEAT_PATTERNS.test(text.trim()),
+	},
+	{
+		type: "smalltalk",
+		weight: 9,
+		label: "smalltalk greeting/checkin",
+		test: (text, wordCount) =>
+			wordCount <= 10 &&
+			!SMALLTALK_ACTION_GUARD.test(text) &&
+			(SMALLTALK_PATTERNS.test(text) || SMALLTALK_SCRIPT_PATTERNS.test(text)),
 	},
 
 	// ── Embedding ──
@@ -252,7 +266,7 @@ const TYPE_SIGNALS: TypeSignal[] = [
  * - embed text → embedding model
  * - write code → code model
  * - search files → BM25/vector, maybe no LLM
- * - heartbeat → cheapest model alive
+ * - heartbeat/smalltalk → deterministic local reply
  *
  * @param context - The conversation context.
  * @param _options - Reserved for future weighting.
@@ -319,6 +333,18 @@ export function classifyTaskType(context: Context, _options?: StreamOptions): Ta
 export const LOCAL_BINDINGS: TaskModelBinding[] = [
 	// ── Zero-token paths (no LLM, no cost) ──
 	{
+		taskType: "heartbeat",
+		providerId: "none",
+		modelId: "heartbeat-local",
+		rationale: "Heartbeat is a deterministic local ack. Zero tokens.",
+	},
+	{
+		taskType: "smalltalk",
+		providerId: "none",
+		modelId: "smalltalk-local",
+		rationale: "Greetings/check-ins are deterministic local replies. Zero tokens.",
+	},
+	{
 		taskType: "search",
 		providerId: "none",
 		modelId: "bm25-local",
@@ -349,12 +375,6 @@ export const LOCAL_BINDINGS: TaskModelBinding[] = [
 		rationale: "Sinkhorn-Knopp, TextRank, MinHash — pure local math. Zero tokens.",
 	},
 	// ── Local LLM paths (free) ──
-	{
-		taskType: "heartbeat",
-		providerId: "ollama",
-		modelId: "llama3.2:1b",
-		rationale: "Heartbeat needs the fastest, cheapest response. 1B local is instant.",
-	},
 	{
 		taskType: "embedding",
 		providerId: "ollama",
@@ -415,6 +435,18 @@ export const LOCAL_BINDINGS: TaskModelBinding[] = [
 export const CLOUD_BINDINGS: TaskModelBinding[] = [
 	// ── Zero-token paths (same everywhere — these NEVER need LLM) ──
 	{
+		taskType: "heartbeat",
+		providerId: "none",
+		modelId: "heartbeat-local",
+		rationale: "Heartbeat checks stay local and deterministic. Zero tokens.",
+	},
+	{
+		taskType: "smalltalk",
+		providerId: "none",
+		modelId: "smalltalk-local",
+		rationale: "Smalltalk stays local by policy. Zero tokens.",
+	},
+	{
 		taskType: "search",
 		providerId: "none",
 		modelId: "bm25-local",
@@ -445,12 +477,6 @@ export const CLOUD_BINDINGS: TaskModelBinding[] = [
 		rationale: "Compaction is pure math. Sinkhorn-Knopp runs locally.",
 	},
 	// ── Cloud LLM paths ──
-	{
-		taskType: "heartbeat",
-		providerId: "anthropic",
-		modelId: "claude-haiku-3-5",
-		rationale: "Cheapest cloud model. Heartbeat needs minimal intelligence.",
-	},
 	{
 		taskType: "embedding",
 		providerId: "openai",
@@ -510,6 +536,18 @@ export const CLOUD_BINDINGS: TaskModelBinding[] = [
 export const HYBRID_BINDINGS: TaskModelBinding[] = [
 	// ── Zero-token paths (tool-only / local-compute) ──
 	{
+		taskType: "heartbeat",
+		providerId: "none",
+		modelId: "heartbeat-local",
+		rationale: "Heartbeat: deterministic local ack. Zero tokens.",
+	},
+	{
+		taskType: "smalltalk",
+		providerId: "none",
+		modelId: "smalltalk-local",
+		rationale: "Smalltalk: deterministic local greeting/check-in. Zero tokens.",
+	},
+	{
 		taskType: "search",
 		providerId: "none",
 		modelId: "bm25-local",
@@ -540,12 +578,6 @@ export const HYBRID_BINDINGS: TaskModelBinding[] = [
 		rationale: "Compaction: Sinkhorn-Knopp locally. Zero tokens.",
 	},
 	// ── Local LLM paths (free) ──
-	{
-		taskType: "heartbeat",
-		providerId: "ollama",
-		modelId: "llama3.2:1b",
-		rationale: "Heartbeat: local, instant, free.",
-	},
 	{
 		taskType: "embedding",
 		providerId: "ollama",
