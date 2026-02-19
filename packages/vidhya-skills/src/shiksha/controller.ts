@@ -354,8 +354,8 @@ export class ShikshaController {
 			if (vasana.strength < 0.5) continue;
 
 			// Check if a matching skill already exists
-			const matches = this.registry.search(vasana.description, 3);
-			const hasSkill = matches.some((m) => m.score >= 0.6);
+			const matches = this.registry.query({ text: vasana.description, topK: 3 });
+			const hasSkill = matches.some((m: SkillMatch) => m.score >= 0.6);
 
 			if (!hasSkill) {
 				suggestions.push(vasana.description);
