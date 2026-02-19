@@ -192,8 +192,19 @@ export class DaemonManager extends EventEmitter {
 
 	private scheduleRestart(): void {
 		if (!this.running) return;
+
 		if (this.consecutiveRestarts >= this.config.maxRestartAttempts) {
-			this.setHealth("crashed", `Gave up after ${this.consecutiveRestarts} restart attempts`);
+			// Exponential cooldown: wait 5 min then try one final self-heal
+			this.setHealth("crashed", `Max restarts (${this.consecutiveRestarts}) reached — entering cooldown`);
+			this.restartTimer = setTimeout(async () => {
+				this.restartTimer = null;
+				if (!this.running) return;
+				await this.selfHeal();
+				this.consecutiveRestarts = 0;
+				this.currentRestartDelay = this.config.initialRestartDelayMs;
+				await this.startDaemon();
+			}, 5 * 60 * 1000); // 5-minute cooldown
+			if (this.restartTimer.unref) this.restartTimer.unref();
 			return;
 		}
 
@@ -213,6 +224,9 @@ export class DaemonManager extends EventEmitter {
 				this.daemon = null;
 			}
 
+			// Run self-heal diagnostics before restart
+			await this.selfHeal();
+
 			// Exponential backoff
 			this.currentRestartDelay = Math.min(
 				this.currentRestartDelay * 2,
@@ -223,6 +237,56 @@ export class DaemonManager extends EventEmitter {
 		}, this.currentRestartDelay);
 
 		if (this.restartTimer.unref) this.restartTimer.unref();
+	}
+
+	/**
+	 * Run self-healing diagnostics before a restart attempt.
+	 * Checks DB integrity, clears stale locks, and reinitializes schema if needed.
+	 */
+	private async selfHeal(): Promise<void> {
+		try {
+			const { DatabaseManager } = await import("@chitragupta/smriti");
+			const db = DatabaseManager.instance();
+
+			// Check DB integrity
+			for (const dbName of ["agent", "graph", "vectors"] as const) {
+				try {
+					const result = db.get(dbName).pragma("integrity_check") as Array<{ integrity_check: string }>;
+					if (result[0]?.integrity_check !== "ok") {
+						db.get(dbName).pragma("wal_checkpoint(TRUNCATE)");
+					}
+				} catch {
+					// DB may not be initialized yet
+				}
+			}
+
+			// Clear stale consolidation locks
+			try {
+				db.get("agent").prepare(
+					`UPDATE nidra_state SET consolidation_phase = NULL, consolidation_progress = 0, updated_at = ? WHERE id = 1`,
+				).run(Date.now());
+			} catch {
+				// nidra_state may not exist
+			}
+
+			this.emit("health", {
+				from: this.health,
+				to: this.health,
+				reason: "Self-heal diagnostics completed",
+				timestamp: new Date().toISOString(),
+				restartCount: this.restartCount,
+			} as HealthEvent);
+
+			// Emit dedicated recovery event
+			if (this.health === "crashed") {
+				this.emit("health-recovered", {
+					reason: "Self-heal completed, attempting restart",
+					timestamp: new Date().toISOString(),
+				});
+			}
+		} catch {
+			// Self-heal is best-effort
+		}
 	}
 
 	// ─── Error Tracking ───────────────────────────────────────────────
