@@ -847,3 +847,39 @@ export class SkillCrystallizer {
 		return count;
 	}
 }
+
+// ─── Daemon Integration Helper ──────────────────────────────────────────────
+
+/**
+ * Promote mature Vidhis to skills via the crystallization pipeline.
+ *
+ * Designed to be called from the daemon's consolidation cycle:
+ *   1. Load mature Vidhis (confidence >= 0.8, successRate >= 0.7, successCount >= 5)
+ *   2. Call SkillCrystallizer.crystallize(vidhis)
+ *   3. Auto-approve low-risk skills
+ *   4. Register approved skills
+ *
+ * @param vidhis - Mature Vidhi procedures to promote.
+ * @returns Summary of the promotion run.
+ */
+export function promoteMatureVidhis(vidhis: VidhiLike[]): {
+	candidates: number;
+	crystallized: number;
+	autoApproved: number;
+} {
+	const crystallizer = new SkillCrystallizer({
+		minVidhiConfidence: 0.8,
+		minSuccessRate: 0.7,
+		minExecutions: 5,
+		autoApproveClean: true,
+	});
+
+	const results = crystallizer.crystallize(vidhis);
+	const approved = results.filter((s) => s.status === "registered" || s.status === "approved");
+
+	return {
+		candidates: vidhis.length,
+		crystallized: results.length,
+		autoApproved: approved.length,
+	};
+}
