@@ -66,5 +66,8 @@ Thumbs.db
 # Agent working directories
 .agents/
 
+# Git worktrees (local lane branches)
+.worktrees/
+
 # Legacy
 .lodestar
