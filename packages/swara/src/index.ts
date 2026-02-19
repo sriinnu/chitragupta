@@ -117,6 +117,7 @@ export { classifyTaskType, RESOLUTION_MAP, LOCAL_BINDINGS, CLOUD_BINDINGS, HYBRI
 export type {
 	TaskType,
 	ResolutionPath,
+	CheckinSubtype,
 	TaskTypeResult,
 	TaskModelBinding,
 } from "./router-task-type.js";

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
 	classifyTaskType,
 	RESOLUTION_MAP,
@@ -26,6 +27,11 @@ function ctx(text: string, opts?: { tools?: Array<{ name: string }>; images?: bo
 	};
 }
 
+function loadFixture(name: string): string[] {
+	const file = new URL(`./fixtures/${name}`, import.meta.url);
+	return JSON.parse(readFileSync(file, "utf8")) as string[];
+}
+
 // ─── All 15 task types ───────────────────────────────────────────────────────
 
 const ALL_TASK_TYPES: TaskType[] = [
@@ -50,6 +56,13 @@ describe("classifyTaskType (Pravritti)", () => {
 			const result = classifyTaskType(ctx("how are you doing today"));
 			expect(result.type).toBe("smalltalk");
 			expect(result.resolution).toBe("local-compute");
+			expect(result.checkinSubtype).toBe("checkin");
+		});
+
+		it("should classify acknowledgements with ack subtype", () => {
+			const result = classifyTaskType(ctx("thanks, got it"));
+			expect(result.type).toBe("smalltalk");
+			expect(result.checkinSubtype).toBe("ack");
 		});
 	});
 
@@ -202,6 +215,24 @@ describe("classifyTaskType (Pravritti)", () => {
 				const result = classifyTaskType(ctx(text));
 				expect(result.confidence).toBeGreaterThanOrEqual(0.5);
 				expect(result.confidence).toBeLessThanOrEqual(1.0);
+			}
+		});
+	});
+
+	describe("multilingual fixtures", () => {
+		it("should classify multilingual short greetings as smalltalk", () => {
+			const phrases = loadFixture("multilingual-smalltalk.json");
+			for (const phrase of phrases) {
+				const result = classifyTaskType(ctx(phrase));
+				expect(result.type).toBe("smalltalk");
+			}
+		});
+
+		it("should avoid false-smalltalk captures for mixed action corpus", () => {
+			const phrases = loadFixture("smalltalk-plus-actions.json");
+			for (const phrase of phrases) {
+				const result = classifyTaskType(ctx(phrase, { tools: [{ name: "bash" }] }));
+				expect(result.type).not.toBe("smalltalk");
 			}
 		});
 	});

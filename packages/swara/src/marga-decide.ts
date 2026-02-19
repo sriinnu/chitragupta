@@ -12,7 +12,12 @@
  *   - Chitragupta does NOT enforce budget/health/policy (that's Vaayu's job)
  */
 
-import type { TaskType, ResolutionPath, TaskModelBinding } from "./router-task-type.js";
+import type {
+	TaskType,
+	ResolutionPath,
+	TaskModelBinding,
+	CheckinSubtype,
+} from "./router-task-type.js";
 import type { TaskComplexity } from "./router-classifier.js";
 import { classifyTaskType, RESOLUTION_MAP, HYBRID_BINDINGS, LOCAL_BINDINGS, CLOUD_BINDINGS } from "./router-task-type.js";
 import { classifyComplexity } from "./router-classifier.js";
@@ -21,7 +26,21 @@ import type { Context, ContentPart } from "./types.js";
 // ─── Contract Version ────────────────────────────────────────────────────────
 
 /** Bump this when the MargaDecision shape or semantics change. */
-export const MARGA_CONTRACT_VERSION = "1.0";
+export const MARGA_CONTRACT_VERSION = "1.1";
+
+type ProviderHealthSignal = {
+	healthy?: boolean;
+	status?: string;
+	note?: string;
+};
+
+type ProviderHealthHint = {
+	channel: "provider-health";
+	providerId: string;
+	severity: "info" | "warning";
+	message: string;
+	status?: string;
+};
 
 // ─── Contract Types ──────────────────────────────────────────────────────────
 
@@ -43,6 +62,8 @@ export interface MargaDecideRequest {
 	bindingStrategy?: "local" | "cloud" | "hybrid";
 	/** Custom bindings (overrides bindingStrategy if provided). */
 	customBindings?: TaskModelBinding[];
+	/** Optional provider-health snapshot from Vaayu (advisory only). */
+	providerHealth?: Record<string, ProviderHealthSignal>;
 }
 
 /**
@@ -88,6 +109,14 @@ export interface MargaDecision {
 
 	/** Secondary task type if ambiguous (e.g. code-gen + reasoning). */
 	secondaryTaskType?: TaskType;
+	/** Explicit greeting/check-in subtype for smalltalk/heartbeat requests. */
+	checkinSubtype?: CheckinSubtype;
+	/** True when top-2 task scores are near tied and should be treated as advisory. */
+	abstain: boolean;
+	/** Reason for abstaining. */
+	abstainReason?: "near_tie_top2";
+	/** Advisory provider-health hints (enforcement stays in Vaayu). */
+	providerHealthHints?: ProviderHealthHint[];
 
 	/** Suggested temperature (identity-adjusted). */
 	temperature?: number;
@@ -124,6 +153,9 @@ const MIN_COMPLEXITY_OVERRIDES: Partial<Record<TaskType, TaskComplexity>> = {
 	reasoning: "complex",
 	vision: "medium",
 };
+
+const NEAR_TIE_MAX_SCORE_DELTA = 1;
+const NEAR_TIE_MAX_CONFIDENCE = 0.67;
 
 // ─── Decision Function ──────────────────────────────────────────────────────
 
@@ -186,6 +218,12 @@ export function margaDecide(request: MargaDecideRequest): MargaDecision {
 
 	// Step 9: Confidence (geometric mean of both classifiers)
 	const confidence = Math.sqrt(taskTypeResult.confidence * complexityResult.confidence);
+	const scoreDelta = (taskTypeResult.topScore ?? 0) - (taskTypeResult.secondScore ?? 0);
+	const abstain = Boolean(taskTypeResult.secondary)
+		&& (taskTypeResult.secondScore ?? 0) > 0
+		&& scoreDelta <= NEAR_TIE_MAX_SCORE_DELTA
+		&& confidence <= NEAR_TIE_MAX_CONFIDENCE;
+	const providerHealthHints = buildProviderHealthHints(request.providerHealth, providerId);
 
 	// Step 10: Default temperature based on task type
 	const temperature = taskTypeResult.type === "code-gen" ? 0.2
@@ -204,10 +242,16 @@ export function margaDecide(request: MargaDecideRequest): MargaDecision {
 		complexity: effectiveComplexity,
 		skipLLM,
 		escalationChain,
-		rationale,
+		rationale: abstain && taskTypeResult.secondary
+			? `${rationale} | near tie with ${taskTypeResult.secondary}`
+			: rationale,
 		confidence,
 		decisionTimeMs,
 		secondaryTaskType: taskTypeResult.secondary,
+		checkinSubtype: taskTypeResult.checkinSubtype,
+		abstain,
+		abstainReason: abstain ? "near_tie_top2" : undefined,
+		providerHealthHints,
 		temperature,
 	};
 }
@@ -281,4 +325,28 @@ function buildEscalationChain(
 	// Return everything after the current position
 	const startIdx = idx >= 0 ? idx + 1 : 0;
 	return ESCALATION_CHAIN.slice(startIdx).map((e) => ({ ...e }));
+}
+
+function buildProviderHealthHints(
+	health: Record<string, ProviderHealthSignal> | undefined,
+	selectedProviderId: string,
+): ProviderHealthHint[] | undefined {
+	if (!health) return undefined;
+	const selected = health[selectedProviderId];
+	if (!selected) return undefined;
+	const healthy =
+		selected.healthy === true ||
+		selected.status === "ok" ||
+		selected.status === "healthy";
+	if (healthy) return undefined;
+	const reason = selected.note ?? selected.status ?? "degraded";
+	return [
+		{
+			channel: "provider-health",
+			providerId: selectedProviderId,
+			severity: "warning",
+			status: selected.status,
+			message: `selected provider is unhealthy (${reason})`,
+		},
+	];
 }

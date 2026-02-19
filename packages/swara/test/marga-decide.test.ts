@@ -28,12 +28,13 @@ describe("margaDecide — contract", () => {
 		expect(d).toHaveProperty("rationale");
 		expect(d).toHaveProperty("confidence");
 		expect(d).toHaveProperty("decisionTimeMs");
+		expect(d).toHaveProperty("abstain");
 	});
 
 	it("should stamp the current contract version", () => {
 		const d = decide("Test message");
 		expect(d.decisionVersion).toBe(MARGA_CONTRACT_VERSION);
-		expect(d.decisionVersion).toBe("1.0");
+		expect(d.decisionVersion).toBe("1.1");
 	});
 
 	it("should compute decision in under 150ms", () => {
@@ -202,6 +203,52 @@ describe("margaDecide — task type detection", () => {
 	});
 });
 
+describe("margaDecide — abstain and subtype signals", () => {
+	it("should mark near-tie top2 decisions as abstain", () => {
+		const d = decide("summarize and translate this release note to Spanish");
+		expect(d.secondaryTaskType).toBeDefined();
+		expect(d.abstain).toBe(true);
+		expect(d.abstainReason).toBe("near_tie_top2");
+	});
+
+	it("should expose explicit checkin subtype for acknowledgement", () => {
+		const d = decide("thanks, got it");
+		expect(d.taskType).toBe("smalltalk");
+		expect(d.checkinSubtype).toBe("ack");
+	});
+
+	it("should expose explicit checkin subtype for social check-in", () => {
+		const d = decide("how are you doing today?");
+		expect(d.taskType).toBe("smalltalk");
+		expect(d.checkinSubtype).toBe("checkin");
+	});
+});
+
+describe("margaDecide — provider health advisory hints", () => {
+	it("should attach provider-health warning hint when selected provider is unhealthy", () => {
+		const d = decide("write a function", {
+			customBindings: [
+				{
+					taskType: "code-gen",
+					providerId: "anthropic",
+					modelId: "claude-sonnet-4-5-20250929",
+					rationale: "test binding",
+				},
+			],
+			providerHealth: {
+				anthropic: {
+					healthy: false,
+					status: "degraded",
+					note: "cooldown active",
+				},
+			},
+		});
+		expect(d.providerHealthHints?.length).toBe(1);
+		expect(d.providerHealthHints?.[0]?.channel).toBe("provider-health");
+		expect(d.providerHealthHints?.[0]?.severity).toBe("warning");
+	});
+});
+
 // ─── Complexity upgrades ─────────────────────────────────────────────────────
 
 describe("margaDecide — complexity upgrades", () => {
@@ -267,20 +314,20 @@ describe("margaDecide — complexity upgrades", () => {
 describe("margaDecide — binding strategies", () => {
 	it("should accept 'local' binding strategy", () => {
 		const d = decide("Write a function", { bindingStrategy: "local" });
-		expect(d.decisionVersion).toBe("1.0");
+		expect(d.decisionVersion).toBe("1.1");
 		// Local strategy should prefer local providers
 		expect(d.providerId).toBeDefined();
 	});
 
 	it("should accept 'cloud' binding strategy", () => {
 		const d = decide("Write a function", { bindingStrategy: "cloud" });
-		expect(d.decisionVersion).toBe("1.0");
+		expect(d.decisionVersion).toBe("1.1");
 		expect(d.providerId).toBeDefined();
 	});
 
 	it("should accept 'hybrid' binding strategy (default)", () => {
 		const d = decide("Write a function", { bindingStrategy: "hybrid" });
-		expect(d.decisionVersion).toBe("1.0");
+		expect(d.decisionVersion).toBe("1.1");
 		expect(d.providerId).toBeDefined();
 	});
 
@@ -297,8 +344,8 @@ describe("margaDecide — binding strategies", () => {
 		const local = decide("Write a function to sort an array", { bindingStrategy: "local" });
 		const cloud = decide("Write a function to sort an array", { bindingStrategy: "cloud" });
 		// They might differ — at minimum both should return valid decisions
-		expect(local.decisionVersion).toBe("1.0");
-		expect(cloud.decisionVersion).toBe("1.0");
+		expect(local.decisionVersion).toBe("1.1");
+		expect(cloud.decisionVersion).toBe("1.1");
 	});
 });
 

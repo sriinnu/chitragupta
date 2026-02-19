@@ -17,14 +17,14 @@ Make Marga task typing production-safe for smalltalk and heartbeat so Vaayu can 
 
 ## Next P0
 
-- [ ] Add confidence-aware abstain output to `margaDecide` when top-2 task scores are near-tied.
-- [ ] Add explicit `checkin` subtype (greeting/ack/checkin) in Marga decision contract.
-- [ ] Add provider-health hint channel in decision output (advisory only; enforcement stays in Vaayu).
+- [x] Add confidence-aware abstain output to `margaDecide` when top-2 task scores are near-tied.
+- [x] Add explicit `checkin` subtype (greeting/ack/checkin) in Marga decision contract.
+- [x] Add provider-health hint channel in decision output (advisory only; enforcement stays in Vaayu).
 
 ## Next P1
 
-- [ ] Add multilingual phrase fixtures for smalltalk classifier (Indic + Romance + Turkic + Slavic + Arabic).
-- [ ] Add regression corpus that mixes greeting tokens with actionable verbs to prevent false smalltalk captures.
+- [x] Add multilingual phrase fixtures for smalltalk classifier (Indic + Romance + Turkic + Slavic + Arabic).
+- [x] Add regression corpus that mixes greeting tokens with actionable verbs to prevent false smalltalk captures.
 - [ ] Add benchmark target: p95 task-classification latency <= 2ms on baseline hardware.
 
 ## Validation Notes

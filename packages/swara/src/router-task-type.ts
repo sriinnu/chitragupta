@@ -17,6 +17,8 @@
  */
 
 import type { Context, StreamOptions } from "./types.js";
+import { TYPE_SIGNALS, detectCheckinSubtype } from "./router-task-type-signals.js";
+export { LOCAL_BINDINGS, CLOUD_BINDINGS, HYBRID_BINDINGS } from "./router-task-bindings.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -53,6 +55,8 @@ export type ResolutionPath =
 	| "embedding"     // Needs an embedding model specifically, not a chat model.
 	| "cheapest-llm"; // Needs an LLM but the absolute cheapest one suffices.
 
+export type CheckinSubtype = "greeting" | "ack" | "checkin";
+
 /** Maps each task type to its resolution path. */
 export const RESOLUTION_MAP: Record<TaskType, ResolutionPath> = {
 	"chat":        "llm",
@@ -84,6 +88,12 @@ export interface TaskTypeResult {
 	confidence: number;
 	/** Secondary type if ambiguous (e.g. code-gen + reasoning). */
 	secondary?: TaskType;
+	/** Check-in subtype for smalltalk/heartbeat intents. */
+	checkinSubtype?: CheckinSubtype;
+	/** Top classifier score (used for near-tie abstain checks downstream). */
+	topScore?: number;
+	/** Runner-up classifier score (used for near-tie abstain checks downstream). */
+	secondScore?: number;
 }
 
 /**
@@ -100,162 +110,6 @@ export interface TaskModelBinding {
 	/** Why this model for this task type. */
 	rationale: string;
 }
-
-// ─── Pattern Definitions ────────────────────────────────────────────────────
-
-interface TypeSignal {
-	type: TaskType;
-	weight: number;
-	label: string;
-	test: (text: string, wordCount: number, hasTools: boolean, hasImages: boolean) => boolean;
-}
-
-// Patterns grouped by task type
-const EMBEDDING_PATTERNS = /\b(embed|embedding|vector|vectorize|encode|encode\s+text|similarity|semantic\s+search|nearest\s+neighbor|cosine)\b/i;
-const SEARCH_PATTERNS = /\b(search|find|look\s+up|retrieve|query|where\s+is|locate|grep|list\s+all|show\s+me\s+all|BM25|full.?text)\b/i;
-const VISION_PATTERNS = /\b(image|screenshot|picture|photo|visual|pixel|diagram|render|draw|chart|look\s+at\s+this|what\s+do\s+you\s+see|describe\s+this\s+image)\b/i;
-const CODE_PATTERNS = /\b(function|class|import|export|implement|code|write\s+a|create\s+a|debug|fix\s+the\s+bug|refactor|compile|typescript|python|javascript|rust|go|api\s+endpoint|unit\s+test|test\s+for)\b/i;
-const REASONING_PATTERNS = /\b(analyze|compare|evaluate|design|trade-?offs?|pros?\s+and\s+cons?|architecture|investigate|explain\s+why|how\s+does|should\s+we|recommend|strategy|approach|plan|review)\b/i;
-const SUMMARIZE_PATTERNS = /\b(summarize|summary|tldr|tl;dr|condense|compress|key\s+points|brief|overview|recap|digest|extract\s+the)\b/i;
-const TRANSLATE_PATTERNS = /\b(translate|translation|in\s+spanish|in\s+french|in\s+german|in\s+hindi|in\s+japanese|to\s+english|from\s+english|localize|i18n)\b/i;
-const HEARTBEAT_PATTERNS = /^(ping|health|status|alive|heartbeat|are\s+you\s+there)\s*[\?\!]?\s*$/i;
-const SMALLTALK_PATTERNS = /\b(hi|hello|hey|hii+|heyy+|yo|sup|wassup|hru|how\s+(?:are|r)\s+(?:you|u)|how(?:'s|\s+is)\s+it\s+going|hola|bonjour|hallo|ciao|ola|namaste|namaskar(?:am|a)?|vanakkam|merhaba|nasilsin|nasilsiniz|kaise\s+ho|kya\s+haal(?:\s+hai)?|como\s+estas|que\s+tal|comment\s+ca\s+va|comment\s+allez(?:[-\s]+vous)?|ca\s+va|wie\s+geht(?:s|es)(?:\s+dir)?|tudo\s+bem|bagunava|bagunnava|bagunnara|ela\s+undh?i|ela\s+unnav(?:u)?|ela\s+unnaru|all\s+good(?:\s+ha)?|thanks?|thank\s*you|thx|gracias|danke|merci|dhanyavad(?:alu)?|shukriya|vale|de\s+acuerdo|compris|entendu|alles\s+klar|in\s+ordnung|verstanden|theek\s+hai|anladim|tamam|ok(?:ay)?|ack)\b/i;
-const SMALLTALK_SCRIPT_PATTERNS = /(привет|здравствуйте|как\s+дела|спасибо|مرحبا|السلام\s+عليكم|كيف\s+حالك|شكرا|你好|你好吗|谢谢|こんにちは|お元気ですか|ありがとう|안녕하세요|잘\s*지내세요|감사합니다|नमस्ते|धन्यवाद|నమస్తే|హలో|హాయ్)/u;
-const SMALLTALK_ACTION_GUARD = /\b(weather|forecast|clima|tiempo|wetter|pogoda|meteo|rain|snow|temperature|temp|router|network|wifi|device|client|connected|lan|scan|time|clock|remind|note|notes|search|find|nearest|hospital|train|rail|journey|memory|session|provider|model|set|delete|forget|clear|music|play|transcrib|calendar|event|todo|joke|funny|meme|story|poem|quote|news|latest|top|tell\s+me|who\s+are\s+you|what\s+are\s+you|what\s+can\s+you\s+do|run|execute|install|debug|code|review|translate|translation|localize|i18n|summarize|summary|tldr|tl;dr|condense|compress)\b/i;
-const TOOL_PATTERNS = /\b(run\s+the|execute|call|invoke|use\s+the\s+tool|bash|shell|terminal|command|mkdir|npm|git|pip|docker)\b/i;
-const MEMORY_PATTERNS = /\b(remember|recall|what\s+did\s+(i|we)|last\s+session|previous\s+conversation|my\s+preference|session\s+history|show\s+memory|list\s+sessions|search\s+sessions|what\s+do\s+you\s+know\s+about\s+me)\b/i;
-const FILE_OP_PATTERNS = /\b(read\s+file|write\s+file|list\s+files|show\s+files|cat\s+|head\s+|tail\s+|ls\s+|find\s+files|grep\s+for|open\s+file|create\s+file|delete\s+file|rename\s+file|move\s+file|copy\s+file)\b/i;
-const API_CALL_PATTERNS = /\b(get\s+(my\s+)?emails?|check\s+(my\s+)?inbox|send\s+(an?\s+)?email|slack\s+message|post\s+to|fetch\s+from|api\s+call|webhook|calendar|schedule|reminder|notification)\b/i;
-const COMPACTION_PATTERNS = /\b(compact|compaction|token\s+budget|sinkhorn|allocat|context\s+window|trim\s+context|reduce\s+context|free\s+up\s+tokens)\b/i;
-
-const TYPE_SIGNALS: TypeSignal[] = [
-	// ── Heartbeat (highest priority — if it matches, it's almost always right) ──
-	{
-		type: "heartbeat",
-		weight: 10,
-		label: "heartbeat/ping pattern",
-		test: (text) => HEARTBEAT_PATTERNS.test(text.trim()),
-	},
-	{
-		type: "smalltalk",
-		weight: 9,
-		label: "smalltalk greeting/checkin",
-		test: (text, wordCount) =>
-			wordCount <= 10 &&
-			!SMALLTALK_ACTION_GUARD.test(text) &&
-			(SMALLTALK_PATTERNS.test(text) || SMALLTALK_SCRIPT_PATTERNS.test(text)),
-	},
-
-	// ── Embedding ──
-	{
-		type: "embedding",
-		weight: 8,
-		label: "embedding/vector keywords",
-		test: (text) => EMBEDDING_PATTERNS.test(text),
-	},
-
-	// ── Vision ──
-	{
-		type: "vision",
-		weight: 7,
-		label: "image/visual content",
-		test: (_text, _wc, _hasTools, hasImages) => hasImages,
-	},
-	{
-		type: "vision",
-		weight: 5,
-		label: "vision keywords",
-		test: (text) => VISION_PATTERNS.test(text),
-	},
-
-	// ── Search ──
-	{
-		type: "search",
-		weight: 6,
-		label: "search/retrieval keywords",
-		test: (text) => SEARCH_PATTERNS.test(text),
-	},
-
-	// ── Tool Execution ──
-	{
-		type: "tool-exec",
-		weight: 5,
-		label: "tool/command execution",
-		test: (text, _wc, hasTools) => hasTools && TOOL_PATTERNS.test(text),
-	},
-
-	// ── Code Generation ──
-	{
-		type: "code-gen",
-		weight: 5,
-		label: "code generation keywords",
-		test: (text) => CODE_PATTERNS.test(text),
-	},
-
-	// ── Summarize ──
-	{
-		type: "summarize",
-		weight: 5,
-		label: "summarization keywords",
-		test: (text) => SUMMARIZE_PATTERNS.test(text),
-	},
-
-	// ── Translate ──
-	{
-		type: "translate",
-		weight: 5,
-		label: "translation keywords",
-		test: (text) => TRANSLATE_PATTERNS.test(text),
-	},
-
-	// ── Memory (local recall, zero tokens) ──
-	{
-		type: "memory",
-		weight: 7,
-		label: "memory/session recall",
-		test: (text) => MEMORY_PATTERNS.test(text),
-	},
-
-	// ── File Operations (tool only, zero tokens) ──
-	{
-		type: "file-op",
-		weight: 7,
-		label: "file read/write/list",
-		test: (text) => FILE_OP_PATTERNS.test(text),
-	},
-
-	// ── API Calls (tool only, zero tokens) ──
-	{
-		type: "api-call",
-		weight: 7,
-		label: "external API call (email, slack, etc.)",
-		test: (text) => API_CALL_PATTERNS.test(text),
-	},
-
-	// ── Compaction (local compute, zero tokens) ──
-	{
-		type: "compaction",
-		weight: 8,
-		label: "context compaction / budget allocation",
-		test: (text) => COMPACTION_PATTERNS.test(text),
-	},
-
-	// ── Reasoning (broad, catches analytical work) ──
-	{
-		type: "reasoning",
-		weight: 4,
-		label: "reasoning/analysis keywords",
-		test: (text) => REASONING_PATTERNS.test(text),
-	},
-
-	// ── Chat (default fallback — always matches) ──
-	{
-		type: "chat",
-		weight: 1,
-		label: "general conversation",
-		test: () => true,
-	},
-];
 
 // ─── Classifier ─────────────────────────────────────────────────────────────
 
@@ -308,6 +162,8 @@ export function classifyTaskType(context: Context, _options?: StreamOptions): Ta
 
 	const [topType, topEntry] = ranked[0];
 	const secondEntry = ranked.length > 1 ? ranked[1] : undefined;
+	const topScore = topEntry.total;
+	const secondScore = secondEntry?.[1].total ?? 0;
 
 	// Confidence: ratio of top score to total, floored at 0.5
 	const totalScore = ranked.reduce((sum, [, e]) => sum + e.total, 0);
@@ -318,313 +174,19 @@ export function classifyTaskType(context: Context, _options?: StreamOptions): Ta
 	const secondary = secondEntry && secondEntry[1].total > topEntry.total * 0.5
 		? secondEntry[0]
 		: undefined;
+	let checkinSubtype: CheckinSubtype | undefined;
+	if (topType === "smalltalk" || topType === "heartbeat") {
+		checkinSubtype = detectCheckinSubtype(text, topType);
+	}
 
-	return { type: topType, resolution: RESOLUTION_MAP[topType], reason, confidence, secondary };
+	return {
+		type: topType,
+		resolution: RESOLUTION_MAP[topType],
+		reason,
+		confidence,
+		secondary,
+		checkinSubtype,
+		topScore,
+		secondScore,
+	};
 }
-
-// ─── Default Task-Type → Model Bindings ─────────────────────────────────────
-
-/**
- * LOCAL_BINDINGS: Use local models where possible — zero cost.
- *
- * This is the recommended default: local LLMs for most tasks,
- * cloud only for what local can't handle.
- */
-export const LOCAL_BINDINGS: TaskModelBinding[] = [
-	// ── Zero-token paths (no LLM, no cost) ──
-	{
-		taskType: "heartbeat",
-		providerId: "none",
-		modelId: "heartbeat-local",
-		rationale: "Heartbeat is a deterministic local ack. Zero tokens.",
-	},
-	{
-		taskType: "smalltalk",
-		providerId: "none",
-		modelId: "smalltalk-local",
-		rationale: "Greetings/check-ins are deterministic local replies. Zero tokens.",
-	},
-	{
-		taskType: "search",
-		providerId: "none",
-		modelId: "bm25-local",
-		rationale: "BM25 + hybrid vectors run locally. No LLM call needed.",
-	},
-	{
-		taskType: "memory",
-		providerId: "none",
-		modelId: "local-recall",
-		rationale: "Memory/session recall is pure local disk I/O. Zero tokens.",
-	},
-	{
-		taskType: "file-op",
-		providerId: "none",
-		modelId: "tool-direct",
-		rationale: "File read/write/list goes straight to yantra tools. Zero tokens.",
-	},
-	{
-		taskType: "api-call",
-		providerId: "none",
-		modelId: "tool-direct",
-		rationale: "Gmail, Slack, webhooks — tool handles the API call. Zero tokens.",
-	},
-	{
-		taskType: "compaction",
-		providerId: "none",
-		modelId: "sinkhorn-local",
-		rationale: "Sinkhorn-Knopp, TextRank, MinHash — pure local math. Zero tokens.",
-	},
-	// ── Local LLM paths (free) ──
-	{
-		taskType: "embedding",
-		providerId: "ollama",
-		modelId: "bge-m3",
-		rationale: "BGE-M3: 1024-dim, multi-lingual, dense+sparse in one model. Best local embedding.",
-	},
-	{
-		taskType: "code-gen",
-		providerId: "ollama",
-		modelId: "qwen2.5-coder:7b",
-		rationale: "Qwen Coder 7B is state-of-art for local code gen. Free.",
-	},
-	{
-		taskType: "chat",
-		providerId: "ollama",
-		modelId: "llama3.2:3b",
-		rationale: "General chat handled by 3B Llama locally. Fast and free.",
-	},
-	{
-		taskType: "summarize",
-		providerId: "ollama",
-		modelId: "llama3.2:3b",
-		rationale: "Summarization is compression — 3B local handles it well.",
-	},
-	{
-		taskType: "translate",
-		providerId: "ollama",
-		modelId: "llama3.2:3b",
-		rationale: "Basic translation at 3B level. Upgrade for rare languages.",
-	},
-	{
-		taskType: "tool-exec",
-		providerId: "ollama",
-		modelId: "qwen2.5-coder:7b",
-		rationale: "Tool calling needs structured output. Qwen Coder handles JSON well.",
-	},
-	// ── Cloud paths (only when local can't handle) ──
-	{
-		taskType: "reasoning",
-		providerId: "anthropic",
-		modelId: "claude-sonnet-4-5-20250929",
-		rationale: "Deep reasoning needs a strong model. Sonnet balances cost + quality.",
-	},
-	{
-		taskType: "vision",
-		providerId: "anthropic",
-		modelId: "claude-sonnet-4-5-20250929",
-		rationale: "Vision requires multimodal. Sonnet has image understanding.",
-	},
-];
-
-/**
- * CLOUD_BINDINGS: All cloud, optimized for cost within cloud providers.
- *
- * For users without local GPU or who prefer cloud reliability.
- * Note: tool-only and local-compute tasks STILL skip the LLM — even on cloud plan.
- */
-export const CLOUD_BINDINGS: TaskModelBinding[] = [
-	// ── Zero-token paths (same everywhere — these NEVER need LLM) ──
-	{
-		taskType: "heartbeat",
-		providerId: "none",
-		modelId: "heartbeat-local",
-		rationale: "Heartbeat checks stay local and deterministic. Zero tokens.",
-	},
-	{
-		taskType: "smalltalk",
-		providerId: "none",
-		modelId: "smalltalk-local",
-		rationale: "Smalltalk stays local by policy. Zero tokens.",
-	},
-	{
-		taskType: "search",
-		providerId: "none",
-		modelId: "bm25-local",
-		rationale: "Search is always local. BM25 + vectors don't need cloud LLM.",
-	},
-	{
-		taskType: "memory",
-		providerId: "none",
-		modelId: "local-recall",
-		rationale: "Memory recall is local disk. No cloud needed ever.",
-	},
-	{
-		taskType: "file-op",
-		providerId: "none",
-		modelId: "tool-direct",
-		rationale: "File operations go straight to tools. Zero tokens even on cloud.",
-	},
-	{
-		taskType: "api-call",
-		providerId: "none",
-		modelId: "tool-direct",
-		rationale: "API calls (Gmail, Slack) go through tools. Zero tokens.",
-	},
-	{
-		taskType: "compaction",
-		providerId: "none",
-		modelId: "sinkhorn-local",
-		rationale: "Compaction is pure math. Sinkhorn-Knopp runs locally.",
-	},
-	// ── Cloud LLM paths ──
-	{
-		taskType: "embedding",
-		providerId: "openai",
-		modelId: "text-embedding-3-small",
-		rationale: "OpenAI embedding API — 1536d, $0.02/1M tokens.",
-	},
-	{
-		taskType: "code-gen",
-		providerId: "anthropic",
-		modelId: "claude-sonnet-4-5-20250929",
-		rationale: "Claude Sonnet is excellent at code. Best price/quality.",
-	},
-	{
-		taskType: "chat",
-		providerId: "anthropic",
-		modelId: "claude-haiku-3-5",
-		rationale: "Haiku for simple chat. Fast, cheap, good enough.",
-	},
-	{
-		taskType: "summarize",
-		providerId: "anthropic",
-		modelId: "claude-haiku-3-5",
-		rationale: "Haiku compresses well. Summarization doesn't need opus-level.",
-	},
-	{
-		taskType: "translate",
-		providerId: "openai",
-		modelId: "gpt-4o-mini",
-		rationale: "GPT-4o-mini handles translation well across languages.",
-	},
-	{
-		taskType: "tool-exec",
-		providerId: "anthropic",
-		modelId: "claude-sonnet-4-5-20250929",
-		rationale: "Sonnet's tool use is production-grade. Reliable function calling.",
-	},
-	{
-		taskType: "reasoning",
-		providerId: "anthropic",
-		modelId: "claude-opus-4-6",
-		rationale: "Deep reasoning demands the strongest model. Opus is the ceiling.",
-	},
-	{
-		taskType: "vision",
-		providerId: "anthropic",
-		modelId: "claude-sonnet-4-5-20250929",
-		rationale: "Sonnet handles vision. Opus if you need deeper analysis.",
-	},
-];
-
-/**
- * HYBRID_BINDINGS: Local for cheap tasks, cloud for hard ones.
- *
- * The sweet spot for most users: zero-cost where possible,
- * pay only for what local can't do.
- */
-export const HYBRID_BINDINGS: TaskModelBinding[] = [
-	// ── Zero-token paths (tool-only / local-compute) ──
-	{
-		taskType: "heartbeat",
-		providerId: "none",
-		modelId: "heartbeat-local",
-		rationale: "Heartbeat: deterministic local ack. Zero tokens.",
-	},
-	{
-		taskType: "smalltalk",
-		providerId: "none",
-		modelId: "smalltalk-local",
-		rationale: "Smalltalk: deterministic local greeting/check-in. Zero tokens.",
-	},
-	{
-		taskType: "search",
-		providerId: "none",
-		modelId: "bm25-local",
-		rationale: "Search: pure local BM25 + vectors. Zero tokens.",
-	},
-	{
-		taskType: "memory",
-		providerId: "none",
-		modelId: "local-recall",
-		rationale: "Memory: local disk I/O. Zero tokens.",
-	},
-	{
-		taskType: "file-op",
-		providerId: "none",
-		modelId: "tool-direct",
-		rationale: "Files: yantra tools handle directly. Zero tokens.",
-	},
-	{
-		taskType: "api-call",
-		providerId: "none",
-		modelId: "tool-direct",
-		rationale: "APIs: tool handles the call. Zero tokens.",
-	},
-	{
-		taskType: "compaction",
-		providerId: "none",
-		modelId: "sinkhorn-local",
-		rationale: "Compaction: Sinkhorn-Knopp locally. Zero tokens.",
-	},
-	// ── Local LLM paths (free) ──
-	{
-		taskType: "embedding",
-		providerId: "ollama",
-		modelId: "bge-m3",
-		rationale: "BGE-M3: 1024d, multi-lingual, dense+sparse unified. Zero cost.",
-	},
-	{
-		taskType: "chat",
-		providerId: "ollama",
-		modelId: "llama3.2:3b",
-		rationale: "Chat: local 3B handles casual conversation.",
-	},
-	{
-		taskType: "summarize",
-		providerId: "ollama",
-		modelId: "llama3.2:3b",
-		rationale: "Summarize: local compression is fast and free.",
-	},
-	{
-		taskType: "translate",
-		providerId: "ollama",
-		modelId: "llama3.2:3b",
-		rationale: "Translate: local for common languages.",
-	},
-	{
-		taskType: "code-gen",
-		providerId: "ollama",
-		modelId: "qwen2.5-coder:7b",
-		rationale: "Code: Qwen Coder locally. Escalates to Sonnet if complex.",
-	},
-	{
-		taskType: "tool-exec",
-		providerId: "ollama",
-		modelId: "qwen2.5-coder:7b",
-		rationale: "Tool calls: Qwen handles JSON. Escalates if needed.",
-	},
-	// ── Cloud paths (only when needed) ──
-	{
-		taskType: "reasoning",
-		providerId: "anthropic",
-		modelId: "claude-sonnet-4-5-20250929",
-		rationale: "Reasoning: needs cloud intelligence. Sonnet is the sweet spot.",
-	},
-	{
-		taskType: "vision",
-		providerId: "anthropic",
-		modelId: "claude-sonnet-4-5-20250929",
-		rationale: "Vision: multimodal requires cloud.",
-	},
-];

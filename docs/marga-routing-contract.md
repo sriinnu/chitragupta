@@ -12,6 +12,9 @@ Define what Swara decides and what it must not decide, so Vaayu gateway remains 
 - classify `complexity`
 - emit resolution hints (`llm`, `tool-only`, `local-compute`, etc.)
 - emit `skipLLM` for deterministic local lanes
+- emit `checkinSubtype` for smalltalk/heartbeat (`greeting`/`ack`/`checkin`)
+- emit confidence-aware `abstain` advisory for near-tie top-2 task scores
+- emit advisory `providerHealthHints` when caller passes provider health metadata
 
 ## Swara Non-Responsibilities
 
