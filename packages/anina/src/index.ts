@@ -50,6 +50,11 @@ export { DEFAULT_NIDRA_CONFIG, DEFAULT_PRATYABHIJNA_CONFIG } from "./types.js";
 
 // Kaala Brahma — Agent Tree Lifecycle Manager
 export { KaalaBrahma } from "./agent-kaala.js";
+export {
+	isAncestor, getDescendantIds, getDirectChildIds,
+	countByStatus, handleOrphans, buildTreeHealthReport,
+	buildAgentHealthSnapshot,
+} from "./agent-kaala-health.js";
 export type {
 	AgentLifecycleStatus,
 	AgentHeartbeat,
@@ -84,6 +89,11 @@ export type {
 	AutonomyEventType,
 	AutonomyEventListener,
 } from "./agent-autonomy.js";
+export {
+	computeBackoffDelay, findValidMessagePrefix, recoverContext, withRetry,
+	checkHealthThresholds, sleep,
+} from "./autonomy-recovery.js";
+export type { RetryOptions, RecoveryOptions, TurnMetrics, HealthCheckOptions } from "./autonomy-recovery.js";
 
 // Learning loop — tool usage tracking, Markov prediction, performance scoring
 export { LearningLoop } from "./learning-loop.js";
@@ -93,6 +103,11 @@ export type {
 	LearnedPatterns,
 	LearningLoopState,
 } from "./learning-loop.js";
+export {
+	computePerformanceScore, computeTransitionMatrix,
+	findCommonSequences, detectNamedPatterns, getFrequencyRanking,
+	isSubsequence, KNOWN_PATTERNS,
+} from "./learning-loop-patterns.js";
 
 // ─── Soul/Identity ──────────────────────────────────────────────────────────
 export { SoulManager, ARCHETYPES } from "./agent-soul.js";
@@ -105,6 +120,7 @@ export type { ReflectionResult, PeerReview, ReflectorConfig } from "./agent-refl
 // ─── Coding Agent (Kartru) ──────────────────────────────────────────────────
 export { CodingAgent, CODE_TOOL_NAMES } from "./coding-agent.js";
 export type { CodingAgentConfig, CodingAgentEvent, CodingResult, ProjectConventions } from "./coding-agent.js";
+export { detectProjectConventions, findSampleSourceFile } from "./coding-agent-conventions.js";
 
 // ─── Coding Orchestrator (Sanyojaka) ────────────────────────────────────────
 export { CodingOrchestrator } from "./coding-orchestrator.js";
@@ -221,6 +237,17 @@ export type {
 	ListDecisionsOptions,
 	DecisionPattern,
 } from "./buddhi.js";
+export {
+	fnv1a, validateNyayaReasoning, rowToDecision,
+	formatDecisionExplanation, queryDecisionPatterns, queryCategorySuccessRate,
+} from "./buddhi-analysis.js";
+
+// Daemon periodic operations (monthly/yearly consolidation, archive)
+export {
+	formatDate as daemonFormatDate, scheduleLongTimeout,
+	consolidateLastMonth, consolidateLastYear,
+	backfillPeriodicReports, archiveOldDayFiles,
+} from "./daemon-periodic.js";
 
 // ─── Manas (मनस् — Zero-Cost Input Pre-Processor) ──────────────────────────
 export { Manas } from "./manas.js";
