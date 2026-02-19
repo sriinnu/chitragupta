@@ -39,6 +39,22 @@
 import type { Context, Message, ToolDefinition } from "./types.js";
 import { estimateTokens } from "./token-counter.js";
 
+// ─── Manas Feature Bridge ───────────────────────────────────────────────────
+
+/**
+ * Structural features from Manas (zero-cost NLU pre-processor).
+ * When provided, Turiya skips redundant regex extraction and uses
+ * these features to enrich its 7-dim context vector.
+ */
+export interface ManasFeatureBridge {
+	hasCode: boolean;
+	hasErrorStack: boolean;
+	questionCount: number;
+	imperative: boolean;
+	multiStep: boolean;
+	technical: boolean;
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 /** The 7-dimensional context vector that describes a request. */
@@ -463,10 +479,14 @@ export class TuriyaRouter {
 	 * This is the "observation" step — Turiya observes the current state
 	 * of the world before deciding which tier to route to.
 	 *
+	 * When `manasFeatures` is provided (from the zero-cost Manas NLU),
+	 * Turiya enriches its context vector without redundant regex extraction.
+	 *
 	 * @param messages - Conversation messages.
 	 * @param systemPrompt - Optional system prompt.
 	 * @param tools - Available tools (their presence affects context).
 	 * @param memoryHits - Number of memory/retrieval hits (optional).
+	 * @param manasFeatures - Pre-extracted features from Manas (optional).
 	 * @returns The 7-dimensional TuriyaContext.
 	 */
 	extractContext(
@@ -474,17 +494,34 @@ export class TuriyaRouter {
 		systemPrompt?: string,
 		tools?: ToolDefinition[],
 		memoryHits?: number,
+		manasFeatures?: ManasFeatureBridge,
 	): TuriyaContext {
 		const text = extractLastUserText(messages);
 		const fullText = systemPrompt ? `${systemPrompt} ${text}` : text;
 		const tokenCount = estimateTokens(fullText);
 
+		// Base context from regex extraction
+		let complexity = estimateComplexity(text, tokenCount);
+		let urgency = estimateUrgency(text);
+		let creativity = estimateCreativity(text);
+		let precision = estimatePrecision(text);
+		let codeRatio = computeCodeRatio(text);
+
+		// Enrich with Manas features when available (skips redundant work)
+		if (manasFeatures) {
+			if (manasFeatures.hasCode) codeRatio = clamp(codeRatio + 0.2);
+			if (manasFeatures.multiStep) complexity = clamp(complexity + 0.15);
+			if (manasFeatures.hasErrorStack) precision = clamp(precision + 0.2);
+			if (manasFeatures.questionCount > 2) creativity = clamp(creativity + 0.1);
+			if (manasFeatures.imperative) urgency = clamp(urgency + 0.1);
+		}
+
 		return {
-			complexity: estimateComplexity(text, tokenCount),
-			urgency: estimateUrgency(text),
-			creativity: estimateCreativity(text),
-			precision: estimatePrecision(text),
-			codeRatio: computeCodeRatio(text),
+			complexity,
+			urgency,
+			creativity,
+			precision,
+			codeRatio,
 			conversationDepth: clamp(messages.length / (2 * this.maxConversationDepth)),
 			memoryLoad: clamp((memoryHits ?? 0) / this.maxMemoryHits),
 		};

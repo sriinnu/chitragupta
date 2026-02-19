@@ -333,6 +333,38 @@ export class ShikshaController {
 		return result.stdout.trim();
 	}
 
+	// ─── Proactive Skill Scanning (Vasana-Informed) ─────────────────
+
+	/**
+	 * Proactively scan user behavioral tendencies (Vasanas) to suggest
+	 * skill learning before a gap is encountered at runtime.
+	 *
+	 * Called during the daemon's DREAMING consolidation phase.
+	 * For each frequent task pattern that has no matching skill,
+	 * returns a suggestion for proactive learning.
+	 *
+	 * @param vasanas - Behavioral tendencies from the VasanaEngine.
+	 * @returns Array of suggested skill topics to learn.
+	 */
+	proactiveScan(vasanas: ReadonlyArray<{ name: string; description: string; strength: number }>): string[] {
+		const suggestions: string[] = [];
+
+		for (const vasana of vasanas) {
+			// Only consider strong tendencies (strength >= 0.5)
+			if (vasana.strength < 0.5) continue;
+
+			// Check if a matching skill already exists
+			const matches = this.registry.search(vasana.description, 3);
+			const hasSkill = matches.some((m) => m.score >= 0.6);
+
+			if (!hasSkill) {
+				suggestions.push(vasana.description);
+			}
+		}
+
+		return suggestions.slice(0, 10); // Cap at 10 suggestions per scan
+	}
+
 	// ─── Configuration ───────────────────────────────────────────────
 
 	/** Get the current configuration (read-only). */
