@@ -13,21 +13,13 @@ import { useState, useCallback } from "preact/hooks";
 
 /** Props for the visual match component. */
 export interface VisualMatchProps {
-	/** Callback invoked with the 4 selected icon indices on submission. */
-	onSubmit: (selection: number[]) => void;
+	/** Icon set from the server challenge to display in the grid. */
+	iconSet: string[];
+	/** Callback invoked with the selected icon strings on submission. */
+	onSubmit: (icons: string[]) => void;
 	/** Whether submission is in progress. */
 	loading?: boolean;
 }
-
-// ── Constants ─────────────────────────────────────────────────────
-
-/** The 16 icons arranged in a 4x4 grid. */
-const ICONS = [
-	"\uD83D\uDD37", "\uD83C\uDF3F", "\u26A1", "\uD83C\uDFAF",
-	"\uD83D\uDD25", "\uD83C\uDF0A", "\uD83D\uDC8E", "\uD83C\uDF19",
-	"\uD83E\uDD8B", "\uD83C\uDF40", "\uD83C\uDF38", "\u2B50",
-	"\uD83D\uDD2E", "\uD83C\uDF08", "\uD83E\uDEB6", "\uD83C\uDF41",
-];
 
 const REQUIRED_COUNT = 4;
 
@@ -40,7 +32,7 @@ const REQUIRED_COUNT = 4;
  * order. The selection is displayed below the grid and can be cleared.
  * Submission is automatic once 4 icons are selected, or manual via button.
  */
-export function VisualMatch({ onSubmit, loading }: VisualMatchProps): preact.JSX.Element {
+export function VisualMatch({ iconSet, onSubmit, loading }: VisualMatchProps): preact.JSX.Element {
 	const [selected, setSelected] = useState<number[]>([]);
 
 	const handleIconClick = useCallback((index: number) => {
@@ -68,7 +60,7 @@ export function VisualMatch({ onSubmit, loading }: VisualMatchProps): preact.JSX
 					marginBottom: "16px",
 				}}
 			>
-				{ICONS.map((icon, i) => {
+				{iconSet.map((icon, i) => {
 					const isSelected = selected.includes(i);
 					const order = isSelected ? selected.indexOf(i) + 1 : null;
 
@@ -132,7 +124,7 @@ export function VisualMatch({ onSubmit, loading }: VisualMatchProps): preact.JSX
 					Selected:
 				</span>
 				{selected.map((idx, i) => (
-					<span key={i} style={{ fontSize: "20px" }}>{ICONS[idx]}</span>
+					<span key={i} style={{ fontSize: "20px" }}>{iconSet[idx]}</span>
 				))}
 				{selected.length < REQUIRED_COUNT && (
 					<span style={{ color: "#8888a0", fontSize: "13px" }}>
@@ -160,7 +152,7 @@ export function VisualMatch({ onSubmit, loading }: VisualMatchProps): preact.JSX
 				</button>
 				<button
 					disabled={!canSubmit}
-					onClick={() => onSubmit(selected)}
+					onClick={() => onSubmit(selected.map((idx) => iconSet[idx]))}
 					style={{
 						padding: "10px 24px",
 						background: canSubmit ? "#6366f1" : "#2a2a3a",
