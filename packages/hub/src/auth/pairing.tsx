@@ -8,7 +8,7 @@
  */
 
 import { useState, useEffect, useCallback } from "preact/hooks";
-import { apiPost, apiGet } from "../api.js";
+import { apiPost, apiGet, ApiError } from "../api.js";
 import { setToken, deviceId } from "../signals/auth.js";
 import { PassphraseEntry } from "./passphrase-entry.js";
 import { VisualMatch } from "./visual-match.js";
@@ -23,14 +23,24 @@ type PairingMethod = "passphrase" | "qr" | "visual" | "number";
 interface PairingChallenge {
 	challengeId: string;
 	methods: string[];
-	expiresAt: string;
-	locked?: boolean;
-	lockExpiresAt?: string;
+	wordList: string[];
+	iconSet: string[];
+	numberCodeLength: number;
+	expiresAt: number; // Unix ms
 }
 
 /** Verification response from the server. */
 interface VerifyResponse {
-	token: string;
+	success: boolean;
+	jwt?: string;
+	deviceId?: string;
+	error?: string;
+}
+
+/** Locked-out response returned by HTTP 423 from the server. */
+interface LockedResponse {
+	error: string;
+	lockedUntil: number;
 }
 
 /** Tab definition for method selection. */
@@ -62,6 +72,7 @@ export function Pairing(): preact.JSX.Element {
 	const [activeTab, setActiveTab] = useState<PairingMethod>("passphrase");
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
+	const [lockedUntil, setLockedUntil] = useState<number | null>(null);
 	const [lockCountdown, setLockCountdown] = useState<number | null>(null);
 
 	// Fetch the challenge on mount
@@ -71,8 +82,14 @@ export function Pairing(): preact.JSX.Element {
 			try {
 				const data = await apiGet<PairingChallenge>("/api/pair/challenge");
 				if (mounted) setChallenge(data);
-			} catch {
-				if (mounted) setError("Could not fetch pairing challenge. Is the server running?");
+			} catch (err) {
+				if (!mounted) return;
+				if (err instanceof ApiError && err.status === 423) {
+					const body = err.body as LockedResponse;
+					setLockedUntil(body.lockedUntil);
+				} else {
+					setError("Could not fetch pairing challenge. Is the server running?");
+				}
 			}
 		}
 		void fetchChallenge();
@@ -81,35 +98,48 @@ export function Pairing(): preact.JSX.Element {
 
 	// Lock countdown timer
 	useEffect(() => {
-		if (!challenge?.locked || !challenge.lockExpiresAt) {
+		if (lockedUntil === null) {
 			setLockCountdown(null);
 			return;
 		}
 		const updateCountdown = (): void => {
-			const remaining = Math.max(0, new Date(challenge.lockExpiresAt!).getTime() - Date.now());
+			const remaining = Math.max(0, lockedUntil - Date.now());
 			setLockCountdown(Math.ceil(remaining / 1000));
+			if (remaining <= 0) {
+				setLockedUntil(null);
+			}
 		};
 		updateCountdown();
 		const interval = setInterval(updateCountdown, 1000);
 		return () => clearInterval(interval);
-	}, [challenge?.locked, challenge?.lockExpiresAt]);
+	}, [lockedUntil]);
 
+	/** Submit a verification response to the backend. */
 	const handleVerify = useCallback(async (method: PairingMethod, proof: unknown) => {
 		if (!challenge) return;
 		setError(null);
 		setLoading(true);
 		try {
-			const response = await apiPost<VerifyResponse>("/api/pair/verify", {
+			const result = await apiPost<VerifyResponse>("/api/pair/verify", {
 				challengeId: challenge.challengeId,
 				method,
-				proof,
+				response: proof, // backend expects "response", not "proof"
 				deviceId: deviceId.value,
 			});
-			setToken(response.token);
-			window.location.hash = "#/";
+			if (result.success && result.jwt) {
+				setToken(result.jwt);
+				window.location.hash = "#/";
+			} else {
+				setError(result.error ?? "Verification failed");
+			}
 		} catch (err) {
-			const message = err instanceof Error ? err.message : "Verification failed";
-			setError(message);
+			if (err instanceof ApiError && err.status === 423) {
+				const body = err.body as LockedResponse;
+				setLockedUntil(body.lockedUntil);
+			} else {
+				const message = err instanceof Error ? err.message : "Verification failed";
+				setError(message);
+			}
 		} finally {
 			setLoading(false);
 		}
@@ -117,7 +147,7 @@ export function Pairing(): preact.JSX.Element {
 
 	// ── Render locked state ────────────────────────────────────
 
-	if (challenge?.locked && lockCountdown !== null && lockCountdown > 0) {
+	if (lockedUntil !== null && lockCountdown !== null && lockCountdown > 0) {
 		return (
 			<div style={{ maxWidth: "440px", margin: "40px auto", textAlign: "center" }}>
 				<div style={{ fontSize: "48px", marginBottom: "16px" }}>{"\uD83D\uDD12"}</div>
@@ -183,8 +213,9 @@ export function Pairing(): preact.JSX.Element {
 			</div>
 
 			{/* Tab content */}
-			{activeTab === "passphrase" && (
+			{activeTab === "passphrase" && challenge && (
 				<PassphraseEntry
+					wordList={challenge.wordList}
 					loading={loading}
 					onSubmit={(words) => void handleVerify("passphrase", { words })}
 				/>
@@ -193,14 +224,15 @@ export function Pairing(): preact.JSX.Element {
 			{activeTab === "qr" && (
 				<QrScanner
 					loading={loading}
-					onSubmit={(token) => void handleVerify("qr", { token })}
+					onSubmit={(qrToken) => void handleVerify("qr", { qrToken })}
 				/>
 			)}
 
-			{activeTab === "visual" && (
+			{activeTab === "visual" && challenge && (
 				<VisualMatch
+					iconSet={challenge.iconSet}
 					loading={loading}
-					onSubmit={(selection) => void handleVerify("visual", { selection })}
+					onSubmit={(icons) => void handleVerify("visual", { icons })}
 				/>
 			)}
 

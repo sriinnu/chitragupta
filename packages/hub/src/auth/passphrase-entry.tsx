@@ -13,39 +13,13 @@ import { useState, useRef, useCallback } from "preact/hooks";
 
 /** Props for the passphrase entry component. */
 export interface PassphraseEntryProps {
+	/** Word list from the server challenge for autocomplete. */
+	wordList: string[];
 	/** Callback invoked with the 4-word array on submission. */
 	onSubmit: (words: string[]) => void;
 	/** Whether submission is currently in progress. */
 	loading?: boolean;
 }
-
-// ── Word list (subset for autocomplete) ───────────────────────────
-
-const WORD_LIST = [
-	"alpha", "anchor", "arrow", "atlas", "autumn",
-	"beacon", "birch", "blaze", "bridge", "bronze",
-	"canyon", "cedar", "cipher", "cobalt", "coral",
-	"dawn", "delta", "drift", "dune", "dusk",
-	"ember", "echo", "elder", "emerald", "epoch",
-	"falcon", "fern", "flame", "flint", "forge",
-	"glacier", "grove", "guard", "gust", "glyph",
-	"harbor", "haven", "hawk", "haze", "helm",
-	"iris", "iron", "ivory", "isle", "ignite",
-	"jade", "jasper", "jewel", "jovial", "juniper",
-	"karma", "kelp", "kernel", "kindle", "knot",
-	"lark", "lava", "leaf", "lunar", "lynx",
-	"maple", "marble", "marsh", "mist", "moth",
-	"nebula", "nest", "nimbus", "noble", "nova",
-	"oak", "oasis", "onyx", "orbit", "osprey",
-	"pebble", "pine", "prism", "pulse", "pyre",
-	"quartz", "quest", "quill", "quiet", "quirk",
-	"raven", "reef", "ridge", "river", "rune",
-	"sage", "sapphire", "shadow", "shore", "slate",
-	"thorn", "tide", "timber", "torch", "trail",
-	"umbra", "unity", "umber", "urchin", "utopia",
-	"vale", "vapor", "vault", "vine", "violet",
-	"warden", "wave", "whisper", "willow", "wren",
-];
 
 const WORD_COUNT = 4;
 
@@ -58,7 +32,7 @@ const WORD_COUNT = 4;
  * Tab and Enter advance focus to the next field. Submission is
  * triggered by the Submit button once all four words are filled.
  */
-export function PassphraseEntry({ onSubmit, loading }: PassphraseEntryProps): preact.JSX.Element {
+export function PassphraseEntry({ wordList, onSubmit, loading }: PassphraseEntryProps): preact.JSX.Element {
 	const [words, setWords] = useState<string[]>(Array(WORD_COUNT).fill(""));
 	const [activeIndex, setActiveIndex] = useState<number | null>(null);
 	const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -95,7 +69,7 @@ export function PassphraseEntry({ onSubmit, loading }: PassphraseEntryProps): pr
 			<div style={{ display: "flex", gap: "8px", marginBottom: "16px", flexWrap: "wrap" }}>
 				{words.map((word, i) => {
 					const filtered = word.length >= 2
-						? WORD_LIST.filter((w) => w.startsWith(word) && w !== word).slice(0, 6)
+						? wordList.filter((w) => w.startsWith(word) && w !== word).slice(0, 6)
 						: [];
 					const showDropdown = activeIndex === i && filtered.length > 0;
 
