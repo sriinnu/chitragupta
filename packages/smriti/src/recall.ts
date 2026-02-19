@@ -18,8 +18,6 @@
  */
 
 import fs from "fs";
-import path from "path";
-import { getChitraguptaHome } from "@chitragupta/core";
 import { DatabaseManager } from "./db/database.js";
 import { initVectorsSchema } from "./db/schema.js";
 import type {
@@ -37,76 +35,19 @@ import {
   extractIndexText,
   resetOllamaAvailability,
 } from "./recall-scoring.js";
+import {
+  DEFAULT_TOP_K,
+  DEFAULT_THRESHOLD,
+  getIndexDir,
+  getEmbeddingsPath,
+  vectorToBlob,
+  blobToVector,
+} from "./recall-storage.js";
+import type { EmbeddingRow, EmbeddingEntry } from "./recall-storage.js";
 
-// ─── SQLite Row Types ────────────────────────────────────────────────────────
-
-/** Shape of a row returned from the `embeddings` table. */
-interface EmbeddingRow {
-  id: string;
-  vector: Buffer;
-  source_type: string;
-  source_id: string;
-  text: string;
-  metadata: string | null;
-  created_at: string;
-}
-
-// ─── Configuration ───────────────────────────────────────────────────────────
-
-/** Default top-K results. */
-const DEFAULT_TOP_K = 10;
-
-/** Default cosine similarity threshold. */
-const DEFAULT_THRESHOLD = 0.3;
-
-// ─── Legacy JSON Storage (fallback + migration source) ───────────────────────
-
-function getIndexDir(): string {
-  return path.join(getChitraguptaHome(), "smriti", "index");
-}
-
-function getEmbeddingsPath(): string {
-  return path.join(getIndexDir(), "embeddings.json");
-}
-
-// ─── Vector Serialization ───────────────────────────────────────────────────
-
-/**
- * Convert a number[] vector to a binary BLOB for SQLite storage.
- * Uses Float32Array for compact, lossless representation.
- */
-export function vectorToBlob(vector: number[]): Buffer {
-  const float32 = new Float32Array(vector);
-  return Buffer.from(float32.buffer);
-}
-
-/**
- * Convert a binary BLOB back to a number[] vector.
- * Reconstructs the Float32Array from the raw buffer.
- */
-export function blobToVector(blob: Buffer): number[] {
-  const float32 = new Float32Array(
-    blob.buffer,
-    blob.byteOffset,
-    blob.byteLength / 4,
-  );
-  return Array.from(float32);
-}
-
-// ─── Embedding Index Entry ───────────────────────────────────────────────────
-
-interface EmbeddingEntry {
-  id: string;
-  vector: number[];
-  source: "session" | "stream";
-  sourceId: string;
-  title: string;
-  text: string;
-  summary: string;
-  tags: string[];
-  date: string;
-  deviceId?: string;
-}
+// Re-export public symbols from recall-storage so index.ts needs no changes
+export { vectorToBlob, blobToVector } from "./recall-storage.js";
+export { migrateEmbeddingsJson } from "./recall-storage.js";
 
 // ─── DB Init Flag ────────────────────────────────────────────────────────────
 
@@ -248,6 +189,7 @@ export class RecallEngine {
 
   // ─── Session Indexing ────────────────────────────────────────────
 
+  /** Index a session's turns into the embedding store. */
   async indexSession(session: Session): Promise<void> {
     if (!this.loaded) this.loadIndex();
 
@@ -289,6 +231,7 @@ export class RecallEngine {
     this.saveIndex();
   }
 
+  /** Index a memory stream into the embedding store. */
   async indexStream(streamType: StreamType, content: string, deviceId?: string): Promise<void> {
     if (!this.loaded) this.loadIndex();
 
@@ -320,6 +263,7 @@ export class RecallEngine {
 
   // ─── Recall (Search) ─────────────────────────────────────────────
 
+  /** Search all indexed embeddings for the given query string. */
   async recall(query: string, options?: RecallOptions): Promise<RecallResult[]> {
     if (!this.loaded) this.loadIndex();
     if (this.entries.length === 0) return [];
@@ -377,6 +321,7 @@ export class RecallEngine {
 
   // ─── Re-index ────────────────────────────────────────────────────
 
+  /** Re-index all sessions and streams from scratch. */
   async reindexAll(): Promise<void> {
     this.entries = [];
 
@@ -411,99 +356,13 @@ export class RecallEngine {
     this.saveIndex();
   }
 
+  /** Return the number of entries in the in-memory index. */
   getIndexSize(): number {
     return this.entries.length;
   }
 
+  /** Reset the embedding provider availability cache. */
   resetOllamaAvailability(): void {
     resetOllamaAvailability();
   }
-}
-
-// ─── Migration: JSON -> SQLite ───────────────────────────────────────────────
-
-/**
- * Migrate embeddings from the legacy JSON file (embeddings.json) to SQLite vectors.db.
- *
- * - Reads from ~/.chitragupta/smriti/index/embeddings.json
- * - Inserts all entries into the embeddings table in vectors.db
- * - Renames the JSON file to embeddings.json.bak on success
- * - Returns the count of migrated and skipped entries
- *
- * Safe to call multiple times: skips if JSON file does not exist.
- */
-export function migrateEmbeddingsJson(): { migrated: number; skipped: number } {
-  const jsonPath = getEmbeddingsPath();
-
-  if (!fs.existsSync(jsonPath)) {
-    return { migrated: 0, skipped: 0 };
-  }
-
-  let entries: EmbeddingEntry[];
-  try {
-    const raw = fs.readFileSync(jsonPath, "utf-8");
-    entries = JSON.parse(raw) as EmbeddingEntry[];
-  } catch {
-    return { migrated: 0, skipped: 0 };
-  }
-
-  if (!entries || entries.length === 0) {
-    return { migrated: 0, skipped: 0 };
-  }
-
-  let migrated = 0;
-  let skipped = 0;
-
-  try {
-    const dbm = DatabaseManager.instance();
-    initVectorsSchema(dbm);
-    const db = dbm.get("vectors");
-
-    const txn = db.transaction(() => {
-      const insert = db.prepare(`
-        INSERT OR IGNORE INTO embeddings (id, vector, text, source_type, source_id, dimensions, metadata, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
-      for (const entry of entries) {
-        try {
-          const result = insert.run(
-            entry.id,
-            vectorToBlob(entry.vector),
-            entry.text,
-            entry.source,
-            entry.sourceId,
-            entry.vector.length,
-            JSON.stringify({
-              title: entry.title,
-              summary: entry.summary,
-              tags: entry.tags,
-              date: entry.date,
-              deviceId: entry.deviceId,
-            }),
-            new Date(entry.date).getTime(),
-          );
-          if (result.changes > 0) {
-            migrated++;
-          } else {
-            skipped++;
-          }
-        } catch {
-          skipped++;
-        }
-      }
-    });
-    txn();
-
-    // Rename JSON file to .bak on success
-    try {
-      fs.renameSync(jsonPath, jsonPath + ".bak");
-    } catch {
-      // Non-fatal: file may be locked or read-only
-    }
-  } catch {
-    return { migrated: 0, skipped: entries.length };
-  }
-
-  return { migrated, skipped };
 }
