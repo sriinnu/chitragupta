@@ -9,6 +9,7 @@
  */
 
 import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
+import { ProviderError, loadGlobalSettings } from "@chitragupta/core";
 
 // ─── Output Truncation ──────────────────────────────────────────────────────
 
@@ -302,4 +303,42 @@ export function createAgentPromptTool(): McpToolHandler {
 			}
 		},
 	};
+}
+
+// ─── Agent Prompt With Provider Fallback ────────────────────────────────────
+
+interface PromptableAgent {
+	prompt(message: string): Promise<string>;
+	destroy(): Promise<void>;
+}
+
+type AgentFactory = (opts: { provider: string }) => Promise<PromptableAgent>;
+
+/**
+ * Try prompting with each provider in priority order, falling back on
+ * {@link ProviderError} or "No provider available" errors.
+ */
+export async function runAgentPromptWithFallback(
+	message: string,
+	_opts: Record<string, unknown>,
+	createAgent: AgentFactory,
+): Promise<string> {
+	const settings = loadGlobalSettings();
+	const providers: string[] = settings.providerPriority ?? ["claude-code"];
+
+	for (const provider of providers) {
+		const agent = await createAgent({ provider });
+		try {
+			const result = await agent.prompt(message);
+			await agent.destroy();
+			return result;
+		} catch (err) {
+			await agent.destroy();
+			const isRetryable =
+				err instanceof ProviderError ||
+				(err instanceof Error && err.message.includes("No provider available"));
+			if (!isRetryable) throw err;
+		}
+	}
+	throw new Error("All providers exhausted");
 }
