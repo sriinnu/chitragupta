@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useCallback } from "preact/hooks";
+import { route } from "preact-router";
 import { apiPost, apiGet, ApiError } from "../api.js";
 import { setToken, deviceId } from "../signals/auth.js";
 import { PassphraseEntry } from "./passphrase-entry.js";
@@ -128,7 +129,7 @@ export function Pairing(): preact.JSX.Element {
 			});
 			if (result.success && result.jwt) {
 				setToken(result.jwt);
-				window.location.hash = "#/";
+				route("/");
 			} else {
 				setError(result.error ?? "Verification failed");
 			}
