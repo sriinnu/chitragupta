@@ -51,6 +51,9 @@ package-lock.json
 # Work-in-progress docs (local only — not pushed)
 work-in-progress/
 
+# Backup files
+*.bak
+
 # Scratch / generation scripts
 _data.json
 _gen.mjs
