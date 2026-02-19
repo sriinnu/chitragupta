@@ -11,6 +11,8 @@ Make Marga task typing production-safe for smalltalk and heartbeat so Vaayu can 
 - [x] Routed both `smalltalk` and `heartbeat` to `local-compute` (`skipLLM=true`).
 - [x] Added bindings for `smalltalk` and `heartbeat` in local/cloud/hybrid binding sets.
 - [x] Updated Swara docs to reflect 15 task types.
+- [x] Added Swara routing ownership contract doc:
+  - `chitragupta/docs/marga-routing-contract.md`
 - [x] Updated Swara tests for new smalltalk + heartbeat behavior.
 
 ## Next P0
