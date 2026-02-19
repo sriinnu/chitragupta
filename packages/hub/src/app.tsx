@@ -3,60 +3,28 @@
  *
  * Sets up hash-based routing via preact-router and wraps all
  * pages in a shared {@link Layout}. When no JWT token is present,
- * the Pairing page is shown instead of the router.
+ * the Pairing page is shown instead of the router. Initialises
+ * the WebSocket connection on mount for real-time events.
  * @module app
  */
 
-import Router from "preact-router";
+import { useEffect, useState } from "preact/hooks";
+import Router, { route } from "preact-router";
 import { Layout } from "./components/layout.js";
 import { isAuthenticated } from "./signals/auth.js";
+import { connectWebSocket, disconnectWebSocket } from "./signals/realtime.js";
 
-// ── Placeholder page components ────────────────────────────────────
+// ── Page imports ────────────────────────────────────────────────
 
-/** Overview dashboard page. */
-function Overview(): preact.JSX.Element {
-	return <div>Overview</div>;
-}
-
-/** Session browser page. */
-function Sessions(): preact.JSX.Element {
-	return <div>Sessions</div>;
-}
-
-/** Model registry page. */
-function Models(): preact.JSX.Element {
-	return <div>Models</div>;
-}
-
-/** Provider configuration page. */
-function Providers(): preact.JSX.Element {
-	return <div>Providers</div>;
-}
-
-/** Memory explorer page. */
-function Memory(): preact.JSX.Element {
-	return <div>Memory</div>;
-}
-
-/** Skill catalogue page. */
-function Skills(): preact.JSX.Element {
-	return <div>Skills</div>;
-}
-
-/** Settings page. */
-function Settings(): preact.JSX.Element {
-	return <div>Settings</div>;
-}
-
-/** Device management page. */
-function Devices(): preact.JSX.Element {
-	return <div>Devices</div>;
-}
-
-/** Device pairing / initial auth page. */
-function Pairing(): preact.JSX.Element {
-	return <div>Pairing</div>;
-}
+import { Overview } from "./pages/overview.js";
+import { Sessions } from "./pages/sessions.js";
+import { Models } from "./pages/models.js";
+import { Providers } from "./pages/providers.js";
+import { Memory } from "./pages/memory.js";
+import { Skills } from "./pages/skills.js";
+import { Settings } from "./pages/settings.js";
+import { Devices } from "./pages/devices.js";
+import { Pairing } from "./auth/pairing.js";
 
 // ── App root ───────────────────────────────────────────────────────
 
@@ -65,19 +33,35 @@ function Pairing(): preact.JSX.Element {
  *
  * Checks the auth signal to decide between the main router and the
  * pairing screen. All routes are wrapped in the shared Layout.
+ * Connects the WebSocket event stream when authenticated.
  */
 export function App(): preact.JSX.Element {
+	const [currentUrl, setCurrentUrl] = useState(window.location.pathname || "/");
+
+	// Connect WebSocket when authenticated, disconnect on logout
+	useEffect(() => {
+		if (isAuthenticated.value) {
+			connectWebSocket();
+			return () => disconnectWebSocket();
+		}
+		return undefined;
+	}, []);
+
+	const handleRouteChange = (e: { url: string }): void => {
+		setCurrentUrl(e.url);
+	};
+
 	if (!isAuthenticated.value) {
 		return (
-			<Layout>
+			<Layout currentUrl="/pair">
 				<Pairing />
 			</Layout>
 		);
 	}
 
 	return (
-		<Layout>
-			<Router>
+		<Layout currentUrl={currentUrl}>
+			<Router onChange={handleRouteChange}>
 				<Overview path="/" />
 				<Sessions path="/sessions" />
 				<Models path="/models" />
