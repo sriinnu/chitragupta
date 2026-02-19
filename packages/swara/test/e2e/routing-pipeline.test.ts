@@ -185,6 +185,14 @@ describe("Routing Pipeline E2E", () => {
 			expect(decision.taskType).toBe("heartbeat");
 		});
 
+		it("should classify greetings as smalltalk and skipLLM", () => {
+			const pipeline = createTestPipeline();
+			const decision = pipeline.classify(userContext("hello how are you"));
+
+			expect(decision.taskType).toBe("smalltalk");
+			expect(decision.skipLLM).toBe(true);
+		});
+
 		it("should classify summarization requests", () => {
 			const pipeline = createTestPipeline();
 			const decision = pipeline.classify(userContext("Summarize the key points of this document"));
@@ -311,10 +319,16 @@ describe("Routing Pipeline E2E", () => {
 			expect(result.resolution).toBe("embedding");
 		});
 
-		it("should classify heartbeat with resolution=cheapest-llm", () => {
+		it("should classify heartbeat with resolution=local-compute", () => {
 			const result = classifyTaskType(userContext("ping"));
 			expect(result.type).toBe("heartbeat");
-			expect(result.resolution).toBe("cheapest-llm");
+			expect(result.resolution).toBe("local-compute");
+		});
+
+		it("should classify smalltalk with resolution=local-compute", () => {
+			const result = classifyTaskType(userContext("how are you doing today"));
+			expect(result.type).toBe("smalltalk");
+			expect(result.resolution).toBe("local-compute");
 		});
 
 		it("should classify reasoning with resolution=llm", () => {
@@ -364,7 +378,7 @@ describe("Routing Pipeline E2E", () => {
 			];
 
 			const pipeline = createTestPipeline({ bindings: customBindings });
-			const decision = pipeline.classify(userContext("Hello there"));
+			const decision = pipeline.classify(userContext("What is the capital of France?"));
 
 			expect(decision.providerId).toBe("custom-provider");
 			expect(decision.modelId).toBe("custom-model");
@@ -373,7 +387,7 @@ describe("Routing Pipeline E2E", () => {
 		it("should fall back to ollama/llama3.2:3b when no binding matches", () => {
 			// Use empty bindings — no task type will match
 			const pipeline = createTestPipeline({ bindings: [] });
-			const decision = pipeline.classify(userContext("Hello"));
+			const decision = pipeline.classify(userContext("What is the capital of France?"));
 
 			// Fallback defaults
 			expect(decision.providerId).toBe("ollama");
@@ -414,7 +428,7 @@ describe("Routing Pipeline E2E", () => {
 				},
 			});
 
-			const decision = pipeline.classify(userContext("Hello"));
+			const decision = pipeline.classify(userContext("What is the capital of France?"));
 
 			if (decision.taskType === "chat") {
 				const complexityOrder = { trivial: 0, simple: 1, medium: 2, complex: 3, expert: 4 };
@@ -445,7 +459,7 @@ describe("Routing Pipeline E2E", () => {
 
 		it("should not set temperature when no hook is provided", () => {
 			const pipeline = createTestPipeline();
-			const decision = pipeline.classify(userContext("Hello"));
+			const decision = pipeline.classify(userContext("What is the capital of France?"));
 
 			expect(decision.temperature).toBeUndefined();
 		});
@@ -462,7 +476,7 @@ describe("Routing Pipeline E2E", () => {
 			// Code-gen should get base 0.2
 			pipeline.classify(userContext("Write a function"));
 			// Chat should get base 0.7
-			pipeline.classify(userContext("Hello friend"));
+			pipeline.classify(userContext("What is the capital of France?"));
 
 			const codeCall = adjustCalls.find(c => c.taskType === "code-gen");
 			const chatCall = adjustCalls.find(c => c.taskType === "chat");
@@ -494,7 +508,7 @@ describe("Routing Pipeline E2E", () => {
 				maxEscalations: 3,
 			});
 
-			const events = await collectStream(pipeline.stream(userContext("Hello")));
+			const events = await collectStream(pipeline.stream(userContext("What is the capital of France?")));
 
 			// The successful escalated provider yields "done", which terminates the stream
 			const doneEvents = events.filter(e => e.type === "done");
@@ -518,7 +532,7 @@ describe("Routing Pipeline E2E", () => {
 				maxEscalations: 2,
 			});
 
-			const events = await collectStream(pipeline.stream(userContext("Hello")));
+			const events = await collectStream(pipeline.stream(userContext("What is the capital of France?")));
 
 			// Escalated to anthropic which succeeds
 			const textEvents = events.filter(e => e.type === "text");
@@ -544,7 +558,7 @@ describe("Routing Pipeline E2E", () => {
 				maxEscalations: 2,
 			});
 
-			const events = await collectStream(pipeline.stream(userContext("Hello")));
+			const events = await collectStream(pipeline.stream(userContext("What is the capital of France?")));
 
 			// The successful provider should have yielded a done event
 			const doneEvents = events.filter(e => e.type === "done");
@@ -620,7 +634,7 @@ describe("Routing Pipeline E2E", () => {
 			});
 
 			await expect(
-				collectStream(pipeline.stream(userContext("Hello"))),
+				collectStream(pipeline.stream(userContext("What is the capital of France?"))),
 			).rejects.toThrow(/not available/i);
 		});
 
@@ -642,7 +656,7 @@ describe("Routing Pipeline E2E", () => {
 			});
 
 			await expect(
-				collectStream(pipeline.stream(userContext("Hello"))),
+				collectStream(pipeline.stream(userContext("What is the capital of France?"))),
 			).rejects.toThrow();
 		});
 
@@ -663,7 +677,7 @@ describe("Routing Pipeline E2E", () => {
 			});
 
 			await expect(
-				collectStream(pipeline.stream(userContext("Hello"))),
+				collectStream(pipeline.stream(userContext("What is the capital of France?"))),
 			).rejects.toThrow();
 		});
 	});
@@ -690,7 +704,7 @@ describe("Routing Pipeline E2E", () => {
 			expect(bindings).toHaveLength(1);
 			expect(bindings[0].providerId).toBe("new-provider");
 
-			const decision = pipeline.classify(userContext("Hello"));
+			const decision = pipeline.classify(userContext("What is the capital of France?"));
 			if (decision.taskType === "chat") {
 				expect(decision.providerId).toBe("new-provider");
 				expect(decision.modelId).toBe("new-model");
@@ -836,7 +850,7 @@ describe("Routing Pipeline E2E", () => {
 				temperatureAdjust: (base) => base * 2,
 			});
 
-			await collectStream(pipeline.stream(userContext("Hello")));
+			await collectStream(pipeline.stream(userContext("What is the capital of France?")));
 
 			expect(capturedOptions).toBeDefined();
 			expect(capturedOptions!.temperature).toBeDefined();

@@ -199,7 +199,7 @@ export class MargaPipeline {
 		if (this.temperatureAdjust) {
 			const baseTemp = taskTypeResult.type === "code-gen" ? 0.2
 				: taskTypeResult.type === "reasoning" ? 0.5
-				: taskTypeResult.type === "chat" ? 0.7
+				: taskTypeResult.type === "chat" || taskTypeResult.type === "smalltalk" ? 0.7
 				: 0.4;
 			temperature = this.temperatureAdjust(baseTemp, taskTypeResult.type, effectiveComplexity);
 		}

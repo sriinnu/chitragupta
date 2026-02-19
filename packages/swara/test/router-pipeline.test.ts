@@ -177,13 +177,13 @@ describe("MargaPipeline", () => {
 		});
 	});
 
-	describe("trivial chat", () => {
-		it("should not skip LLM for trivial chat and select a cheap model", () => {
+	describe("smalltalk", () => {
+		it("should skip LLM for greeting/check-in requests", () => {
 			const registry = createMockRegistry(["ollama", "anthropic"]);
 			const pipeline = new MargaPipeline({ registry, bindings: HYBRID_BINDINGS });
 			const decision = pipeline.classify(ctx("how are you doing today"));
-			expect(decision.skipLLM).toBe(false);
-			expect(decision.taskType).toBe("chat");
+			expect(decision.skipLLM).toBe(true);
+			expect(decision.taskType).toBe("smalltalk");
 			expect(decision.modelId).toBeDefined();
 		});
 	});
