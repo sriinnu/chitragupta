@@ -140,7 +140,7 @@ export class MargaPipeline {
 		this.registry = config.registry;
 		this.bindings = config.bindings ?? [...HYBRID_BINDINGS];
 		this.autoEscalate = config.autoEscalate ?? true;
-		this.maxEscalations = config.maxEscalations ?? 2;
+		this.maxEscalations = config.maxEscalations ?? ESCALATION_CHAIN.length;
 		this.temperatureAdjust = config.temperatureAdjust;
 		this.minComplexityOverrides = config.minComplexityOverrides ?? {
 			reasoning: "complex",   // Reasoning always gets at least complex-tier
@@ -296,13 +296,16 @@ export class MargaPipeline {
 						continue;
 					}
 				}
-				if (err instanceof ProviderError) throw err;
-				throw new ProviderError(
-					`Pipeline failed for ${currentProvider}/${currentModel}: ${err instanceof Error ? err.message : String(err)}`,
-					currentProvider,
-					undefined,
-					err instanceof Error ? err : undefined,
-				);
+				// All escalation attempts exhausted — provide a clear message
+			const detail = err instanceof Error ? err.message : String(err);
+			throw new ProviderError(
+				`All available providers exhausted for ${decision.taskType} task ` +
+				`(last: ${currentProvider}/${currentModel}, ${escalations} escalations tried). ` +
+				`Please check provider configuration or try again shortly. Detail: ${detail}`,
+				currentProvider,
+				undefined,
+				err instanceof Error ? err : undefined,
+			);
 			}
 		}
 	}
