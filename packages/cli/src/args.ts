@@ -28,7 +28,7 @@ export interface ParsedArgs {
 /**
  * Known subcommands that take a second-level command.
  */
-const SUBCOMMANDS = new Set(["provider", "session", "memory", "agent", "config", "plugin", "mcp", "serve", "mcp-server", "init", "code", "orchestrate", "workflow", "skill", "swapna", "sync"]);
+const SUBCOMMANDS = new Set(["provider", "session", "memory", "agent", "config", "plugin", "mcp", "serve", "mcp-server", "init", "code", "orchestrate", "workflow", "skill", "swapna", "sync", "daemon"]);
 
 /**
  * Parse process.argv (or a custom argv array) into structured arguments.
@@ -209,6 +209,7 @@ Subcommands:
   plugin install|list|remove    Manage plugins
   swapna [date]                 Run Swapna memory consolidation
   sync status|export|import     Cross-machine sync for days/memory
+  daemon start|stop|status|restart  Manage background daemon
   serve [--port N] [--host H]  Start HTTP API server
   mcp-server [--sse] [--port N] [--agent]  Run as MCP server
 
