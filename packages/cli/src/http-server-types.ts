@@ -117,4 +117,10 @@ export interface ApiDeps {
 	getKartavyaEngine?: () => unknown;
 	getKalaChakra?: () => unknown;
 	getProjectPath?: () => string;
+	/** Lazy getter for the Dvara-Bandhu pairing engine. */
+	getPairingEngine?: () => unknown;
+	/** Lazy getter for the budget tracker. */
+	getBudgetTracker?: () => unknown;
+	/** Lazy getter for global settings. */
+	getSettings?: () => unknown;
 }
