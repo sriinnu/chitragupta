@@ -209,6 +209,13 @@ export async function main(args: ParsedArgs): Promise<void> {
 		log.debug("Manas unavailable", { error: String(e) });
 	}
 
+	// ─── 5b-daemon. Handle 'daemon' subcommand ──────────────────────────
+	if (args.command === "daemon") {
+		const { runDaemonCommand } = await import("./modes/daemon-cmd.js");
+		await runDaemonCommand(args.subcommand);
+		process.exit(0);
+	}
+
 	// ─── 5b-0. Handle 'swapna' subcommand (Consolidation) ───────────────
 	if (args.command === "swapna") {
 		const targetDate = args.subcommand ?? new Date().toISOString().slice(0, 10);
