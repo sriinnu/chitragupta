@@ -2,7 +2,9 @@
  * Test: MCP double extraction fix
  *
  * Verifies that fact extraction from user content happens only once per tool call
- * in the recordToolCall path, NOT duplicated in autoExtractEvents().
+ * in the recordToolCall path (McpSessionRecorder), NOT duplicated in autoExtractEvents().
+ *
+ * Source-code analysis reads mcp-session.ts where McpSessionRecorder lives.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -10,38 +12,34 @@ import fs from "node:fs";
 
 describe("MCP double extraction fix", () => {
 	it("autoExtractEvents does not contain duplicate fact extraction", () => {
-		// Read the mcp-server.ts source
 		const source = fs.readFileSync(
-			new URL("../src/modes/mcp-server.ts", import.meta.url),
+			new URL("../src/modes/mcp-session.ts", import.meta.url),
 			"utf-8",
 		);
 
-		// Find the autoExtractEvents function body
-		const fnStart = source.indexOf("const autoExtractEvents = async (");
+		// Find the autoExtractEvents method body (class method)
+		const fnStart = source.indexOf("private async autoExtractEvents(");
 		expect(fnStart).toBeGreaterThan(-1);
 
-		// Get the function body (until the next section marker)
-		const nextSection = source.indexOf("\n\t// ─── 2b.", fnStart);
-		const fallback = source.indexOf("\n\t// ─── 3.", fnStart);
-		const fnBody = source.slice(fnStart, nextSection > -1 ? nextSection : fallback);
+		// Get the method body (until the next method: createRecordConversationTool)
+		const fnEnd = source.indexOf("\tcreateRecordConversationTool(", fnStart);
+		const fnBody = source.slice(fnStart, fnEnd > -1 ? fnEnd : undefined);
 
 		// Should NOT contain getFactExtractor call (that's the duplication)
 		expect(fnBody).not.toContain("getFactExtractor");
 		expect(fnBody).not.toContain("extractAndSave");
-
-		// The comment about handling in recordToolCall should be present
-		expect(fnBody).toContain("Fact extraction from user content is already handled in recordToolCall");
 	});
 
 	it("recordToolCall contains exactly one extractAndSave call", () => {
 		const source = fs.readFileSync(
-			new URL("../src/modes/mcp-server.ts", import.meta.url),
+			new URL("../src/modes/mcp-session.ts", import.meta.url),
 			"utf-8",
 		);
 
-		// Find the recordToolCall function
-		const fnStart = source.indexOf("const recordToolCall = async (");
-		const fnEnd = source.indexOf("const autoExtractEvents", fnStart);
+		// Find the recordToolCall method (class method)
+		const fnStart = source.indexOf("async recordToolCall(");
+		expect(fnStart).toBeGreaterThan(-1);
+		const fnEnd = source.indexOf("private async autoExtractEvents(", fnStart);
 		const fnBody = source.slice(fnStart, fnEnd);
 
 		// Should contain exactly one extractAndSave call
