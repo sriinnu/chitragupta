@@ -60,5 +60,8 @@ _write_tests.py
 .DS_Store
 Thumbs.db
 
+# Agent working directories
+.agents/
+
 # Legacy
 .lodestar
