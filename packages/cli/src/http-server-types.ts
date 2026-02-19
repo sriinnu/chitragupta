@@ -116,5 +116,6 @@ export interface ApiDeps {
 	getAkasha?: () => unknown;
 	getKartavyaEngine?: () => unknown;
 	getKalaChakra?: () => unknown;
+	getBudgetTracker?: () => unknown;
 	getProjectPath?: () => string;
 }
