@@ -8,6 +8,9 @@
  * Sanskrit: Atman (आत्मन्) = the true self, the eternal essence.
  */
 
+import fs from "node:fs";
+import path from "node:path";
+
 // ─── Archetype Types ────────────────────────────────────────────────────────
 
 export interface AgentArchetype {
@@ -90,6 +93,47 @@ export interface AgentSoul {
 
 export class SoulManager {
 	private souls = new Map<string, AgentSoul>();
+	private persistPath: string | undefined;
+
+	/**
+	 * @param opts.persistPath  Explicit path for soul persistence.
+	 * @param opts.persist      Enable auto-detection of ~/.chitragupta/souls.json. Default: false.
+	 */
+	constructor(opts?: { persistPath?: string; persist?: boolean }) {
+		if (opts?.persistPath) {
+			this.persistPath = opts.persistPath;
+		} else if (opts?.persist) {
+			const home = process.env.CHITRAGUPTA_HOME?.trim()
+				|| path.join(process.env.HOME || process.env.USERPROFILE || "~", ".chitragupta");
+			this.persistPath = path.join(home, "souls.json");
+		}
+		this.loadFromDisk();
+	}
+
+	/** Load persisted souls from disk (best-effort). */
+	private loadFromDisk(): void {
+		if (!this.persistPath) return;
+		try {
+			if (fs.existsSync(this.persistPath)) {
+				const raw = fs.readFileSync(this.persistPath, "utf-8");
+				this.deserialize(raw);
+			}
+		} catch {
+			// Best-effort — continue with empty state
+		}
+	}
+
+	/** Persist current souls to disk (best-effort). */
+	private saveToDisk(): void {
+		if (!this.persistPath) return;
+		try {
+			const dir = path.dirname(this.persistPath);
+			if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+			fs.writeFileSync(this.persistPath, this.serialize(), "utf-8");
+		} catch {
+			// Best-effort — persistence is not blocking
+		}
+	}
 
 	/** Create a new soul for an agent. */
 	create(config: {
@@ -114,6 +158,7 @@ export class SoulManager {
 			lastActiveAt: Date.now(),
 		};
 		this.souls.set(config.id, soul);
+		this.saveToDisk();
 		return soul;
 	}
 
@@ -137,6 +182,7 @@ export class SoulManager {
 		const updated = current + alpha * (target - current);
 		soul.confidenceModel.set(domain, Math.max(0, Math.min(1, updated)));
 		soul.lastActiveAt = Date.now();
+		this.saveToDisk();
 	}
 
 	/** Record a learned trait (deduplicated). */
@@ -144,6 +190,7 @@ export class SoulManager {
 		const soul = this.souls.get(agentId);
 		if (soul && !soul.learnedTraits.includes(trait)) {
 			soul.learnedTraits.push(trait);
+			this.saveToDisk();
 		}
 	}
 
@@ -152,6 +199,7 @@ export class SoulManager {
 		const soul = this.souls.get(agentId);
 		if (soul && !soul.values.includes(value)) {
 			soul.values.push(value);
+			this.saveToDisk();
 		}
 	}
 
@@ -249,7 +297,9 @@ export class SoulManager {
 
 	/** Remove a soul. */
 	remove(agentId: string): boolean {
-		return this.souls.delete(agentId);
+		const removed = this.souls.delete(agentId);
+		if (removed) this.saveToDisk();
+		return removed;
 	}
 
 	/** Get all souls. */

@@ -1094,7 +1094,7 @@ export async function main(args: ParsedArgs): Promise<void> {
 	let soulManager: InstanceType<typeof SoulManager> | undefined;
 	let soulPrompt: string | undefined;
 	try {
-		soulManager = new SoulManager();
+		soulManager = new SoulManager({ persist: true });
 		const archetypeMap: Record<string, string> = {
 			kartru: "meticulous-craftsman",
 			parikshaka: "vigilant-guardian",
