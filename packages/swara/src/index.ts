@@ -171,6 +171,7 @@ export type {
 	TuriyaStats,
 	TuriyaState,
 	TuriyaRouterConfig,
+	ManasFeatureBridge,
 } from "./turiya.js";
 
 // ─── Providers ──────────────────────────────────────────────────────────────

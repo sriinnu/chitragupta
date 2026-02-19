@@ -249,6 +249,22 @@ interface ReflectorInstance {
 	};
 }
 
+/**
+ * Simple word overlap ratio between two strings.
+ * Used for rephrase detection — high overlap (>0.6) suggests
+ * the user is rephrasing a previous query.
+ */
+function wordOverlap(a: string, b: string): number {
+	const wordsA = new Set(a.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+	const wordsB = new Set(b.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+	if (wordsA.size === 0 || wordsB.size === 0) return 0;
+	let shared = 0;
+	for (const w of wordsA) {
+		if (wordsB.has(w)) shared++;
+	}
+	return shared / Math.max(wordsA.size, wordsB.size);
+}
+
 /** Reason the interactive session ended. */
 export type ExitReason = "quit" | "sigint";
 
@@ -271,6 +287,7 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 	let currentModel = agent.getState().model;
 	let budgetBlocked = false;
 	let lastTuriyaDecision: ReturnType<TuriyaRouterInstance["classify"]> | undefined;
+	let lastUserMessage = "";
 
 	const budgetTracker = new BudgetTracker(options.budgetConfig);
 
@@ -599,6 +616,17 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 			}
 		}
 
+		// ─── Turiya: retroactive rephrase penalty for previous decision ──
+		if (options.turiyaRouter && lastTuriyaDecision && lastUserMessage) {
+			const overlap = wordOverlap(lastUserMessage, message);
+			if (overlap > 0.6) {
+				// User rephrased — previous answer wasn't helpful, penalize
+				try {
+					options.turiyaRouter.recordOutcome(lastTuriyaDecision, 0.2);
+				} catch { /* best-effort */ }
+			}
+		}
+
 		// ─── Manas + Turiya: intelligent per-turn model routing ─────────
 		lastTuriyaDecision = undefined;
 		if (options.manas && options.turiyaRouter && !options.userExplicitModel) {
@@ -777,6 +805,9 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 			if (options.onTurnComplete) {
 				options.onTurnComplete(message, streamingText);
 			}
+
+			// Track for next-turn rephrase detection
+			lastUserMessage = message;
 		} catch (error) {
 			spinner.stop();
 			if ((error as Error).name === "AbortError") {
