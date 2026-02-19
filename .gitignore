@@ -66,6 +66,13 @@ Thumbs.db
 # Agent working directories
 .agents/
 
+# Session task/completion reports (ephemeral)
+TASK.md
+TASK-COMPLETE*.md
+**/TASK-COMPLETE*.md
+**/REFACTOR_COMPLETE.md
+**/*-AUDIT.md
+
 # Git worktrees (local lane branches)
 .worktrees/
 

@@ -199,7 +199,7 @@ describe("MCP Server Mode", () => {
 					"utf-8",
 				),
 			);
-			expect(pkg.bin["chitragupta-mcp"]).toBe("dist/mcp-entry.js");
+			expect(pkg.bin["chitragupta-mcp"]).toBe("bin/chitragupta-mcp.js");
 		});
 
 		it("should have ./mcp export", async () => {
