@@ -1,15 +1,16 @@
 /**
  * Root application component for Chitragupta Hub.
  *
- * Sets up hash-based routing via preact-router and wraps all
+ * Sets up pathname-based routing via preact-router and wraps all
  * pages in a shared {@link Layout}. When no JWT token is present,
- * the Pairing page is shown instead of the router. Initialises
- * the WebSocket connection on mount for real-time events.
+ * the Pairing page is shown instead of the router. Connects the
+ * WebSocket event stream reactively when the auth signal changes.
  * @module app
  */
 
 import { useEffect, useState } from "preact/hooks";
-import Router, { route } from "preact-router";
+import { effect } from "@preact/signals";
+import Router from "preact-router";
 import { Layout } from "./components/layout.js";
 import { isAuthenticated } from "./signals/auth.js";
 import { connectWebSocket, disconnectWebSocket } from "./signals/realtime.js";
@@ -38,13 +39,18 @@ import { Pairing } from "./auth/pairing.js";
 export function App(): preact.JSX.Element {
 	const [currentUrl, setCurrentUrl] = useState(window.location.pathname || "/");
 
-	// Connect WebSocket when authenticated, disconnect on logout
+	// Connect WebSocket reactively when auth state changes.
+	// Uses @preact/signals `effect()` so signal reads are auto-tracked;
+	// the inner disposer is cleaned up when the component unmounts.
 	useEffect(() => {
-		if (isAuthenticated.value) {
-			connectWebSocket();
-			return () => disconnectWebSocket();
-		}
-		return undefined;
+		const dispose = effect(() => {
+			if (isAuthenticated.value) {
+				connectWebSocket();
+			} else {
+				disconnectWebSocket();
+			}
+		});
+		return dispose;
 	}, []);
 
 	const handleRouteChange = (e: { url: string }): void => {

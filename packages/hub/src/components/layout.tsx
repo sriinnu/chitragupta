@@ -7,6 +7,7 @@
  */
 
 import type { ComponentChildren } from "preact";
+import { route } from "preact-router";
 import { WsIndicator } from "./ws-indicator.js";
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -88,6 +89,10 @@ export function Layout({ children, currentUrl }: LayoutProps): preact.JSX.Elemen
 						<a
 							key={item.path}
 							href={item.path}
+							onClick={(e: Event) => {
+								e.preventDefault();
+								route(item.path);
+							}}
 							style={{
 								display: "flex",
 								alignItems: "center",

@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useCallback } from "preact/hooks";
+import { route } from "preact-router";
 import { apiPost, apiGet } from "../api.js";
 import { setToken, deviceId } from "../signals/auth.js";
 import { PassphraseEntry } from "./passphrase-entry.js";
@@ -106,7 +107,7 @@ export function Pairing(): preact.JSX.Element {
 				deviceId: deviceId.value,
 			});
 			setToken(response.token);
-			window.location.hash = "#/";
+			route("/");
 		} catch (err) {
 			const message = err instanceof Error ? err.message : "Verification failed";
 			setError(message);
