@@ -238,6 +238,25 @@ describe("SessionStore v2", () => {
 			expect(ftsResults.length).toBe(1);
 		});
 
+		it("should self-heal when the SQLite session row is missing", async () => {
+			const session = createSession({ project: "/test" });
+			const db = DatabaseManager.instance(tmpDir).get("agent");
+
+			db.prepare("DELETE FROM sessions WHERE id = ?").run(session.meta.id);
+
+			await addTurn(session.meta.id, "/test", {
+				turnNumber: 0,
+				role: "user",
+				content: "Repair this session row",
+			});
+
+			const sessionRow = db.prepare("SELECT id FROM sessions WHERE id = ?").get(session.meta.id);
+			const turnCount = db.prepare("SELECT COUNT(*) AS count FROM turns WHERE session_id = ?").get(session.meta.id) as { count: number };
+
+			expect(sessionRow).toBeDefined();
+			expect(turnCount.count).toBe(1);
+		});
+
 		it("should update session turn count in SQLite", async () => {
 			const session = createSession({ project: "/test" });
 
