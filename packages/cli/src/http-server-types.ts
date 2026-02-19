@@ -50,6 +50,13 @@ export interface ServerConfig {
 	 * Required for /api/auth/* routes when using JWT auth.
 	 */
 	tokenExchange?: TokenExchangeConfig;
+	/**
+	 * Absolute path to the Hub SPA `dist/` directory.
+	 * When set, the server serves static files from this directory
+	 * for any GET request that does not start with `/api/`.
+	 * Non-file paths fall back to `index.html` for SPA routing.
+	 */
+	hubDistPath?: string;
 }
 
 export interface RouteHandler {
