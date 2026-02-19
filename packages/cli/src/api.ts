@@ -745,14 +745,15 @@ export async function createChitragupta(options: ChitraguptaOptions = {}): Promi
 		model?: string;
 		contentParts?: Array<Record<string, unknown>>;
 	}) => {
+		const turnNumber = session.turns.length + 1;
 		session.turns.push({
 			...turn,
-			turnNumber: session.turns.length + 1,
+			turnNumber,
 		});
 		try {
 			await addTurn(session.meta.id, projectPath, {
 				...turn,
-				turnNumber: 0,
+				turnNumber,
 			});
 		} catch {
 			try {

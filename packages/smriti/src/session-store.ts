@@ -332,13 +332,43 @@ function upsertSessionToDb(meta: SessionMeta, filePath: string): void {
 	}
 }
 
-function insertTurnToDb(sessionId: string, turn: SessionTurn): void {
+function isRecoverableSessionConstraintError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	const lower = err.message.toLowerCase();
+	return lower.includes("foreign key constraint failed") || lower.includes("constraint failed");
+}
+
+function seedSessionRowForTurn(sessionId: string, project: string, filePath: string): void {
+	const db = getAgentDb();
+	const now = Date.now();
+	const normalizedFilePath = path.isAbsolute(filePath)
+		? path.relative(getChitraguptaHome(), filePath)
+		: filePath;
+	db.prepare(`
+		INSERT OR IGNORE INTO sessions (id, project, title, created_at, updated_at, turn_count, file_path)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`).run(
+		sessionId,
+		project,
+		"Recovered Session",
+		now,
+		now,
+		0,
+		normalizedFilePath,
+	);
+}
+
+function insertTurnToDb(
+	sessionId: string,
+	turn: SessionTurn,
+	context?: { project: string; filePath: string },
+): void {
 	try {
 		const db = getAgentDb();
-		const now = Date.now();
 
 		// Wrap turn insert + FTS5 index + session update in a transaction
-		const insertTurn = db.transaction(() => {
+		const writeTurn = db.transaction(() => {
+			const now = Date.now();
 			const result = db.prepare(`
 				INSERT OR IGNORE INTO turns (session_id, turn_number, role, content, agent, model, tool_calls, created_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -353,23 +383,39 @@ function insertTurnToDb(sessionId: string, turn: SessionTurn): void {
 				now,
 			);
 
-			// Index into FTS5
-			if (result.changes > 0) {
-				db.prepare("INSERT INTO turns_fts (rowid, content) VALUES (?, ?)").run(
-					result.lastInsertRowid,
-					turn.content,
-				);
-			}
+				// Index into FTS5
+				if (result.changes > 0) {
+					db.prepare("INSERT OR IGNORE INTO turns_fts (rowid, content) VALUES (?, ?)").run(
+						result.lastInsertRowid,
+						turn.content,
+					);
+				}
 
 			// Update session turn count + timestamp
-			db.prepare(
-				"UPDATE sessions SET turn_count = turn_count + 1, updated_at = ? WHERE id = ?",
-			).run(now, sessionId);
+				db.prepare(
+					"UPDATE sessions SET turn_count = turn_count + 1, updated_at = ? WHERE id = ?",
+				).run(now, sessionId);
 		});
-		insertTurn();
+		try {
+			writeTurn();
+			return;
+		} catch (err) {
+			// Self-heal: if SQLite session row is missing, recreate a minimal row and retry once.
+			if (context && isRecoverableSessionConstraintError(err)) {
+				seedSessionRowForTurn(sessionId, context.project, context.filePath);
+				writeTurn();
+				return;
+			}
+			throw err;
+		}
 	} catch (err) {
 		// Best-effort write-through
-		process.stderr.write(`[chitragupta] turn insert failed for session ${sessionId}: ${err instanceof Error ? err.message : err}\n`);
+		const code = typeof err === "object" && err !== null && "code" in err
+			? String((err as { code?: unknown }).code)
+			: "unknown";
+		process.stderr.write(
+			`[chitragupta] turn insert failed for session ${sessionId} (turn=${turn.turnNumber}, role=${turn.role}, code=${code}): ${err instanceof Error ? err.message : err}\n`,
+		);
 	}
 }
 
@@ -776,8 +822,8 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 		// Invalidate L1 cache — file content changed
 		cacheInvalidate(sessionId, project);
 
-		// Write-through to SQLite
-		insertTurnToDb(sessionId, turn);
+		// Write-through to SQLite (self-heals missing session rows in SQLite).
+		insertTurnToDb(sessionId, turn, { project, filePath });
 	}).catch((err) => {
 		throw err;
 	}).finally(() => {

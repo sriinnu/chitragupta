@@ -25,6 +25,7 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import { getBuiltinTools, loadProjectMemory } from "../bootstrap.js";
+import { createAgentPromptTool } from "./mcp-agent-prompt.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -325,70 +326,6 @@ function createMargaDecideTool(): McpToolHandler {
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: `Marga decision failed: ${err instanceof Error ? err.message : String(err)}` }],
-					isError: true,
-				};
-			}
-		},
-	};
-}
-
-/**
- * Create the `chitragupta_prompt` tool — delegates a task to Chitragupta's agent.
- */
-function createAgentPromptTool(): McpToolHandler {
-	return {
-		definition: {
-			name: "chitragupta_prompt",
-			description:
-				"Delegate a task to Chitragupta's AI agent. The agent has its own " +
-				"memory, tools, and configuration. Use this for complex tasks that " +
-				"benefit from Chitragupta's project context and memory.",
-			inputSchema: {
-				type: "object",
-				properties: {
-					message: {
-						type: "string",
-						description: "The prompt/task to send to Chitragupta's agent.",
-					},
-					provider: {
-						type: "string",
-						description: "AI provider to use. Default: from config (usually 'anthropic')",
-					},
-					model: {
-						type: "string",
-						description: "Model to use. Default: from config",
-					},
-				},
-				required: ["message"],
-			},
-		},
-		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
-			const message = String(args.message ?? "");
-			if (!message) {
-				return {
-					content: [{ type: "text", text: "Error: message is required" }],
-					isError: true,
-				};
-			}
-
-			try {
-				const { createChitragupta } = await import("../api.js");
-				const options: Record<string, unknown> = {};
-				if (args.provider) options.provider = String(args.provider);
-				if (args.model) options.model = String(args.model);
-
-				const chitragupta = await createChitragupta(options);
-				try {
-					const response = await chitragupta.prompt(message);
-					return {
-						content: [{ type: "text", text: response }],
-					};
-				} finally {
-					await chitragupta.destroy();
-				}
-			} catch (err) {
-				return {
-					content: [{ type: "text", text: `Agent prompt failed: ${err instanceof Error ? err.message : String(err)}` }],
 					isError: true,
 				};
 			}
