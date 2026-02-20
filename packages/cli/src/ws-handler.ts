@@ -10,6 +10,7 @@
  */
 
 import http from "node:http";
+import type https from "node:https";
 import { createHash, randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
 import type { AuthMiddlewareConfig, AuthContext } from "@chitragupta/core";
@@ -463,7 +464,7 @@ export class WebSocketServer {
 	 * Listens for the `upgrade` event and handles WebSocket handshakes.
 	 * Can only be attached once.
 	 */
-	attach(server: http.Server): void {
+	attach(server: http.Server | https.Server): void {
 		if (this.attached) {
 			throw new Error("WebSocketServer is already attached to a server");
 		}

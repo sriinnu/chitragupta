@@ -22,6 +22,8 @@ export interface ParsedArgs {
 	port?: number;
 	/** Host for the HTTP server (--host flag with 'serve' subcommand). */
 	host?: string;
+	/** Disable Kavach TLS (--no-tls flag with 'serve' subcommand). */
+	noTls?: boolean;
 	rest: string[];
 }
 
@@ -164,6 +166,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
 			} else if (result.rest[j] === "--host" && j + 1 < result.rest.length) {
 				result.host = result.rest[j + 1];
 				j++; // skip value
+			} else if (result.rest[j] === "--no-tls") {
+				result.noTls = true;
 			} else {
 				remaining.push(result.rest[j]);
 			}
@@ -210,7 +214,7 @@ Subcommands:
   swapna [date]                 Run Swapna memory consolidation
   sync status|export|import     Cross-machine sync for days/memory
   daemon start|stop|status|restart  Manage background daemon
-  serve [--port N] [--host H]  Start HTTP API server
+  serve [--port N] [--host H] [--no-tls]  Start HTTP API server (TLS on by default)
   mcp-server [--sse] [--port N] [--agent]  Run as MCP server
 
 Interactive shortcuts:
