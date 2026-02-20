@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { TuriyaRouter } from "@chitragupta/swara";
+import { TuriyaRouter, budgetAdjustedScore, updateBudgetLambda, preferenceBlendedScore } from "@chitragupta/swara";
 import type {
 	TuriyaContext,
 	TuriyaTier,
@@ -7,6 +7,8 @@ import type {
 	TuriyaStats,
 	TuriyaState,
 	TuriyaRouterConfig,
+	TuriyaPreference,
+	TuriyaCascadeResult,
 } from "@chitragupta/swara";
 import type { Message, ToolDefinition } from "@chitragupta/swara";
 
@@ -760,6 +762,289 @@ describe("TuriyaRouter", () => {
 
 			const avgMs = elapsed / 1000;
 			expect(avgMs).toBeLessThan(1);
+		});
+	});
+
+	// ─── V2: Budget-Aware Scoring (PILOT) ───────────────────────────────────────
+
+	describe("budget-aware scoring (PILOT)", () => {
+		it("should accept dailyBudget and expectedDailyRequests config", () => {
+			const budgetRouter = new TuriyaRouter({
+				dailyBudget: 5.0,
+				expectedDailyRequests: 100,
+			});
+			expect(budgetRouter).toBeDefined();
+			expect(budgetRouter.getBudgetLambda()).toBe(0);
+		});
+
+		it("should increase lambda when spending above budget pace", () => {
+			const budgetRouter = new TuriyaRouter({
+				dailyBudget: 0.01, // Very tight budget
+				expectedDailyRequests: 10,
+			});
+
+			warmUp(budgetRouter, 12);
+
+			// Route some expensive requests
+			const ctx: TuriyaContext = {
+				complexity: 0.9, urgency: 0.5, creativity: 0.5,
+				precision: 0.7, codeRatio: 0.4, conversationDepth: 0.2, memoryLoad: 0.2,
+			};
+
+			for (let i = 0; i < 20; i++) {
+				const d = budgetRouter.classify(ctx);
+				budgetRouter.recordOutcome(d, 0.8);
+			}
+
+			// Lambda should have grown due to budget pressure
+			expect(budgetRouter.getBudgetLambda()).toBeGreaterThan(0);
+		});
+
+		it("should not update lambda when no budget constraint", () => {
+			warmUp(router);
+			const ctx: TuriyaContext = {
+				complexity: 0.5, urgency: 0.2, creativity: 0.3,
+				precision: 0.3, codeRatio: 0.2, conversationDepth: 0.1, memoryLoad: 0,
+			};
+			for (let i = 0; i < 10; i++) {
+				const d = router.classify(ctx);
+				router.recordOutcome(d, 0.7);
+			}
+			// Default config has no budget cap, so lambda stays 0
+			expect(router.getBudgetLambda()).toBe(0);
+		});
+
+		it("should serialize and restore budgetLambda", () => {
+			const budgetRouter = new TuriyaRouter({
+				dailyBudget: 0.01,
+				expectedDailyRequests: 10,
+			});
+			warmUp(budgetRouter, 12);
+
+			const ctx: TuriyaContext = {
+				complexity: 0.8, urgency: 0.3, creativity: 0.3,
+				precision: 0.5, codeRatio: 0.3, conversationDepth: 0.1, memoryLoad: 0,
+			};
+			for (let i = 0; i < 10; i++) {
+				const d = budgetRouter.classify(ctx);
+				budgetRouter.recordOutcome(d, 0.7);
+			}
+
+			const state = budgetRouter.serialize();
+			expect(state.budgetLambda).toBeGreaterThanOrEqual(0);
+
+			const restored = new TuriyaRouter({ dailyBudget: 0.01, expectedDailyRequests: 10 });
+			restored.deserialize(state);
+			expect(restored.getBudgetLambda()).toBe(state.budgetLambda);
+		});
+	});
+
+	// ─── V2: Preference Conditioning (LLM Bandit) ───────────────────────────────
+
+	describe("preference conditioning (LLM Bandit)", () => {
+		it("should accept preference parameter in classify", () => {
+			warmUp(router, 12);
+			const ctx: TuriyaContext = {
+				complexity: 0.5, urgency: 0.2, creativity: 0.3,
+				precision: 0.3, codeRatio: 0.2, conversationDepth: 0.1, memoryLoad: 0,
+			};
+
+			const noPreference = router.classify(ctx);
+			const costPreference = router.classify(ctx, { costWeight: 0.9 });
+			const qualityPreference = router.classify(ctx, { costWeight: 0.0 });
+
+			expect(noPreference.tier).toBeDefined();
+			expect(costPreference.tier).toBeDefined();
+			expect(qualityPreference.tier).toBeDefined();
+		});
+
+		it("should favor cheaper tiers with high costWeight", () => {
+			const budgetRouter = new TuriyaRouter();
+			warmUp(budgetRouter, 16);
+
+			const ctx: TuriyaContext = {
+				complexity: 0.4, urgency: 0.2, creativity: 0.2,
+				precision: 0.3, codeRatio: 0.1, conversationDepth: 0.1, memoryLoad: 0,
+			};
+
+			// With max cost preference, should lean toward cheaper tiers
+			const costDecision = budgetRouter.classify(ctx, { costWeight: 1.0 });
+			const qualityDecision = budgetRouter.classify(ctx, { costWeight: 0.0 });
+
+			// Cost tier index should be <= quality tier index (cheaper or same)
+			const tiers: TuriyaTier[] = ["no-llm", "haiku", "sonnet", "opus"];
+			const costIdx = tiers.indexOf(costDecision.tier);
+			const qualityIdx = tiers.indexOf(qualityDecision.tier);
+			expect(costIdx).toBeLessThanOrEqual(qualityIdx);
+		});
+
+		it("should not change heuristic behavior on cold start", () => {
+			const ctx: TuriyaContext = {
+				complexity: 0.5, urgency: 0.2, creativity: 0.3,
+				precision: 0.3, codeRatio: 0.2, conversationDepth: 0.1, memoryLoad: 0,
+			};
+
+			// On cold start, preference is ignored (heuristic doesn't use it)
+			const noPreference = router.classify(ctx);
+			const withPreference = router.classify(ctx, { costWeight: 0.8 });
+			expect(noPreference.tier).toBe(withPreference.tier);
+		});
+	});
+
+	// ─── V2: Cascade Routing ────────────────────────────────────────────────────
+
+	describe("cascade routing", () => {
+		it("should not escalate when confidence is above threshold", () => {
+			const decision: TuriyaDecision = {
+				tier: "haiku",
+				confidence: 0.8,
+				costEstimate: 0.0003,
+				context: { complexity: 0.2, urgency: 0, creativity: 0, precision: 0, codeRatio: 0, conversationDepth: 0, memoryLoad: 0 },
+				rationale: "test",
+				armIndex: 1,
+			};
+
+			const cascade = router.cascadeDecision(decision);
+			expect(cascade.escalated).toBe(false);
+			expect(cascade.final.tier).toBe("haiku");
+			expect(cascade.originalTier).toBeUndefined();
+		});
+
+		it("should escalate when confidence is below threshold", () => {
+			const decision: TuriyaDecision = {
+				tier: "haiku",
+				confidence: 0.2,
+				costEstimate: 0.0003,
+				context: { complexity: 0.4, urgency: 0.1, creativity: 0.1, precision: 0.2, codeRatio: 0.1, conversationDepth: 0, memoryLoad: 0 },
+				rationale: "test rationale",
+				armIndex: 1,
+			};
+
+			const cascade = router.cascadeDecision(decision);
+			expect(cascade.escalated).toBe(true);
+			expect(cascade.final.tier).toBe("sonnet");
+			expect(cascade.originalTier).toBe("haiku");
+			expect(cascade.final.rationale).toContain("[cascade]");
+		});
+
+		it("should not escalate opus even with low confidence", () => {
+			const decision: TuriyaDecision = {
+				tier: "opus",
+				confidence: 0.1,
+				costEstimate: 0.015,
+				context: { complexity: 0.9, urgency: 0.5, creativity: 0.5, precision: 0.7, codeRatio: 0.4, conversationDepth: 0.2, memoryLoad: 0.2 },
+				rationale: "test",
+				armIndex: 3,
+			};
+
+			const cascade = router.cascadeDecision(decision);
+			expect(cascade.escalated).toBe(false);
+			expect(cascade.final.tier).toBe("opus");
+		});
+
+		it("should escalate no-llm to haiku", () => {
+			const decision: TuriyaDecision = {
+				tier: "no-llm",
+				confidence: 0.2,
+				costEstimate: 0,
+				context: { complexity: 0.1, urgency: 0, creativity: 0, precision: 0, codeRatio: 0, conversationDepth: 0, memoryLoad: 0 },
+				rationale: "test",
+				armIndex: 0,
+			};
+
+			const cascade = router.cascadeDecision(decision);
+			expect(cascade.escalated).toBe(true);
+			expect(cascade.final.tier).toBe("haiku");
+		});
+
+		it("should escalate sonnet to opus", () => {
+			const decision: TuriyaDecision = {
+				tier: "sonnet",
+				confidence: 0.3,
+				costEstimate: 0.003,
+				context: { complexity: 0.6, urgency: 0.3, creativity: 0.3, precision: 0.5, codeRatio: 0.3, conversationDepth: 0.1, memoryLoad: 0 },
+				rationale: "test",
+				armIndex: 2,
+			};
+
+			const cascade = router.cascadeDecision(decision);
+			expect(cascade.escalated).toBe(true);
+			expect(cascade.final.tier).toBe("opus");
+			expect(cascade.final.costEstimate).toBe(0.015);
+		});
+
+		it("should respect custom quality threshold", () => {
+			const decision: TuriyaDecision = {
+				tier: "haiku",
+				confidence: 0.5,
+				costEstimate: 0.0003,
+				context: { complexity: 0.3, urgency: 0.1, creativity: 0.1, precision: 0.2, codeRatio: 0.1, conversationDepth: 0, memoryLoad: 0 },
+				rationale: "test",
+				armIndex: 1,
+			};
+
+			// Threshold 0.4 => confidence 0.5 >= 0.4 => no escalation
+			const noEscalate = router.cascadeDecision(decision, 0.4);
+			expect(noEscalate.escalated).toBe(false);
+
+			// Threshold 0.8 => confidence 0.5 < 0.8 => escalation
+			const escalate = router.cascadeDecision(decision, 0.8);
+			expect(escalate.escalated).toBe(true);
+		});
+
+		it("should work in full extract → classify → cascade → record cycle", () => {
+			warmUp(router, 16);
+
+			const ctx = router.extractContext([
+				userMsg("implement a complex distributed system"),
+			]);
+			const decision = router.classify(ctx);
+			const cascade = router.cascadeDecision(decision);
+			router.recordOutcome(cascade.final, 0.85);
+
+			expect(router.getStats().totalRequests).toBeGreaterThan(16);
+		});
+	});
+
+	// ─── V2: Math Functions ─────────────────────────────────────────────────────
+
+	describe("turiya-math public functions", () => {
+		it("budgetAdjustedScore should reduce score for expensive arms", () => {
+			const base = budgetAdjustedScore(1.0, 0.015, 10);
+			const cheap = budgetAdjustedScore(1.0, 0.0003, 10);
+			expect(cheap).toBeGreaterThan(base);
+		});
+
+		it("budgetAdjustedScore with zero lambda should return ucbScore", () => {
+			expect(budgetAdjustedScore(1.5, 0.015, 0)).toBe(1.5);
+		});
+
+		it("updateBudgetLambda should increase when cost exceeds budget", () => {
+			const newLambda = updateBudgetLambda(0, 0.015, 0.001, 0.01);
+			expect(newLambda).toBeGreaterThan(0);
+		});
+
+		it("updateBudgetLambda should decrease when cost is under budget", () => {
+			const newLambda = updateBudgetLambda(1.0, 0.001, 0.015, 0.01);
+			expect(newLambda).toBeLessThan(1.0);
+		});
+
+		it("updateBudgetLambda should never go negative", () => {
+			const newLambda = updateBudgetLambda(0, 0.001, 0.015, 0.01);
+			expect(newLambda).toBeGreaterThanOrEqual(0);
+		});
+
+		it("preferenceBlendedScore with costWeight=0 should return rewardScore", () => {
+			expect(preferenceBlendedScore(1.5, 0.8, 0)).toBe(1.5);
+		});
+
+		it("preferenceBlendedScore with costWeight=1 should return costScore", () => {
+			expect(preferenceBlendedScore(1.5, 0.8, 1)).toBe(0.8);
+		});
+
+		it("preferenceBlendedScore should interpolate linearly", () => {
+			const blended = preferenceBlendedScore(1.0, 0.5, 0.5);
+			expect(blended).toBeCloseTo(0.75, 6);
 		});
 	});
 });
