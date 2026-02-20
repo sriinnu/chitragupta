@@ -8,15 +8,20 @@
  */
 
 import { useEffect, useState } from "preact/hooks";
+import { effect } from "@preact/signals";
 import { StatCard } from "../components/stat-card.js";
 import { BarChart } from "../components/chart.js";
+import { Spinner } from "../components/spinner.js";
+import { EmptyState } from "../components/empty-state.js";
 import { apiGet } from "../api.js";
 import {
 	budgetStatus,
 	budgetHistory,
+	budgetLoading,
 	fetchBudgetStatus,
 	fetchBudgetHistory,
 } from "../signals/budget.js";
+import { lastEvent } from "../signals/realtime.js";
 import { Welcome } from "../components/welcome.js";
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -89,23 +94,47 @@ export function Overview(): preact.JSX.Element {
 	const [health, setHealth] = useState<DeepHealth | null>(null);
 	const [sessions, setSessions] = useState<SessionSummary[]>([]);
 
+	const [loading, setLoading] = useState(true);
+
 	useEffect(() => {
-		void fetchBudgetStatus();
-		void fetchBudgetHistory();
-		void apiGet<DeepHealth>("/api/health/deep").then(setHealth).catch(() => {});
-		void apiGet<SessionsResponse>("/api/sessions?limit=5")
-			.then((data) => setSessions(data.sessions ?? []))
-			.catch(() => {});
+		void Promise.all([
+			fetchBudgetStatus(),
+			fetchBudgetHistory(),
+			apiGet<DeepHealth>("/api/health/deep").then(setHealth).catch(() => {}),
+			apiGet<SessionsResponse>("/api/sessions?limit=5")
+				.then((data) => setSessions(data.sessions ?? []))
+				.catch(() => {}),
+		]).finally(() => setLoading(false));
+	}, []);
+
+	// Re-fetch budget when a chat completes (WS event)
+	useEffect(() => {
+		const dispose = effect(() => {
+			const ev = lastEvent.value;
+			if (ev?.type === "chat:done") {
+				void fetchBudgetStatus();
+				void fetchBudgetHistory();
+			}
+		});
+		return dispose;
 	}, []);
 
 	const budget = budgetStatus.value;
 	const history = budgetHistory.value;
 	const costData = history.map((d) => d.cost);
 
+	if (loading && budgetLoading.value) {
+		return (
+			<div style={{ display: "flex", justifyContent: "center", padding: "var(--space-2xl)" }}>
+				<Spinner size="lg" />
+			</div>
+		);
+	}
+
 	return (
 		<div>
 			<Welcome />
-			<h1 style={{ fontSize: "20px", color: "#e8e8ed", marginBottom: "20px" }}>
+			<h1 style={{ fontSize: "var(--font-size-xl)", color: "var(--color-text)", marginBottom: "var(--space-xl)" }}>
 				Overview
 			</h1>
 
@@ -222,7 +251,7 @@ export function Overview(): preact.JSX.Element {
 					Recent Sessions
 				</h3>
 				{sessions.length === 0 ? (
-					<div style={{ color: "#8888a0", fontSize: "13px" }}>No sessions yet.</div>
+					<EmptyState icon="\uD83D\uDDC2" title="No recent sessions" description="Sessions will appear here once you start chatting." />
 				) : (
 					<table style={{ width: "100%", borderCollapse: "collapse" }}>
 						<thead>
