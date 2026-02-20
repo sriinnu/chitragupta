@@ -298,10 +298,55 @@ export async function main(args: ParsedArgs): Promise<void> {
 		const port = args.port ?? 3141;
 		const host = args.host ?? "127.0.0.1";
 
+		// ── Kavach: TLS provisioning (default on, --no-tls to disable) ──
+		let tlsCerts: import("./tls/tls-types.js").TlsCertificates | undefined;
+		if (!args.noTls) {
+			try {
+				const { provisionTls } = await import("./tls/tls-store.js");
+				const { installCATrust } = await import("./tls/tls-trust.js");
+
+				const result = await provisionTls();
+				if (result.ok && result.certs) {
+					tlsCerts = result.certs;
+					// Auto-trust CA in Keychain on first generation
+					if (result.freshCA) {
+						const trustResult = await installCATrust(result.certs.ca);
+						if (trustResult.trusted) {
+							log.info("Kavach: CA trusted in system store");
+						} else {
+							log.info("Kavach: " + trustResult.message);
+						}
+					}
+				} else {
+					log.warn("Kavach: TLS provisioning failed, falling back to HTTP", {
+						reason: result.reason,
+					});
+				}
+			} catch (err) {
+				log.warn("Kavach: TLS unavailable, falling back to HTTP", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+		}
+
 		// Auth from environment or settings
 		const authToken = process.env.CHITRAGUPTA_AUTH_TOKEN
 			?? (settings as unknown as Record<string, unknown>).authToken as string | undefined;
 		const apiKeys = process.env.CHITRAGUPTA_API_KEYS?.split(",").filter(Boolean);
+
+		// ── Hub Dashboard + Dvara-Bandhu Pairing ────────────────────
+		const { PairingEngine } = await import("./pairing-engine.js");
+		const { BudgetTracker } = await import("./budget-tracker.js");
+
+		const jwtSecret = process.env.CHITRAGUPTA_JWT_SECRET
+			?? authToken ?? crypto.randomUUID();
+		const pairingEngine = new PairingEngine({ port, jwtSecret });
+		const budgetTracker = new BudgetTracker(settings.budget);
+
+		// Resolve hub static dist path (peer package built by Vite)
+		const cliDir = path.dirname(new URL(import.meta.url).pathname);
+		const hubDistPath = path.resolve(cliDir, "../../hub/dist");
+		const hubAvailable = fs.existsSync(path.join(hubDistPath, "index.html"));
 
 		const serverConfig = {
 			port,
@@ -309,6 +354,8 @@ export async function main(args: ParsedArgs): Promise<void> {
 			authToken,
 			apiKeys,
 			enableLogging: true,
+			hubDistPath: hubAvailable ? hubDistPath : undefined,
+			tls: tlsCerts,
 		};
 
 		// Create the API server with all phase modules wired in.
@@ -660,15 +707,29 @@ export async function main(args: ParsedArgs): Promise<void> {
 			// Vidya Skills
 			getVidyaOrchestrator: () => servVidyaOrchestrator,
 			getProjectPath: () => projectPath,
+			// Hub Dashboard + Dvara-Bandhu
+			getPairingEngine: () => pairingEngine,
+			getBudgetTracker: () => budgetTracker,
 		}, serverConfig);
 
 		const actualPort = await server.start();
+
+		// Generate initial pairing challenge and display in terminal
+		pairingEngine.generateChallenge();
+		const protocol = tlsCerts ? "https" : "http";
+		const hubUrl = `${protocol}://${host === "0.0.0.0" ? "localhost" : host}:${actualPort}`;
+
 		process.stdout.write(
-			`\n  \u2605 Chitragupta HTTP API listening on http://${host}:${actualPort}\n` +
-			`  Health: http://${host}:${actualPort}/api/health\n` +
+			`\n  \u2605 Chitragupta ${protocol.toUpperCase()} API listening on ${hubUrl}\n` +
+			(tlsCerts ? `  TLS:  Kavach (local ECDSA P-256)\n` : "") +
+			`  Health: ${hubUrl}/api/health\n` +
 			(authToken || apiKeys?.length ? `  Auth: enabled\n` : `  Auth: disabled (set CHITRAGUPTA_AUTH_TOKEN to enable)\n`) +
-			`\n  Press Ctrl+C to stop.\n\n`,
+			(hubAvailable ? `  Hub:  ${hubUrl} (open in browser)\n` : `  Hub:  not built (run: pnpm -F @chitragupta/hub build)\n`) +
+			`\n`,
 		);
+		// Show Dvara-Bandhu pairing challenge for browser authentication
+		process.stdout.write(pairingEngine.getTerminalDisplay() + "\n\n");
+		process.stdout.write(`  Press Ctrl+C to stop.\n\n`);
 
 		// Block until SIGINT
 		await new Promise<void>((resolve) => {

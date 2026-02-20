@@ -37,6 +37,7 @@ settings.local.json
 packages/*/src/**/*.js
 packages/*/src/**/*.js.map
 packages/*/src/**/*.d.ts
+!packages/*/src/types.d.ts
 packages/*/src/**/*.d.ts.map
 
 # Logs
@@ -72,6 +73,9 @@ TASK-COMPLETE*.md
 **/TASK-COMPLETE*.md
 **/REFACTOR_COMPLETE.md
 **/*-AUDIT.md
+
+# Internal audit/health reports (local only — never publish)
+HEALTH.md
 
 # Git worktrees (local lane branches)
 .worktrees/
