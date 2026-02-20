@@ -12,6 +12,8 @@ import { useEffect, useState } from "preact/hooks";
 import { effect } from "@preact/signals";
 import Router from "preact-router";
 import { Layout } from "./components/layout.js";
+import { ToastContainer } from "./components/toast.js";
+import { ErrorBoundary } from "./components/error-boundary.js";
 import { isAuthenticated } from "./signals/auth.js";
 import { connectWebSocket, disconnectWebSocket } from "./signals/realtime.js";
 
@@ -26,6 +28,13 @@ import { Skills } from "./pages/skills.js";
 import { Settings } from "./pages/settings.js";
 import { Devices } from "./pages/devices.js";
 import { Pairing } from "./auth/pairing.js";
+import { Consciousness } from "./pages/consciousness.js";
+import { Intelligence } from "./pages/intelligence.js";
+import { Collaboration } from "./pages/collaboration.js";
+import { Evolution } from "./pages/evolution.js";
+import { Agents } from "./pages/agents.js";
+import { Workflows } from "./pages/workflows.js";
+import { ChatPanel } from "./components/chat-panel.js";
 
 // ── App root ───────────────────────────────────────────────────────
 
@@ -59,25 +68,38 @@ export function App(): preact.JSX.Element {
 
 	if (!isAuthenticated.value) {
 		return (
-			<Layout currentUrl="/pair">
-				<Pairing />
-			</Layout>
+			<ErrorBoundary>
+				<Layout currentUrl="/pair">
+					<Pairing />
+				</Layout>
+				<ToastContainer />
+			</ErrorBoundary>
 		);
 	}
 
 	return (
-		<Layout currentUrl={currentUrl}>
-			<Router onChange={handleRouteChange}>
-				<Overview path="/" />
-				<Sessions path="/sessions" />
-				<Models path="/models" />
-				<Providers path="/providers" />
-				<Memory path="/memory" />
-				<Skills path="/skills" />
-				<Settings path="/settings" />
-				<Devices path="/devices" />
-				<Pairing path="/pair" />
-			</Router>
-		</Layout>
+		<ErrorBoundary>
+			<Layout currentUrl={currentUrl}>
+				<Router onChange={handleRouteChange}>
+					<Overview path="/" />
+					<Sessions path="/sessions" />
+					<Models path="/models" />
+					<Providers path="/providers" />
+					<Memory path="/memory" />
+					<Skills path="/skills" />
+					<Settings path="/settings" />
+					<Devices path="/devices" />
+					<Consciousness path="/consciousness" />
+					<Intelligence path="/intelligence" />
+					<Collaboration path="/collaboration" />
+					<Evolution path="/evolution" />
+					<Agents path="/agents" />
+					<Workflows path="/workflows" />
+					<Pairing path="/pair" />
+				</Router>
+			</Layout>
+			<ChatPanel />
+			<ToastContainer />
+		</ErrorBoundary>
 	);
 }

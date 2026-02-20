@@ -42,7 +42,6 @@ describe("StdioServerTransport", () => {
 
 	it("should start reading from stdin", () => {
 		transport.start();
-		expect(mockStdin.setEncoding).toHaveBeenCalledWith("utf-8");
 		expect(mockStdin.resume).toHaveBeenCalled();
 	});
 
@@ -55,8 +54,8 @@ describe("StdioServerTransport", () => {
 	it("should not start twice", () => {
 		transport.start();
 		transport.start();
-		// setEncoding and resume should be called only once
-		expect(mockStdin.setEncoding).toHaveBeenCalledTimes(1);
+		// resume should be called only once
+		expect(mockStdin.resume).toHaveBeenCalledTimes(1);
 	});
 
 	it("should parse JSON-RPC messages from stdin", () => {
@@ -116,7 +115,7 @@ describe("StdioServerTransport", () => {
 		expect(handler).not.toHaveBeenCalled();
 	});
 
-	it("should send JSON-RPC messages to stdout", () => {
+	it("should send JSON-RPC messages to stdout using Content-Length framing", () => {
 		const rpcResp: JsonRpcResponse = {
 			jsonrpc: "2.0",
 			id: 1,
@@ -125,10 +124,11 @@ describe("StdioServerTransport", () => {
 		transport.send(rpcResp);
 
 		expect(mockStdoutWrite).toHaveBeenCalledOnce();
-		const written = mockStdoutWrite.mock.calls[0][0];
+		const written = mockStdoutWrite.mock.calls[0][0] as string;
+		expect(written).toContain("Content-Length:");
+		expect(written).toContain("\r\n\r\n");
 		expect(written).toContain('"jsonrpc":"2.0"');
 		expect(written).toContain('"id":1');
-		expect(written.endsWith("\n")).toBe(true);
 	});
 
 	it("should ignore empty lines", () => {

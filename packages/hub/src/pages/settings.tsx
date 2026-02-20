@@ -9,6 +9,7 @@
 
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { apiGet, apiPut } from "../api.js";
+import { showToast } from "../components/toast.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -124,8 +125,9 @@ export function Settings(): preact.JSX.Element {
 			const data = await apiPut<SettingsResponse>("/api/settings", settings);
 			setSettings(data.settings);
 			setSaved(true);
+			showToast("Settings saved", "success");
 		} catch {
-			// Save error
+			showToast("Failed to save settings", "error");
 		} finally {
 			setSaving(false);
 		}

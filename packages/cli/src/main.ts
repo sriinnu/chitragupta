@@ -298,6 +298,37 @@ export async function main(args: ParsedArgs): Promise<void> {
 		const port = args.port ?? 3141;
 		const host = args.host ?? "127.0.0.1";
 
+		// ── Kavach: TLS provisioning (default on, --no-tls to disable) ──
+		let tlsCerts: import("./tls/tls-types.js").TlsCertificates | undefined;
+		if (!args.noTls) {
+			try {
+				const { provisionTls } = await import("./tls/tls-store.js");
+				const { installCATrust } = await import("./tls/tls-trust.js");
+
+				const result = await provisionTls();
+				if (result.ok && result.certs) {
+					tlsCerts = result.certs;
+					// Auto-trust CA in Keychain on first generation
+					if (result.freshCA) {
+						const trustResult = await installCATrust(result.certs.ca);
+						if (trustResult.trusted) {
+							log.info("Kavach: CA trusted in system store");
+						} else {
+							log.info("Kavach: " + trustResult.message);
+						}
+					}
+				} else {
+					log.warn("Kavach: TLS provisioning failed, falling back to HTTP", {
+						reason: result.reason,
+					});
+				}
+			} catch (err) {
+				log.warn("Kavach: TLS unavailable, falling back to HTTP", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+		}
+
 		// Auth from environment or settings
 		const authToken = process.env.CHITRAGUPTA_AUTH_TOKEN
 			?? (settings as unknown as Record<string, unknown>).authToken as string | undefined;
@@ -324,6 +355,7 @@ export async function main(args: ParsedArgs): Promise<void> {
 			apiKeys,
 			enableLogging: true,
 			hubDistPath: hubAvailable ? hubDistPath : undefined,
+			tls: tlsCerts,
 		};
 
 		// Create the API server with all phase modules wired in.
@@ -684,10 +716,12 @@ export async function main(args: ParsedArgs): Promise<void> {
 
 		// Generate initial pairing challenge and display in terminal
 		pairingEngine.generateChallenge();
-		const hubUrl = `http://${host === "0.0.0.0" ? "localhost" : host}:${actualPort}`;
+		const protocol = tlsCerts ? "https" : "http";
+		const hubUrl = `${protocol}://${host === "0.0.0.0" ? "localhost" : host}:${actualPort}`;
 
 		process.stdout.write(
-			`\n  \u2605 Chitragupta HTTP API listening on ${hubUrl}\n` +
+			`\n  \u2605 Chitragupta ${protocol.toUpperCase()} API listening on ${hubUrl}\n` +
+			(tlsCerts ? `  TLS:  Kavach (local ECDSA P-256)\n` : "") +
 			`  Health: ${hubUrl}/api/health\n` +
 			(authToken || apiKeys?.length ? `  Auth: enabled\n` : `  Auth: disabled (set CHITRAGUPTA_AUTH_TOKEN to enable)\n`) +
 			(hubAvailable ? `  Hub:  ${hubUrl} (open in browser)\n` : `  Hub:  not built (run: pnpm -F @chitragupta/hub build)\n`) +

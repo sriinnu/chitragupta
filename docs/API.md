@@ -1,6 +1,6 @@
 # API Reference
 
-Chitragupta exposes four interface layers: a **CLI** with command groups and interactive slash commands, an **MCP server** with 25 tools for integration with Claude Code and other MCP clients, and a **REST API** with 60+ endpoints served via `chitragupta serve`. This document is the canonical reference for all public-facing interfaces.
+Chitragupta exposes four interface layers: a **CLI** with command groups and interactive slash commands, an **MCP server** with 25 tools for integration with Claude Code and other MCP clients, a **REST API** with 70+ endpoints served via `chitragupta serve`, and a **Hub web dashboard** for visual monitoring and device pairing. This document is the canonical reference for all public-facing interfaces.
 
 For architectural context see [ARCHITECTURE.md](./ARCHITECTURE.md). For algorithmic details see [ALGORITHMS.md](./ALGORITHMS.md). For the Vedic model taxonomy see [VEDIC-MODELS.md](./VEDIC-MODELS.md).
 
@@ -138,7 +138,7 @@ chitragupta [options] [command]
 
 | Command | Description |
 |---------|-------------|
-| `serve [--port 3000] [--host localhost]` | HTTP API server |
+| `serve [--port 3141] [--host localhost]` | HTTP API server + Hub dashboard |
 | `mcp-server [--stdio\|--sse] [--port 3001] [--project <path>] [--agent] [--name <name>]` | MCP server |
 
 ---
@@ -476,7 +476,7 @@ Generate complete agent self-report. No parameters.
 
 ## 4. REST API Endpoints
 
-Served by `chitragupta serve`. Default port 3000.
+Served by `chitragupta serve`. Default port 3141. When the Hub package is built, the server also serves the web dashboard at the root URL.
 
 ### Health and Observability
 
@@ -619,6 +619,39 @@ Served by `chitragupta serve`. Default port 3000.
 | `GET` | `/api/workflows/executions/:id` | Execution details |
 | `GET` | `/api/workflows/:name` | Workflow DAG |
 | `POST` | `/api/workflows/:name/run` | Execute workflow |
+
+### Hub — Device Pairing (Dvara-Bandhu)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/pair/challenge` | Get current pairing challenge (passphrase, icons, QR data) |
+| `POST` | `/api/pair/verify` | Submit pairing attempt (`{method, response}`) |
+| `POST` | `/api/pair/refresh` | Refresh JWT (`{token}`) |
+| `GET` | `/api/pair/devices` | List paired devices (requires Bearer token) |
+| `DELETE` | `/api/pair/devices/:id` | Revoke a paired device (requires Bearer token) |
+
+### Hub — Budget and Cost
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/budget/status` | Session + daily cost, limits, warnings, canProceed |
+| `GET` | `/api/budget/history` | Daily cost history (last 30 days) |
+| `GET` | `/api/budget/breakdown` | Cost breakdown by provider and by model |
+
+### Hub — Model Catalog
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/models` | All available models across providers |
+| `GET` | `/api/models/:id` | Model detail (pricing, capabilities) |
+| `GET` | `/api/models/router` | TuriyaRouter state and strategy |
+
+### Hub — Settings
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/settings` | Current ChitraguptaSettings |
+| `PUT` | `/api/settings` | Partial settings merge |
 
 ### WebSocket
 

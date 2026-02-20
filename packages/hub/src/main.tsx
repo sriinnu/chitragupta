@@ -9,6 +9,7 @@
  */
 
 import { render } from "preact";
+import "./styles/tokens.css";
 import { App } from "./app.js";
 
 render(<App />, document.getElementById("app")!);

@@ -74,6 +74,9 @@ TASK-COMPLETE*.md
 **/REFACTOR_COMPLETE.md
 **/*-AUDIT.md
 
+# Internal audit/health reports (local only — never publish)
+HEALTH.md
+
 # Git worktrees (local lane branches)
 .worktrees/
 
