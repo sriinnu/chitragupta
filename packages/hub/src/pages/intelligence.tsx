@@ -1,9 +1,5 @@
 /**
- * Intelligence page for the Chitragupta Hub.
- *
- * Three-tab layout: Turiya Routing, Rta Audit, and Buddhi Decisions.
- * Surfaces the intelligent subsystems that govern model routing,
- * rule enforcement, and decision reasoning.
+ * Intelligence page — Turiya Routing, Rta Audit, Buddhi Decisions.
  * @module pages/intelligence
  */
 
@@ -14,10 +10,16 @@ import { EmptyState } from "../components/empty-state.js";
 import { Badge } from "../components/badge.js";
 import type { BadgeVariant } from "../components/badge.js";
 import { Tabs, createTabSignal, type TabDef } from "../components/tabs.js";
+import {
+	turiyaBudgetState,
+	turiyaPreference,
+	fetchTuriyaBudgetState,
+	setTuriyaPreference,
+	type TuriyaBudgetState,
+} from "../signals/cognitive.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
-/** Turiya routing tier (matches backend GET /api/turiya/routing). */
 interface TuriyaTier {
 	tier: string;
 	calls: number;
@@ -26,19 +28,12 @@ interface TuriyaTier {
 	averageReward: number;
 }
 
-/** Turiya routing response (matches backend GET /api/turiya/routing). */
 interface TuriyaRouting {
 	totalRequests: number;
 	tiers: TuriyaTier[];
-	costSummary: {
-		totalCost: number;
-		opusBaseline: number;
-		savings: number;
-		savingsPercent: number;
-	};
+	costSummary: { totalCost: number; opusBaseline: number; savings: number; savingsPercent: number };
 }
 
-/** Rta rule entry (matches backend GET /api/rta/rules). */
 interface RtaRule {
 	id: string;
 	name: string;
@@ -49,7 +44,6 @@ interface RtaRule {
 	checkCount: number;
 }
 
-/** Rta audit log entry (matches backend GET /api/rta/audit). */
 interface RtaAuditEntry {
 	toolName: string;
 	allowed: boolean;
@@ -59,7 +53,6 @@ interface RtaAuditEntry {
 	sessionId?: string;
 }
 
-/** Buddhi decision entry. */
 interface BuddhiDecision {
 	id: string;
 	category: string;
@@ -67,7 +60,6 @@ interface BuddhiDecision {
 	confidence: number;
 }
 
-/** Nyaya 5-limbed reasoning for a decision (matches backend field names). */
 interface NyayaReasoning {
 	pratijña: string;
 	hetu: string;
@@ -87,17 +79,11 @@ const TABS: TabDef[] = [
 const activeTab = createTabSignal("turiya");
 
 const SEVERITY_BADGE: Record<string, BadgeVariant> = {
-	critical: "error",
-	high: "warning",
-	medium: "accent",
-	low: "muted",
+	critical: "error", high: "warning", medium: "accent", low: "muted",
 };
 
 // ── Component ─────────────────────────────────────────────────────
 
-/**
- * Intelligence page with tabbed sub-views for Turiya, Rta, and Buddhi.
- */
 export function Intelligence(): preact.JSX.Element {
 	return (
 		<div>
@@ -120,24 +106,29 @@ function TuriyaTab(): preact.JSX.Element {
 	const [loading, setLoading] = useState(true);
 
 	useEffect(() => {
-		void apiGet<TuriyaRouting>("/api/turiya/routing")
-			.then(setData)
-			.catch(() => {})
-			.finally(() => setLoading(false));
+		void Promise.all([
+			apiGet<TuriyaRouting>("/api/turiya/routing").then(setData).catch(() => {}),
+			fetchTuriyaBudgetState(),
+		]).finally(() => setLoading(false));
 	}, []);
 
 	if (loading) return <LoadingSpinner />;
 	if (!data || !data.tiers?.length) return <EmptyState icon="\uD83C\uDFAF" title="No routing data" description="Turiya routing data will appear once the router is active." />;
 
 	const cs = data.costSummary;
+	const budget = turiyaBudgetState.value;
 	return (
 		<div>
-			{/* Summary */}
-			<div style={{ display: "flex", gap: "var(--space-xl)", marginBottom: "var(--space-xl)" }}>
+			{/* Summary cards */}
+			<div style={{ display: "flex", gap: "var(--space-xl)", marginBottom: "var(--space-xl)", flexWrap: "wrap" }}>
 				<SummaryCard label="Total Calls" value={String(data.totalRequests)} />
 				<SummaryCard label="Cost Saved" value={`$${cs.savings.toFixed(2)}`} color="var(--color-success)" />
 				<SummaryCard label="Savings" value={`${cs.savingsPercent.toFixed(1)}%`} color="var(--color-success)" />
+				{budget && <BudgetLambdaCard budget={budget} />}
 			</div>
+
+			{/* Preference slider */}
+			<PreferenceSlider />
 
 			{/* Tier table */}
 			<div style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: "var(--radius-lg)", overflow: "hidden" }}>
@@ -166,6 +157,62 @@ function TuriyaTab(): preact.JSX.Element {
 	);
 }
 
+/** Budget lambda indicator card. Shows budget pressure level. */
+function BudgetLambdaCard({ budget }: { budget: TuriyaBudgetState }): preact.JSX.Element {
+	const pressure = budget.budgetLambda;
+	const level = pressure < 0.01 ? "low" : pressure < 0.1 ? "moderate" : "high";
+	const color = level === "low" ? "var(--color-success)" : level === "moderate" ? "var(--color-warning)" : "var(--color-error)";
+	return (
+		<div style={{
+			background: "var(--color-surface)", border: "1px solid var(--color-border)",
+			borderRadius: "var(--radius-lg)", padding: "var(--space-lg)", minWidth: "140px",
+		}}>
+			<div style={{ fontSize: "var(--font-size-xs)", color: "var(--color-muted)", marginBottom: "var(--space-xs)" }}>
+				Budget Pressure
+			</div>
+			<div style={{ fontSize: "var(--font-size-xl)", fontWeight: "bold", color }}>
+				{level}
+			</div>
+			<div style={{ fontSize: "var(--font-size-xs)", color: "var(--color-muted)", marginTop: "2px" }}>
+				{"\u03BB"} = {pressure.toFixed(4)} | ${budget.dailySpend.toFixed(2)} spent
+			</div>
+		</div>
+	);
+}
+
+/** Cost/quality preference slider. */
+function PreferenceSlider(): preact.JSX.Element {
+	const pref = turiyaPreference.value;
+	return (
+		<div style={{
+			background: "var(--color-surface)", border: "1px solid var(--color-border)",
+			borderRadius: "var(--radius-lg)", padding: "var(--space-lg)", marginBottom: "var(--space-xl)",
+		}}>
+			<div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-sm)" }}>
+				<span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text)", fontWeight: 500 }}>
+					Cost / Quality Preference
+				</span>
+				<span style={{ fontSize: "var(--font-size-xs)", color: "var(--color-muted)" }}>
+					{pref < 0.3 ? "Quality-first" : pref > 0.7 ? "Cost-first" : "Balanced"}
+				</span>
+			</div>
+			<div style={{ display: "flex", alignItems: "center", gap: "var(--space-md)" }}>
+				<span style={{ fontSize: "var(--font-size-xs)", color: "var(--color-muted)" }}>Quality</span>
+				<input
+					type="range" min="0" max="1" step="0.05"
+					value={pref}
+					onInput={(e) => {
+						const val = parseFloat((e.target as HTMLInputElement).value);
+						void setTuriyaPreference(val);
+					}}
+					style={{ flex: 1, accentColor: "var(--color-accent)" }}
+				/>
+				<span style={{ fontSize: "var(--font-size-xs)", color: "var(--color-muted)" }}>Cost</span>
+			</div>
+		</div>
+	);
+}
+
 // ── Rta Tab ───────────────────────────────────────────────────────
 
 function RtaTab(): preact.JSX.Element {
@@ -185,7 +232,6 @@ function RtaTab(): preact.JSX.Element {
 
 	return (
 		<div>
-			{/* Rules table */}
 			{rules.length > 0 && (
 				<div style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: "var(--radius-lg)", overflow: "hidden", marginBottom: "var(--space-xl)" }}>
 					<table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -208,39 +254,18 @@ function RtaTab(): preact.JSX.Element {
 					</table>
 				</div>
 			)}
-
-			{/* Audit log */}
 			{audit.length > 0 && (
 				<div>
-					<h3 style={{ fontSize: "var(--font-size-base)", color: "var(--color-muted)", marginBottom: "var(--space-md)" }}>
-						Audit Log
-					</h3>
+					<h3 style={{ fontSize: "var(--font-size-base)", color: "var(--color-muted)", marginBottom: "var(--space-md)" }}>Audit Log</h3>
 					<div style={{ display: "flex", flexDirection: "column", gap: "var(--space-sm)" }}>
-						{audit
-							.sort((a, b) => b.timestamp - a.timestamp)
-							.slice(0, 20)
-							.map((entry, i) => (
-								<div key={i} style={{
-									display: "flex",
-									alignItems: "center",
-									gap: "var(--space-md)",
-									padding: "var(--space-sm) var(--space-lg)",
-									background: "var(--color-surface)",
-									borderRadius: "var(--radius-md)",
-									border: "1px solid var(--color-border)",
-								}}>
-									<Badge label={entry.allowed ? "allowed" : "blocked"} variant={entry.allowed ? "success" : "error"} />
-									<span style={{ color: "var(--color-text)", fontSize: "var(--font-size-md)", fontFamily: "monospace" }}>
-										{entry.toolName}
-									</span>
-									<span style={{ color: "var(--color-muted)", fontSize: "var(--font-size-xs)", flex: 1 }}>
-										{entry.ruleId}
-									</span>
-									<span style={{ color: "var(--color-muted)", fontSize: "var(--font-size-xs)", whiteSpace: "nowrap" }}>
-										{formatEpoch(entry.timestamp)}
-									</span>
-								</div>
-							))}
+						{audit.sort((a, b) => b.timestamp - a.timestamp).slice(0, 20).map((entry, i) => (
+							<div key={i} style={{ display: "flex", alignItems: "center", gap: "var(--space-md)", padding: "var(--space-sm) var(--space-lg)", background: "var(--color-surface)", borderRadius: "var(--radius-md)", border: "1px solid var(--color-border)" }}>
+								<Badge label={entry.allowed ? "allowed" : "blocked"} variant={entry.allowed ? "success" : "error"} />
+								<span style={{ color: "var(--color-text)", fontSize: "var(--font-size-md)", fontFamily: "monospace" }}>{entry.toolName}</span>
+								<span style={{ color: "var(--color-muted)", fontSize: "var(--font-size-xs)", flex: 1 }}>{entry.ruleId}</span>
+								<span style={{ color: "var(--color-muted)", fontSize: "var(--font-size-xs)", whiteSpace: "nowrap" }}>{formatEpoch(entry.timestamp)}</span>
+							</div>
+						))}
 					</div>
 				</div>
 			)}
@@ -264,19 +289,13 @@ function BuddhiTab(): preact.JSX.Element {
 	}, []);
 
 	const handleExpand = useCallback(async (id: string) => {
-		if (expandedId === id) {
-			setExpandedId(null);
-			setReasoning(null);
-			return;
-		}
+		if (expandedId === id) { setExpandedId(null); setReasoning(null); return; }
 		setExpandedId(id);
 		setReasoning(null);
 		try {
 			const data = await apiGet<{ reasoning: NyayaReasoning }>(`/api/decisions/${id}/reasoning`);
 			setReasoning(data.reasoning);
-		} catch {
-			// best-effort
-		}
+		} catch { /* best-effort */ }
 	}, [expandedId]);
 
 	if (loading) return <LoadingSpinner />;
@@ -286,40 +305,19 @@ function BuddhiTab(): preact.JSX.Element {
 		<div style={{ display: "flex", flexDirection: "column", gap: "var(--space-sm)" }}>
 			{decisions.map((d) => (
 				<div key={d.id}>
-					<div
-						onClick={() => void handleExpand(d.id)}
-						style={{
-							background: "var(--color-surface)",
-							border: "1px solid var(--color-border)",
-							borderRadius: "var(--radius-lg)",
-							padding: "var(--space-md) var(--space-lg)",
-							cursor: "pointer",
-							display: "flex",
-							alignItems: "center",
-							gap: "var(--space-md)",
-						}}
-					>
+					<div onClick={() => void handleExpand(d.id)} style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: "var(--radius-lg)", padding: "var(--space-md) var(--space-lg)", cursor: "pointer", display: "flex", alignItems: "center", gap: "var(--space-md)" }}>
 						<Badge label={d.category} variant="accent" />
-						<span style={{ flex: 1, color: "var(--color-text)", fontSize: "var(--font-size-md)" }}>
-							{d.description}
-						</span>
-						<span style={{ color: "var(--color-muted)", fontSize: "var(--font-size-sm)" }}>
-							{(d.confidence * 100).toFixed(0)}%
-						</span>
-						<span style={{ color: "var(--color-muted)", fontSize: "var(--font-size-sm)" }}>
-							{expandedId === d.id ? "\u25B2" : "\u25BC"}
-						</span>
+						<span style={{ flex: 1, color: "var(--color-text)", fontSize: "var(--font-size-md)" }}>{d.description}</span>
+						<span style={{ color: "var(--color-muted)", fontSize: "var(--font-size-sm)" }}>{(d.confidence * 100).toFixed(0)}%</span>
+						<span style={{ color: "var(--color-muted)", fontSize: "var(--font-size-sm)" }}>{expandedId === d.id ? "\u25B2" : "\u25BC"}</span>
 					</div>
-					{expandedId === d.id && reasoning && (
-						<NyayaPanel reasoning={reasoning} />
-					)}
+					{expandedId === d.id && reasoning && <NyayaPanel reasoning={reasoning} />}
 				</div>
 			))}
 		</div>
 	);
 }
 
-/** Renders the 5-limbed Nyaya reasoning. */
 function NyayaPanel({ reasoning }: { reasoning: NyayaReasoning }): preact.JSX.Element {
 	const limbs: Array<{ label: string; key: keyof NyayaReasoning }> = [
 		{ label: "Pratijna (Thesis)", key: "pratijña" },
@@ -328,23 +326,12 @@ function NyayaPanel({ reasoning }: { reasoning: NyayaReasoning }): preact.JSX.El
 		{ label: "Upanaya (Application)", key: "upanaya" },
 		{ label: "Nigamana (Conclusion)", key: "nigamana" },
 	];
-
 	return (
-		<div style={{
-			background: "var(--color-surface-alt)",
-			borderRadius: "0 0 var(--radius-lg) var(--radius-lg)",
-			border: "1px solid var(--color-border)",
-			borderTop: "none",
-			padding: "var(--space-lg)",
-		}}>
+		<div style={{ background: "var(--color-surface-alt)", borderRadius: "0 0 var(--radius-lg) var(--radius-lg)", border: "1px solid var(--color-border)", borderTop: "none", padding: "var(--space-lg)" }}>
 			{limbs.map((limb) => (
 				<div key={limb.key} style={{ marginBottom: "var(--space-md)" }}>
-					<div style={{ fontSize: "var(--font-size-xs)", color: "var(--color-accent)", fontWeight: 600, marginBottom: "2px" }}>
-						{limb.label}
-					</div>
-					<div style={{ fontSize: "var(--font-size-md)", color: "var(--color-text)", lineHeight: 1.5 }}>
-						{reasoning[limb.key]}
-					</div>
+					<div style={{ fontSize: "var(--font-size-xs)", color: "var(--color-accent)", fontWeight: 600, marginBottom: "2px" }}>{limb.label}</div>
+					<div style={{ fontSize: "var(--font-size-md)", color: "var(--color-text)", lineHeight: 1.5 }}>{reasoning[limb.key]}</div>
 				</div>
 			))}
 		</div>
@@ -354,44 +341,22 @@ function NyayaPanel({ reasoning }: { reasoning: NyayaReasoning }): preact.JSX.El
 // ── Shared helpers ────────────────────────────────────────────────
 
 function LoadingSpinner(): preact.JSX.Element {
-	return (
-		<div style={{ display: "flex", justifyContent: "center", padding: "var(--space-2xl)" }}>
-			<Spinner size="lg" />
-		</div>
-	);
+	return <div style={{ display: "flex", justifyContent: "center", padding: "var(--space-2xl)" }}><Spinner size="lg" /></div>;
 }
 
 function SummaryCard({ label, value, color }: { label: string; value: string; color?: string }): preact.JSX.Element {
 	return (
-		<div style={{
-			background: "var(--color-surface)",
-			border: "1px solid var(--color-border)",
-			borderRadius: "var(--radius-lg)",
-			padding: "var(--space-lg)",
-			minWidth: "120px",
-		}}>
+		<div style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: "var(--radius-lg)", padding: "var(--space-lg)", minWidth: "120px" }}>
 			<div style={{ fontSize: "var(--font-size-xs)", color: "var(--color-muted)", marginBottom: "var(--space-xs)" }}>{label}</div>
 			<div style={{ fontSize: "var(--font-size-xl)", fontWeight: "bold", color: color ?? "var(--color-text)" }}>{value}</div>
 		</div>
 	);
 }
 
-const thStyle: preact.JSX.CSSProperties = {
-	textAlign: "left",
-	padding: "var(--space-sm) var(--space-md)",
-	fontSize: "var(--font-size-xs)",
-	color: "var(--color-muted)",
-	fontWeight: 500,
-};
-
-const tdStyle: preact.JSX.CSSProperties = {
-	padding: "var(--space-sm) var(--space-md)",
-	color: "var(--color-muted)",
-	fontSize: "var(--font-size-md)",
-};
+const thStyle: preact.JSX.CSSProperties = { textAlign: "left", padding: "var(--space-sm) var(--space-md)", fontSize: "var(--font-size-xs)", color: "var(--color-muted)", fontWeight: 500 };
+const tdStyle: preact.JSX.CSSProperties = { padding: "var(--space-sm) var(--space-md)", color: "var(--color-muted)", fontSize: "var(--font-size-md)" };
 
 function formatEpoch(ts: number): string {
-	try {
-		return new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-	} catch { return String(ts); }
+	try { return new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
+	catch { return String(ts); }
 }
