@@ -7,7 +7,9 @@
  */
 
 import { useEffect, useState, useCallback } from "preact/hooks";
-import { apiGet, apiDelete, apiPost } from "../api.js";
+import { apiGet, apiDelete } from "../api.js";
+import { Spinner } from "../components/spinner.js";
+import { EmptyState } from "../components/empty-state.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -75,7 +77,7 @@ export function Devices(): preact.JSX.Element {
 	const [devices, setDevices] = useState<DeviceEntry[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [generating, setGenerating] = useState(false);
-	const [challengeUrl, setChallengeUrl] = useState<string | null>(null);
+	const [challengeInfo, setChallengeInfo] = useState<string | null>(null);
 
 	const refresh = useCallback(async () => {
 		try {
@@ -102,12 +104,13 @@ export function Devices(): preact.JSX.Element {
 
 	const handleNewChallenge = useCallback(async () => {
 		setGenerating(true);
-		setChallengeUrl(null);
+		setChallengeInfo(null);
 		try {
-			const result = await apiPost<{ url: string }>("/api/pair/challenge");
-			setChallengeUrl(result.url);
+			const result = await apiGet<{ challengeId: string; expiresAt: number }>("/api/pair/challenge");
+			const expiresIn = Math.round((result.expiresAt - Date.now()) / 1000);
+			setChallengeInfo(`Challenge ${result.challengeId.slice(0, 8)} active — check terminal for pairing code (expires in ${expiresIn}s)`);
 		} catch {
-			// best-effort
+			setChallengeInfo("Failed to fetch challenge. Is the server running?");
 		} finally {
 			setGenerating(false);
 		}
@@ -134,8 +137,8 @@ export function Devices(): preact.JSX.Element {
 				</button>
 			</div>
 
-			{/* Challenge URL display */}
-			{challengeUrl && (
+			{/* Challenge info display */}
+			{challengeInfo && (
 				<div
 					style={{
 						background: "rgba(99,102,241,0.1)",
@@ -143,29 +146,26 @@ export function Devices(): preact.JSX.Element {
 						borderRadius: "8px",
 						padding: "12px 16px",
 						marginBottom: "16px",
+						fontSize: "13px",
+						color: "#6366f1",
 					}}
 				>
-					<div style={{ fontSize: "12px", color: "#8888a0", marginBottom: "4px" }}>
-						Share this URL with the new device:
-					</div>
-					<code
-						style={{
-							fontSize: "13px",
-							color: "#6366f1",
-							wordBreak: "break-all",
-						}}
-					>
-						{challengeUrl}
-					</code>
+					{challengeInfo}
 				</div>
 			)}
 
-			{loading && <div style={{ color: "#8888a0" }}>Loading devices...</div>}
+			{loading && (
+				<div style={{ display: "flex", justifyContent: "center", padding: "var(--space-2xl)" }}>
+					<Spinner size="lg" />
+				</div>
+			)}
 
 			{!loading && devices.length === 0 && (
-				<div style={{ color: "#8888a0", fontSize: "13px" }}>
-					No paired devices found.
-				</div>
+				<EmptyState
+					icon="\uD83D\uDCF1"
+					title="No paired devices"
+					description="Use the button above to generate a pairing challenge and connect a device."
+				/>
 			)}
 
 			{/* Device list */}

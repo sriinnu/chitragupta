@@ -8,17 +8,17 @@
 
 <p align="center">
   <a href="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml"><img src="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/tests-10%2C232-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-10%2C618-brightgreen" alt="Tests" />
   <img src="https://img.shields.io/badge/node-%3E%3D22-blue" alt="Node" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
-  <img src="https://img.shields.io/badge/packages-15-orange" alt="Packages" />
+  <img src="https://img.shields.io/badge/packages-16-orange" alt="Packages" />
 </p>
 
 ---
 
-Chitragupta is an AI agent platform that treats cognition as a first-class engineering discipline. It is a TypeScript ESM monorepo of 15 packages — a complete cognitive system with memory, identity, attention, affect, intention, self-reflection, deliberation, and self-evolution. Most of which runs at zero LLM cost.
+Chitragupta is an AI agent platform that treats cognition as a first-class engineering discipline. It is a TypeScript ESM monorepo of 16 packages — a complete cognitive system with memory, identity, attention, affect, intention, self-reflection, deliberation, and self-evolution. Most of which runs at zero LLM cost.
 
-It exposes a **CLI**, an **HTTP server**, an **MCP server**, and a **programmatic API**. It is designed to be consumed by other applications.
+It exposes a **CLI**, an **HTTP server**, an **MCP server**, a **web dashboard (Hub)**, and a **programmatic API**. It is designed to be consumed by other applications.
 
 Named after the divine scribe in Vedic tradition — the keeper of the hidden record — internally, every module carries a Sanskrit name that defines its purpose. Externally, everything speaks English.
 
@@ -98,7 +98,7 @@ pnpm chitragupta
 # Direct prompt
 pnpm chitragupta -- "explain the auth flow in this project"
 
-# HTTP API server
+# HTTP API server + Hub dashboard
 pnpm chitragupta -- serve
 
 # MCP server (for Claude Code integration)
@@ -106,6 +106,37 @@ pnpm chitragupta -- mcp
 ```
 
 See [GETTING_STARTED.md](GETTING_STARTED.md) for the full setup guide — providers, config, MCP, profiles, memory.
+
+---
+
+## Hub Dashboard
+
+Chitragupta includes a web-based dashboard served from the same port as the HTTP API. It provides a visual interface for monitoring sessions, costs, models, memory, skills, and managing paired devices.
+
+```bash
+# Build the Hub frontend
+pnpm -F @chitragupta/hub build
+
+# Start the server (Hub auto-detected)
+chitragupta serve
+# → Hub: http://localhost:3141
+```
+
+On first visit, the browser must complete a **device pairing** — a novel 4-method protocol (passphrase, QR code, visual icon match, or number code) that proves the browser can see the terminal output. No passwords, no API keys.
+
+### Dashboard Pages
+
+| Page | What It Shows |
+|------|--------------|
+| **Overview** | Cost cards, session summary, health indicators, recent activity |
+| **Sessions** | Session list with search, turn-by-turn detail view |
+| **Models** | Model catalog across providers, router insights, model switching |
+| **Memory** | GraphRAG explorer, consolidation rules, learned patterns |
+| **Skills** | Skill registry, approval queue, learning timeline |
+| **Settings** | Budget config, provider preferences, skill discovery mode |
+| **Devices** | Paired browsers, revoke access, re-pair |
+
+See [docs/HUB.md](docs/HUB.md) for the full Hub guide.
 
 ---
 
@@ -233,7 +264,7 @@ context persists          ← next session picks up where you left off
 
 ---
 
-## The 15 Packages
+## The 16 Packages
 
 | Package | What It Does | Internal Name | Meaning |
 |---------|-------------|---------------|---------|
@@ -250,12 +281,13 @@ context persists          ← next session picks up where you left off
 | [`@chitragupta/tantra`](./packages/tantra) | MCP — server lifecycle, circuit breaker, capability aggregation, auto-restart | Tantra | Technique |
 | [`@chitragupta/vidhya-skills`](./packages/vidhya-skills) | Skills — trait vector matching, evolution, security scanning, autonomous learning | Vidhya | Knowledge |
 | [`@chitragupta/niyanta`](./packages/niyanta) | Orchestrator — multi-armed bandit, task routing, agent evaluation, auto-scaling | Niyanta | Director |
+| [`@chitragupta/hub`](./packages/hub) | Web Dashboard — Preact SPA, device pairing, real-time monitoring | — | — |
 | [`@chitragupta/cli`](./packages/cli) | Entry Point — interactive CLI, HTTP server, MCP server, onboarding | — | — |
 | [`@chitragupta/darpana`](./packages/darpana) | LLM Proxy — mirrors Anthropic API to any provider, <5ms overhead, zero-config | Darpana | Mirror |
 
 > **npm:** Published as [`@yugenlab/chitragupta`](https://www.npmjs.com/package/@yugenlab/chitragupta) — `npm install -g @yugenlab/chitragupta`
 
-Build order: `core -> swara -> anina -> smriti -> ui -> yantra -> dharma -> netra -> vayu -> sutra -> tantra -> vidhya-skills -> niyanta -> cli` · `darpana` (standalone, depends on core only)
+Build order: `core -> swara -> anina -> smriti -> ui -> yantra -> dharma -> netra -> vayu -> sutra -> tantra -> vidhya-skills -> niyanta -> hub -> cli` · `darpana` (standalone, depends on core only)
 
 ---
 
@@ -280,11 +312,11 @@ Plus 3 base profiles: `chitragupta` (bold, opinionated default), `friendly`, `mi
 
 | Metric | Value |
 |--------|-------|
-| Test files | 300 |
-| Total tests | 10,232 |
+| Test files | 300+ |
+| Total tests | 10,618 |
 | Failures | 0 |
 | TypeScript errors | 0 |
-| Packages | 15 |
+| Packages | 16 |
 | p99 latency (load test) | 1.2ms at 500 RPS |
 | Security audit | 36 issues found and resolved |
 
@@ -298,6 +330,7 @@ Plus 3 base profiles: `chitragupta` (bold, opinionated default), `friendly`, `mi
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture, package graph, internal components, memory model, actor mesh |
 | [docs/ALGORITHMS.md](docs/ALGORITHMS.md) | Novel algorithms — Sinkhorn-Knopp, PageRank, Thompson Sampling, BOCPD, and more |
 | [docs/VEDIC-MODELS.md](docs/VEDIC-MODELS.md) | 17 Vedic cognitive models mapped to computational modules |
+| [docs/HUB.md](docs/HUB.md) | Hub web dashboard — device pairing, pages, API endpoints, architecture |
 | [docs/API.md](docs/API.md) | REST API, MCP tools/resources, CLI commands, Vayu DAG integration |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | 30+ research papers backing every major module |
 | [CHANGELOG.md](CHANGELOG.md) | Release history (v0.1.0 — v0.5.0) |

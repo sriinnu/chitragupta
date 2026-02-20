@@ -10,6 +10,7 @@
  */
 
 import http from "node:http";
+import https from "node:https";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -62,7 +63,7 @@ const MIME_TYPES: Record<string, string> = {
  * Lightweight HTTP server with route-matching, CORS, rate limiting, and auth.
  */
 export class ChitraguptaServer {
-	private server: http.Server | null = null;
+	private server: http.Server | https.Server | null = null;
 	private routes: Map<string, RegisteredRoute[]> = new Map();
 	private startTime = 0;
 	private rateLimitMap = new Map<string, number[]>();
@@ -110,7 +111,7 @@ export class ChitraguptaServer {
 			}
 		}, 60_000);
 
-		this.server = http.createServer(async (req, res) => {
+		const requestHandler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
 			const requestId = randomUUID();
 			const startMs = Date.now();
 			const allowedOrigin = this.resolveCorsOrigin(req.headers.origin, corsConfig);
@@ -196,7 +197,18 @@ export class ChitraguptaServer {
 					log.error(`Request failed: ${req.method ?? "?"} ${req.url ?? "?"}`, err instanceof Error ? err : undefined, { requestId, status, duration: durationMs });
 				}
 			}
-		});
+		};
+
+		// Kavach: use HTTPS when TLS certs are provided, plain HTTP otherwise
+		const tls = this.config.tls;
+		if (tls) {
+			this.server = https.createServer(
+				{ cert: tls.cert, key: tls.key, ca: tls.ca },
+				requestHandler,
+			);
+		} else {
+			this.server = http.createServer(requestHandler);
+		}
 
 		this.server.timeout = timeoutMs;
 

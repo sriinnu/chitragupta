@@ -9,6 +9,8 @@
 
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { apiGet } from "../api.js";
+import { Spinner } from "../components/spinner.js";
+import { EmptyState } from "../components/empty-state.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -154,10 +156,18 @@ export function Sessions(): preact.JSX.Element {
 				}}
 			/>
 
-			{loading && <div style={{ color: "#8888a0" }}>Loading sessions...</div>}
+			{loading && (
+				<div style={{ display: "flex", justifyContent: "center", padding: "var(--space-2xl)" }}>
+					<Spinner size="lg" />
+				</div>
+			)}
 
 			{!loading && filtered.length === 0 && (
-				<div style={{ color: "#8888a0", fontSize: "13px" }}>No sessions found.</div>
+				<EmptyState
+					icon="\uD83D\uDDC2"
+					title="No sessions found"
+					description={filter.trim() ? `No sessions match "${filter}".` : "Sessions will appear here once you start using Chitragupta."}
+				/>
 			)}
 
 			{/* Session list */}

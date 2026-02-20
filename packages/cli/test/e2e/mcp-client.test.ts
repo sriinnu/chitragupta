@@ -65,7 +65,7 @@ let globalRequestId = 1;
  */
 class McpTestClient {
 	private _child: ChildProcess | null = null;
-	private _buffer = "";
+	private _buffer: Buffer = Buffer.alloc(0);
 	private _pendingResponses: Map<
 		number | string,
 		{
@@ -80,7 +80,7 @@ class McpTestClient {
 	 * Spawn the MCP server process and begin listening.
 	 */
 	async start(entryPoint: string, args: string[] = []): Promise<void> {
-		this._buffer = "";
+		this._buffer = Buffer.alloc(0);
 		this._stderr = [];
 
 		this._child = spawn("node", [entryPoint, ...args], {
@@ -92,9 +92,9 @@ class McpTestClient {
 			},
 		});
 
-		this._child.stdout?.setEncoding("utf-8");
-		this._child.stdout?.on("data", (chunk: string) => {
-			this._buffer += chunk;
+		// Read stdout as raw Buffers (not strings) — Content-Length counts bytes
+		this._child.stdout?.on("data", (chunk: Buffer) => {
+			this._buffer = Buffer.concat([this._buffer, chunk]);
 			this._drain();
 		});
 
@@ -185,7 +185,7 @@ class McpTestClient {
 			await exitPromise;
 			this._child = null;
 		}
-		this._buffer = "";
+		this._buffer = Buffer.alloc(0);
 		this._stderr = [];
 	}
 
@@ -227,32 +227,63 @@ class McpTestClient {
 	}
 
 	/**
-	 * Drain the stdout buffer, extract complete lines, parse as JSON-RPC,
-	 * and resolve any matching pending requests.
+	 * Drain the stdout buffer, extract JSON-RPC messages, and resolve
+	 * matching pending requests. Supports both MCP Content-Length framing
+	 * (`Content-Length: N\r\n\r\n{json}`) and line-delimited JSON.
+	 *
+	 * Uses raw Buffers to match Content-Length byte counts correctly
+	 * (string length !== byte length for multibyte UTF-8).
 	 */
 	private _drain(): void {
-		let newlineIdx = this._buffer.indexOf("\n");
-		while (newlineIdx !== -1) {
-			const line = this._buffer.slice(0, newlineIdx).trim();
-			this._buffer = this._buffer.slice(newlineIdx + 1);
+		const HEADER_DELIM = Buffer.from("\r\n\r\n");
+		const NEWLINE = 0x0a; // '\n'
 
-			if (line.length > 0) {
-				try {
-					const msg = JSON.parse(line) as JsonRpcResponse;
-					if (msg.jsonrpc === "2.0" && "id" in msg) {
-						const pending = this._pendingResponses.get(msg.id);
-						if (pending) {
-							clearTimeout(pending.timer);
-							this._pendingResponses.delete(msg.id);
-							pending.resolve(msg);
-						}
+		// eslint-disable-next-line no-constant-condition
+		while (this._buffer.length > 0) {
+			// Try Content-Length framed message first
+			const headerEnd = this._buffer.indexOf(HEADER_DELIM);
+			if (headerEnd !== -1) {
+				const header = this._buffer.subarray(0, headerEnd).toString("utf8");
+				const match = header.match(/Content-Length:\s*(\d+)/i);
+				if (match) {
+					const bodyLength = parseInt(match[1], 10);
+					const bodyStart = headerEnd + HEADER_DELIM.length;
+					if (this._buffer.length >= bodyStart + bodyLength) {
+						const body = this._buffer.subarray(bodyStart, bodyStart + bodyLength).toString("utf8");
+						this._buffer = this._buffer.subarray(bodyStart + bodyLength);
+						this._resolveMessage(body);
+						continue;
 					}
-				} catch {
-					// Not valid JSON -- skip
+					return; // Not enough bytes yet
 				}
 			}
 
-			newlineIdx = this._buffer.indexOf("\n");
+			// Fallback: line-delimited JSON
+			const newlineIdx = this._buffer.indexOf(NEWLINE);
+			if (newlineIdx === -1) return;
+
+			const line = this._buffer.subarray(0, newlineIdx).toString("utf8").trim();
+			this._buffer = this._buffer.subarray(newlineIdx + 1);
+			if (line.length > 0) {
+				this._resolveMessage(line);
+			}
+		}
+	}
+
+	/** Parse a raw JSON string and resolve matching pending request. */
+	private _resolveMessage(raw: string): void {
+		try {
+			const msg = JSON.parse(raw) as JsonRpcResponse;
+			if (msg.jsonrpc === "2.0" && "id" in msg) {
+				const pending = this._pendingResponses.get(msg.id);
+				if (pending) {
+					clearTimeout(pending.timer);
+					this._pendingResponses.delete(msg.id);
+					pending.resolve(msg);
+				}
+			}
+		} catch {
+			// Not valid JSON -- skip
 		}
 	}
 }

@@ -26,7 +26,7 @@ cd chitragupta
 # Install all workspace dependencies
 pnpm install
 
-# Build all 15 packages (in dependency order)
+# Build all 16 packages (in dependency order)
 pnpm run build
 ```
 
@@ -142,8 +142,8 @@ chitragupta plugin list                # List installed plugins
 chitragupta plugin load                # Load all plugins from ~/.chitragupta/plugins/
 chitragupta plugin install             # Show plugin installation instructions
 
-# HTTP API server
-chitragupta serve --port 3000 --host localhost
+# HTTP API server + Hub dashboard
+chitragupta serve --port 3141 --host localhost
 
 # MCP server (for Claude Code, Codex, Gemini CLI, etc.)
 chitragupta mcp-server                         # stdio transport (default)
@@ -373,7 +373,84 @@ cd /path/to/chitragupta && pnpm run build --filter @chitragupta/cli
 
 ---
 
+### Using npx (After npm Install)
+
+If Chitragupta is installed globally or as a dependency, you can reference
+the MCP entry point via npx. This is the recommended approach for machines
+where Chitragupta was installed via npm rather than cloned from source.
+
+```json
+{
+  "mcpServers": {
+    "chitragupta": {
+      "command": "npx",
+      "args": [
+        "-y", "-p", "@chitragupta/cli",
+        "chitragupta-mcp",
+        "--project", "/path/to/your/project",
+        "--agent"
+      ]
+    }
+  }
+}
+```
+
+> **Note:** Some MCP clients (VS Code, Cursor) don't load your shell profile,
+> so `npx` may not be on the PATH. See the troubleshooting section below
+> for absolute-path workarounds.
+
+---
+
 ### Configuring Other MCP Clients
+
+#### VS Code (Copilot / Augment / Roo)
+
+Add Chitragupta to `.vscode/mcp.json` in your project root (or to your
+user-level `settings.json` under `"mcp.servers"`):
+
+```json
+{
+  "servers": {
+    "chitragupta": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/chitragupta/packages/cli/dist/mcp-entry.js",
+        "--project", "${workspaceFolder}",
+        "--agent"
+      ]
+    }
+  }
+}
+```
+
+> **Important — VS Code PATH caveat:** VS Code extensions do **not** load your
+> shell profile (`~/.zshrc`, `~/.bashrc`), so commands like `npx`, `chitragupta`,
+> or nvm-managed `node` are typically not found. Always use **absolute paths**
+> to both the `node` binary and the MCP entry script.
+
+Find your absolute Node.js path:
+
+```bash
+which node
+# Example: /Users/you/.nvm/versions/node/v22.12.0/bin/node
+```
+
+Then use the full paths in the config:
+
+```json
+{
+  "servers": {
+    "chitragupta": {
+      "command": "/Users/you/.nvm/versions/node/v22.12.0/bin/node",
+      "args": [
+        "/Users/you/code/chitragupta/packages/cli/dist/mcp-entry.js",
+        "--project", "${workspaceFolder}",
+        "--agent"
+      ]
+    }
+  }
+}
+```
 
 #### OpenAI Codex
 
@@ -392,8 +469,43 @@ Add to your Codex MCP configuration:
 
 #### Gemini CLI
 
-Add Chitragupta as an MCP server in your Gemini CLI configuration. The stdio
-transport works with any MCP-compatible client.
+Add to `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "chitragupta": {
+      "command": "node",
+      "args": [
+        "/path/to/chitragupta/packages/cli/dist/mcp-entry.js",
+        "--project", "/path/to/your/project",
+        "--agent"
+      ]
+    }
+  }
+}
+```
+
+The stdio transport works with any MCP-compatible client.
+
+#### Cursor
+
+Add to `.cursor/mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "chitragupta": {
+      "command": "node",
+      "args": [
+        "/path/to/chitragupta/packages/cli/dist/mcp-entry.js",
+        "--project", ".",
+        "--agent"
+      ]
+    }
+  }
+}
+```
 
 #### Generic / Custom Clients
 
@@ -452,6 +564,47 @@ When Chitragupta is connected as an MCP server, Claude Code gains access to:
 
 This is particularly useful when working on projects where Chitragupta has already
 accumulated context through previous sessions.
+
+---
+
+## Hub Dashboard (Web UI)
+
+Chitragupta includes a web-based dashboard served from the same port as the HTTP API.
+
+### Setup
+
+```bash
+# Build the Hub frontend (Preact SPA)
+pnpm -F @chitragupta/hub build
+
+# Start the server — Hub is auto-detected
+chitragupta serve
+```
+
+On startup, the terminal prints a **pairing challenge**. Open `http://localhost:3141` in your browser.
+
+### Device Pairing
+
+On first visit, the browser must pair with the terminal. Choose one of four methods:
+
+1. **Passphrase** — type the words shown in the terminal
+2. **Number code** — enter the 7-digit number code
+3. **QR code** — scan the terminal QR with the browser camera
+4. **Visual match** — tap the 4 icons shown in the terminal (in order)
+
+On success, the browser receives a JWT and redirects to the dashboard. The JWT lasts 24 hours and auto-refreshes.
+
+### What You Get
+
+- **Overview** — cost cards, session summary, health indicators
+- **Sessions** — searchable session list, turn-by-turn detail
+- **Models** — model catalog across providers, router insights
+- **Memory** — GraphRAG explorer, consolidation rules, learned patterns
+- **Skills** — skill registry, approval queue, learning timeline
+- **Settings** — budget config, provider preferences
+- **Devices** — manage paired browsers, revoke access
+
+For full details, see [docs/HUB.md](docs/HUB.md).
 
 ---
 
@@ -709,7 +862,7 @@ Add custom providers in your settings:
 
 ## Project Structure (for Contributors)
 
-Chitragupta is a monorepo with 15 packages under `packages/`:
+Chitragupta is a monorepo with 16 packages under `packages/`:
 
 | Package | npm Scope | Sanskrit Name | Purpose |
 |---------|-----------|---------------|---------|
@@ -726,6 +879,7 @@ Chitragupta is a monorepo with 15 packages under `packages/`:
 | `tantra` | `@chitragupta/tantra` | Weave | MCP server/client implementation |
 | `vidhya-skills` | `@chitragupta/vidhya-skills` | Knowledge | Skill discovery via Trait Vector Matching |
 | `niyanta` | `@chitragupta/niyanta` | Orchestrator | Multi-agent orchestration (bandit strategies) |
+| `hub` | `@chitragupta/hub` | -- | Web dashboard (Preact SPA, device pairing, monitoring) |
 | `cli` | `@chitragupta/cli` | -- | CLI binary, HTTP server, MCP server, programmatic API |
 | `darpana` | `@chitragupta/darpana` | Mirror | LLM API proxy — mirrors Anthropic API to any provider |
 
@@ -752,8 +906,8 @@ pnpm run dev
 
 ```
                          chitragupta (CLI)
-                        /      |       \
-                   TUI Mode  HTTP Mode  MCP Mode
+                        /      |       \       \
+                   TUI Mode  HTTP Mode  MCP Mode  Hub (Web UI)
                       |        |          |
                  [cli/main]  [serve]  [mcp-server]
                       \        |        /
@@ -775,7 +929,8 @@ pnpm run dev
 
 ## What's Next
 
-- **Individual package READMEs** -- each of the 15 packages has its own README with
+- **Hub dashboard** -- build and open the web dashboard for visual monitoring. See [docs/HUB.md](docs/HUB.md).
+- **Individual package READMEs** -- each of the 16 packages has its own README with
   full API documentation. See `packages/<name>/README.md`.
 - **Plugin development** -- create custom tools, commands, and themes as ESM modules
   in `~/.chitragupta/plugins/`.
@@ -847,6 +1002,26 @@ pnpm run build --filter @chitragupta/smriti
 3. Check the path in your MCP config is absolute, not relative
 4. Restart Claude Code after changing MCP configuration
 5. Run `/mcp` in Claude Code to verify the server is listed
+
+### MCP server not connecting in VS Code / Cursor
+
+VS Code extensions don't load your shell profile, so `node`, `npx`, and
+any nvm-managed binaries aren't on the PATH.
+
+**Fix:** Use absolute paths in your MCP config:
+
+```bash
+# Find your node binary
+which node
+# Example output: /Users/you/.nvm/versions/node/v22.12.0/bin/node
+
+# Find the MCP entry point
+ls /path/to/chitragupta/packages/cli/dist/mcp-entry.js
+```
+
+Then update your `.vscode/mcp.json` to use the full absolute paths for
+both `command` and the entry script in `args`. See the
+[VS Code setup section](#vs-code-copilot--augment--roo) above.
 
 ### Tests failing after a fresh clone
 

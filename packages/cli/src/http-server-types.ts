@@ -6,6 +6,7 @@
 import type { AuthContext, AuthMiddlewareConfig, TokenExchangeConfig } from "@chitragupta/core";
 import type { JobQueueConfig } from "./job-queue.js";
 import type { WebSocketServerOptions } from "./ws-handler.js";
+import type { TlsCertificates } from "./tls/tls-types.js";
 
 export interface ServerConfig {
 	/** Port to listen on. Default: 3141 (pi). */
@@ -57,6 +58,12 @@ export interface ServerConfig {
 	 * Non-file paths fall back to `index.html` for SPA routing.
 	 */
 	hubDistPath?: string;
+	/**
+	 * Kavach TLS certificate material. When set, the server uses
+	 * `https.createServer()` instead of `http.createServer()`.
+	 * WebSocket upgrades automatically use `wss://`.
+	 */
+	tls?: TlsCertificates;
 }
 
 export interface RouteHandler {

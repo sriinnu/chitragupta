@@ -4,176 +4,16 @@
  * Exposes Samiti (ambient channels), Sabha (deliberation), Lokapala (guardians),
  * and Akasha (shared knowledge) via JSON endpoints. Mounts onto the existing
  * ChitraguptaServer via `server.route()`.
+ *
+ * @module routes/collaboration
  */
 
-// ─── Duck-Typed Interfaces ──────────────────────────────────────────────────
-// Avoid hard import dependencies — the actual classes are structurally
-// compatible at runtime.
-
-// ─── Samiti ─────────────────────────────────────────────────────────────────
-
-interface SamitiMessageLike {
-	id: string;
-	channel: string;
-	sender: string;
-	severity: string;
-	category: string;
-	content: string;
-	data?: unknown;
-	timestamp: number;
-	ttl: number;
-	references?: string[];
-}
-
-interface SamitiChannelLike {
-	name: string;
-	description: string;
-	maxHistory: number;
-	subscribers: Set<string>;
-	messages: SamitiMessageLike[];
-	createdAt: number;
-}
-
-interface SamitiLike {
-	listChannels(): SamitiChannelLike[];
-	getChannel(name: string): SamitiChannelLike | undefined;
-	listen(channel: string, opts?: {
-		since?: number;
-		severity?: string;
-		limit?: number;
-	}): SamitiMessageLike[];
-	broadcast(
-		channel: string,
-		message: {
-			sender: string;
-			severity: string;
-			category: string;
-			content: string;
-			data?: unknown;
-			references?: string[];
-			ttl?: number;
-		},
-	): SamitiMessageLike;
-	stats(): { channels: number; totalMessages: number; subscribers: number };
-}
-
-// ─── Sabha ──────────────────────────────────────────────────────────────────
-
-interface SabhaLike {
-	id: string;
-	topic: string;
-	status: string;
-	convener: string;
-	participants: Array<{ id: string; role: string; expertise: number; credibility: number }>;
-	rounds: Array<{
-		roundNumber: number;
-		proposal: Record<string, string>;
-		challenges: unknown[];
-		votes: unknown[];
-		verdict: string | null;
-	}>;
-	finalVerdict: string | null;
-	createdAt: number;
-	concludedAt: number | null;
-}
-
-interface SabhaEngineLike {
-	convene(
-		topic: string,
-		convener: string,
-		participants: Array<{ id: string; role: string; expertise: number; credibility: number }>,
-	): SabhaLike;
-	getSabha(id: string): SabhaLike | undefined;
-	listActive(): SabhaLike[];
-	propose(sabhaId: string, proposerId: string, syllogism: Record<string, string>): unknown;
-	vote(sabhaId: string, participantId: string, position: string, reasoning: string): unknown;
-	conclude(sabhaId: string): SabhaLike;
-	explain(sabhaId: string): string;
-}
-
-// ─── Lokapala ───────────────────────────────────────────────────────────────
-
-interface FindingLike {
-	id: string;
-	guardianId: string;
-	domain: string;
-	severity: string;
-	title: string;
-	description: string;
-	location?: string;
-	suggestion?: string;
-	confidence: number;
-	autoFixable: boolean;
-	timestamp: number;
-}
-
-interface GuardianStatsLike {
-	scansCompleted: number;
-	findingsTotal: number;
-	findingsBySeverity: Record<string, number>;
-	autoFixesApplied: number;
-	lastScanAt: number;
-	avgScanDurationMs: number;
-}
-
-interface LokapalaLike {
-	allFindings(limit?: number): FindingLike[];
-	findingsByDomain(domain: string): FindingLike[];
-	criticalFindings(): FindingLike[];
-	stats(): Record<string, GuardianStatsLike>;
-}
-
-// ─── Akasha ─────────────────────────────────────────────────────────────────
-
-interface StigmergicTraceLike {
-	id: string;
-	agentId: string;
-	traceType: string;
-	topic: string;
-	content: string;
-	strength: number;
-	reinforcements: number;
-	metadata: Record<string, unknown>;
-	createdAt: number;
-	lastReinforcedAt: number;
-}
-
-interface AkashaLike {
-	query(
-		topic: string,
-		opts?: { type?: string; minStrength?: number; limit?: number },
-	): StigmergicTraceLike[];
-	leave(
-		agentId: string,
-		type: string,
-		topic: string,
-		content: string,
-		metadata?: Record<string, unknown>,
-	): StigmergicTraceLike;
-	strongest(limit?: number): StigmergicTraceLike[];
-	stats(): {
-		totalTraces: number;
-		activeTraces: number;
-		byType: Record<string, number>;
-		avgStrength: number;
-		strongestTopic: string | null;
-		totalReinforcements: number;
-	};
-}
-
-// ─── Server ─────────────────────────────────────────────────────────────────
-
-interface ServerLike {
-	route(
-		method: string,
-		path: string,
-		handler: (req: {
-			params: Record<string, string>;
-			query: Record<string, string>;
-			body: unknown;
-		}) => Promise<{ status: number; body: unknown; headers?: Record<string, string> }>,
-	): void;
-}
+import type {
+	ServerLike,
+	CollaborationDeps,
+	FindingLike,
+	StigmergicTraceLike,
+} from "./collaboration-types.js";
 
 // ─── Route Mounter ──────────────────────────────────────────────────────────
 
@@ -185,17 +25,10 @@ interface ServerLike {
  */
 export function mountCollaborationRoutes(
 	server: ServerLike,
-	deps: {
-		getSamiti: () => SamitiLike | undefined;
-		getSabhaEngine: () => SabhaEngineLike | undefined;
-		getLokapala: () => LokapalaLike | undefined;
-		getAkasha: () => AkashaLike | undefined;
-	},
+	deps: CollaborationDeps,
 ): void {
 
-	// ═════════════════════════════════════════════════════════════════════
-	// Samiti — Ambient Communication Channels
-	// ═════════════════════════════════════════════════════════════════════
+	// ─── Samiti — Ambient Communication Channels ────────────────────────
 
 	// ─── GET /api/samiti/channels ───────────────────────────────────
 	server.route("GET", "/api/samiti/channels", async () => {
@@ -307,9 +140,7 @@ export function mountCollaborationRoutes(
 		}
 	});
 
-	// ═════════════════════════════════════════════════════════════════════
-	// Sabha — Multi-Agent Deliberation
-	// ═════════════════════════════════════════════════════════════════════
+	// ─── Sabha — Multi-Agent Deliberation ───────────────────────────────
 
 	// ─── GET /api/sabha/deliberations ───────────────────────────────
 	server.route("GET", "/api/sabha/deliberations", async () => {
@@ -423,9 +254,7 @@ export function mountCollaborationRoutes(
 		}
 	});
 
-	// ═════════════════════════════════════════════════════════════════════
-	// Lokapala — Guardian Agents
-	// ═════════════════════════════════════════════════════════════════════
+	// ─── Lokapala — Guardian Agents ──────────────────────────────────────
 
 	// ─── GET /api/lokapala/guardians ────────────────────────────────
 	server.route("GET", "/api/lokapala/guardians", async () => {
@@ -529,9 +358,7 @@ export function mountCollaborationRoutes(
 		}
 	});
 
-	// ═════════════════════════════════════════════════════════════════════
-	// Akasha — Shared Knowledge Field
-	// ═════════════════════════════════════════════════════════════════════
+	// ─── Akasha — Shared Knowledge Field ────────────────────────────────
 
 	// ─── GET /api/akasha/traces ─────────────────────────────────────
 	server.route("GET", "/api/akasha/traces", async (req) => {

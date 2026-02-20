@@ -1,12 +1,14 @@
 /**
  * Shell layout for the Chitragupta Hub SPA.
  *
- * Renders a fixed sidebar with navigation links, a slim topbar with
- * the WebSocket indicator, and a scrollable content area for pages.
+ * Renders a responsive sidebar with navigation links, a topbar with
+ * breadcrumbs and the WebSocket indicator, and a scrollable content
+ * area for pages. Sidebar collapses to a hamburger on narrow viewports.
  * @module components/layout
  */
 
 import type { ComponentChildren } from "preact";
+import { useState } from "preact/hooks";
 import { route } from "preact-router";
 import { WsIndicator } from "./ws-indicator.js";
 
@@ -26,109 +28,240 @@ interface NavItem {
 	icon: string;
 }
 
+/** A navigation section with grouped items. */
+interface NavSection {
+	title: string;
+	items: NavItem[];
+}
+
 // ── Constants ─────────────────────────────────────────────────────
 
-const NAV_ITEMS: NavItem[] = [
-	{ path: "/", label: "Overview", icon: "\uD83D\uDCCA" },
-	{ path: "/sessions", label: "Sessions", icon: "\uD83D\uDDC2" },
-	{ path: "/models", label: "Models", icon: "\uD83E\uDD16" },
-	{ path: "/providers", label: "Providers", icon: "\uD83D\uDD0C" },
-	{ path: "/memory", label: "Memory", icon: "\uD83E\uDDE0" },
-	{ path: "/skills", label: "Skills", icon: "\u26A1" },
-	{ path: "/settings", label: "Settings", icon: "\u2699\uFE0F" },
-	{ path: "/devices", label: "Devices", icon: "\uD83D\uDCF1" },
+const NAV_SECTIONS: NavSection[] = [
+	{
+		title: "Dashboard",
+		items: [
+			{ path: "/", label: "Overview", icon: "\uD83D\uDCCA" },
+			{ path: "/sessions", label: "Sessions", icon: "\uD83D\uDDC2" },
+			{ path: "/models", label: "Models", icon: "\uD83E\uDD16" },
+			{ path: "/providers", label: "Providers", icon: "\uD83D\uDD0C" },
+		],
+	},
+	{
+		title: "Cognitive",
+		items: [
+			{ path: "/consciousness", label: "Consciousness", icon: "\uD83E\uDDD8" },
+			{ path: "/intelligence", label: "Intelligence", icon: "\uD83E\uDDE0" },
+			{ path: "/evolution", label: "Evolution", icon: "\uD83C\uDF31" },
+		],
+	},
+	{
+		title: "System",
+		items: [
+			{ path: "/memory", label: "Memory", icon: "\uD83D\uDCDD" },
+			{ path: "/skills", label: "Skills", icon: "\u26A1" },
+			{ path: "/collaboration", label: "Collaboration", icon: "\uD83E\uDD1D" },
+			{ path: "/agents", label: "Agents", icon: "\uD83D\uDC65" },
+			{ path: "/workflows", label: "Workflows", icon: "\uD83D\uDD04" },
+		],
+	},
+	{
+		title: "Config",
+		items: [
+			{ path: "/settings", label: "Settings", icon: "\u2699\uFE0F" },
+			{ path: "/devices", label: "Devices", icon: "\uD83D\uDCF1" },
+		],
+	},
 ];
 
-const SIDEBAR_WIDTH = 240;
-const TOPBAR_HEIGHT = 48;
+/** Map from path to human-readable breadcrumb label. */
+const BREADCRUMB_LABELS: Record<string, string> = {
+	"/": "Overview",
+	"/sessions": "Sessions",
+	"/models": "Models",
+	"/providers": "Providers",
+	"/consciousness": "Consciousness",
+	"/intelligence": "Intelligence",
+	"/evolution": "Evolution",
+	"/memory": "Memory",
+	"/skills": "Skills",
+	"/collaboration": "Collaboration",
+	"/agents": "Agents",
+	"/workflows": "Workflows",
+	"/settings": "Settings",
+	"/devices": "Devices",
+	"/pair": "Pairing",
+};
+
+// ── Helpers ───────────────────────────────────────────────────────
+
+/** Check if the given path matches the current URL (prefix match for sub-paths). */
+function isActivePath(activePath: string, itemPath: string): boolean {
+	if (itemPath === "/") return activePath === "/";
+	return activePath === itemPath || activePath.startsWith(`${itemPath}/`);
+}
+
+/** Derive breadcrumb text from the current URL. */
+function getBreadcrumb(path: string): string {
+	return BREADCRUMB_LABELS[path] ?? path.slice(1).replace(/-/g, " ");
+}
 
 // ── Component ─────────────────────────────────────────────────────
 
 /**
- * Top-level layout shell with sidebar, topbar, and content area.
+ * Top-level layout shell with responsive sidebar, breadcrumb topbar,
+ * and content area.
  *
- * The sidebar displays the app title and navigation links. The active
- * link is highlighted with the accent colour background. The topbar
- * shows the WebSocket connection indicator.
+ * The sidebar displays grouped navigation sections. Active links use
+ * prefix matching so sub-paths stay highlighted. A hamburger toggle
+ * appears on narrow viewports (<768px).
  */
 export function Layout({ children, currentUrl }: LayoutProps): preact.JSX.Element {
 	const activePath = currentUrl ?? "/";
+	const [sidebarOpen, setSidebarOpen] = useState(false);
 
 	return (
-		<div style={{ display: "flex", minHeight: "100vh", background: "#0a0a0f" }}>
+		<div style={{ display: "flex", minHeight: "100vh", background: "var(--color-bg)" }}>
+			{/* ── Mobile overlay ───────────────────────────────── */}
+			{sidebarOpen && (
+				<div
+					onClick={() => setSidebarOpen(false)}
+					style={{
+						position: "fixed",
+						inset: 0,
+						background: "rgba(0,0,0,0.5)",
+						zIndex: 40,
+					}}
+				/>
+			)}
+
 			{/* ── Sidebar ───────────────────────────────────────── */}
 			<nav
 				style={{
-					width: `${SIDEBAR_WIDTH}px`,
-					minWidth: `${SIDEBAR_WIDTH}px`,
-					background: "#0d0d14",
-					borderRight: "1px solid #2a2a3a",
+					width: "var(--sidebar-width)",
+					minWidth: "var(--sidebar-width)",
+					background: "var(--color-sidebar)",
+					borderRight: "1px solid var(--color-border)",
 					display: "flex",
 					flexDirection: "column",
-					padding: "16px 0",
+					padding: "var(--space-lg) 0",
+					position: sidebarOpen ? "fixed" : undefined,
+					top: sidebarOpen ? 0 : undefined,
+					left: sidebarOpen ? 0 : undefined,
+					bottom: sidebarOpen ? 0 : undefined,
+					zIndex: sidebarOpen ? 50 : undefined,
+					overflowY: "auto",
 				}}
+				class="hub-sidebar"
 			>
+				{/* Branding */}
 				<div
 					style={{
-						padding: "0 20px 20px",
-						borderBottom: "1px solid #2a2a3a",
-						marginBottom: "8px",
+						padding: "0 var(--space-xl) var(--space-xl)",
+						borderBottom: "1px solid var(--color-border)",
+						marginBottom: "var(--space-sm)",
 					}}
 				>
-					<span style={{ fontSize: "18px", fontWeight: "bold", color: "#e8e8ed" }}>
+					<span style={{ fontSize: "var(--font-size-lg)", fontWeight: "bold", color: "var(--color-text)" }}>
 						Chitragupta
 					</span>
-					<div style={{ fontSize: "11px", color: "#8888a0", marginTop: "2px" }}>
+					<div style={{ fontSize: "var(--font-size-xs)", color: "var(--color-muted)", marginTop: "2px" }}>
 						Hub Dashboard
 					</div>
 				</div>
 
-				{NAV_ITEMS.map((item) => {
-					const isActive = activePath === item.path;
-					return (
-						<a
-							key={item.path}
-							href={item.path}
-							onClick={(e: Event) => {
-								e.preventDefault();
-								route(item.path);
-							}}
+				{/* Nav sections */}
+				{NAV_SECTIONS.map((section) => (
+					<div key={section.title} style={{ marginBottom: "var(--space-xs)" }}>
+						<div
 							style={{
-								display: "flex",
-								alignItems: "center",
-								gap: "10px",
-								padding: "10px 20px",
-								color: isActive ? "#e8e8ed" : "#8888a0",
-								backgroundColor: isActive ? "rgba(99, 102, 241, 0.15)" : "transparent",
-								borderLeft: isActive ? "3px solid #6366f1" : "3px solid transparent",
-								textDecoration: "none",
-								fontSize: "14px",
-								transition: "background-color 0.15s, color 0.15s",
+								padding: "var(--space-sm) var(--space-xl)",
+								fontSize: "var(--font-size-xs)",
+								color: "var(--color-muted)",
+								textTransform: "uppercase",
+								letterSpacing: "0.5px",
+								fontWeight: 600,
 							}}
 						>
-							<span style={{ fontSize: "16px", width: "20px", textAlign: "center" }}>
-								{item.icon}
-							</span>
-							{item.label}
-						</a>
-					);
-				})}
+							{section.title}
+						</div>
+						{section.items.map((item) => {
+							const active = isActivePath(activePath, item.path);
+							return (
+								<a
+									key={item.path}
+									href={item.path}
+									onClick={(e: Event) => {
+										e.preventDefault();
+										route(item.path);
+										setSidebarOpen(false);
+									}}
+									style={{
+										display: "flex",
+										alignItems: "center",
+										gap: "10px",
+										padding: "8px 20px",
+										color: active ? "var(--color-text)" : "var(--color-muted)",
+										backgroundColor: active ? "var(--color-accent-muted)" : "transparent",
+										borderLeft: active ? "3px solid var(--color-accent)" : "3px solid transparent",
+										textDecoration: "none",
+										fontSize: "var(--font-size-base)",
+										transition: `background-color var(--transition-fast), color var(--transition-fast)`,
+									}}
+								>
+									<span style={{ fontSize: "var(--font-size-lg)", width: "20px", textAlign: "center" }}>
+										{item.icon}
+									</span>
+									{item.label}
+								</a>
+							);
+						})}
+					</div>
+				))}
 			</nav>
 
 			{/* ── Main area ─────────────────────────────────────── */}
-			<div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+			<div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
 				{/* Topbar */}
 				<header
 					style={{
-						height: `${TOPBAR_HEIGHT}px`,
-						borderBottom: "1px solid #2a2a3a",
+						height: "var(--topbar-height)",
+						borderBottom: "1px solid var(--color-border)",
 						display: "flex",
 						alignItems: "center",
-						justifyContent: "flex-end",
-						padding: "0 20px",
-						gap: "16px",
+						justifyContent: "space-between",
+						padding: "0 var(--space-xl)",
+						gap: "var(--space-lg)",
 					}}
 				>
+					{/* Left: hamburger + breadcrumb */}
+					<div style={{ display: "flex", alignItems: "center", gap: "var(--space-md)" }}>
+						<button
+							onClick={() => setSidebarOpen(!sidebarOpen)}
+							class="hub-hamburger"
+							style={{
+								display: "none",
+								background: "none",
+								border: "none",
+								color: "var(--color-muted)",
+								fontSize: "20px",
+								cursor: "pointer",
+								padding: "var(--space-xs)",
+							}}
+						>
+							{sidebarOpen ? "\u2715" : "\u2630"}
+						</button>
+						<div style={{ display: "flex", alignItems: "center", gap: "var(--space-sm)" }}>
+							<span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-muted)" }}>
+								Hub
+							</span>
+							<span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-border)" }}>/</span>
+							<span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text)", fontWeight: 500 }}>
+								{getBreadcrumb(activePath)}
+							</span>
+						</div>
+					</div>
+
+					{/* Right: WS indicator */}
 					<WsIndicator />
 				</header>
 
@@ -136,13 +269,22 @@ export function Layout({ children, currentUrl }: LayoutProps): preact.JSX.Elemen
 				<main
 					style={{
 						flex: 1,
-						padding: "24px",
+						padding: "var(--space-xl)",
 						overflowY: "auto",
 					}}
 				>
 					{children}
 				</main>
 			</div>
+
+			{/* ── Responsive styles ───────────────────────────── */}
+			<style>{`
+				@media (max-width: 768px) {
+					.hub-sidebar { display: none !important; }
+					.hub-sidebar[style*="position: fixed"] { display: flex !important; }
+					.hub-hamburger { display: block !important; }
+				}
+			`}</style>
 		</div>
 	);
 }

@@ -3,7 +3,7 @@
  *
  * Manages a persistent WebSocket connection with automatic reconnection
  * using exponential backoff. Exposes reactive signals for connection
- * status and the latest received event.
+ * status, typed event tracking, and the latest received event.
  * @module signals/realtime
  */
 
@@ -30,6 +30,15 @@ export const wsStatus = signal<WsStatus>("disconnected");
 /** The most recently received WebSocket event. `null` until first message. */
 export const lastEvent = signal<WsEvent | null>(null);
 
+/** Name of the currently executing tool, set on `tool:start`, cleared on `tool:done`. */
+export const activeToolName = signal<string | null>(null);
+
+/** Accumulated text from `stream:text` events, cleared on `chat:done`. */
+export const streamBuffer = signal<string>("");
+
+/** Rolling history of the last 50 WebSocket events for debugging. */
+export const wsEventHistory = signal<WsEvent[]>([]);
+
 // ── Internal state ────────────────────────────────────────────────
 
 let ws: WebSocket | null = null;
@@ -42,6 +51,9 @@ const MAX_BACKOFF_MS = 30_000;
 
 /** Base reconnection delay in milliseconds. */
 const BASE_BACKOFF_MS = 1_000;
+
+/** Maximum number of events to keep in the rolling history. */
+const MAX_HISTORY = 50;
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -65,6 +77,28 @@ function scheduleReconnect(): void {
 	}, delay);
 }
 
+/** Route a parsed event to the appropriate typed signal. */
+function routeEvent(event: WsEvent): void {
+	// Update rolling history
+	const history = wsEventHistory.value;
+	wsEventHistory.value = [...history.slice(-(MAX_HISTORY - 1)), event];
+
+	switch (event.type) {
+		case "tool:start":
+			activeToolName.value = (event.payload.name as string) ?? "unknown";
+			break;
+		case "tool:done":
+			activeToolName.value = null;
+			break;
+		case "stream:text":
+			streamBuffer.value += (event.payload.text as string) ?? "";
+			break;
+		case "chat:done":
+			streamBuffer.value = "";
+			break;
+	}
+}
+
 // ── Public API ────────────────────────────────────────────────────
 
 /**
@@ -72,6 +106,7 @@ function scheduleReconnect(): void {
  *
  * Handles open/close/error/message events and triggers automatic
  * reconnection with exponential backoff on unexpected disconnects.
+ * Routes typed events to dedicated signals.
  */
 export function connectWebSocket(): void {
 	if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
@@ -98,6 +133,7 @@ export function connectWebSocket(): void {
 		try {
 			const parsed = JSON.parse(event.data as string) as WsEvent;
 			lastEvent.value = parsed;
+			routeEvent(parsed);
 		} catch {
 			// Ignore malformed messages
 		}
@@ -144,5 +180,16 @@ export function disconnectWebSocket(): void {
 export function subscribe(patterns: string[]): void {
 	if (ws && ws.readyState === WebSocket.OPEN) {
 		ws.send(JSON.stringify({ action: "subscribe", patterns }));
+	}
+}
+
+/**
+ * Send a raw message over the WebSocket.
+ *
+ * @param data - JSON-serialisable payload to send.
+ */
+export function sendWsMessage(data: Record<string, unknown>): void {
+	if (ws && ws.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify(data));
 	}
 }

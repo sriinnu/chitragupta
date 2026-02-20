@@ -8,6 +8,8 @@
 
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { apiGet, apiPost, apiPut, apiDelete } from "../api.js";
+import { Spinner } from "../components/spinner.js";
+import { showToast } from "../components/toast.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -34,10 +36,12 @@ interface ProviderForm {
 	models: string;
 }
 
-/** Test connection result. */
+/** Test connection result (matches backend shape). */
 interface TestResult {
 	success: boolean;
-	latency: number;
+	latencyMs: number;
+	providerId?: string;
+	modelsAvailable?: number;
 	message?: string;
 }
 
@@ -67,6 +71,7 @@ export function Providers(): preact.JSX.Element {
 	const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
+	const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
 
 	const refresh = useCallback(async () => {
 		try {
@@ -92,27 +97,30 @@ export function Providers(): preact.JSX.Element {
 			};
 			if (editing) {
 				await apiPut(`/api/providers/${editing}`, payload);
+				showToast(`Provider "${editing}" updated`, "success");
 			} else {
 				await apiPost("/api/providers", { id: form.id, ...payload });
+				showToast(`Provider "${form.id}" created`, "success");
 			}
 			setShowForm(false);
 			setEditing(null);
 			setForm(EMPTY_FORM);
 			await refresh();
 		} catch {
-			// error handling
+			showToast("Failed to save provider", "error");
 		} finally {
 			setSaving(false);
 		}
 	}, [form, editing, refresh]);
 
 	const handleDelete = useCallback(async (id: string) => {
-		if (!confirm(`Delete provider "${id}"?`)) return;
 		try {
 			await apiDelete(`/api/providers/${id}`);
+			showToast(`Provider "${id}" deleted`, "success");
+			setConfirmingDelete(null);
 			await refresh();
 		} catch {
-			// best-effort
+			showToast("Failed to delete provider", "error");
 		}
 	}, [refresh]);
 
@@ -123,7 +131,7 @@ export function Providers(): preact.JSX.Element {
 		} catch {
 			setTestResults((prev) => ({
 				...prev,
-				[id]: { success: false, latency: 0, message: "Test failed" },
+				[id]: { success: false, latencyMs: 0, message: "Test failed" },
 			}));
 		}
 	}, []);
@@ -152,7 +160,11 @@ export function Providers(): preact.JSX.Element {
 				</button>
 			</div>
 
-			{loading && <div style={{ color: "#8888a0" }}>Loading...</div>}
+			{loading && (
+				<div style={{ display: "flex", justifyContent: "center", padding: "var(--space-2xl)" }}>
+					<Spinner size="lg" />
+				</div>
+			)}
 
 			{/* Provider list */}
 			{providers.map((p) => (
@@ -184,14 +196,31 @@ export function Providers(): preact.JSX.Element {
 							{p.type} | {p.models.join(", ") || "no models"}
 						</div>
 					</div>
-					<div style={{ display: "flex", gap: "6px" }}>
+					<div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
 						<button onClick={() => void handleTest(p.id)} style={btnSmall}>Test</button>
 						<button onClick={() => startEdit(p)} style={btnSmall}>Edit</button>
-						<button onClick={() => void handleDelete(p.id)} style={{ ...btnSmall, color: "#ef4444" }}>Delete</button>
+						{confirmingDelete === p.id ? (
+							<>
+								<button
+									onClick={() => void handleDelete(p.id)}
+									style={{ ...btnSmall, background: "var(--color-error-muted)", color: "var(--color-error)" }}
+								>
+									Confirm
+								</button>
+								<button onClick={() => setConfirmingDelete(null)} style={btnSmall}>Cancel</button>
+							</>
+						) : (
+							<button
+								onClick={() => setConfirmingDelete(p.id)}
+								style={{ ...btnSmall, color: "var(--color-error)" }}
+							>
+								Delete
+							</button>
+						)}
 					</div>
 					{testResults[p.id] && (
 						<div style={{ fontSize: "11px", color: testResults[p.id].success ? "#22c55e" : "#ef4444" }}>
-							{testResults[p.id].success ? `OK ${testResults[p.id].latency}ms` : testResults[p.id].message}
+							{testResults[p.id].success ? `OK ${testResults[p.id].latencyMs}ms` : testResults[p.id].message}
 						</div>
 					)}
 				</div>

@@ -9,6 +9,10 @@
 
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { apiGet, apiPost } from "../api.js";
+import { Spinner } from "../components/spinner.js";
+import { EmptyState } from "../components/empty-state.js";
+import { Badge } from "../components/badge.js";
+import type { BadgeVariant } from "../components/badge.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -31,10 +35,11 @@ interface SkillsResponse {
 
 // ── Constants ─────────────────────────────────────────────────────
 
-const STATUS_STYLES: Record<string, { bg: string; color: string }> = {
-	active: { bg: "rgba(34,197,94,0.15)", color: "#22c55e" },
-	quarantined: { bg: "rgba(234,179,8,0.15)", color: "#eab308" },
-	disabled: { bg: "rgba(136,136,160,0.15)", color: "#8888a0" },
+/** Map skill status to badge variant. */
+const STATUS_BADGE: Record<string, BadgeVariant> = {
+	active: "success",
+	quarantined: "warning",
+	disabled: "muted",
 };
 
 // ── Component ─────────────────────────────────────────────────────
@@ -66,7 +71,7 @@ export function Skills(): preact.JSX.Element {
 
 	const handleApprove = useCallback(async (id: string) => {
 		try {
-			await apiPost(`/api/skills/${id}/approve`);
+			await apiPost(`/api/skills/${id}/promote`);
 			await refresh();
 		} catch {
 			// best-effort
@@ -75,7 +80,7 @@ export function Skills(): preact.JSX.Element {
 
 	const handleReject = useCallback(async (id: string) => {
 		try {
-			await apiPost(`/api/skills/${id}/reject`);
+			await apiPost(`/api/skills/${id}/deprecate`);
 			await refresh();
 		} catch {
 			// best-effort
@@ -92,7 +97,11 @@ export function Skills(): preact.JSX.Element {
 				Skill Registry
 			</h1>
 
-			{loading && <div style={{ color: "#8888a0" }}>Loading skills...</div>}
+			{loading && (
+				<div style={{ display: "flex", justifyContent: "center", padding: "var(--space-2xl)" }}>
+					<Spinner size="lg" />
+				</div>
+			)}
 
 			{/* Quarantine section */}
 			{quarantined.length > 0 && (
@@ -160,6 +169,15 @@ export function Skills(): preact.JSX.Element {
 				</div>
 			)}
 
+			{/* Empty state */}
+			{!loading && skills.length === 0 && (
+				<EmptyState
+					icon="\u26A1"
+					title="No skills registered"
+					description="Skills will appear here when agents register their capabilities."
+				/>
+			)}
+
 			{/* Skills table */}
 			{!loading && activeSkills.length > 0 && (
 				<div
@@ -191,38 +209,33 @@ export function Skills(): preact.JSX.Element {
 							</tr>
 						</thead>
 						<tbody>
-							{activeSkills.map((s) => {
-								const statusStyle = STATUS_STYLES[s.status] ?? STATUS_STYLES.disabled;
-								return (
+							{activeSkills.map((s) => (
 									<tr
 										key={s.id}
 										onClick={() => setSelectedId(selectedId === s.id ? null : s.id)}
 										style={{
-											borderBottom: "1px solid #1e1e2a",
+											borderBottom: "1px solid var(--color-border-subtle)",
 											cursor: "pointer",
-											background: selectedId === s.id ? "rgba(99,102,241,0.08)" : "transparent",
+											background: selectedId === s.id ? "var(--color-accent-subtle)" : "transparent",
 										}}
 									>
-										<td style={{ padding: "8px 10px", color: "#e8e8ed", fontSize: "13px" }}>
+										<td style={{ padding: "8px 10px", color: "var(--color-text)", fontSize: "var(--font-size-md)" }}>
 											{s.name}
 										</td>
-										<td style={{ padding: "8px 10px", color: "#8888a0", fontSize: "13px" }}>
+										<td style={{ padding: "8px 10px", color: "var(--color-muted)", fontSize: "var(--font-size-md)" }}>
 											{s.category}
 										</td>
 										<td style={{ padding: "8px 10px" }}>
-											<span style={{ ...statusStyle, padding: "2px 8px", borderRadius: "4px", fontSize: "11px" }}>
-												{s.status}
-											</span>
+											<Badge label={s.status} variant={STATUS_BADGE[s.status] ?? "muted"} />
 										</td>
-										<td style={{ padding: "8px 10px", color: "#8888a0", fontSize: "13px" }}>
+										<td style={{ padding: "8px 10px", color: "var(--color-muted)", fontSize: "var(--font-size-md)" }}>
 											v{s.version}
 										</td>
-										<td style={{ padding: "8px 10px", color: "#8888a0", fontSize: "13px" }}>
+										<td style={{ padding: "8px 10px", color: "var(--color-muted)", fontSize: "var(--font-size-md)" }}>
 											{s.usageCount ?? 0}
 										</td>
 									</tr>
-								);
-							})}
+								))}
 						</tbody>
 					</table>
 				</div>
