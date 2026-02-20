@@ -1,16 +1,6 @@
-/**
- * Intelligence API Routes — REST endpoints for Phase 2 Intelligence Layer.
- *
- * Exposes Turiya (model routing), Triguna (system health), Rta (invariant
- * rules + audit), and Buddhi (decisions + Nyaya reasoning) via JSON
- * endpoints. Mounts onto the existing ChitraguptaServer via `server.route()`.
- */
+/** Intelligence API Routes — Turiya, Triguna, Rta, Buddhi endpoints. */
 
-// ─── Duck-Typed Interfaces ──────────────────────────────────────────────────
-// Avoid hard import dependencies — the actual classes are structurally
-// compatible at runtime.
-
-// ─── Turiya ─────────────────────────────────────────────────────────────────
+// Duck-typed interfaces — actual classes are structurally compatible at runtime.
 
 interface TuriyaTierStatsLike {
 	tier: string;
@@ -33,9 +23,21 @@ interface TuriyaStatsLike {
 interface TuriyaRouterLike {
 	getStats(): TuriyaStatsLike;
 	serialize(): unknown;
+	classify(context: Record<string, number>, preference?: { costWeight: number }): {
+		tier: string;
+		confidence: number;
+		costEstimate: number;
+		rationale: string;
+	};
+	cascadeDecision(decision: { tier: string; confidence: number; costEstimate: number; context: Record<string, number>; rationale: string; armIndex: number }, threshold?: number): {
+		final: { tier: string; confidence: number; costEstimate: number };
+		escalated: boolean;
+		originalTier?: string;
+	};
+	extractContext(messages: Array<{ role: string; content: Array<{ type: string; text: string }> }>, systemPrompt?: string, tools?: unknown[], memoryHits?: number): Record<string, number>;
+	recordOutcome(decision: { tier: string; confidence: number; costEstimate: number; context: Record<string, number>; rationale: string; armIndex: number }, reward: number): void;
+	getBudgetLambda(): number;
 }
-
-// ─── Triguna ────────────────────────────────────────────────────────────────
 
 interface GunaStateLike {
 	sattva: number;
@@ -55,8 +57,6 @@ interface TrigunaLike {
 	getTrend(): GunaTrendLike;
 	serialize(): unknown;
 }
-
-// ─── Rta ────────────────────────────────────────────────────────────────────
 
 interface RtaRuleLike {
 	id: string;
@@ -78,8 +78,6 @@ interface RtaEngineLike {
 	getRules(): RtaRuleLike[];
 	getAuditLog(limit?: number): RtaAuditEntryLike[];
 }
-
-// ─── Buddhi ─────────────────────────────────────────────────────────────────
 
 interface DecisionLike {
 	id: string;
@@ -114,8 +112,6 @@ interface BuddhiLike {
 	explainDecision(id: string, db: DatabaseManagerLike): string | null;
 }
 
-// ─── Server ─────────────────────────────────────────────────────────────────
-
 interface ServerLike {
 	route(
 		method: string,
@@ -128,14 +124,7 @@ interface ServerLike {
 	): void;
 }
 
-// ─── Route Mounter ──────────────────────────────────────────────────────────
-
-/**
- * Mount all Phase 2 Intelligence Layer API routes onto the server.
- *
- * @param server - ChitraguptaServer instance
- * @param deps   - Lazy getters for intelligence modules
- */
+/** Mount all Phase 2 Intelligence Layer API routes onto the server. */
 export function mountIntelligenceRoutes(
 	server: ServerLike,
 	deps: {
@@ -147,7 +136,6 @@ export function mountIntelligenceRoutes(
 		getProjectPath: () => string;
 	},
 ): void {
-	// ─── GET /api/turiya/status ─────────────────────────────────────
 	server.route("GET", "/api/turiya/status", async () => {
 		const router = deps.getTuriyaRouter();
 		if (!router) {
@@ -172,7 +160,6 @@ export function mountIntelligenceRoutes(
 		}
 	});
 
-	// ─── GET /api/turiya/routing ────────────────────────────────────
 	server.route("GET", "/api/turiya/routing", async () => {
 		const router = deps.getTuriyaRouter();
 		if (!router) {
@@ -207,7 +194,6 @@ export function mountIntelligenceRoutes(
 		}
 	});
 
-	// ─── GET /api/health/guna ──────────────────────────────────────
 	server.route("GET", "/api/health/guna", async () => {
 		const triguna = deps.getTriguna();
 		if (!triguna) {
@@ -239,7 +225,6 @@ export function mountIntelligenceRoutes(
 		}
 	});
 
-	// ─── GET /api/rta/rules ────────────────────────────────────────
 	server.route("GET", "/api/rta/rules", async () => {
 		const rta = deps.getRtaEngine();
 		if (!rta) {
@@ -279,7 +264,6 @@ export function mountIntelligenceRoutes(
 		}
 	});
 
-	// ─── GET /api/rta/audit ────────────────────────────────────────
 	server.route("GET", "/api/rta/audit", async (req) => {
 		const rta = deps.getRtaEngine();
 		if (!rta) {
@@ -302,7 +286,6 @@ export function mountIntelligenceRoutes(
 		}
 	});
 
-	// ─── GET /api/decisions ────────────────────────────────────────
 	server.route("GET", "/api/decisions", async (req) => {
 		const buddhi = deps.getBuddhi();
 		const db = deps.getDatabase();
@@ -341,7 +324,6 @@ export function mountIntelligenceRoutes(
 		}
 	});
 
-	// ─── GET /api/decisions/:id/reasoning ──────────────────────────
 	server.route("GET", "/api/decisions/:id/reasoning", async (req) => {
 		const buddhi = deps.getBuddhi();
 		const db = deps.getDatabase();
@@ -373,6 +355,84 @@ export function mountIntelligenceRoutes(
 					alternatives: decision.alternatives,
 					outcome: decision.outcome ?? null,
 					metadata: decision.metadata,
+				},
+			};
+		} catch (err) {
+			return { status: 500, body: { error: `Failed: ${(err as Error).message}` } };
+		}
+	});
+
+	server.route("POST", "/api/turiya/classify", async (req) => {
+		const router = deps.getTuriyaRouter();
+		if (!router) {
+			return { status: 503, body: { error: "Turiya router not available" } };
+		}
+		try {
+			const body = req.body as Record<string, unknown>;
+			const text = typeof body.text === "string" ? body.text : "";
+			const messageCount = typeof body.messageCount === "number" ? body.messageCount : 0;
+			const memoryHits = typeof body.memoryHits === "number" ? body.memoryHits : 0;
+
+			const messages = [{ role: "user" as const, content: [{ type: "text" as const, text }] }];
+			const context = router.extractContext(messages, undefined, undefined, memoryHits);
+			const preference = typeof body.costWeight === "number"
+				? { costWeight: body.costWeight }
+				: undefined;
+			const decision = router.classify(context, preference);
+
+			return { status: 200, body: decision };
+		} catch (err) {
+			return { status: 500, body: { error: `Failed: ${(err as Error).message}` } };
+		}
+	});
+
+	server.route("POST", "/api/turiya/outcome", async (req) => {
+		const router = deps.getTuriyaRouter();
+		if (!router) {
+			return { status: 503, body: { error: "Turiya router not available" } };
+		}
+		try {
+			const body = req.body as Record<string, unknown>;
+			const tier = typeof body.tier === "string" ? body.tier : "haiku";
+			const reward = typeof body.reward === "number" ? body.reward : 0.5;
+			const ctx = (body.context ?? {}) as Record<string, number>;
+
+			const context = {
+				complexity: ctx.complexity ?? 0.5,
+				urgency: ctx.urgency ?? 0,
+				creativity: ctx.creativity ?? 0,
+				precision: ctx.precision ?? 0,
+				codeRatio: ctx.codeRatio ?? 0,
+				conversationDepth: ctx.conversationDepth ?? 0,
+				memoryLoad: ctx.memoryLoad ?? 0,
+			};
+
+			const tiers = ["no-llm", "haiku", "sonnet", "opus"];
+			const decision = {
+				tier, confidence: 0.5, costEstimate: 0, context,
+				rationale: "outcome", armIndex: tiers.indexOf(tier),
+			};
+			router.recordOutcome(decision, reward);
+			return { status: 200, body: { ok: true } };
+		} catch (err) {
+			return { status: 500, body: { error: `Failed: ${(err as Error).message}` } };
+		}
+	});
+
+	server.route("GET", "/api/turiya/budget-state", async () => {
+		const router = deps.getTuriyaRouter();
+		if (!router) {
+			return { status: 503, body: { error: "Turiya router not available" } };
+		}
+		try {
+			const stats = router.getStats();
+			return {
+				status: 200,
+				body: {
+					budgetLambda: router.getBudgetLambda(),
+					dailySpend: stats.totalCost,
+					totalRequests: stats.totalRequests,
+					savingsPercent: stats.savingsPercent,
 				},
 			};
 		} catch (err) {
