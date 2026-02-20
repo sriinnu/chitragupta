@@ -1,34 +1,23 @@
 /**
  * Cognitive system signals for the consciousness dashboard.
- *
- * Fetchers for Triguna health, Vasana tendencies, Nidra sleep state,
- * Vidhi procedures, and Turiya routing stats. All data is fetched
- * from existing backend endpoints and cached in Preact signals.
+ * Fetchers for Triguna, Vasana, Nidra, Vidhi, and Turiya v2 stats.
  * @module signals/cognitive
  */
 
 import { signal } from "@preact/signals";
-import { apiGet } from "../api.js";
+import { apiGet, apiPost } from "../api.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
-/** Triguna guna breakdown from /api/health/guna (matches backend shape). */
+/** Triguna guna breakdown from /api/health/guna. */
 export interface TrigunaData {
-	state: {
-		sattva: number;
-		rajas: number;
-		tamas: number;
-	};
+	state: { sattva: number; rajas: number; tamas: number };
 	dominant: "sattva" | "rajas" | "tamas";
-	trend: {
-		sattva: string;
-		rajas: string;
-		tamas: string;
-	};
+	trend: { sattva: string; rajas: string; tamas: string };
 	mode: "harmonious" | "hyperactive" | "degraded";
 }
 
-/** Vasana (learned tendency) entry from /api/vasanas (matches backend VasanaLike). */
+/** Vasana (learned tendency) entry from /api/vasanas. */
 export interface VasanaEntry {
 	id: string;
 	tendency: string;
@@ -41,7 +30,7 @@ export interface VasanaEntry {
 	predictiveAccuracy?: number;
 }
 
-/** Nidra (sleep/consolidation) status from /api/nidra/status (matches NidraSnapshotLike). */
+/** Nidra (sleep/consolidation) status from /api/nidra/status. */
 export interface NidraData {
 	state: string;
 	lastStateChange: number;
@@ -53,7 +42,7 @@ export interface NidraData {
 	uptime: number;
 }
 
-/** Vidhi (procedure) entry from /api/vidhi (matches backend VidhiLike). */
+/** Vidhi (procedure) entry from /api/vidhi. */
 export interface VidhiEntry {
 	id: string;
 	name: string;
@@ -64,7 +53,7 @@ export interface VidhiEntry {
 	confidence?: number;
 }
 
-/** Turiya (routing) stats from /api/turiya/status (matches backend shape). */
+/** Turiya routing stats from /api/turiya/status. */
 export interface TuriyaStats {
 	totalRequests: number;
 	totalCost: number;
@@ -74,97 +63,79 @@ export interface TuriyaStats {
 	activeTiers: string[];
 }
 
+/** Turiya budget state from /api/turiya/budget-state. */
+export interface TuriyaBudgetState {
+	budgetLambda: number;
+	dailySpend: number;
+	totalRequests: number;
+	savingsPercent: number;
+}
+
 // ── Signals ───────────────────────────────────────────────────────
 
-/** Triguna guna health data. `null` until first fetch. */
 export const trigunaData = signal<TrigunaData | null>(null);
-
-/** List of all Vasana tendencies. */
 export const vasanas = signal<VasanaEntry[]>([]);
-
-/** Nidra sleep/consolidation status. `null` until first fetch. */
 export const nidraData = signal<NidraData | null>(null);
-
-/** List of all Vidhi procedures. */
 export const vidhis = signal<VidhiEntry[]>([]);
-
-/** Turiya routing statistics. `null` until first fetch. */
 export const turiyaStats = signal<TuriyaStats | null>(null);
-
-/** Whether any cognitive fetch is in-flight. */
 export const cognitiveLoading = signal<boolean>(false);
+
+/** Turiya budget state (lambda, daily spend, savings). */
+export const turiyaBudgetState = signal<TuriyaBudgetState | null>(null);
+
+/** User preference dial: 0 = cheapest, 1 = best quality. */
+export const turiyaPreference = signal<number>(0.5);
 
 // ── Fetchers ──────────────────────────────────────────────────────
 
-/**
- * Fetch Triguna guna health breakdown.
- * Updates the `trigunaData` signal on success.
- */
 export async function fetchTriguna(): Promise<void> {
 	try {
-		const data = await apiGet<TrigunaData>("/api/health/guna");
-		trigunaData.value = data;
-	} catch {
-		// Triguna fetch is best-effort; signal retains last value
-	}
+		trigunaData.value = await apiGet<TrigunaData>("/api/health/guna");
+	} catch { /* best-effort */ }
 }
 
-/**
- * Fetch all Vasana tendencies.
- * Updates the `vasanas` signal on success.
- */
 export async function fetchVasanas(): Promise<void> {
 	try {
 		const data = await apiGet<{ vasanas: VasanaEntry[] }>("/api/vasanas");
 		vasanas.value = data.vasanas ?? [];
-	} catch {
-		// best-effort
-	}
+	} catch { /* best-effort */ }
 }
 
-/**
- * Fetch Nidra sleep/consolidation status.
- * Updates the `nidraData` signal on success.
- */
 export async function fetchNidra(): Promise<void> {
 	try {
-		const data = await apiGet<NidraData>("/api/nidra/status");
-		nidraData.value = data;
-	} catch {
-		// best-effort
-	}
+		nidraData.value = await apiGet<NidraData>("/api/nidra/status");
+	} catch { /* best-effort */ }
 }
 
-/**
- * Fetch all Vidhi procedures.
- * Updates the `vidhis` signal on success.
- */
 export async function fetchVidhis(): Promise<void> {
 	try {
 		const data = await apiGet<{ vidhis: VidhiEntry[] }>("/api/vidhi");
 		vidhis.value = data.vidhis ?? [];
-	} catch {
-		// best-effort
-	}
+	} catch { /* best-effort */ }
 }
 
-/**
- * Fetch Turiya routing statistics.
- * Updates the `turiyaStats` signal on success.
- */
 export async function fetchTuriyaStats(): Promise<void> {
 	try {
-		const data = await apiGet<TuriyaStats>("/api/turiya/status");
-		turiyaStats.value = data;
-	} catch {
-		// best-effort
-	}
+		turiyaStats.value = await apiGet<TuriyaStats>("/api/turiya/status");
+	} catch { /* best-effort */ }
 }
 
-/**
- * Fetch all cognitive data in parallel.
- * Sets `cognitiveLoading` during the fetch and clears it on completion.
- */
+/** Fetch Turiya budget state (lambda, daily spend). */
+export async function fetchTuriyaBudgetState(): Promise<void> {
+	try {
+		turiyaBudgetState.value = await apiGet<TuriyaBudgetState>("/api/turiya/budget-state");
+	} catch { /* best-effort */ }
+}
+
+/** Push the user's cost/quality preference dial to the backend. */
+export async function setTuriyaPreference(costWeight: number): Promise<void> {
+	turiyaPreference.value = costWeight;
+	try {
+		await apiPost("/api/turiya/preference", { costWeight });
+	} catch { /* best-effort — preference is still applied locally */ }
+}
+
+/** Fetch all cognitive data in parallel. */
 export async function fetchAllCognitive(): Promise<void> {
 	cognitiveLoading.value = true;
 	try {
@@ -174,6 +145,7 @@ export async function fetchAllCognitive(): Promise<void> {
 			fetchNidra(),
 			fetchVidhis(),
 			fetchTuriyaStats(),
+			fetchTuriyaBudgetState(),
 		]);
 	} finally {
 		cognitiveLoading.value = false;
