@@ -172,7 +172,16 @@ export type {
 	TuriyaState,
 	TuriyaRouterConfig,
 	ManasFeatureBridge,
+	TuriyaPreference,
+	TuriyaCascadeResult,
 } from "./turiya.js";
+
+// ─── Turiya Math (public for Vaayu bridge) ──────────────────────────────
+export {
+	budgetAdjustedScore,
+	updateBudgetLambda,
+	preferenceBlendedScore,
+} from "./turiya-math.js";
 
 // ─── Providers ──────────────────────────────────────────────────────────────
 export {
