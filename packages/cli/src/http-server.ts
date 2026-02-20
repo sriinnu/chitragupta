@@ -10,6 +10,9 @@
  */
 
 import http from "node:http";
+import https from "node:https";
+import fs from "node:fs";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { WebSocketServer } from "./ws-handler.js";
 import {
@@ -39,11 +42,28 @@ const DEFAULT_CORS_ORIGINS = [
 	"https://localhost", "https://127.0.0.1",
 ];
 
+/** Map file extensions to MIME Content-Type values for static file serving. */
+const MIME_TYPES: Record<string, string> = {
+	".html": "text/html; charset=utf-8",
+	".js": "application/javascript; charset=utf-8",
+	".css": "text/css; charset=utf-8",
+	".json": "application/json; charset=utf-8",
+	".svg": "image/svg+xml",
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".ico": "image/x-icon",
+	".woff": "font/woff",
+	".woff2": "font/woff2",
+	".ttf": "font/ttf",
+	".map": "application/json; charset=utf-8",
+};
+
 /**
  * Lightweight HTTP server with route-matching, CORS, rate limiting, and auth.
  */
 export class ChitraguptaServer {
-	private server: http.Server | null = null;
+	private server: http.Server | https.Server | null = null;
 	private routes: Map<string, RegisteredRoute[]> = new Map();
 	private startTime = 0;
 	private rateLimitMap = new Map<string, number[]>();
@@ -91,7 +111,7 @@ export class ChitraguptaServer {
 			}
 		}, 60_000);
 
-		this.server = http.createServer(async (req, res) => {
+		const requestHandler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
 			const requestId = randomUUID();
 			const startMs = Date.now();
 			const allowedOrigin = this.resolveCorsOrigin(req.headers.origin, corsConfig);
@@ -135,6 +155,18 @@ export class ChitraguptaServer {
 				return;
 			}
 
+			// Static file serving for Hub SPA
+			if (req.method === "GET" && !rawPath.startsWith("/api/")) {
+				const hubDistPath = this.config.hubDistPath;
+				if (hubDistPath) {
+					const served = await this.serveStaticFile(rawPath, hubDistPath, res);
+					if (served) {
+						if (logging) this.log(requestId, "GET", rawPath, 200, Date.now() - startMs);
+						return;
+					}
+				}
+			}
+
 			try {
 				const parsed = await this.parseRequest(req, requestId, maxBody);
 				if (typeof authResult === "object") parsed.auth = authResult;
@@ -165,7 +197,18 @@ export class ChitraguptaServer {
 					log.error(`Request failed: ${req.method ?? "?"} ${req.url ?? "?"}`, err instanceof Error ? err : undefined, { requestId, status, duration: durationMs });
 				}
 			}
-		});
+		};
+
+		// Kavach: use HTTPS when TLS certs are provided, plain HTTP otherwise
+		const tls = this.config.tls;
+		if (tls) {
+			this.server = https.createServer(
+				{ cert: tls.cert, key: tls.key, ca: tls.ca },
+				requestHandler,
+			);
+		} else {
+			this.server = http.createServer(requestHandler);
+		}
 
 		this.server.timeout = timeoutMs;
 
@@ -216,6 +259,43 @@ export class ChitraguptaServer {
 	get uptime(): number { return this.startTime > 0 ? Date.now() - this.startTime : 0; }
 
 	// ── Private helpers ─────────────────────────────────────────────────
+
+	/**
+	 * Attempt to serve a static file from the Hub SPA dist directory.
+	 * Returns `true` if a file was served, `false` if no match was found
+	 * (so the request should fall through to API route matching).
+	 *
+	 * For paths without a file extension (SPA routes), serves `index.html`.
+	 */
+	private async serveStaticFile(
+		rawPath: string, hubDistPath: string, res: http.ServerResponse,
+	): Promise<boolean> {
+		const ext = path.extname(rawPath);
+		const filePath = ext
+			? path.join(hubDistPath, rawPath)
+			: path.join(hubDistPath, "index.html");
+
+		// Prevent directory traversal
+		const resolved = path.resolve(filePath);
+		if (!resolved.startsWith(path.resolve(hubDistPath))) {
+			return false;
+		}
+
+		try {
+			await fs.promises.access(resolved, fs.constants.R_OK);
+		} catch {
+			// File not found — if it had an extension it's a genuine 404 for the asset.
+			// For extensionless paths the SPA fallback already tried index.html.
+			if (ext) return false;
+			return false;
+		}
+
+		const contentType = MIME_TYPES[path.extname(resolved)] ?? "application/octet-stream";
+		res.writeHead(200, { "Content-Type": contentType });
+		const stream = fs.createReadStream(resolved);
+		stream.pipe(res);
+		return true;
+	}
 
 	private resolveCorsOrigin(origin: string | undefined, corsConfig: string | undefined): string {
 		if (corsConfig === "*") return "*";

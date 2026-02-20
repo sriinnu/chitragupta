@@ -260,13 +260,18 @@ export async function runOnboarding(): Promise<OnboardingResult> {
 		fs.mkdirSync(path.join(home, dir), { recursive: true });
 	}
 
-	// 7. Done — show quick-start guide with daemon recommendation
+	// 7. Done — show quick-start guide with daemon + hub recommendations
 	stdout.write("\n");
 	stdout.write(`  ${green(bold("You're ready."))}\n\n`);
 	stdout.write(`  ${bold("Quick start:")}\n`);
 	stdout.write(`    ${cyan("chitragupta 'Hello'")}            ${dim("— start a conversation")}\n`);
 	stdout.write(`    ${cyan("chitragupta daemon start")}       ${dim("— enable background daemon")}\n`);
 	stdout.write(`    ${cyan("chitragupta daemon status")}      ${dim("— check daemon health")}\n`);
+	stdout.write("\n");
+	stdout.write(`  ${bold("Hub dashboard:")}\n`);
+	stdout.write(`    ${cyan("chitragupta serve")}              ${dim("— start the HTTP server + Hub UI")}\n`);
+	stdout.write(`    ${dim("Open")} ${cyan("http://localhost:3141")} ${dim("in your browser")}\n`);
+	stdout.write(`    ${dim("Pair your browser with a passphrase, QR code, or number code.")}\n`);
 	stdout.write("\n");
 	stdout.write(`  ${dim("The daemon runs memory consolidation, self-healing, and")}\n`);
 	stdout.write(`  ${dim("skill discovery in the background. Recommended for daily use.")}\n\n`);

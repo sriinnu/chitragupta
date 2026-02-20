@@ -3,6 +3,14 @@
 - with git push, dont add co-authored information AT ALL.
 - before git push, check what files/folders need to be ignored and add them to .gitignore, report to jaanu whats been done.
 
+## Local-Only Files — NEVER Commit or Publish
+Internal/ephemeral files must stay local. NEVER commit these to git or let them reach npm:
+- `HEALTH.md`, `*-AUDIT.md`, `TASK.md`, `TASK-COMPLETE*.md` — audit/health/task reports
+- `.agents/`, `.worktrees/`, `work-in-progress/` — working directories
+- Any file generated for diagnostics, benchmarks, or internal analysis
+- When creating new report/audit/diagnostic files, **immediately add them to `.gitignore`** before doing anything else
+- If unsure whether a file is internal, default to adding it to `.gitignore` and ask
+
 ## Session Start
 - At the START of every session, call `chitragupta_memory_search` with the current task
   to load relevant context from past sessions.

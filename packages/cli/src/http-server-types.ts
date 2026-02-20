@@ -6,6 +6,7 @@
 import type { AuthContext, AuthMiddlewareConfig, TokenExchangeConfig } from "@chitragupta/core";
 import type { JobQueueConfig } from "./job-queue.js";
 import type { WebSocketServerOptions } from "./ws-handler.js";
+import type { TlsCertificates } from "./tls/tls-types.js";
 
 export interface ServerConfig {
 	/** Port to listen on. Default: 3141 (pi). */
@@ -50,6 +51,19 @@ export interface ServerConfig {
 	 * Required for /api/auth/* routes when using JWT auth.
 	 */
 	tokenExchange?: TokenExchangeConfig;
+	/**
+	 * Absolute path to the Hub SPA `dist/` directory.
+	 * When set, the server serves static files from this directory
+	 * for any GET request that does not start with `/api/`.
+	 * Non-file paths fall back to `index.html` for SPA routing.
+	 */
+	hubDistPath?: string;
+	/**
+	 * Kavach TLS certificate material. When set, the server uses
+	 * `https.createServer()` instead of `http.createServer()`.
+	 * WebSocket upgrades automatically use `wss://`.
+	 */
+	tls?: TlsCertificates;
 }
 
 export interface RouteHandler {
@@ -117,4 +131,10 @@ export interface ApiDeps {
 	getKartavyaEngine?: () => unknown;
 	getKalaChakra?: () => unknown;
 	getProjectPath?: () => string;
+	/** Lazy getter for the Dvara-Bandhu pairing engine. */
+	getPairingEngine?: () => unknown;
+	/** Lazy getter for the budget tracker. */
+	getBudgetTracker?: () => unknown;
+	/** Lazy getter for global settings. */
+	getSettings?: () => unknown;
 }
