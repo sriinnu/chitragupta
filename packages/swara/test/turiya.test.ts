@@ -32,7 +32,7 @@ function simpleTool(name: string): ToolDefinition {
 	return {
 		name,
 		description: `The ${name} tool`,
-		parameters: { type: "object", properties: {} },
+		inputSchema: { type: "object", properties: {} },
 	};
 }
 
