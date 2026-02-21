@@ -44,11 +44,11 @@ function makeDangerousManifest(): EnhancedSkillManifest {
 			privilege: true,
 			networkPolicy: { allowlist: [] },
 			secrets: ["API_KEY", "DB_PASSWORD"],
-			userData: { location: "read", memory: "write", calendar: true },
-			filesystem: { scope: "full" },
-			piiPolicy: "collect",
+			userData: { location: "precise", memory: "write", calendar: true },
+			filesystem: { scope: "staging_dir" },
+			piiPolicy: "explicit_only",
 		},
-	} as EnhancedSkillManifest;
+	} as unknown as EnhancedSkillManifest;
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -75,7 +75,7 @@ describe("Approval Queue", () => {
 			const manifest = {
 				...makeManifest(),
 				requirements: { bins: [], env: [], os: [], network: true, privilege: false },
-			} as EnhancedSkillManifest;
+			} as unknown as EnhancedSkillManifest;
 			const { factors } = assessRisk(manifest);
 			expect(factors.some(f => f.includes("network"))).toBe(true);
 		});
@@ -84,7 +84,7 @@ describe("Approval Queue", () => {
 			const manifest = {
 				...makeManifest(),
 				requirements: { bins: [], env: [], os: [], network: false, privilege: true },
-			} as EnhancedSkillManifest;
+			} as unknown as EnhancedSkillManifest;
 			const { factors } = assessRisk(manifest);
 			expect(factors.some(f => f.includes("privilege"))).toBe(true);
 		});
@@ -112,7 +112,7 @@ describe("Approval Queue", () => {
 					bins: [], env: [], os: [], network: false, privilege: false,
 					secrets: ["API_KEY"],
 				},
-			} as EnhancedSkillManifest;
+			} as unknown as EnhancedSkillManifest;
 			const { factors } = assessRisk(manifest);
 			expect(factors.some(f => f.includes("secret"))).toBe(true);
 		});
@@ -124,7 +124,7 @@ describe("Approval Queue", () => {
 					bins: [], env: [], os: [], network: false, privilege: false,
 					filesystem: { scope: "full" },
 				},
-			} as EnhancedSkillManifest;
+			} as unknown as EnhancedSkillManifest;
 			const { level, factors } = assessRisk(manifest);
 			expect(factors.some(f => f.includes("Full filesystem"))).toBe(true);
 			expect(level).toBe("high"); // Escalated
@@ -137,7 +137,7 @@ describe("Approval Queue", () => {
 					bins: [], env: [], os: [], network: false, privilege: false,
 					piiPolicy: "collect",
 				},
-			} as EnhancedSkillManifest;
+			} as unknown as EnhancedSkillManifest;
 			const { factors } = assessRisk(manifest);
 			expect(factors.some(f => f.includes("PII"))).toBe(true);
 		});

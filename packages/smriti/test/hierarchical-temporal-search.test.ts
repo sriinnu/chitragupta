@@ -43,7 +43,7 @@ let tmpDir: string;
 beforeEach(async () => {
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "chitragupta-hts-test-"));
 	DatabaseManager.reset();
-	const core = vi.mocked(await import("@chitragupta/core"));
+	const core = vi.mocked(await import("@chitragupta/core")) as unknown as typeof import("@chitragupta/core") & { setChitraguptaHome: (h: string) => void };
 	core.setChitraguptaHome(tmpDir);
 
 	// Initialize vectors schema

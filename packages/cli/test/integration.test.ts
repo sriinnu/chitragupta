@@ -197,9 +197,14 @@ describe("Routing Pipeline", () => {
 		expect(codeResult.type).toBe("code-gen");
 
 		const chatResult = classifyTaskType({
-			messages: [{ role: "user", content: [{ type: "text", text: "Hello, how are you?" }] }],
+			messages: [{ role: "user", content: [{ type: "text", text: "What is the capital of France?" }] }],
 		});
 		expect(chatResult.type).toBe("chat");
+
+		const smalltalkResult = classifyTaskType({
+			messages: [{ role: "user", content: [{ type: "text", text: "Hello, how are you?" }] }],
+		});
+		expect(smalltalkResult.type).toBe("smalltalk");
 	});
 
 	it("should classify complexity levels", async () => {

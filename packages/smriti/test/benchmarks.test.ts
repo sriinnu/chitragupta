@@ -18,7 +18,7 @@ import os from "os";
 import path from "path";
 import { performance } from "perf_hooks";
 import { DatabaseManager } from "@chitragupta/smriti/db/database";
-import { initAgentSchema, initGraphSchema, initVectorSchema } from "@chitragupta/smriti/db/schema";
+import { initAgentSchema, initGraphSchema, initVectorsSchema } from "@chitragupta/smriti/db/schema";
 
 let tmpDir: string;
 

@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import http from "node:http";
 import { createServer } from "../src/server.js";
-import type { DarpanaConfig, DarpanaServer, OpenAIResponse } from "../src/types.js";
+import type { DarpanaConfig, OpenAIResponse } from "../src/types.js";
+import type { DarpanaServer } from "../src/server.js";
 
 // Mock upstream server that returns canned OpenAI responses
 let mockUpstream: http.Server;

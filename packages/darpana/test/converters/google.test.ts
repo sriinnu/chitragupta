@@ -189,7 +189,7 @@ describe("Google Gemini converter", () => {
 
 			const result = toGemini(req, "gemini-2.5-pro");
 			const toolMsg = result.contents[2];
-			const funcResp = toolMsg.parts[0] as { functionResponse: { response: { result: string } } };
+			const funcResp = toolMsg.parts[0] as unknown as { functionResponse: { response: { result: string } } };
 			expect(funcResp.functionResponse.response.result).toBe("line 1line 2");
 		});
 
