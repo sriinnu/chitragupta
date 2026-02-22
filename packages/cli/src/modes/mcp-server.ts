@@ -29,7 +29,7 @@ import { getBuiltinTools } from "../bootstrap.js";
 import { resetMcpStartedAt, writeChitraguptaState, clearChitraguptaState } from "./mcp-state.js";
 import {
 	createMemorySearchTool, createSessionListTool, createSessionShowTool,
-	createMargaDecideTool, createAgentPromptTool,
+	createMargaDecideTool, createAgentPromptTool, createPromptStatusTool,
 } from "./mcp-tools-core.js";
 import {
 	createSamitiChannelsTool, createSamitiBroadcastTool,
@@ -107,7 +107,10 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	mcpTools.push(createSessionListTool(projectPath));
 	mcpTools.push(createSessionShowTool(projectPath));
 	mcpTools.push(createMargaDecideTool());
-	if (enableAgent) mcpTools.push(createAgentPromptTool());
+	if (enableAgent) {
+		mcpTools.push(createAgentPromptTool());
+		mcpTools.push(createPromptStatusTool());
+	}
 
 	// Memory, handover & day files
 	mcpTools.push(createHandoverTool(projectPath));

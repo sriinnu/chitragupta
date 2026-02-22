@@ -255,7 +255,35 @@ export function createMargaDecideTool(): McpToolHandler {
 	};
 }
 
-// ─── Agent Prompt ───────────────────────────────────────────────────────────
+// ─── Agent Prompt (Async-Safe) ──────────────────────────────────────────────
+
+/**
+ * MCP client timeout is typically 60s. We wait inline for up to 45s.
+ * If the prompt finishes within 45s, return the result directly.
+ * If not, return the job ID so the caller can poll via `chitragupta_prompt_status`.
+ */
+const INLINE_WAIT_MS = 45_000;
+
+/** Module-level store for pending/completed prompt jobs. */
+const promptJobs = new Map<string, {
+	status: "running" | "completed" | "failed";
+	response?: string;
+	error?: string;
+	createdAt: number;
+}>();
+
+/** Generate a short job ID. */
+function generatePromptJobId(): string {
+	return `pj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/** Evict completed jobs older than 30 minutes. */
+function evictStaleJobs(): void {
+	const cutoff = Date.now() - 30 * 60_000;
+	for (const [id, job] of promptJobs) {
+		if (job.status !== "running" && job.createdAt < cutoff) promptJobs.delete(id);
+	}
+}
 
 /** Create the `chitragupta_prompt` tool — delegates a task to Chitragupta's agent. */
 export function createAgentPromptTool(): McpToolHandler {
@@ -263,9 +291,10 @@ export function createAgentPromptTool(): McpToolHandler {
 		definition: {
 			name: "chitragupta_prompt",
 			description:
-				"Delegate a task to Chitragupta's AI agent. The agent has its own " +
-				"memory, tools, and configuration. Use this for complex tasks that " +
-				"benefit from Chitragupta's project context and memory.",
+				"Delegate a task to Chitragupta's AI agent. Returns the result " +
+				"directly if it completes within 45 seconds. For longer tasks, " +
+				"returns a jobId — poll with `chitragupta_prompt_status` to get " +
+				"the result when ready.",
 			inputSchema: {
 				type: "object",
 				properties: {
@@ -282,18 +311,38 @@ export function createAgentPromptTool(): McpToolHandler {
 				return { content: [{ type: "text", text: "Error: message is required" }], isError: true };
 			}
 
-			try {
-				const { createChitragupta } = await import("../api.js");
-				const options: Record<string, unknown> = {};
-				if (args.provider) options.provider = String(args.provider);
-				if (args.model) options.model = String(args.model);
+			evictStaleJobs();
+			const jobId = generatePromptJobId();
+			promptJobs.set(jobId, { status: "running", createdAt: Date.now() });
 
-				const chitragupta = await createChitragupta(options);
+			// Launch the prompt asynchronously.
+			const promptPromise = (async () => {
 				try {
-					const response = await chitragupta.prompt(message);
+					const { runAgentPromptWithFallback } = await import("./mcp-agent-prompt.js");
+					const result = await runAgentPromptWithFallback({
+						message,
+						...(args.provider ? { provider: String(args.provider) } : {}),
+						...(args.model ? { model: String(args.model) } : {}),
+					});
+					const job = promptJobs.get(jobId);
+					if (job) { job.status = "completed"; job.response = result.response; }
+					return result.response;
+				} catch (err) {
+					const job = promptJobs.get(jobId);
+					const msg = err instanceof Error ? err.message : String(err);
+					if (job) { job.status = "failed"; job.error = msg; }
+					throw err;
+				}
+			})();
+
+			// Wait up to INLINE_WAIT_MS for the result. If it finishes in time, return directly.
+			try {
+				const response = await Promise.race([
+					promptPromise,
+					new Promise<"__timeout__">((resolve) => setTimeout(() => resolve("__timeout__"), INLINE_WAIT_MS)),
+				]);
+				if (response !== "__timeout__") {
 					return { content: [{ type: "text", text: response }] };
-				} finally {
-					await chitragupta.destroy();
 				}
 			} catch (err) {
 				return {
@@ -301,6 +350,59 @@ export function createAgentPromptTool(): McpToolHandler {
 					isError: true,
 				};
 			}
+
+			// Prompt is still running — return job ID for polling.
+			return {
+				content: [{ type: "text", text:
+					`Prompt is still running (jobId: ${jobId}). ` +
+					`Use the chitragupta_prompt_status tool with this jobId to check for the result.`,
+				}],
+				_metadata: { jobId, status: "running" },
+			};
+		},
+	};
+}
+
+/** Create the `chitragupta_prompt_status` tool — poll for async prompt results. */
+export function createPromptStatusTool(): McpToolHandler {
+	return {
+		definition: {
+			name: "chitragupta_prompt_status",
+			description:
+				"Check the status of a long-running chitragupta_prompt. " +
+				"Call this with the jobId returned by chitragupta_prompt when " +
+				"the prompt didn't complete within the inline timeout.",
+			inputSchema: {
+				type: "object",
+				properties: {
+					jobId: { type: "string", description: "The jobId returned by chitragupta_prompt." },
+				},
+				required: ["jobId"],
+			},
+		},
+		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+			const jobId = String(args.jobId ?? "");
+			if (!jobId) {
+				return { content: [{ type: "text", text: "Error: jobId is required" }], isError: true };
+			}
+			const job = promptJobs.get(jobId);
+			if (!job) {
+				return { content: [{ type: "text", text: `No prompt job found with id "${jobId}". It may have expired.` }], isError: true };
+			}
+			if (job.status === "running") {
+				const elapsed = Math.round((Date.now() - job.createdAt) / 1000);
+				return {
+					content: [{ type: "text", text: `Prompt is still running (${elapsed}s elapsed). Try again in 10-15 seconds.` }],
+					_metadata: { jobId, status: "running", elapsedMs: Date.now() - job.createdAt },
+				};
+			}
+			if (job.status === "failed") {
+				return {
+					content: [{ type: "text", text: `Prompt failed: ${job.error ?? "Unknown error"}` }],
+					isError: true,
+				};
+			}
+			return { content: [{ type: "text", text: job.response ?? "" }] };
 		},
 	};
 }
