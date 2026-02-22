@@ -375,56 +375,67 @@ If any check fails, the spawn is rejected with a reason string.
 
 ## P2P Agent Communication (Sutra Mesh)
 
-Chitragupta agents communicate via **Sutra** (सूत्र — Thread), a full P2P actor mesh with gossip-based peer discovery, typed messaging, and ambient broadcast channels.
+Chitragupta agents communicate via **Sutra** (सूत्र — Thread), a full P2P actor mesh over real WebSocket connections with Bitcoin-inspired network design, HMAC authentication, TLS encryption, gossip-based failure detection, and ambient broadcast channels.
+
+> Full documentation: [docs/p2p-mesh.md](docs/p2p-mesh.md)
 
 ### Architecture
 
 ```
-Agent A ──tell()──→  MeshRouter  ──deliver──→ Agent B
-         ──ask()──→  MeshRouter  ──reply()──→ Agent A (with timeout)
-                        │
-                  GossipProtocol ──SWIM──→ Peer Discovery & Failure Detection
-                        │
-                     Samiti ──broadcast──→ #security, #performance, #correctness
+┌─────────────────────────────┐     ┌─────────────────────────────┐
+│ Node A                      │ WS  │ Node B                      │
+│  Agent 1 ──→ MeshRouter ────┼─────┼──→ MeshRouter ──→ Agent 3  │
+│  Agent 2     GossipProtocol ┼─────┼──  GossipProtocol          │
+│              PeerGuard      │     │    PeerAddrDb               │
+└─────────────────────────────┘     └─────────────────────────────┘
 ```
 
 ### Core Components
 
-| Component | Sanskrit | What It Does |
-|-----------|----------|-------------|
-| **ActorSystem** | Brahma | Top-level coordinator: spawn, stop, route, broadcast |
-| **MeshRouter** | -- | Message delivery with TTL, hop tracking, priority lanes |
-| **GossipProtocol** | -- | SWIM-style failure detection (alive → suspect → dead) |
-| **Samiti** | समिति (Assembly) | Ambient broadcast channels with ring-buffer history |
-| **Lokapala** | लोकपाल (Guardian) | 3 autonomous monitors: security, performance, correctness |
+| Component | What It Does |
+|-----------|-------------|
+| **ActorSystem** | Top-level coordinator: spawn, stop, route, broadcast, P2P bootstrap |
+| **PeerConnectionManager** | WebSocket lifecycle, TLS, reconnect, peer exchange, addr relay |
+| **MeshRouter** | Message delivery with TTL, hop tracking, 5 priority lanes |
+| **GossipProtocol** | SWIM-style failure detection (alive → suspect → dead) |
+| **PeerGuard** | Anti-eclipse: subnet diversity, rate limiting, peer scoring |
+| **PeerAddrDb** | Bitcoin-style persistent peer database (new/tried tables) |
+| **Samiti** | Ambient broadcast channels with ring-buffer history |
 
-### Agent-to-Agent Messaging
-
-Every agent auto-registers as an actor when `actorSystem` is provided:
+### Quick Start
 
 ```typescript
-import { Agent } from "@chitragupta/anina";
+const system = new ActorSystem({ gossipIntervalMs: 500 });
+system.start();
 
-const agent = new Agent({
-  // ... standard config
-  actorSystem: meshSystem,     // Enable P2P mesh
-  enableMesh: true,            // Auto-register as actor (default: true)
-  samiti: samitiInstance,       // Broadcast channel access
-  lokapala: guardianInstance,   // Guardian monitoring
+const port = await system.bootstrapP2P({
+  listenPort: 3142,
+  staticPeers: ["ws://seed.example.com:3142/mesh"],
+  meshSecret: process.env.MESH_SECRET,
+  tls: true, tlsCert: cert, tlsKey: key,
 });
+
+// Actors on this node are reachable from any peer
+system.spawn("my-agent", { behavior: agentBehavior });
+const reply = await system.ask("caller", "remote-agent", { task: "analyze" });
 ```
 
-**Message Types:**
-- `tell(targetId, message)` — Fire-and-forget delivery
-- `ask(targetId, message, timeout)` — Request-reply with timeout
-- `broadcast(topic, payload)` — Fan-out to all subscribers
+### Security
 
-**Protocol Messages:**
-`prompt` | `steer` | `abort` | `status` | `delegate` | `ping`
+- **HMAC-SHA256 authentication** — nonce-based mutual auth on every connection
+- **Per-frame signing** — all messages signed with shared secret
+- **TLS (wss://)** — encrypted transport with custom CA support
+- **Anti-eclipse (PeerGuard)** — subnet diversity (/24), rate limiting, min outbound
+- **Version handshake** — protocol compatibility negotiation (`mesh/1.0`)
+
+### Bitcoin-Inspired Peer Discovery
+
+- **Addr relay** — newly discovered peers transitively propagated to all connections
+- **Two-table addr database** — "new" (heard about) and "tried" (connected) survive restarts
+- **Subnet diversity** — max connections per /24 block; bootstrap set capped at 2 per subnet
+- **Peer scoring** — reliability * recency ranking for reconnection priority
 
 ### Samiti Broadcast Channels
-
-Pre-configured ambient channels for cross-cutting concerns:
 
 | Channel | Purpose |
 |---------|---------|
@@ -434,27 +445,9 @@ Pre-configured ambient channels for cross-cutting concerns:
 | `#style` | Code style, convention violations |
 | `#alerts` | Agent lifecycle events, health warnings |
 
-Agents broadcast findings automatically. Consumers subscribe to channels for real-time notifications.
-
 ### Gossip & Failure Detection
 
-SWIM-based protocol with configurable timings:
-
-```json
-{
-  "mesh": {
-    "enabled": true,
-    "gossip": {
-      "fanout": 3,
-      "sweepIntervalMs": 5000,
-      "suspectTimeoutMs": 15000,
-      "deadTimeoutMs": 30000
-    }
-  }
-}
-```
-
-Peer lifecycle: `alive` → `suspect` (no heartbeat) → `dead` (evicted). Lamport generation clock ensures causal ordering across the mesh.
+SWIM-based protocol: `alive` → `suspect` (no heartbeat) → `dead` (evicted). Lamport generation clock ensures causal ordering. Configurable fanout, sweep intervals, and timeouts.
 
 ---
 
@@ -482,6 +475,7 @@ Peer lifecycle: `alive` → `suspect` (no heartbeat) → `dead` (evicted). Lampo
 | [docs/VEDIC-MODELS.md](docs/VEDIC-MODELS.md) | 17 Vedic cognitive models mapped to computational modules |
 | [docs/HUB.md](docs/HUB.md) | Hub web dashboard — device pairing, pages, API endpoints, architecture |
 | [docs/API.md](docs/API.md) | REST API, MCP tools/resources, CLI commands, Vayu DAG integration |
+| [docs/p2p-mesh.md](docs/p2p-mesh.md) | P2P actor mesh — Bitcoin-inspired network, TLS, anti-eclipse, peer discovery |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | 30+ research papers backing every major module |
 | [CHANGELOG.md](CHANGELOG.md) | Release history (v0.1.0 — v0.5.0) |
 
