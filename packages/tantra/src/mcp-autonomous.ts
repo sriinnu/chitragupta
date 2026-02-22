@@ -22,6 +22,7 @@ import type {
 	AutonomousMcpConfig,
 	SkillGeneratorCallback,
 	QuarantineInfo,
+	CircuitBreakerState,
 	McpHealthReport,
 } from "./mcp-autonomous-types.js";
 import {

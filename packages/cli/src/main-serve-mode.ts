@@ -21,7 +21,7 @@ import {
 import type { AgentProfile, ChitraguptaSettings } from "@chitragupta/core";
 
 import type { ProviderRegistry } from "@chitragupta/swara/provider-registry";
-import type { TuriyaRouter } from "@chitragupta/swara";
+import type { ProviderDefinition, TuriyaRouter } from "@chitragupta/swara";
 import { Agent } from "@chitragupta/anina";
 import type { AgentConfig, ToolHandler } from "@chitragupta/anina";
 
@@ -32,6 +32,7 @@ import {
 import { getAllTools } from "@chitragupta/yantra";
 
 import type { ProjectInfo } from "./project-detector.js";
+import type { ApiDeps } from "./http-server-types.js";
 import { loadContextFiles } from "./context-files.js";
 import { buildSystemPrompt } from "./personality.js";
 
@@ -286,7 +287,7 @@ async function wireServePhaseModules(
 				m.servKartavyaEngine as InstanceType<typeof KartavyaEngine>,
 				m.servSamiti as unknown as ConstructorParameters<typeof KartavyaDispatcher>[1],
 				m.servRtaEngine as unknown as ConstructorParameters<typeof KartavyaDispatcher>[2],
-				{ enableCommandActions: false, workingDirectory: projectPath, project: projectPath, toolExecutor, vidhiEngine: m.vidhiEngine as ConstructorParameters<typeof KartavyaDispatcher>[3] extends { vidhiEngine: infer V } ? V : unknown },
+				{ enableCommandActions: false, workingDirectory: projectPath, project: projectPath, toolExecutor, vidhiEngine: m.vidhiEngine as import("@chitragupta/niyanta").DispatcherVidhiEngine | undefined },
 			);
 			d.start();
 			c.servKartavyaDispatcher = d;
@@ -310,7 +311,12 @@ async function wireServePhaseModules(
 		try { scanner = new SurakshaScanner(); const sandbox = new SkillSandbox(); const staging = new PratikshaManager(); const pipeline = new SkillPipeline({ scanner, sandbox, staging, registry: reg }); shiksha = new ShikshaController({ registry: reg, pipeline, scanner }); } catch (e) { log.debug("Suraksha/Shiksha pipeline unavailable", { error: String(e) }); }
 		const stateDir = path.join(projectPath, ".chitragupta");
 		m.servVidyaOrchestrator = new VidyaOrchestrator(
-			{ registry: reg, bridge, scanner: scanner as ConstructorParameters<typeof VidyaOrchestrator>[0] extends { scanner: infer S } ? S : unknown, shiksha: shiksha as ConstructorParameters<typeof VidyaOrchestrator>[0] extends { shiksha: infer H } ? H : unknown },
+			{
+				registry: reg,
+				bridge,
+				scanner: scanner as ConstructorParameters<typeof VidyaOrchestrator>[0]["scanner"],
+				shiksha: shiksha as ConstructorParameters<typeof VidyaOrchestrator>[0]["shiksha"],
+			},
 			{ persistPath: stateDir + "/vidya-state.json", enableAutoComposition: true },
 		);
 		await (m.servVidyaOrchestrator as { initialize: () => Promise<void> }).initialize();
@@ -320,7 +326,7 @@ async function wireServePhaseModules(
 }
 
 interface CreateServerAgentParams {
-	servResolved: { providerId: string; provider: unknown };
+	servResolved: { providerId: string; provider: ProviderDefinition };
 	profile: AgentProfile;
 	settings: ChitraguptaSettings;
 	project: ProjectInfo;
@@ -425,7 +431,7 @@ function buildServerHandlers(opts: {
 	pairingEngine: { generateChallenge(): void; getTerminalDisplay(): string };
 	budgetTracker: unknown; meshActorSystem?: unknown;
 	getMeshBootstrapResult?: () => MeshBootstrapResult | undefined;
-}): Record<string, unknown> {
+}): ApiDeps {
 	const { serverAgent, serverSession, registry, projectPath, turiyaRouter, modules: m, pairingEngine, budgetTracker } = opts;
 	return {
 		getAgent: () => serverAgent, getSession: () => serverSession,

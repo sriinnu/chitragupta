@@ -42,7 +42,7 @@ const BANNER = [
 	"   ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝",
 ];
 
-function printBanner(): void {
+export function printBanner(): void {
 	const { stdout } = process;
 	stdout.write("\n");
 	for (let i = 0; i < BANNER.length; i++) {
@@ -53,7 +53,7 @@ function printBanner(): void {
 	stdout.write("\n");
 }
 
-function formatMs(ms: number): string {
+export function formatMs(ms: number): string {
 	if (ms < 1000) return `${ms}ms`;
 	if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
 	const mins = Math.floor(ms / 60_000);
@@ -71,7 +71,7 @@ export interface ProjectSnapshot {
 	hasTests: boolean;
 }
 
-function detectProject(projectPath: string): ProjectSnapshot {
+export function detectProject(projectPath: string): ProjectSnapshot {
 
 	let branch = "";
 	try {
@@ -120,7 +120,7 @@ function detectProject(projectPath: string): ProjectSnapshot {
 	return { branch, language, framework, packageManager, hasTests };
 }
 
-function printProjectInfo(project: ProjectSnapshot, projectPath: string, providerId: string, model: string | undefined, mode: string): void {
+export function printProjectInfo(project: ProjectSnapshot, projectPath: string, providerId: string, model: string | undefined, mode: string): void {
 	const { stdout } = process;
 	const dirName = path.basename(projectPath);
 
@@ -144,7 +144,7 @@ function printProjectInfo(project: ProjectSnapshot, projectPath: string, provide
 
 // ─── Slash Commands ─────────────────────────────────────────────────────────
 
-function printHelp(): void {
+export function printHelp(): void {
 	const { stdout } = process;
 	stdout.write("\n");
 	stdout.write(bold("  Tasks:\n"));
@@ -171,7 +171,7 @@ function printHelp(): void {
 
 // ─── Phase Streaming ────────────────────────────────────────────────────────
 
-function createProgressRenderer(): (progress: { phase: string; message: string; elapsedMs: number }) => void {
+export function createProgressRenderer(): (progress: { phase: string; message: string; elapsedMs: number }) => void {
 	const { stdout } = process;
 	const phases = new Map<string, boolean>();
 
@@ -201,7 +201,7 @@ function createProgressRenderer(): (progress: { phase: string; message: string; 
 }
 
 /** Stream coding agent events to terminal — tool calls, validation, retries. */
-function createCodingEventRenderer(): (event: { type: string; name?: string; args?: Record<string, unknown>; text?: string; passed?: boolean; output?: string; attempt?: number; maxRetries?: number; durationMs?: number; path?: string }) => void {
+export function createCodingEventRenderer(): (event: { type: string; name?: string; args?: Record<string, unknown>; text?: string; passed?: boolean; output?: string; attempt?: number; maxRetries?: number; durationMs?: number; path?: string }) => void {
 	const { stdout } = process;
 	const toolIcons: Record<string, string> = {
 		read: "📖", write: "📝", edit: "✏️", bash: "🔧",
@@ -241,7 +241,7 @@ function createCodingEventRenderer(): (event: { type: string; name?: string; arg
 
 // ─── Result Display ─────────────────────────────────────────────────────────
 
-function displayResult(result: {
+export function displayResult(result: {
 	success: boolean;
 	plan: { task: string; steps: { index: number; description: string; completed: boolean }[]; complexity: string } | null;
 	git: { featureBranch: string | null; commits: string[] };
@@ -344,4 +344,3 @@ function displayResult(result: {
 
 	stdout.write("\n");
 }
-

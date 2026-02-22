@@ -10,6 +10,7 @@
 
 import type {
 	SkillManifest,
+	SkillCapability,
 	SkillSource,
 } from "./types.js";
 import { computeTraitVector } from "./fingerprint.js";

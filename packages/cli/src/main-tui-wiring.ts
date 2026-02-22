@@ -216,7 +216,12 @@ async function wireVidhyaSkills(result: TuiWiringResult, projectPath: string): P
 
 		const stateDir = projectPath ? (await import("node:path")).join(projectPath, ".chitragupta") : undefined;
 		result.vidyaOrchestrator = new VidyaOrchestrator(
-			{ registry: skillRegistry, bridge, scanner: scanner as ConstructorParameters<typeof VidyaOrchestrator>[0] extends { scanner: infer S } ? S : unknown, shiksha: result.shikshaController as ConstructorParameters<typeof VidyaOrchestrator>[0] extends { shiksha: infer H } ? H : unknown },
+			{
+				registry: skillRegistry,
+				bridge,
+				scanner: scanner as ConstructorParameters<typeof VidyaOrchestrator>[0]["scanner"],
+				shiksha: result.shikshaController as ConstructorParameters<typeof VidyaOrchestrator>[0]["shiksha"],
+			},
 			{ persistPath: stateDir ? stateDir + "/vidya-state.json" : undefined, enableAutoComposition: true },
 		);
 		await result.vidyaOrchestrator.initialize();
