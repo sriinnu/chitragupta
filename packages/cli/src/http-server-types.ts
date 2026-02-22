@@ -137,4 +137,12 @@ export interface ApiDeps {
 	getBudgetTracker?: () => unknown;
 	/** Lazy getter for global settings. */
 	getSettings?: () => unknown;
+	/** Webhook HMAC secret for inbound webhook signature verification. */
+	getWebhookSecret?: () => string | undefined;
+	/** Lazy getter for the P2P mesh router (for webhook→actor forwarding). */
+	getMeshRouter?: () => unknown;
+	/** P2P mesh status snapshot getter. */
+	getMeshStatus?: () => import("./mesh-bootstrap.js").MeshStatusSnapshot | undefined;
+	/** Connect to a remote peer endpoint. Returns true if connected. */
+	connectToPeer?: (endpoint: string) => Promise<boolean>;
 }

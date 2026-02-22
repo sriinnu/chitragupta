@@ -39,6 +39,12 @@ import {
 	loadProjectMemory,
 	resolvePreferredProvider,
 } from "./bootstrap.js";
+import {
+	bootstrapMeshNetwork,
+	resolveMeshConfig,
+	buildMeshApiHandlers,
+	type MeshBootstrapResult,
+} from "./mesh-bootstrap.js";
 
 const log = createLogger("cli:main-serve");
 
@@ -124,12 +130,42 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 		log.warn("No provider available — HTTP chat endpoints will return 503");
 	}
 
+	// Resolve mesh network config from settings/env
+	const meshConfig = resolveMeshConfig(settings as unknown as Record<string, unknown>);
+	let meshResult: MeshBootstrapResult | undefined;
+	let meshActorSystem: unknown;
+
+	// Extract the ActorSystem from the server agent's mesh infrastructure
+	// for P2P bootstrap and mesh status reporting
+	if (serverAgent) {
+		try {
+			const agentAny = serverAgent as { actorSystem?: unknown };
+			meshActorSystem = agentAny.actorSystem;
+		} catch { /* best-effort */ }
+	}
+
 	const server = createChitraguptaAPI(
-		buildServerHandlers({ serverAgent, serverSession, registry, projectPath, turiyaRouter, modules, pairingEngine, budgetTracker }),
+		buildServerHandlers({
+			serverAgent, serverSession, registry, projectPath, turiyaRouter,
+			modules, pairingEngine, budgetTracker, meshActorSystem,
+			getMeshBootstrapResult: () => meshResult,
+		}),
 		serverConfig,
 	);
 
 	const actualPort = await server.start();
+
+	// Bootstrap P2P mesh if config is present
+	if (meshConfig && meshActorSystem) {
+		try {
+			meshResult = await bootstrapMeshNetwork(meshActorSystem, meshConfig);
+			log.info("P2P mesh active", { meshPort: meshResult.meshPort, nodeId: meshResult.nodeId });
+		} catch (err) {
+			log.warn("P2P mesh bootstrap failed — running local-only", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
 
 	pairingEngine.generateChallenge();
 	const protocol = tlsCerts ? "https" : "http";
@@ -141,6 +177,7 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 		`  Health: ${hubUrl}/api/health\n` +
 		(authToken || apiKeys?.length ? `  Auth: enabled\n` : `  Auth: disabled (set CHITRAGUPTA_AUTH_TOKEN to enable)\n`) +
 		(hubAvailable ? `  Hub:  ${hubUrl} (open in browser)\n` : `  Hub:  not built (run: pnpm -F @chitragupta/hub build)\n`) +
+		(meshResult ? `  Mesh: ws://${host === "0.0.0.0" ? "localhost" : host}:${meshResult.meshPort}/mesh (node: ${meshResult.nodeId.slice(0, 8)})\n` : "") +
 		`\n`,
 	);
 	process.stdout.write(pairingEngine.getTerminalDisplay() + "\n\n");
@@ -151,6 +188,7 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 		process.on("SIGINT", () => {
 			process.stdout.write(`\n  Shutting down server...\n`);
 			const cleanup = async () => {
+				if (meshResult) { try { await meshResult.shutdown(); } catch { /* best-effort */ } }
 				for (const fn of cleanups.skillWatcherCleanups) { try { fn(); } catch { /* best-effort */ } }
 				if (modules.servNidraDaemon) {
 					try { await (modules.servNidraDaemon as { stop: () => Promise<void> }).stop(); } catch { /* best-effort */ }
@@ -184,31 +222,18 @@ interface ServePhaseModules {
 
 interface ServeCleanups { skillWatcherCleanups: Array<() => void>; servKartavyaDispatcher?: { start(): void; stop(): void }; }
 
-/**
- * Provision TLS certificates via Kavach if enabled.
- */
-async function provisionTlsCerts(
-	noTls?: boolean,
-): Promise<import("./tls/tls-types.js").TlsCertificates | undefined> {
+/** Provision TLS certificates via Kavach if enabled. */
+async function provisionTlsCerts(noTls?: boolean): Promise<import("./tls/tls-types.js").TlsCertificates | undefined> {
 	if (noTls) return undefined;
 	try {
 		const { provisionTls } = await import("./tls/tls-store.js");
-		const { installCATrust } = await import("./tls/tls-trust.js");
 		const result = await provisionTls();
 		if (result.ok && result.certs) {
-			if (result.freshCA) {
-				const trustResult = await installCATrust(result.certs.ca);
-				if (trustResult.trusted) log.info("Kavach: CA trusted in system store");
-				else log.info("Kavach: " + trustResult.message);
-			}
+			if (result.freshCA) { const { installCATrust } = await import("./tls/tls-trust.js"); const tr = await installCATrust(result.certs.ca); log.info(tr.trusted ? "Kavach: CA trusted in system store" : "Kavach: " + tr.message); }
 			return result.certs;
 		}
-		log.warn("Kavach: TLS provisioning failed, falling back to HTTP", { reason: result.reason });
-	} catch (err) {
-		log.warn("Kavach: TLS unavailable, falling back to HTTP", {
-			error: err instanceof Error ? err.message : String(err),
-		});
-	}
+		log.warn("Kavach: TLS provisioning failed", { reason: result.reason });
+	} catch (err) { log.warn("Kavach: TLS unavailable", { error: err instanceof Error ? err.message : String(err) }); }
 	return undefined;
 }
 
@@ -393,53 +418,30 @@ async function createServerAgent(params: CreateServerAgentParams): Promise<{ res
 	};
 }
 
-interface BuildServerHandlersParams {
-	serverAgent: unknown;
-	serverSession: unknown;
-	registry: ProviderRegistry;
-	projectPath: string;
-	turiyaRouter?: TuriyaRouter;
-	modules: ServePhaseModules;
+/** Build the handler map passed to createChitraguptaAPI. */
+function buildServerHandlers(opts: {
+	serverAgent: unknown; serverSession: unknown; registry: ProviderRegistry;
+	projectPath: string; turiyaRouter?: TuriyaRouter; modules: ServePhaseModules;
 	pairingEngine: { generateChallenge(): void; getTerminalDisplay(): string };
-	budgetTracker: unknown;
-}
-
-/**
- * Build the handler map passed to createChitraguptaAPI.
- */
-function buildServerHandlers(params: BuildServerHandlersParams): Record<string, unknown> {
-	const { serverAgent, serverSession, registry, projectPath, turiyaRouter, modules, pairingEngine, budgetTracker } = params;
+	budgetTracker: unknown; meshActorSystem?: unknown;
+	getMeshBootstrapResult?: () => MeshBootstrapResult | undefined;
+}): Record<string, unknown> {
+	const { serverAgent, serverSession, registry, projectPath, turiyaRouter, modules: m, pairingEngine, budgetTracker } = opts;
 	return {
-		getAgent: () => serverAgent,
-		getSession: () => serverSession,
+		getAgent: () => serverAgent, getSession: () => serverSession,
 		listSessions: () => { try { return listSessions(projectPath); } catch { return []; } },
 		listProviders: () => registry.getAll().map((p) => ({ id: p.id, name: p.name })),
-		listTools: () => getAllTools().map((t) => ({
-			name: (t as unknown as Record<string, Record<string, string>>).definition?.name,
-			description: (t as unknown as Record<string, Record<string, string>>).definition?.description,
-		})),
-		prompt: serverAgent ? async (message: string) => {
-			const agent = serverAgent as Agent;
-			const result = await agent.prompt(message);
-			return result.content.filter((p): p is { type: "text"; text: string } => p.type === "text").map((p) => p.text).join("");
-		} : undefined,
-		getVasanaEngine: () => modules.vasanaEngine,
-		getNidraDaemon: () => modules.servNidraDaemon,
-		getVidhiEngine: () => modules.vidhiEngine,
-		getTuriyaRouter: () => turiyaRouter,
-		getTriguna: () => modules.servTriguna,
-		getRtaEngine: () => modules.servRtaEngine,
-		getBuddhi: () => modules.servBuddhi,
-		getDatabase: () => modules.servDatabase,
-		getSamiti: () => modules.servSamiti,
-		getSabhaEngine: () => modules.servSabhaEngine,
-		getLokapala: () => modules.servLokapala,
-		getAkasha: () => modules.servAkasha,
-		getKartavyaEngine: () => modules.servKartavyaEngine,
-		getKalaChakra: () => modules.servKalaChakra,
-		getVidyaOrchestrator: () => modules.servVidyaOrchestrator,
-		getProjectPath: () => projectPath,
-		getPairingEngine: () => pairingEngine,
-		getBudgetTracker: () => budgetTracker,
+		listTools: () => getAllTools().map((t) => ({ name: (t as unknown as Record<string, Record<string, string>>).definition?.name, description: (t as unknown as Record<string, Record<string, string>>).definition?.description })),
+		prompt: serverAgent ? async (message: string) => { const result = await (serverAgent as Agent).prompt(message); return result.content.filter((p): p is { type: "text"; text: string } => p.type === "text").map((p) => p.text).join(""); } : undefined,
+		getVasanaEngine: () => m.vasanaEngine, getNidraDaemon: () => m.servNidraDaemon,
+		getVidhiEngine: () => m.vidhiEngine, getTuriyaRouter: () => turiyaRouter,
+		getTriguna: () => m.servTriguna, getRtaEngine: () => m.servRtaEngine,
+		getBuddhi: () => m.servBuddhi, getDatabase: () => m.servDatabase,
+		getSamiti: () => m.servSamiti, getSabhaEngine: () => m.servSabhaEngine,
+		getLokapala: () => m.servLokapala, getAkasha: () => m.servAkasha,
+		getKartavyaEngine: () => m.servKartavyaEngine, getKalaChakra: () => m.servKalaChakra,
+		getVidyaOrchestrator: () => m.servVidyaOrchestrator, getProjectPath: () => projectPath,
+		getPairingEngine: () => pairingEngine, getBudgetTracker: () => budgetTracker,
+		...buildMeshApiHandlers(opts.meshActorSystem, opts.getMeshBootstrapResult ?? (() => undefined)),
 	};
 }
