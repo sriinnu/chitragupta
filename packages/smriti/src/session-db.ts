@@ -193,13 +193,77 @@ export function upsertSessionToDb(meta: SessionMeta, filePath: string): void {
  * @param sessionId - The session this turn belongs to.
  * @param turn - The turn data to insert.
  */
-export function insertTurnToDb(sessionId: string, turn: SessionTurn): void {
+/**
+ * Check if an error is a recoverable session constraint error.
+ * Used for self-healing when a turn references a missing session row.
+ *
+ * @param err - The error to check.
+ * @returns True if the error is a recoverable constraint violation.
+ */
+function isRecoverableSessionConstraintError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	const lower = err.message.toLowerCase();
+	return lower.includes("foreign key constraint failed") || lower.includes("constraint failed");
+}
+
+/**
+ * Seed a minimal session row for turn insertion self-healing.
+ * Creates a placeholder session when the session row is missing from SQLite
+ * but the .md file exists on disk.
+ *
+ * @param sessionId - The session ID to create a row for.
+ * @param project - The project path.
+ * @param filePath - The session file path (absolute or relative).
+ */
+function seedSessionRowForTurn(sessionId: string, project: string, filePath: string): void {
+	const db = getAgentDb();
+	const now = Date.now();
+	const normalizedFilePath = path.isAbsolute(filePath)
+		? path.relative(getChitraguptaHome(), filePath)
+		: filePath;
+	db.prepare(`
+		INSERT OR IGNORE INTO sessions (id, project, title, created_at, updated_at, turn_count, file_path)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`).run(
+		sessionId,
+		project,
+		"Recovered Session",
+		now,
+		now,
+		0,
+		normalizedFilePath,
+	);
+}
+
+/** Context for self-healing turn inserts. */
+export interface TurnInsertContext {
+	project: string;
+	filePath: string;
+}
+
+/**
+ * Insert a turn into the SQLite turns table + FTS5 index.
+ * Also bumps the session turn_count and updated_at.
+ * Best-effort: swallows errors since .md files are the source of truth.
+ *
+ * When context is provided, self-heals missing session rows by creating
+ * a minimal placeholder before retrying the turn insert.
+ *
+ * @param sessionId - The session this turn belongs to.
+ * @param turn - The turn data to insert.
+ * @param context - Optional project/filePath for self-healing missing sessions.
+ */
+export function insertTurnToDb(
+	sessionId: string,
+	turn: SessionTurn,
+	context?: TurnInsertContext,
+): void {
 	try {
 		const db = getAgentDb();
 		const now = Date.now();
 
 		// Wrap turn insert + FTS5 index + session update in a transaction
-		const doInsert = db.transaction(() => {
+		const writeTurn = db.transaction(() => {
 			const result = db.prepare(`
 				INSERT OR IGNORE INTO turns (session_id, turn_number, role, content, agent, model, tool_calls, created_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -216,7 +280,7 @@ export function insertTurnToDb(sessionId: string, turn: SessionTurn): void {
 
 			// Index into FTS5
 			if (result.changes > 0) {
-				db.prepare("INSERT INTO turns_fts (rowid, content) VALUES (?, ?)").run(
+				db.prepare("INSERT OR IGNORE INTO turns_fts (rowid, content) VALUES (?, ?)").run(
 					result.lastInsertRowid,
 					turn.content,
 				);
@@ -227,10 +291,26 @@ export function insertTurnToDb(sessionId: string, turn: SessionTurn): void {
 				"UPDATE sessions SET turn_count = turn_count + 1, updated_at = ? WHERE id = ?",
 			).run(now, sessionId);
 		});
-		doInsert();
+		try {
+			writeTurn();
+			return;
+		} catch (err) {
+			// Self-heal: if SQLite session row is missing, recreate a minimal row and retry once.
+			if (context && isRecoverableSessionConstraintError(err)) {
+				seedSessionRowForTurn(sessionId, context.project, context.filePath);
+				writeTurn();
+				return;
+			}
+			throw err;
+		}
 	} catch (err) {
 		// Best-effort write-through
-		process.stderr.write(`[chitragupta] turn insert failed for session ${sessionId}: ${err instanceof Error ? err.message : err}\n`);
+		const code = typeof err === "object" && err !== null && "code" in err
+			? String((err as { code?: unknown }).code)
+			: "unknown";
+		process.stderr.write(
+			`[chitragupta] turn insert failed for session ${sessionId} (turn=${turn.turnNumber}, role=${turn.role}, code=${code}): ${err instanceof Error ? err.message : err}\n`,
+		);
 	}
 }
 
