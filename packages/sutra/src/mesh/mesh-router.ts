@@ -65,6 +65,10 @@ export class MeshRouter implements MessageSender {
 	private readonly defaultAskTimeout: number;
 	/** Optional actor-to-node lookup for distributed routing. */
 	private actorLocationFn: ((actorId: string) => string | undefined) | null = null;
+	/** Direct peer channel resolver for P2P mesh distributed routing. */
+	private peerChannelResolver: ((actorId: string) => PeerChannel | undefined) | null = null;
+	/** Reply routes for cross-node ask/reply — maps correlationId → originating channel. */
+	private readonly replyRoutes = new Map<string, { channel: PeerChannel; timer: ReturnType<typeof setTimeout> }>();
 
 	constructor(defaultTTL = DEFAULT_TTL, defaultAskTimeout = DEFAULT_ASK_TIMEOUT) {
 		this.defaultTTL = defaultTTL;
@@ -77,6 +81,17 @@ export class MeshRouter implements MessageSender {
 	 */
 	setActorLocationResolver(fn: (actorId: string) => string | undefined): void {
 		this.actorLocationFn = fn;
+	}
+
+	/** Set a resolver that directly returns a PeerChannel for a remote actorId. */
+	setPeerChannelResolver(fn: (actorId: string) => PeerChannel | undefined): void {
+		this.peerChannelResolver = fn;
+	}
+
+	/** Register a reply route for cross-node ask/reply correlation. */
+	registerReplyRoute(correlationId: string, channel: PeerChannel): void {
+		const timer = setTimeout(() => this.replyRoutes.delete(correlationId), this.defaultTTL);
+		this.replyRoutes.set(correlationId, { channel, timer });
 	}
 
 	// ─── Event subscription ────────────────────────────────────────
@@ -148,13 +163,22 @@ export class MeshRouter implements MessageSender {
 	 * prevention, broadcast ("*"), topic publish, point-to-point.
 	 */
 	route(envelope: MeshEnvelope): void {
-		// 1. Handle replies to pending asks
+		// 1a. Handle replies to pending asks (local originator)
 		if (envelope.type === "reply" && envelope.correlationId) {
 			const pending = this.pending.get(envelope.correlationId);
 			if (pending) {
 				clearTimeout(pending.timer);
 				this.pending.delete(envelope.correlationId);
 				pending.resolve(envelope);
+				return;
+			}
+			// 1b. Forward reply via cross-node reply route
+			const entry = this.replyRoutes.get(envelope.correlationId);
+			if (entry) {
+				clearTimeout(entry.timer);
+				this.replyRoutes.delete(envelope.correlationId);
+				entry.channel.receive(envelope);
+				this.emit({ type: "delivered", envelope });
 				return;
 			}
 		}
@@ -269,7 +293,8 @@ export class MeshRouter implements MessageSender {
 	 * Routing priority:
 	 * 1. Local actor (direct delivery)
 	 * 2. Peer channel by ID match (explicit peer targeting)
-	 * 3. Distributed lookup: actorId → nodeId → PeerChannel (network hop)
+	 * 3. P2P mesh resolver: actorId → PeerChannel (network hop)
+	 * 4. Legacy location resolver: actorId → nodeId → channels map
 	 */
 	private doDeliver(envelope: MeshEnvelope): void {
 		// 1. Local actor
@@ -289,7 +314,17 @@ export class MeshRouter implements MessageSender {
 			}
 		}
 
-		// 3. Distributed routing: look up which node hosts this actor
+		// 3. P2P mesh: peer channel resolver (actorId → PeerChannel directly)
+		if (this.peerChannelResolver) {
+			const channel = this.peerChannelResolver(envelope.to);
+			if (channel) {
+				channel.receive(envelope);
+				this.emit({ type: "delivered", envelope });
+				return;
+			}
+		}
+
+		// 4. Legacy: actor location resolver + channels map
 		if (this.actorLocationFn) {
 			const nodeId = this.actorLocationFn(envelope.to);
 			if (nodeId) {
@@ -311,6 +346,8 @@ export class MeshRouter implements MessageSender {
 
 	/**
 	 * Broadcast to all local actors and peer channels (except sender).
+	 * Broadcasts received from a remote peer (_networkHop) are only
+	 * delivered to local actors — not re-forwarded to channels.
 	 */
 	private doBroadcast(envelope: MeshEnvelope): void {
 		let count = 0;
@@ -321,10 +358,13 @@ export class MeshRouter implements MessageSender {
 			count++;
 		}
 
-		for (const channel of this.channels.values()) {
-			if (channel.peerId === envelope.from) continue;
-			channel.receive(envelope);
-			count++;
+		// Only forward to channels for locally-originated broadcasts
+		if (!(envelope as Record<string, unknown>)._networkHop) {
+			for (const channel of this.channels.values()) {
+				if (channel.peerId === envelope.from) continue;
+				channel.receive(envelope);
+				count++;
+			}
 		}
 
 		this.emit({ type: "broadcast", envelope, recipientCount: count });
@@ -370,6 +410,10 @@ export class MeshRouter implements MessageSender {
 			pending.reject(new Error("Router destroyed"));
 			this.pending.delete(id);
 		}
+		for (const [, entry] of this.replyRoutes) {
+			clearTimeout(entry.timer);
+		}
+		this.replyRoutes.clear();
 		this.actors.clear();
 		this.channels.clear();
 		this.topics.clear();
