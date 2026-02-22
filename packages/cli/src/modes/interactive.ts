@@ -39,6 +39,7 @@ import {
 } from "./interactive-commands.js";
 import type {
 	InteractiveModeOptions,
+	ExitReason,
 	TuriyaRouterInstance,
 	ShikshaInstance,
 	ManasInstance,
@@ -91,6 +92,16 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 
 	/** FIFO queue of pending input requests from sub-agents (Sandesha pattern). */
 	const pendingInputRequests: InputRequest[] = [];
+	const kpState: KeypressState = {
+		inputBuffer: "",
+		cursorPos: 0,
+		isStreaming: false,
+		ctrlCCount: 0,
+		ctrlCTimer: null,
+		currentThinking,
+		currentModel,
+		pendingInputRequests,
+	};
 
 	const stdin = process.stdin;
 	const stdout = process.stdout;
@@ -121,7 +132,7 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 	});
 
 	function renderPrompt(): void {
-		renderPromptHelper(stdout, inputBuffer);
+		renderPromptHelper(stdout, kpState.inputBuffer);
 	}
 
 	function renderStatusBar(): void {
@@ -182,7 +193,7 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 		stdout,
 		profileName: profile.name,
 		pendingInputRequests,
-		budgetBlocked,
+		budgetBlocked: false,
 		streamingText: "",
 		inThinking: false,
 		toolStartTime: 0,
@@ -300,18 +311,17 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 
 			// ─── Shiksha: pre-prompt skill gap detection ────────────────────
 			const shikshaResult = await tryShikshaIntercept(message, options, stdout);
-		if (shikshaResult.handled) {
-			isStreaming = false;
-			kpState.isStreaming = false;
-		kpState.isStreaming = false;
-			if (options.onTurnComplete && shikshaResult.output) {
-				options.onTurnComplete(message, shikshaResult.output);
+			if (shikshaResult.handled) {
+				isStreaming = false;
+				kpState.isStreaming = false;
+				if (options.onTurnComplete && shikshaResult.output) {
+					options.onTurnComplete(message, shikshaResult.output);
+				}
+				renderStatusBar();
+				stdout.write("\n");
+				renderPrompt();
+				return;
 			}
-			renderStatusBar();
-			stdout.write("\n");
-			renderPrompt();
-			return;
-		}
 
 		try {
 			await agent.prompt(promptMessage);
@@ -344,7 +354,6 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 			spinner.stop();
 			isStreaming = false;
 			kpState.isStreaming = false;
-		kpState.isStreaming = false;
 		}
 
 		// Auto-compact if context pressure exceeds 80%
@@ -373,19 +382,6 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 	stdout.write(dim(welcome) + "\n\n");
 	renderStatusBar();
 	stdout.write("\n");
-
-	// Set up stdin listener
-	// Keypress state — shared with the keypress handler module
-	const kpState: KeypressState = {
-		inputBuffer: "",
-		cursorPos: 0,
-		isStreaming: false,
-		ctrlCCount: 0,
-		ctrlCTimer: null,
-		currentThinking,
-		currentModel,
-		pendingInputRequests,
-	};
 
 	// Set up stdin listener
 	stdin.on("data", (data: Buffer | string) => {

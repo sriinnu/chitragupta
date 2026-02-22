@@ -20,7 +20,7 @@ import {
 	getChitraguptaHome,
 	createLogger,
 } from "@chitragupta/core";
-import type { AgentProfile, ThinkingLevel } from "@chitragupta/core";
+import type { AgentProfile, BudgetConfig, ThinkingLevel } from "@chitragupta/core";
 
 import type { MargaPipeline } from "@chitragupta/swara";
 import type { TuriyaRouter } from "@chitragupta/swara";
@@ -155,7 +155,7 @@ export interface LaunchInteractiveParams {
 	turiyaRouter?: TuriyaRouter;
 	manas?: Manas;
 	registry: ProviderRegistry;
-	settings: { budget?: unknown };
+	settings: { budget?: BudgetConfig };
 }
 
 /**
@@ -170,7 +170,7 @@ export async function launchInteractiveMode(params: LaunchInteractiveParams): Pr
 		budgetConfig: settings.budget,
 		session: { id: session.meta.id, project: projectPath },
 		margaPipeline,
-		turiyaRouter: turiyaRouter as Parameters<typeof runInteractiveMode>[0] extends { turiyaRouter: infer T } ? T : unknown,
+		turiyaRouter: turiyaRouter as Parameters<typeof runInteractiveMode>[0]["turiyaRouter"],
 		manas,
 		soulManager: wiring.soulManager,
 		reflector: wiring.reflector,
@@ -191,7 +191,7 @@ export async function launchInteractiveMode(params: LaunchInteractiveParams): Pr
 				} catch { return []; }
 			},
 		} : undefined,
-		vidyaOrchestrator: wiring.vidyaOrchestrator as Parameters<typeof runInteractiveMode>[0] extends { vidyaOrchestrator: infer V } ? V : unknown,
+		vidyaOrchestrator: wiring.vidyaOrchestrator as Parameters<typeof runInteractiveMode>[0]["vidyaOrchestrator"],
 		nidraDaemon: wiring.nidraDaemon ? {
 			snapshot: () => wiring.nidraDaemon!.snapshot(),
 			wake: () => wiring.nidraDaemon!.wake(),

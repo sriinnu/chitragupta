@@ -323,7 +323,7 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 				const session = parseSessionMarkdown(fileContent);
 				turn.turnNumber = session.turns.length + 1;
 			} catch {
-				turn.turnNumber = getMaxTurnNumber(sessionId) + 1;
+				turn.turnNumber = getMaxTurnNumberDb(sessionId) + 1;
 			}
 		}
 
@@ -343,7 +343,7 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 
 		// Write-through to SQLite (self-heals missing session rows in SQLite).
 		insertTurnToDb(sessionId, turn, { project, filePath });
-	}).catch((err) => {
+	}).catch((err: unknown) => {
 		throw err;
 	}).finally(() => {
 		if (sessionWriteQueues.get(key) === next) {
