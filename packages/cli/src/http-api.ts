@@ -21,6 +21,7 @@ import { mountIntelligenceRoutes } from "./routes/intelligence.js";
 import { mountEvolutionRoutes } from "./routes/evolution.js";
 import { mountAutonomyRoutes } from "./routes/autonomy.js";
 import { mountWorkflowRoutes } from "./routes/workflow.js";
+import { mountWebhookRoutes } from "./http-routes-webhooks.js";
 import type { CollaborationDeps } from "./routes/collaboration-types.js";
 
 /**
@@ -101,6 +102,15 @@ export function createChitraguptaAPI(deps: ApiDeps, config?: ServerConfig): Chit
 			deps.getPairingEngine as () => PairingEngine | undefined,
 		);
 	}
+
+	// Webhook + Mesh management routes
+	mountWebhookRoutes(server, {
+		webhookSecret: deps.getWebhookSecret?.(),
+		getSamiti: deps.getSamiti as () => { broadcast(channel: string, message: unknown): void } | undefined,
+		getMeshRouter: deps.getMeshRouter as () => { route(envelope: unknown): void } | undefined,
+		getMeshStatus: deps.getMeshStatus,
+		connectToPeer: deps.connectToPeer,
+	});
 
 	// Wire WebSocket chat handlers (overrides server.start)
 	wireWebSocket(server, jobRunner);
