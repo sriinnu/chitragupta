@@ -30,6 +30,9 @@ import type {
 	PeerView,
 	SendOptions,
 } from "./types.js";
+import type { PeerNetworkConfig } from "./peer-types.js";
+import type { PeerConnectionManager } from "./peer-connection.js";
+import type { NetworkGossip } from "./network-gossip.js";
 
 // ─── Defaults ───────────────────────────────────────────────────────────────
 
@@ -323,6 +326,67 @@ export class ActorSystem {
 		return this.gossip.findAlive();
 	}
 
+	// ─── P2P Network ──────────────────────────────────────────────
+
+	private connectionManager: PeerConnectionManager | null = null;
+	private networkGossip: NetworkGossip | null = null;
+
+	/**
+	 * Bootstrap real P2P mesh networking on this actor system.
+	 *
+	 * Creates a WebSocket listener for incoming peers, connects to
+	 * configured static peers, and starts network gossip so all nodes
+	 * converge on a shared view of the actor population.
+	 *
+	 * @returns The port the mesh listener is bound to.
+	 */
+	async bootstrapP2P(networkConfig: PeerNetworkConfig): Promise<number> {
+		const { PeerConnectionManager: ConnMgr } = await import("./peer-connection.js");
+		const { NetworkGossip: NetGossip } = await import("./network-gossip.js");
+
+		this.connectionManager = new ConnMgr(networkConfig);
+		this.connectionManager.setRouter(this.router);
+
+		this.networkGossip = new NetGossip(
+			this.connectionManager.nodeId,
+			this.gossip,
+			this.connectionManager,
+			{ exchangeIntervalMs: networkConfig.gossipIntervalMs },
+		);
+
+		this.router.setActorLocationResolver((actorId) =>
+			this.networkGossip?.findNode(actorId),
+		);
+
+		const port = await this.connectionManager.start();
+		this.networkGossip.start();
+
+		this.connectionManager.on((event) => {
+			if (event.type === "peer:connected") {
+				this.emit({ type: "peer:discovered", peer: {
+					actorId: event.peerId,
+					status: "alive",
+					generation: 0,
+					lastSeen: Date.now(),
+				}});
+			}
+		});
+
+		return port;
+	}
+
+	/** Get the network gossip layer (null if P2P not bootstrapped). */
+	getNetworkGossip(): NetworkGossip | null { return this.networkGossip; }
+
+	/** Get the connection manager (null if P2P not bootstrapped). */
+	getConnectionManager(): PeerConnectionManager | null { return this.connectionManager; }
+
+	/** Expose the internal router for advanced use (e.g., PeerChannel wiring). */
+	getRouter(): MeshRouter { return this.router; }
+
+	/** Expose the internal gossip protocol. */
+	getGossipProtocol(): GossipProtocol { return this.gossip; }
+
 	// ─── Lifecycle ─────────────────────────────────────────────────
 
 	/**
@@ -337,13 +401,22 @@ export class ActorSystem {
 	/**
 	 * Gracefully shut down the actor system.
 	 *
-	 * Stops all actors, clears the router, and halts gossip.
+	 * Stops all actors, clears the router, halts gossip, and
+	 * disconnects all P2P peers.
 	 */
-	shutdown(): void {
+	async shutdown(): Promise<void> {
 		if (!this.running) return;
 		this.running = false;
 
-		// Stop all actors
+		if (this.networkGossip) {
+			this.networkGossip.destroy();
+			this.networkGossip = null;
+		}
+		if (this.connectionManager) {
+			await this.connectionManager.stop();
+			this.connectionManager = null;
+		}
+
 		for (const [id, actor] of this.actors) {
 			actor.kill();
 			this.emit({ type: "actor:stopped", actorId: id });

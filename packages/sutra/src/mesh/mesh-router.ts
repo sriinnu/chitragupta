@@ -63,10 +63,20 @@ export class MeshRouter implements MessageSender {
 	private readonly eventHandlers: RouterEventHandler[] = [];
 	private readonly defaultTTL: number;
 	private readonly defaultAskTimeout: number;
+	/** Optional actor-to-node lookup for distributed routing. */
+	private actorLocationFn: ((actorId: string) => string | undefined) | null = null;
 
 	constructor(defaultTTL = DEFAULT_TTL, defaultAskTimeout = DEFAULT_ASK_TIMEOUT) {
 		this.defaultTTL = defaultTTL;
 		this.defaultAskTimeout = defaultAskTimeout;
+	}
+
+	/**
+	 * Set a function to resolve actorId → nodeId for distributed routing.
+	 * Called by the P2P mesh layer (NetworkGossip) to enable remote forwarding.
+	 */
+	setActorLocationResolver(fn: (actorId: string) => string | undefined): void {
+		this.actorLocationFn = fn;
 	}
 
 	// ─── Event subscription ────────────────────────────────────────
@@ -255,8 +265,14 @@ export class MeshRouter implements MessageSender {
 
 	/**
 	 * Deliver to a local actor or forward via a peer channel.
+	 *
+	 * Routing priority:
+	 * 1. Local actor (direct delivery)
+	 * 2. Peer channel by ID match (explicit peer targeting)
+	 * 3. Distributed lookup: actorId → nodeId → PeerChannel (network hop)
 	 */
 	private doDeliver(envelope: MeshEnvelope): void {
+		// 1. Local actor
 		const local = this.actors.get(envelope.to);
 		if (local) {
 			local.receive(envelope);
@@ -264,12 +280,25 @@ export class MeshRouter implements MessageSender {
 			return;
 		}
 
-		// Try peer channels
+		// 2. Direct peer channel match
 		for (const channel of this.channels.values()) {
 			if (channel.peerId === envelope.to || channel.actorId === envelope.to) {
 				channel.receive(envelope);
 				this.emit({ type: "delivered", envelope });
 				return;
+			}
+		}
+
+		// 3. Distributed routing: look up which node hosts this actor
+		if (this.actorLocationFn) {
+			const nodeId = this.actorLocationFn(envelope.to);
+			if (nodeId) {
+				const peerChannel = this.channels.get(nodeId);
+				if (peerChannel) {
+					peerChannel.receive(envelope);
+					this.emit({ type: "delivered", envelope });
+					return;
+				}
 			}
 		}
 
