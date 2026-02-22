@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml"><img src="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/tests-10%2C618-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-10%2C682-brightgreen" alt="Tests" />
   <img src="https://img.shields.io/badge/node-%3E%3D22-blue" alt="Node" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
   <img src="https://img.shields.io/badge/packages-16-orange" alt="Packages" />
@@ -308,12 +308,162 @@ Plus 3 base profiles: `chitragupta` (bold, opinionated default), `friendly`, `mi
 
 ---
 
+## Agent Scaling
+
+Chitragupta enforces a **two-tier limit model** to prevent runaway agent spawning while keeping defaults generous for real workloads.
+
+### Limits Overview
+
+| Parameter | Default | System Ceiling | What It Controls |
+|-----------|---------|---------------|-----------------|
+| **Max Agent Depth** | 8 | 10 | How deep the agent tree can nest (root → child → grandchild...) |
+| **Max Sub-Agents** | 12 | 16 | Maximum children a single parent agent can spawn |
+| **Max Concurrent Jobs** | 10 | 16 | Parallel jobs in the HTTP job queue |
+| **Global Max Agents** | 16 | -- | Total active agents across the entire tree |
+| **Budget Decay** | 0.7x | -- | Token budget multiplier per depth level |
+
+System ceilings are hard-coded and **cannot be exceeded** regardless of configuration. User-configured values are clamped to these ceilings automatically.
+
+### Configuring via Settings
+
+Add an `agents` section to `~/.chitragupta/config/settings.json`:
+
+```json
+{
+  "agents": {
+    "maxDepth": 10,
+    "maxSubAgents": 16,
+    "maxConcurrentJobs": 14
+  }
+}
+```
+
+All fields are optional — missing fields use defaults. Values exceeding system ceilings are silently clamped.
+
+### Programmatic Configuration (KaalaConfig)
+
+For fine-grained control, configure `KaalaBrahma` directly:
+
+```typescript
+import { KaalaBrahma } from "@chitragupta/anina";
+
+const kaala = new KaalaBrahma({
+  maxAgentDepth: 10,           // Tree depth (clamped to 10)
+  maxSubAgents: 16,            // Children per parent (clamped to 16)
+  globalMaxAgents: 16,         // Total active agents
+  budgetDecayFactor: 0.7,      // Token budget: child = parent * 0.7
+  rootTokenBudget: 200_000,    // Root agent token budget
+  heartbeatInterval: 5_000,    // Health check cadence (ms)
+  staleThreshold: 30_000,      // Stale detection (ms)
+  deadThreshold: 120_000,      // Dead promotion (ms)
+  orphanPolicy: "cascade",     // "cascade" | "reparent" | "promote"
+  minTokenBudgetForSpawn: 1_000,
+});
+```
+
+### Spawn Validation
+
+Before any agent spawn, `KaalaBrahma.canSpawn()` checks:
+1. **Depth** — child depth <= `maxAgentDepth`
+2. **Sibling count** — parent's children < `maxSubAgents`
+3. **Global count** — total active < `globalMaxAgents`
+4. **Token budget** — child budget (`parent * decayFactor`) >= `minTokenBudgetForSpawn`
+
+If any check fails, the spawn is rejected with a reason string.
+
+---
+
+## P2P Agent Communication (Sutra Mesh)
+
+Chitragupta agents communicate via **Sutra** (सूत्र — Thread), a full P2P actor mesh with gossip-based peer discovery, typed messaging, and ambient broadcast channels.
+
+### Architecture
+
+```
+Agent A ──tell()──→  MeshRouter  ──deliver──→ Agent B
+         ──ask()──→  MeshRouter  ──reply()──→ Agent A (with timeout)
+                        │
+                  GossipProtocol ──SWIM──→ Peer Discovery & Failure Detection
+                        │
+                     Samiti ──broadcast──→ #security, #performance, #correctness
+```
+
+### Core Components
+
+| Component | Sanskrit | What It Does |
+|-----------|----------|-------------|
+| **ActorSystem** | Brahma | Top-level coordinator: spawn, stop, route, broadcast |
+| **MeshRouter** | -- | Message delivery with TTL, hop tracking, priority lanes |
+| **GossipProtocol** | -- | SWIM-style failure detection (alive → suspect → dead) |
+| **Samiti** | समिति (Assembly) | Ambient broadcast channels with ring-buffer history |
+| **Lokapala** | लोकपाल (Guardian) | 3 autonomous monitors: security, performance, correctness |
+
+### Agent-to-Agent Messaging
+
+Every agent auto-registers as an actor when `actorSystem` is provided:
+
+```typescript
+import { Agent } from "@chitragupta/anina";
+
+const agent = new Agent({
+  // ... standard config
+  actorSystem: meshSystem,     // Enable P2P mesh
+  enableMesh: true,            // Auto-register as actor (default: true)
+  samiti: samitiInstance,       // Broadcast channel access
+  lokapala: guardianInstance,   // Guardian monitoring
+});
+```
+
+**Message Types:**
+- `tell(targetId, message)` — Fire-and-forget delivery
+- `ask(targetId, message, timeout)` — Request-reply with timeout
+- `broadcast(topic, payload)` — Fan-out to all subscribers
+
+**Protocol Messages:**
+`prompt` | `steer` | `abort` | `status` | `delegate` | `ping`
+
+### Samiti Broadcast Channels
+
+Pre-configured ambient channels for cross-cutting concerns:
+
+| Channel | Purpose |
+|---------|---------|
+| `#security` | Credential leaks, injection attempts, dangerous commands |
+| `#performance` | Token burn spikes, latency outliers, context overflow |
+| `#correctness` | Error streaks, user corrections, incomplete tasks |
+| `#style` | Code style, convention violations |
+| `#alerts` | Agent lifecycle events, health warnings |
+
+Agents broadcast findings automatically. Consumers subscribe to channels for real-time notifications.
+
+### Gossip & Failure Detection
+
+SWIM-based protocol with configurable timings:
+
+```json
+{
+  "mesh": {
+    "enabled": true,
+    "gossip": {
+      "fanout": 3,
+      "sweepIntervalMs": 5000,
+      "suspectTimeoutMs": 15000,
+      "deadTimeoutMs": 30000
+    }
+  }
+}
+```
+
+Peer lifecycle: `alive` → `suspect` (no heartbeat) → `dead` (evicted). Lamport generation clock ensures causal ordering across the mesh.
+
+---
+
 ## Performance
 
 | Metric | Value |
 |--------|-------|
 | Test files | 300+ |
-| Total tests | 10,618 |
+| Total tests | 10,682 |
 | Failures | 0 |
 | TypeScript errors | 0 |
 | Packages | 16 |

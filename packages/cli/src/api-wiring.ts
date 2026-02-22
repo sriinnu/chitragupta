@@ -253,9 +253,11 @@ async function wireCommHubAndSamiti(result: ApiWiringResult): Promise<void> {
 async function wireKaalaBrahma(result: ApiWiringResult): Promise<void> {
 	try {
 		const { KaalaBrahma } = await import("@chitragupta/anina");
+		const { loadGlobalSettings } = await import("@chitragupta/core");
+		const agentsCfg = loadGlobalSettings().agents;
 		const k = new KaalaBrahma({
 			heartbeatInterval: 5000, staleThreshold: 30000,
-			maxAgentDepth: 5, maxSubAgents: 8,
+			maxAgentDepth: agentsCfg?.maxDepth ?? 8, maxSubAgents: agentsCfg?.maxSubAgents ?? 12,
 		});
 		k.startMonitoring();
 		result.kaala = k as unknown as AgentConfig["kaala"];
