@@ -12,7 +12,6 @@
 import type { Agent, AgentEventType } from "@chitragupta/anina";
 import type { AgentProfile, BudgetConfig, InputRequest, ThinkingLevel, CostBreakdown, TokenUsage } from "@chitragupta/core";
 import { bold, dim, gray, green, cyan, yellow, red, reset, showCursor } from "@chitragupta/ui/ansi";
-import { parseKeypress, matchKey } from "@chitragupta/ui/keys";
 import type { ProjectInfo } from "../project-detector.js";
 import { buildWelcomeMessage } from "../personality.js";
 import { BudgetTracker } from "../budget-tracker.js";
@@ -38,256 +37,43 @@ import {
 	completeSlashCommand,
 	handleSlashCommand,
 } from "./interactive-commands.js";
+import type {
+	InteractiveModeOptions,
+	TuriyaRouterInstance,
+	ShikshaInstance,
+	ManasInstance,
+	SoulManagerInstance,
+	ReflectorInstance,
+	MargaPipelineInstance,
+	ProviderRegistryInstance,
+} from "./interactive-types.js";
+export type { InteractiveModeOptions, ExitReason } from "./interactive-types.js";
+import {
+	type RoutingState,
+	applyMemoryRecall,
+	applyRephrasePenalty,
+	routeModelForTurn,
+	tryShikshaIntercept,
+	runPostTurnHooks,
+} from "./interactive-routing.js";
+import {
+	type EventHandlerState,
+	createAgentEventHandler,
+	unwrapInputRequest,
+} from "./interactive-events.js";
+import {
+	type KeypressState,
+	handleKeypress as processKeypress,
+} from "./interactive-keypress.js";
 
-// ─── Marga Pipeline type (soft dependency — avoid hard import) ───────────────
-
-/**
- * Minimal interface for MargaPipeline.classify().
- * Avoids a hard import of @chitragupta/swara from the interactive module.
- */
-interface MargaPipelineInstance {
-	classify(
-		context: { messages: Array<{ role: string; content: unknown }>; systemPrompt?: string },
-		options?: Record<string, unknown>,
-	): {
-		taskType: string;
-		complexity: string;
-		providerId: string;
-		modelId: string;
-		rationale: string;
-		confidence: number;
-		skipLLM: boolean;
-		temperature?: number;
-	};
-}
-
-/**
- * Minimal interface for ProviderRegistry.get().
- * Avoids a hard import of @chitragupta/swara from the interactive module.
- */
-interface ProviderRegistryInstance {
-	get(id: string): { id: string; name: string; stream: unknown } | undefined;
-}
-
-// ─── Sandesha Input Routing ──────────────────────────────────────────────────
-
-/**
- * Unwrap an InputRequest from potentially nested subagent:event wrappers.
- *
- * When a sub-agent emits `agent:input_request`, each parent wraps it in a
- * `subagent:event` envelope. This function recursively unwraps to find the
- * original InputRequest payload.
- *
- * @param event - The event type string.
- * @param data - The event payload.
- * @returns The InputRequest if found, or null.
- */
-function unwrapInputRequest(event: string, data: unknown): InputRequest | null {
-	if (event === "agent:input_request") {
-		return data as InputRequest;
-	}
-
-	if (event === "subagent:event") {
-		const envelope = data as Record<string, unknown>;
-		const innerEvent = envelope.originalEvent as string | undefined;
-		const innerData = envelope.data;
-		if (innerEvent) {
-			return unwrapInputRequest(innerEvent, innerData);
-		}
-	}
-
-	return null;
-}
-
-export interface InteractiveModeOptions {
-	agent: Agent;
-	profile: AgentProfile;
-	project?: ProjectInfo;
-	initialPrompt?: string;
-	budgetConfig?: BudgetConfig;
-	session?: { id: string; project?: string };
-	/**
-	 * MargaPipeline instance for intelligent per-turn model routing.
-	 * When present (and the user did not explicitly pick a model via --model),
-	 * each turn is classified by intent + complexity to select the best model.
-	 */
-	margaPipeline?: MargaPipelineInstance;
-	/** TuriyaRouter for contextual bandit model routing (replaces Marga when available). */
-	turiyaRouter?: TuriyaRouterInstance;
-	/** Manas zero-cost input classifier (feeds Turiya). */
-	manas?: ManasInstance;
-	/** SoulManager for personality-driven confidence and temperature. */
-	soulManager?: SoulManagerInstance;
-	/** AgentReflector for post-turn self-evaluation. */
-	reflector?: ReflectorInstance;
-	/** Provider registry for Marga-driven provider switching. */
-	providerRegistry?: ProviderRegistryInstance;
-	/** True when the user explicitly passed --model on the CLI. Disables Marga routing. */
-	userExplicitModel?: boolean;
-	/**
-	 * KaalaBrahma agent tree accessor for HeartbeatMonitor display.
-	 * When sub-agents are active, their vitals are rendered as an ECG waveform.
-	 */
-	kaala?: {
-		getTree(): Array<{
-			agentId: string;
-			status: string;
-			depth: number;
-			parentId: string | null;
-			purpose: string;
-			lastBeatAge: number;
-			tokenUsage: number;
-			tokenBudget: number;
-		}>;
-	};
-	onModelChange?: (model: string) => void;
-	onThinkingChange?: (level: ThinkingLevel) => void;
-	onTurnComplete?: (userMessage: string, assistantResponse: string) => void;
-	/**
-	 * Shiksha autonomous skill learning controller.
-	 * When present, queries are checked for skill gaps before agent.prompt().
-	 * If Shiksha can handle it (shell command), the LLM is bypassed entirely.
-	 */
-	shiksha?: ShikshaInstance;
-	/**
-	 * MemoryBridge for Smaran (explicit memory) and per-turn recall.
-	 * When present:
-	 *   - handleMemoryCommand() intercepts "remember"/"forget"/"recall" before the LLM
-	 *   - recallForQuery() injects relevant memories as a system note per turn
-	 */
-	memoryBridge?: {
-		handleMemoryCommand(userMessage: string, sessionId?: string): string | null;
-		recallForQuery(query: string): string;
-	};
-	/** VidyaOrchestrator for /vidya slash command ecosystem dashboard. */
-	vidyaOrchestrator?: {
-		getEcosystemStats(): Record<string, unknown>;
-		getSkillReport(name?: string): unknown;
-		promoteSkill(name: string, reviewer?: string): boolean;
-		deprecateSkill(name: string, reason?: string): boolean;
-		evaluateLifecycles(): Record<string, unknown>;
-	};
-	/** NidraDaemon instance for /nidra slash command (duck-typed). */
-	nidraDaemon?: {
-		snapshot(): {
-			state: string;
-			lastStateChange: number;
-			lastHeartbeat: number;
-			lastConsolidationStart?: number;
-			lastConsolidationEnd?: number;
-			consolidationPhase?: string;
-			consolidationProgress: number;
-			uptime: number;
-		};
-		wake(): void;
-	};
-}
-
-/**
- * Minimal interface for ShikshaController (avoids hard import of @chitragupta/vidhya-skills).
- */
-interface ShikshaInstance {
-	detectGap(query: string, matches: Array<{ score: number }>): boolean;
-	learn(query: string): Promise<{
-		success: boolean;
-		executed: boolean;
-		executionOutput?: string;
-		skill?: { manifest: { name: string } };
-		autoApproved: boolean;
-		quarantineId?: string;
-		durationMs: number;
-		error?: string;
-		cloudRecipeDisplay?: string;
-	}>;
-}
-
-/**
- * Minimal interfaces for Turiya/Manas/Soul/Reflector (avoid hard imports).
- */
-interface TuriyaRouterInstance {
-	extractContext(
-		messages: Array<{ role: string; content: unknown }>,
-		systemPrompt?: string,
-		tools?: unknown[],
-		memoryHits?: number,
-	): Record<string, number>;
-	classify(context: Record<string, number>): {
-		tier: string;
-		confidence: number;
-		costEstimate: number;
-		context: Record<string, number>;
-		rationale: string;
-		armIndex: number;
-	};
-	recordOutcome(decision: { tier: string; confidence: number; costEstimate: number; context: Record<string, number>; rationale: string; armIndex: number }, reward: number): void;
-	getStats(): { totalRequests: number; savingsPercent: number; totalCost: number };
-}
-
-interface ManasInstance {
-	classify(input: string): {
-		intent: string;
-		route: string;
-		confidence: number;
-		features: { hasCode: boolean; hasErrorStack: boolean; multiStep: boolean; wordCount: number };
-		durationMs: number;
-	};
-}
-
-interface SoulManagerInstance {
-	updateConfidence(agentId: string, domain: string, success: boolean): void;
-	addTrait(agentId: string, trait: string): void;
-	getEffectiveTemperature(agentId: string, baseTemp: number): number;
-}
-
-interface ReflectorInstance {
-	reflect(agentId: string, taskDescription: string, output: string): {
-		score: number;
-		confidence: number;
-		strengths: string[];
-		weaknesses: string[];
-		improvements: string[];
-	};
-}
-
-/**
- * Simple word overlap ratio between two strings.
- * Used for rephrase detection — high overlap (>0.6) suggests
- * the user is rephrasing a previous query.
- */
-function wordOverlap(a: string, b: string): number {
-	const wordsA = new Set(a.toLowerCase().split(/\s+/).filter(w => w.length > 2));
-	const wordsB = new Set(b.toLowerCase().split(/\s+/).filter(w => w.length > 2));
-	if (wordsA.size === 0 || wordsB.size === 0) return 0;
-	let shared = 0;
-	for (const w of wordsA) {
-		if (wordsB.has(w)) shared++;
-	}
-	return shared / Math.max(wordsA.size, wordsB.size);
-}
-
-/** Reason the interactive session ended. */
-export type ExitReason = "quit" | "sigint";
-
-/**
- * Run the interactive TUI mode.
- *
- * Returns when the user quits (via /quit, /exit, Ctrl+C double-tap, or SIGINT),
- * allowing the caller to run post-session hooks (e.g. ConsolidationEngine)
- * before the process terminates.
- */
 export async function runInteractiveMode(options: InteractiveModeOptions): Promise<ExitReason> {
 	const { agent, profile, project, initialPrompt } = options;
 
-	let inputBuffer = "";
-	let cursorPos = 0;
-	let isStreaming = false;
-	let ctrlCCount = 0;
-	let ctrlCTimer: ReturnType<typeof setTimeout> | null = null;
+	
 	let currentThinking: ThinkingLevel = (agent.getState().thinkingLevel as ThinkingLevel) ?? "medium";
 	let currentModel = agent.getState().model;
-	let budgetBlocked = false;
-	let lastTuriyaDecision: ReturnType<TuriyaRouterInstance["classify"]> | undefined;
-	let lastUserMessage = "";
+	let isStreaming = false;
+	const routing: RoutingState = { currentModel: currentModel, lastTuriyaDecision: undefined, lastUserMessage: "" };
 
 	const budgetTracker = new BudgetTracker(options.budgetConfig);
 
@@ -343,9 +129,6 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 	}
 
 	const spinner = createSpinner(stdout);
-	let streamingText = "";
-	let inThinking = false;
-	let toolStartTime = 0;
 
 	// ─── HeartbeatMonitor (ECG waveform for sub-agent vitals) ────────────
 	let heartbeatMonitor: InstanceType<typeof import("@chitragupta/ui").HeartbeatMonitor> | undefined;
@@ -391,152 +174,27 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 		process.stderr.write("\n" + display + "\n");
 	}
 
-	const handleAgentEvent = (event: AgentEventType, data: unknown) => {
-		const eventData = data as Record<string, unknown>;
-
-		switch (event) {
-			case "stream:start":
-				spinner.start();
-				break;
-
-			case "stream:text": {
-				const text = eventData.text as string;
-				spinner.stop();
-				if (!streamingText && !inThinking) {
-					printAssistantLabel(stdout, profile.name);
-				}
-				if (inThinking) {
-					printThinkingEnd(stdout);
-					inThinking = false;
-				}
-				stdout.write(text);
-				streamingText += text;
-				break;
-			}
-
-			case "stream:thinking": {
-				const text = eventData.text as string;
-				spinner.stop();
-				if (!inThinking) {
-					if (!streamingText) {
-						printAssistantLabel(stdout, profile.name);
-					}
-					printThinkingStart(stdout);
-					inThinking = true;
-				}
-				// Dimmed thinking text with violet left border
-				stdout.write(`${THEME.thinking}\u2502${reset} ${dim(text)}`);
-				break;
-			}
-
-			case "stream:tool_call": {
-				const name = eventData.name as string;
-				const args = eventData.input as string | undefined;
-				if (inThinking) {
-					stdout.write("\n");
-					printThinkingEnd(stdout);
-					inThinking = false;
-				}
-				toolStartTime = Date.now();
-				printToolStart(stdout, name, args);
-				break;
-			}
-
-			case "tool:start": {
-				const name = eventData.name as string;
-				spinner.setLabel(`Running ${name}...`);
-				break;
-			}
-
-			case "tool:done": {
-				const duration = toolStartTime > 0 ? Date.now() - toolStartTime : undefined;
-				printToolEnd(stdout, "done", duration);
-				toolStartTime = 0;
-				break;
-			}
-
-			case "tool:error": {
-				const errorMsg = eventData.error as string;
-				const duration = toolStartTime > 0 ? Date.now() - toolStartTime : undefined;
-				printToolEnd(stdout, "error", duration);
-				printError(stdout, errorMsg);
-				toolStartTime = 0;
-				break;
-			}
-
-			case "stream:usage": {
-				const usage = eventData.usage as TokenUsage;
-				if (usage) {
-					stats.totalInputTokens += usage.inputTokens;
-					stats.totalOutputTokens += usage.outputTokens;
-				}
-				break;
-			}
-
-			case "stream:done": {
-				spinner.stop();
-				if (inThinking) {
-					stdout.write("\n");
-					printThinkingEnd(stdout);
-					inThinking = false;
-				}
-
-				const cost = eventData.cost as CostBreakdown | undefined;
-				if (cost) {
-					stats.totalCost += cost.total;
-
-					// Record cost in budget tracker and check for warnings/limits
-					const budgetStatus = budgetTracker.recordCost(cost.total);
-					if (budgetStatus.sessionWarning || budgetStatus.sessionExceeded ||
-						budgetStatus.dailyWarning || budgetStatus.dailyExceeded) {
-						printBudgetWarning(stdout, budgetStatus);
-					}
-
-					const proceed = budgetTracker.canProceed();
-					if (!proceed.allowed) {
-						budgetBlocked = true;
-					}
-				}
-
-				const usage = eventData.usage as TokenUsage | undefined;
-				if (usage) {
-					const totalTokens = stats.totalInputTokens + stats.totalOutputTokens;
-					stats.contextPercent = Math.min(100, (totalTokens / 200000) * 100);
-				}
-
-				break;
-			}
-
-			// ─── Sandesha: direct input request from agent ────────────────
-			case "agent:input_request": {
-				const request = eventData as unknown as InputRequest;
-				spinner.stop();
-				printInputRequest(stdout, request);
-				pendingInputRequests.push(request);
-				break;
-			}
-
-			// ─── Sandesha: unwrap nested subagent events for input requests ─
-			case "subagent:event": {
-				const inputReq = unwrapInputRequest(event, data);
-				if (inputReq) {
-					spinner.stop();
-					printInputRequest(stdout, inputReq);
-					pendingInputRequests.push(inputReq);
-				}
-				break;
-			}
-		}
+	// ─── Agent Event Handler (extracted to interactive-events.ts) ─────
+	const eventState: EventHandlerState = {
+		spinner,
+		stats,
+		budgetTracker,
+		stdout,
+		profileName: profile.name,
+		pendingInputRequests,
+		budgetBlocked,
+		streamingText: "",
+		inThinking: false,
+		toolStartTime: 0,
 	};
-
-	// Inject event handler into agent
+	const handleAgentEvent = createAgentEventHandler(eventState);
 	agent.setOnEvent(handleAgentEvent);
 
 	async function sendMessage(message: string): Promise<void> {
 		if (!message.trim()) return;
 
 		// Check budget limits before sending (slash commands still allowed)
-		if (budgetBlocked && !message.startsWith("/")) {
+		if (eventState.budgetBlocked && !message.startsWith("/")) {
 			const proceed = budgetTracker.canProceed();
 			stdout.write(red("\n  " + (proceed.reason ?? "Budget exceeded") + "\n"));
 			stdout.write(dim("  Use /cost to see details. Start a new session to continue.\n\n"));
@@ -564,8 +222,8 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 					resolveSession("quit");
 					return;
 				}
-				if (result.newModel) currentModel = result.newModel;
-				if (result.newThinking) currentThinking = result.newThinking;
+				if (result.newModel) { currentModel = result.newModel; routing.currentModel = result.newModel; kpState.currentModel = result.newModel; }
+				if (result.newThinking) { currentThinking = result.newThinking; kpState.currentThinking = result.newThinking; }
 				renderPrompt();
 				return;
 			}
@@ -600,214 +258,53 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 		stdout.write("  " + message + "\n");
 
 		isStreaming = true;
-		streamingText = "";
+		kpState.isStreaming = true;
+		eventState.streamingText = "";
 		stats.turnCount++;
 
 		// ─── Smaran: per-turn memory recall (inject relevant memories) ──
-		let promptMessage = message;
-		if (options.memoryBridge) {
-			try {
-				const recallContext = options.memoryBridge.recallForQuery(message);
-				if (recallContext) {
-					promptMessage = `[Recalled memories]\n${recallContext}\n\n[User message]\n${message}`;
-				}
-			} catch {
-				// Memory recall failed — proceed without recall context
-			}
-		}
+		const promptMessage = applyMemoryRecall(message, options);
 
 		// ─── Turiya: retroactive rephrase penalty for previous decision ──
-		if (options.turiyaRouter && lastTuriyaDecision && lastUserMessage) {
-			const overlap = wordOverlap(lastUserMessage, message);
-			if (overlap > 0.6) {
-				// User rephrased — previous answer wasn't helpful, penalize
-				try {
-					options.turiyaRouter.recordOutcome(lastTuriyaDecision, 0.2);
-				} catch { /* best-effort */ }
-			}
-		}
+		applyRephrasePenalty(message, routing, options);
 
-		// ─── Manas + Turiya: intelligent per-turn model routing ─────────
-		lastTuriyaDecision = undefined;
-		if (options.manas && options.turiyaRouter && !options.userExplicitModel) {
-			try {
-				const classification = options.manas.classify(message);
-
-				// Build message array for Turiya context extraction
-				const agentMessages = [...agent.getMessages()].map(m => ({
-					role: (m as { role: string }).role,
-					content: (m as { content: unknown }).content,
-				}));
-				agentMessages.push({ role: "user", content: [{ type: "text", text: message }] });
-
-				const ctx = options.turiyaRouter.extractContext(agentMessages);
-				const decision = options.turiyaRouter.classify(ctx);
-				lastTuriyaDecision = decision;
-
-				// Map tier to model ID — search current provider for a matching model
-				const tierModelHints: Record<string, string[]> = {
-					"haiku": ["haiku", "claude-haiku", "gpt-4o-mini", "gemini-flash"],
-					"sonnet": ["sonnet", "claude-sonnet", "gpt-4o", "gemini-pro"],
-					"opus": ["opus", "claude-opus", "gpt-4", "o1", "gemini-ultra"],
-				};
-				const hints = tierModelHints[decision.tier];
-				if (hints && decision.tier !== "no-llm") {
-					// Try to find a model matching the tier in the current model string
-					const currentLower = currentModel.toLowerCase();
-					const alreadyMatchesTier = hints.some(h => currentLower.includes(h));
-					if (!alreadyMatchesTier) {
-						// Try Marga for actual model resolution if available
-						if (options.margaPipeline) {
-							try {
-								const margaDecision = options.margaPipeline.classify({
-									messages: [{ role: "user", content: [{ type: "text", text: message }] }],
-									systemPrompt: undefined,
-								});
-								if (margaDecision.modelId && margaDecision.modelId !== currentModel) {
-									if (options.providerRegistry) {
-										const newProvider = options.providerRegistry.get(margaDecision.providerId);
-										if (newProvider) {
-											agent.setProvider(newProvider as Parameters<typeof agent.setProvider>[0]);
-										}
-									}
-									agent.setModel(margaDecision.modelId);
-									currentModel = margaDecision.modelId;
-								}
-							} catch {
-								// Marga fallback failed — keep current model
-							}
-						}
-					}
-				}
-
-				stdout.write(
-					dim(`  [${classification.intent} → ${decision.tier} (${(decision.confidence * 100).toFixed(0)}%) ~$${decision.costEstimate.toFixed(4)}]\n`),
-				);
-			} catch {
-				// Manas/Turiya classification failed — continue with current model
-			}
-		} else if (options.margaPipeline && !options.userExplicitModel) {
-			// Fallback: pure Marga routing when Turiya is unavailable
-			try {
-				const decision = options.margaPipeline.classify({
-					messages: [{ role: "user", content: [{ type: "text", text: message }] }],
-					systemPrompt: undefined,
-				});
-				if (decision.modelId && decision.modelId !== currentModel) {
-					if (options.providerRegistry) {
-						const newProvider = options.providerRegistry.get(decision.providerId);
-						if (newProvider) {
-							agent.setProvider(newProvider as Parameters<typeof agent.setProvider>[0]);
-						}
-					}
-					agent.setModel(decision.modelId);
-					currentModel = decision.modelId;
-					stdout.write(
-						dim(`  [marga: ${decision.taskType}/${decision.complexity} → ${decision.modelId}]\n`),
-					);
-				}
-			} catch {
-				// Marga classification failed — continue with current model
-			}
-		}
+		// ─── Model routing (Manas + Turiya / Marga) ─────────────────────
+		routeModelForTurn(message, agent, routing, options, stdout);
 
 		// ─── Shiksha: pre-prompt skill gap detection ────────────────────
-		if (options.shiksha) {
-			try {
-				if (options.shiksha.detectGap(message, [])) {
-					const result = await options.shiksha.learn(message);
-					if (result.success && result.executed && result.executionOutput) {
-						stdout.write(dim(`  [shiksha: learned "${result.skill?.manifest.name}" in ${result.durationMs.toFixed(0)}ms]\n`));
-						stdout.write("\n" + result.executionOutput + "\n");
-						isStreaming = false;
-
-						if (options.onTurnComplete) {
-							options.onTurnComplete(message, result.executionOutput);
-						}
-
-						renderStatusBar();
-						stdout.write("\n");
-						renderPrompt();
-						return;
-					}
-					// Cloud recipe display — show recipe, skip LLM
-					if (result.success && result.cloudRecipeDisplay) {
-						stdout.write(dim(`  [shiksha: cloud recipe found in ${result.durationMs.toFixed(0)}ms]\n`));
-						stdout.write("\n" + result.cloudRecipeDisplay + "\n");
-						isStreaming = false;
-
-						if (options.onTurnComplete) {
-							options.onTurnComplete(message, result.cloudRecipeDisplay);
-						}
-
-						renderStatusBar();
-						stdout.write("\n");
-						renderPrompt();
-						return;
-					}
-					// Not executed (quarantined or failed) — fall through to agent
-				}
-			} catch {
-				// Shiksha failed — fall through to agent silently
+		const shikshaResult = await tryShikshaIntercept(message, options, stdout);
+		if (shikshaResult.handled) {
+			isStreaming = false;
+			kpState.isStreaming = false;
+		kpState.isStreaming = false;
+			if (options.onTurnComplete && shikshaResult.output) {
+				options.onTurnComplete(message, shikshaResult.output);
 			}
+			renderStatusBar();
+			stdout.write("\n");
+			renderPrompt();
+			return;
 		}
 
 		try {
 			await agent.prompt(promptMessage);
 
 			// Ensure we end with a newline after streaming
-			if (streamingText && !streamingText.endsWith("\n")) {
+			if (eventState.streamingText && !eventState.streamingText.endsWith("\n")) {
 				stdout.write("\n");
 			}
 
 			// Process follow-ups
 			await agent.processFollowUps();
 
-			// ─── Post-turn: Turiya learning ─────────────────────────────
-			if (options.turiyaRouter && lastTuriyaDecision) {
-				try {
-					// Compute reward: 0.8 baseline, boost for substantive response, penalize for very short
-					let reward = 0.8;
-					if (streamingText.length > 500) reward = 0.9;
-					if (streamingText.length > 2000) reward = 0.95;
-					if (streamingText.length < 20) reward = 0.3;
-					options.turiyaRouter.recordOutcome(lastTuriyaDecision, reward);
-				} catch {
-					// Turiya learning is best-effort
-				}
-			}
-
-			// ─── Post-turn: Soul confidence update ──────────────────────
-			if (options.soulManager && options.manas) {
-				try {
-					const intent = options.manas.classify(message).intent;
-					options.soulManager.updateConfidence("root", intent, streamingText.length > 50);
-				} catch {
-					// Soul update is best-effort
-				}
-			}
-
-			// ─── Post-turn: Self-reflection ─────────────────────────────
-			if (options.reflector && streamingText.length > 0) {
-				try {
-					const reflection = options.reflector.reflect("root", message, streamingText);
-					if (reflection.score < 5 && reflection.weaknesses.length > 0) {
-						stdout.write(
-							dim(`  [reflect: score=${reflection.score.toFixed(1)} — ${reflection.weaknesses[0]}]\n`),
-						);
-					}
-				} catch {
-					// Reflection is best-effort
-				}
-			}
+			// ─── Post-turn hooks (Turiya, Soul, Reflection) ────────────
+			runPostTurnHooks(message, eventState.streamingText, routing, options, stdout);
 
 			// Notify caller of completed turn for session persistence
 			if (options.onTurnComplete) {
-				options.onTurnComplete(message, streamingText);
+				options.onTurnComplete(message, eventState.streamingText);
 			}
 
-			// Track for next-turn rephrase detection
-			lastUserMessage = message;
 		} catch (error) {
 			spinner.stop();
 			if ((error as Error).name === "AbortError") {
@@ -819,6 +316,8 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 		} finally {
 			spinner.stop();
 			isStreaming = false;
+			kpState.isStreaming = false;
+		kpState.isStreaming = false;
 		}
 
 		// Auto-compact if context pressure exceeds 80%
@@ -838,196 +337,6 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 		renderPrompt();
 	}
 
-	function handleKeypress(data: Buffer): void {
-		const key = parseKeypress(data);
-
-		// Ctrl+C: clear or quit
-		if (matchKey(key, "ctrl+c")) {
-			if (isStreaming) {
-				agent.abort();
-				return;
-			}
-
-			if (inputBuffer.length > 0) {
-				inputBuffer = "";
-				cursorPos = 0;
-				ctrlCCount = 0;
-				renderPrompt();
-				return;
-			}
-
-			ctrlCCount++;
-			if (ctrlCCount >= 2) {
-				stdout.write(dim("\n\n  Goodbye.\n\n"));
-				cleanup();
-				resolveSession("quit");
-				return;
-			}
-
-			stdout.write(dim("\n  Press Ctrl+C again to quit.\n"));
-			renderPrompt();
-
-			if (ctrlCTimer) clearTimeout(ctrlCTimer);
-			ctrlCTimer = setTimeout(() => {
-				ctrlCCount = 0;
-			}, 2000);
-
-			return;
-		}
-
-		// Reset Ctrl+C counter on any other key
-		ctrlCCount = 0;
-
-		if (matchKey(key, "escape")) {
-			if (isStreaming) {
-				agent.abort();
-			}
-			return;
-		}
-
-		if (matchKey(key, "ctrl+l")) {
-			stdout.write(dim(`\n  Current model: ${currentModel}\n`));
-			stdout.write(dim("  Use /model <id> to switch.\n\n"));
-			renderPrompt();
-			return;
-		}
-
-		if (matchKey(key, "shift+tab")) {
-			const currentIdx = THINKING_LEVELS.indexOf(currentThinking);
-			const nextIdx = (currentIdx + 1) % THINKING_LEVELS.length;
-			currentThinking = THINKING_LEVELS[nextIdx];
-			agent.setThinkingLevel(currentThinking);
-
-			stdout.write(dim(`  Thinking: ${bold(currentThinking)}\n`));
-			renderPrompt();
-			return;
-		}
-
-		if (matchKey(key, "tab")) {
-			if (inputBuffer.startsWith("/")) {
-				const result = completeSlashCommand(inputBuffer, stdout, renderPrompt);
-				if (result) {
-					inputBuffer = result.newBuffer;
-					cursorPos = result.newCursorPos;
-					renderPrompt();
-				}
-			}
-			return;
-		}
-
-		if (matchKey(key, "return")) {
-			if (isStreaming) return;
-
-			const message = inputBuffer.trim();
-			inputBuffer = "";
-			cursorPos = 0;
-
-			// Sandesha: if there are pending input requests, resolve the oldest one
-			if (message && pendingInputRequests.length > 0) {
-				const pendingReq = pendingInputRequests.shift()!;
-				stdout.write("\n");
-				stdout.write(dim(`  [responding to ${pendingReq.agentId.slice(0, 8)}] `) + message + "\n");
-
-				// Find the agent that owns this request and resolve it.
-				// For the root agent or direct children, use findAgent on the root.
-				const targetAgent = agent.findAgent(pendingReq.agentId);
-				if (targetAgent) {
-					targetAgent.resolveInput(pendingReq.requestId, message);
-				} else {
-					// Fallback: resolve on the root agent (it will be a no-op if ID doesn't match)
-					agent.resolveInput(pendingReq.requestId, message);
-				}
-
-				if (pendingInputRequests.length > 0) {
-					stdout.write(dim(`  [${pendingInputRequests.length} more pending input request(s)]\n`));
-				}
-
-				renderPrompt();
-				return;
-			}
-
-			if (message) {
-				stdout.write("\n");
-				sendMessage(message);
-			} else {
-				renderPrompt();
-			}
-			return;
-		}
-
-		if (matchKey(key, "backspace")) {
-			if (cursorPos > 0) {
-				inputBuffer = inputBuffer.slice(0, cursorPos - 1) + inputBuffer.slice(cursorPos);
-				cursorPos--;
-				renderPrompt();
-			}
-			return;
-		}
-
-		if (key.name === "delete") {
-			if (cursorPos < inputBuffer.length) {
-				inputBuffer = inputBuffer.slice(0, cursorPos) + inputBuffer.slice(cursorPos + 1);
-				renderPrompt();
-			}
-			return;
-		}
-
-		if (key.name === "left") {
-			if (cursorPos > 0) cursorPos--;
-			return;
-		}
-		if (key.name === "right") {
-			if (cursorPos < inputBuffer.length) cursorPos++;
-			return;
-		}
-		if (key.name === "home") {
-			cursorPos = 0;
-			return;
-		}
-		if (key.name === "end") {
-			cursorPos = inputBuffer.length;
-			return;
-		}
-
-		if (matchKey(key, "ctrl+a")) {
-			cursorPos = 0;
-			return;
-		}
-
-		if (matchKey(key, "ctrl+e")) {
-			cursorPos = inputBuffer.length;
-			return;
-		}
-
-		if (matchKey(key, "ctrl+u")) {
-			inputBuffer = "";
-			cursorPos = 0;
-			renderPrompt();
-			return;
-		}
-
-		if (matchKey(key, "ctrl+w")) {
-			if (cursorPos > 0) {
-				const before = inputBuffer.slice(0, cursorPos);
-				const after = inputBuffer.slice(cursorPos);
-				const trimmed = before.replace(/\S+\s*$/, "");
-				inputBuffer = trimmed + after;
-				cursorPos = trimmed.length;
-				renderPrompt();
-			}
-			return;
-		}
-
-		if (key.sequence && !key.ctrl && !key.meta && key.sequence.length > 0 && key.name !== "unknown") {
-			const ch = key.sequence;
-			const code = ch.charCodeAt(0);
-			if (code >= 32 || code >= 128) {
-				inputBuffer = inputBuffer.slice(0, cursorPos) + ch + inputBuffer.slice(cursorPos);
-				cursorPos += ch.length;
-				renderPrompt();
-			}
-		}
-	}
 
 	// ─── Welcome ────────────────────────────────────────────────────────────
 
@@ -1039,9 +348,29 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 	stdout.write("\n");
 
 	// Set up stdin listener
+	// Keypress state — shared with the keypress handler module
+	const kpState: KeypressState = {
+		inputBuffer: "",
+		cursorPos: 0,
+		isStreaming: false,
+		ctrlCCount: 0,
+		ctrlCTimer: null,
+		currentThinking,
+		currentModel,
+		pendingInputRequests,
+	};
+
+	// Set up stdin listener
 	stdin.on("data", (data: Buffer | string) => {
 		const buffer = typeof data === "string" ? Buffer.from(data) : data;
-		handleKeypress(buffer);
+		processKeypress(buffer, kpState, {
+			renderPrompt,
+			sendMessage,
+			cleanup,
+			resolveSession,
+			agent,
+			stdout,
+		});
 	});
 
 	// Handle initial prompt if provided
