@@ -1,37 +1,8 @@
 /**
- * @chitragupta/vidhya-skills — Skill Evolution.
+ * @chitragupta/vidhya-skills -- Skill Evolution.
  *
- * Skills that EVOLVE — learning from usage to become better at matching.
- * Like the Vedic concept of "Tapas" (transformative heat), each usage
- * event applies heat to the skill, forging it into a better version of
- * itself through online gradient descent on the trait space.
- *
- * ## Core Algorithms
- *
- * 1. **Online Gradient Descent on Trait Vectors** — When a skill is used
- *    successfully in a context that doesn't match its current vector well,
- *    the vector is nudged toward the query vector:
- *
- *        v_new = L2_normalize((1 - lr) * v_old + lr * v_query)
- *
- *    This is stochastic gradient descent on the cosine similarity loss
- *    surface in R^128, minimizing the angular distance between the skill
- *    and the queries that actually invoke it.
- *
- * 2. **Skill Health Score** — A composite health metric:
- *
- *        health = useRate * 0.4 + successRate * 0.3 + freshness * 0.2 + diversity * 0.1
- *
- *    - useRate = uses / matches (conversion rate)
- *    - successRate = successful / total uses
- *    - freshness = 1 / (1 + daysSinceLastUse) (exponential decay)
- *    - diversity = uniqueContexts / totalUses
- *
- * 3. **Auto-Deprecation** — Skills with health < 0.1 after 50+ matches
- *    are flagged for review.
- *
- * 4. **Skill Fusion Suggestion** — When two skills are consistently used
- *    together (co-occurrence > 60%), suggest merging them.
+ * Skills that evolve through usage via online gradient descent on trait
+ * vectors, Thompson sampling, and composite health scoring.
  *
  * @packageDocumentation
  */
@@ -40,105 +11,29 @@ import { TRAIT_DIMENSIONS } from "./fingerprint.js";
 import type { DreyfusLevel, AnandamayaMastery } from "./types-v2.js";
 import { DREYFUS_THRESHOLDS, INITIAL_ANANDAMAYA } from "./types-v2.js";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+export type { SkillHealthReport, SkillEvolutionState, FusionSuggestion } from "./skill-evolution-types.js";
+import type { SkillHealthReport, SkillEvolutionState, FusionSuggestion, SkillTrackingData, SerializedSkillTrackingData } from "./skill-evolution-types.js";
+import {
+	DEFAULT_LEARNING_RATE,
+	DEPRECATION_HEALTH_THRESHOLD,
+	DEPRECATION_MIN_MATCHES,
+	FUSION_CO_OCCURRENCE_THRESHOLD,
+	FUSION_MIN_CO_OCCURRENCES,
+	MAX_SESSION_RECORDS,
+	MS_PER_DAY,
+} from "./skill-evolution-types.js";
 
-/** Health report for a single skill. */
-export interface SkillHealthReport {
-	/** Skill name. */
-	name: string;
-	/** Number of times matched by a query. */
-	matchCount: number;
-	/** Number of times actually used after matching. */
-	useCount: number;
-	/** Number of times rejected after matching. */
-	rejectCount: number;
-	/** Number of successful uses. */
-	successCount: number;
-	/** Average match score across all matches. */
-	avgMatchScore: number;
-	/** Use rate: uses / matches. */
-	useRate: number;
-	/** Success rate: successes / uses. */
-	successRate: number;
-	/** Freshness score in [0, 1] based on exponential decay. */
-	freshnessScore: number;
-	/** Diversity score: unique contexts / total uses. */
-	diversityScore: number;
-	/** Composite health score in [0, 1]. */
-	health: number;
-	/** Timestamp of last usage. */
-	lastUsedAt: number | null;
-	/** Whether this skill is flagged for deprecation review. */
-	flaggedForReview: boolean;
-}
-
-/** Serializable state for persistence. */
-/** Serialized form of SkillTrackingData where Set<string> becomes string[]. */
-type SerializedSkillTrackingData = Omit<SkillTrackingData, "contexts"> & { contexts: string[] };
-
-export interface SkillEvolutionState {
-	/** Per-skill tracking data (contexts serialized as string[]). */
-	skills: Array<[string, SerializedSkillTrackingData]>;
-	/** Co-occurrence matrix for fusion detection. */
-	coOccurrences: Array<[string, Array<[string, number]>]>;
-	/** Session co-use records. */
-	sessionSkills: string[][];
-}
-
-/** Suggestion to merge two skills that are always used together. */
-export interface FusionSuggestion {
-	/** First skill name. */
-	skillA: string;
-	/** Second skill name. */
-	skillB: string;
-	/** Co-occurrence rate in [0, 1]. */
-	coOccurrenceRate: number;
-	/** Reason for the suggestion. */
-	reason: string;
-}
-
-// ─── Internal Types ─────────────────────────────────────────────────────────
-
-/** Internal per-skill tracking data. */
-interface SkillTrackingData {
-	name: string;
-	matchCount: number;
-	useCount: number;
-	rejectCount: number;
-	successCount: number;
-	totalMatchScore: number;
-	contexts: Set<string>;
-	lastUsedAt: number | null;
-	/** Evolved trait vector (number[] for serialization). */
-	evolvedVector: number[] | null;
-	/** Thompson Sampling: Beta distribution alpha (successes + 1). */
-	thompsonAlpha: number;
-	/** Thompson Sampling: Beta distribution beta (failures + 1). */
-	thompsonBeta: number;
-}
-
-// ─── Constants ──────────────────────────────────────────────────────────────
-
-/** Learning rate for trait vector evolution. */
-const DEFAULT_LEARNING_RATE = 0.05;
-
-/** Minimum health before flagging for deprecation review. */
-const DEPRECATION_HEALTH_THRESHOLD = 0.1;
-
-/** Minimum matches before a skill can be flagged for deprecation. */
-const DEPRECATION_MIN_MATCHES = 50;
-
-/** Co-occurrence threshold for fusion suggestions. */
-const FUSION_CO_OCCURRENCE_THRESHOLD = 0.6;
-
-/** Minimum co-occurrences before suggesting fusion. */
-const FUSION_MIN_CO_OCCURRENCES = 10;
-
-/** Maximum number of session records to retain for co-occurrence analysis. */
-const MAX_SESSION_RECORDS = 200;
-
-/** Milliseconds in one day (for freshness decay). */
-const MS_PER_DAY = 86_400_000;
+import {
+	sampleThompson as doSampleThompson,
+	getDreyfusLevel as doGetDreyfusLevel,
+	toAnandamayaMastery as doToAnandamayaMastery,
+	computeMutualInformation as doComputeMI,
+	getRelatedPairs as doGetRelatedPairs,
+	ensureSkillData,
+	computeFreshness,
+	updateCoOccurrences,
+	emptyHealthReport,
+} from "./skill-evolution-analysis.js";
 
 // ─── Skill Evolution ────────────────────────────────────────────────────────
 
@@ -240,16 +135,7 @@ export class SkillEvolution {
 	// ─── Trait Vector Evolution ────────────────────────────────────────
 
 	/**
-	 * Evolve a skill's trait vector toward the query vector that led to its usage.
-	 *
-	 * Implements online stochastic gradient descent on the cosine similarity
-	 * loss surface:
-	 *
-	 *     v_new = L2_normalize((1 - lr) * v_old + lr * v_query)
-	 *
-	 * This nudges the skill's position in the 128-dimensional trait space
-	 * toward the queries that actually invoke it, making future matches
-	 * more accurate.
+	 * Evolve a skill's trait vector via online SGD: v_new = L2_normalize((1 - lr) * v_old + lr * v_query).
 	 *
 	 * @param skillName - Name of the skill to evolve.
 	 * @param queryVector - The query vector (Float32Array of length 128).
@@ -302,14 +188,7 @@ export class SkillEvolution {
 	// ─── Health Scoring ───────────────────────────────────────────────
 
 	/**
-	 * Compute the health score for a skill.
-	 *
-	 *     health = useRate * 0.4 + successRate * 0.3 + freshness * 0.2 + diversity * 0.1
-	 *
-	 * - useRate = uses / matches (0 if no matches)
-	 * - successRate = successCount / useCount (0.5 if no uses)
-	 * - freshness = 1 / (1 + daysSinceLastUse) — exponential decay
-	 * - diversity = uniqueContexts / totalUses (0 if no uses)
+	 * Compute composite health: useRate*0.4 + successRate*0.3 + freshness*0.2 + diversity*0.1.
 	 *
 	 * @param skillName - Name of the skill.
 	 * @returns Complete health report.
@@ -393,13 +272,7 @@ export class SkillEvolution {
 	// ─── Fusion Suggestions ───────────────────────────────────────────
 
 	/**
-	 * Suggest pairs of skills that should be merged.
-	 *
-	 * Two skills are fusion candidates when their co-occurrence rate exceeds
-	 * the fusion threshold (default 60%). Co-occurrence rate is:
-	 *
-	 *     rate(A, B) = coOccurrences(A, B) / min(uses(A), uses(B))
-	 *
+	 * Suggest skill pairs for merging based on co-occurrence rate (>= 60% threshold).
 	 * @returns Pairs of skills that are frequently used together.
 	 */
 	suggestFusions(): FusionSuggestion[] {
@@ -504,298 +377,29 @@ export class SkillEvolution {
 		return evo;
 	}
 
-	// ─── Thompson Sampling & Dreyfus Model ──────────────────────────────
+	// ─── Thompson Sampling & Dreyfus (delegated) ─────────────────────
 
-	/**
-	 * Sample from the Thompson (Beta) distribution for a skill.
-	 * Returns a sample in [0, 1] — higher = more likely to be good.
-	 * New skills with no data return samples near 0.5 (uniform prior).
-	 *
-	 * Implementation:
-	 * - Beta(alpha, beta) = Gamma(alpha) / (Gamma(alpha) + Gamma(beta))
-	 * - For integer shapes < 100: Gamma(n, 1) = -sum(ln(U_i)) for i=1..n
-	 * - For shapes >= 100: use normal approximation
-	 *
-	 * @param skillName - Name of the skill.
-	 * @returns A sample in [0, 1].
-	 */
-	sampleThompson(skillName: string): number {
-		const data = this.skills.get(skillName);
-		if (!data) {
-			// No data yet — return uniform prior sample
-			return Math.random();
-		}
+	/** Sample from the Thompson (Beta) distribution for a skill. */
+	sampleThompson(skillName: string): number { return doSampleThompson(this.skills, skillName); }
 
-		const alpha = data.thompsonAlpha;
-		const beta = data.thompsonBeta;
+	/** Get the Dreyfus mastery level for a skill. */
+	getDreyfusLevel(skillName: string): DreyfusLevel { return doGetDreyfusLevel(this.skills, skillName); }
 
-		// Sample X ~ Gamma(alpha, 1)
-		const X = this.sampleGamma(alpha);
-		// Sample Y ~ Gamma(beta, 1)
-		const Y = this.sampleGamma(beta);
+	/** Convert internal tracking data to AnandamayaMastery. */
+	toAnandamayaMastery(skillName: string): AnandamayaMastery { return doToAnandamayaMastery(this.skills, skillName); }
 
-		// Return Beta sample: X / (X + Y)
-		return X / (X + Y);
-	}
+	/** Compute pointwise mutual information between two skills. */
+	computeMutualInformation(skillA: string, skillB: string): number { return doComputeMI(this.sessionSkills, skillA, skillB); }
 
-	/**
-	 * Get the Dreyfus mastery level for a skill.
-	 *
-	 * Progression based on invocations × success rate:
-	 * - expert: >= 100 uses AND success >= 0.85
-	 * - proficient: >= 50 uses AND success >= 0.7
-	 * - competent: >= 20 uses AND success >= 0.5
-	 * - advanced-beginner: >= 5 uses AND success >= 0.3
-	 * - novice: < 5 uses OR success < 0.3
-	 *
-	 * @param skillName - Name of the skill.
-	 * @returns The Dreyfus mastery level.
-	 */
-	getDreyfusLevel(skillName: string): DreyfusLevel {
-		const data = this.skills.get(skillName);
-		if (!data || data.useCount === 0) {
-			return "novice";
-		}
-
-		const successRate = data.successCount / data.useCount;
-
-		// Iterate thresholds from highest to lowest
-		for (const threshold of DREYFUS_THRESHOLDS) {
-			if (
-				data.useCount >= threshold.minUses &&
-				successRate >= threshold.minSuccessRate
-			) {
-				return threshold.level;
-			}
-		}
-
-		return "novice";
-	}
-
-	/**
-	 * Convert internal tracking data to AnandamayaMastery.
-	 *
-	 * @param skillName - Name of the skill.
-	 * @returns The mastery data in Anandamaya format.
-	 */
-	toAnandamayaMastery(skillName: string): AnandamayaMastery {
-		const data = this.skills.get(skillName);
-		if (!data) {
-			return INITIAL_ANANDAMAYA;
-		}
-
-		const failureCount = data.useCount - data.successCount;
-		const successRate = data.useCount > 0
-			? data.successCount / data.useCount
-			: 0;
-
-		return {
-			totalInvocations: data.useCount,
-			successCount: data.successCount,
-			failureCount,
-			successRate,
-			avgLatencyMs: 0, // Not tracked in current implementation
-			dreyfusLevel: this.getDreyfusLevel(skillName),
-			lastInvokedAt: data.lastUsedAt ? new Date(data.lastUsedAt).toISOString() : null,
-			firstInvokedAt: null, // Not tracked in current implementation
-			thompsonAlpha: data.thompsonAlpha,
-			thompsonBeta: data.thompsonBeta,
-		};
-	}
-
-	/**
-	 * Compute pointwise mutual information between two skills.
-	 * Uses NPMI (normalized) to get values in [-1, 1].
-	 *
-	 * PMI(A, B) = log2(P(A,B) / (P(A) * P(B)))
-	 * NPMI(A, B) = PMI(A, B) / -log2(P(A,B))
-	 *
-	 * Higher NPMI = stronger relationship.
-	 * NPMI = 1: perfect co-occurrence
-	 * NPMI = 0: independent
-	 * NPMI = -1: never co-occur
-	 *
-	 * @param skillA - First skill name.
-	 * @param skillB - Second skill name.
-	 * @returns NPMI in [-1, 1], or 0 if insufficient data.
-	 */
-	computeMutualInformation(skillA: string, skillB: string): number {
-		const totalSessions = this.sessionSkills.length;
-		if (totalSessions === 0) return 0;
-
-		// Count sessions where each skill appears
-		let countA = 0;
-		let countB = 0;
-		let countAB = 0;
-
-		for (const session of this.sessionSkills) {
-			const hasA = session.includes(skillA);
-			const hasB = session.includes(skillB);
-			if (hasA) countA++;
-			if (hasB) countB++;
-			if (hasA && hasB) countAB++;
-		}
-
-		if (countA === 0 || countB === 0 || countAB === 0) return 0;
-
-		// Compute probabilities
-		const pA = countA / totalSessions;
-		const pB = countB / totalSessions;
-		const pAB = countAB / totalSessions;
-
-		// PMI = log2(P(A,B) / (P(A) * P(B)))
-		const pmi = Math.log2(pAB / (pA * pB));
-
-		// NPMI = PMI / -log2(P(A,B))
-		const npmi = pmi / -Math.log2(pAB);
-
-		return npmi;
-	}
-
-	/**
-	 * Get all skill pairs with mutual information above a threshold.
-	 *
-	 * @param threshold - Minimum NPMI value (default 0.3).
-	 * @returns Skill pairs sorted by NPMI descending.
-	 */
+	/** Get all skill pairs with MI above threshold. */
 	getRelatedPairs(threshold: number = 0.3): Array<{ skillA: string; skillB: string; npmi: number }> {
-		const pairs: Array<{ skillA: string; skillB: string; npmi: number }> = [];
-		const processed = new Set<string>();
-
-		for (const [skillA, neighbors] of this.coOccurrences) {
-			for (const [skillB] of neighbors) {
-				// Avoid duplicates (A,B) and (B,A)
-				const pairKey = [skillA, skillB].sort().join("|");
-				if (processed.has(pairKey)) continue;
-				processed.add(pairKey);
-
-				const npmi = this.computeMutualInformation(skillA, skillB);
-				if (npmi >= threshold) {
-					pairs.push({ skillA, skillB, npmi });
-				}
-			}
-		}
-
-		return pairs.sort((a, b) => b.npmi - a.npmi);
+		return doGetRelatedPairs(this.coOccurrences, this.sessionSkills, threshold);
 	}
 
-	// ─── Private Helpers ──────────────────────────────────────────────
+	// ─── Private Helpers (delegated) ─────────────────────────────────
 
-	/** Ensure tracking data exists for a skill. */
-	private ensureSkillData(name: string): SkillTrackingData {
-		let data = this.skills.get(name);
-		if (!data) {
-			data = {
-				name,
-				matchCount: 0,
-				useCount: 0,
-				rejectCount: 0,
-				successCount: 0,
-				totalMatchScore: 0,
-				contexts: new Set(),
-				lastUsedAt: null,
-				evolvedVector: null,
-				thompsonAlpha: 1,
-				thompsonBeta: 1,
-			};
-			this.skills.set(name, data);
-		}
-		return data;
-	}
-
-	/**
-	 * Compute freshness score using exponential decay.
-	 *
-	 *     freshness = 1 / (1 + daysSinceLastUse)
-	 *
-	 * This produces a smooth decay:
-	 * - Just used: 1.0
-	 * - 1 day ago: 0.5
-	 * - 7 days ago: 0.125
-	 * - 30 days ago: ~0.032
-	 * - Never used: 0.0
-	 */
-	private computeFreshness(lastUsedAt: number | null): number {
-		if (lastUsedAt === null) return 0;
-		const daysSinceUse = (Date.now() - lastUsedAt) / MS_PER_DAY;
-		return 1 / (1 + daysSinceUse);
-	}
-
-	/**
-	 * Update co-occurrence counts for all skill pairs in a session.
-	 *
-	 * For each pair (A, B) where A !== B, increments the co-occurrence
-	 * count in both directions. This builds the symmetric co-occurrence
-	 * matrix used for fusion suggestions.
-	 */
-	private updateCoOccurrences(skills: string[]): void {
-		for (let i = 0; i < skills.length; i++) {
-			for (let j = i + 1; j < skills.length; j++) {
-				this.incrementCoOccurrence(skills[i], skills[j]);
-				this.incrementCoOccurrence(skills[j], skills[i]);
-			}
-		}
-	}
-
-	/** Increment the co-occurrence count for a directed pair. */
-	private incrementCoOccurrence(from: string, to: string): void {
-		let neighbors = this.coOccurrences.get(from);
-		if (!neighbors) {
-			neighbors = new Map();
-			this.coOccurrences.set(from, neighbors);
-		}
-		neighbors.set(to, (neighbors.get(to) ?? 0) + 1);
-	}
-
-	/** Generate an empty health report for an unknown skill. */
-	private emptyHealthReport(name: string): SkillHealthReport {
-		return {
-			name,
-			matchCount: 0,
-			useCount: 0,
-			rejectCount: 0,
-			successCount: 0,
-			avgMatchScore: 0,
-			useRate: 0,
-			successRate: 0.5,
-			freshnessScore: 0,
-			diversityScore: 0,
-			health: 0,
-			lastUsedAt: null,
-			flaggedForReview: false,
-		};
-	}
-
-	/**
-	 * Sample from Gamma(shape, scale=1) distribution.
-	 *
-	 * For integer shapes < 100: Use sum of exponential variates
-	 *   Gamma(n, 1) = -sum(ln(U_i)) for i=1..n
-	 *
-	 * For shapes >= 100: Use normal approximation
-	 *   mean = shape, variance = shape
-	 *
-	 * @param shape - The shape parameter (alpha or beta).
-	 * @returns A sample from Gamma(shape, 1).
-	 */
-	private sampleGamma(shape: number): number {
-		if (shape < 100) {
-			// Sum of exponentials: -ln(U_i) ~ Exp(1), sum ~ Gamma(n, 1)
-			let sum = 0;
-			for (let i = 0; i < shape; i++) {
-				sum -= Math.log(Math.random());
-			}
-			return sum;
-		} else {
-			// Normal approximation: Gamma(shape, 1) ≈ N(shape, shape)
-			// Box-Muller transform for normal sample
-			const u1 = Math.random();
-			const u2 = Math.random();
-			const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-			// Z ~ N(0, 1), so shape + sqrt(shape) * Z ~ N(shape, shape)
-			const sample = shape + Math.sqrt(shape) * z;
-			// Clamp to positive values
-			return Math.max(0.001, sample);
-		}
-	}
+	private ensureSkillData(name: string): SkillTrackingData { return ensureSkillData(this.skills, name); }
+	private computeFreshness(lastUsedAt: number | null): number { return computeFreshness(lastUsedAt); }
+	private updateCoOccurrences(skills: string[]): void { updateCoOccurrences(this.coOccurrences, skills); }
+	private emptyHealthReport(name: string): SkillHealthReport { return emptyHealthReport(name); }
 }

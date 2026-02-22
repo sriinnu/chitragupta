@@ -184,7 +184,7 @@ console.log(MAX_AGENT_DEPTH); // Maximum nesting depth
 
 The lifecycle system enforces a **two-tier configuration model**:
 
-- **Configurable defaults** -- `DEFAULT_MAX_AGENT_DEPTH` (3) and `DEFAULT_MAX_SUB_AGENTS` (4) can be overridden per-instance via `KaalaConfig`.
+- **Configurable defaults** -- `DEFAULT_MAX_AGENT_DEPTH` (8) and `DEFAULT_MAX_SUB_AGENTS` (12) can be overridden per-instance via `KaalaConfig` or globally via `settings.json`.
 - **System hard ceilings** -- `SYSTEM_MAX_AGENT_DEPTH` (10) and `SYSTEM_MAX_SUB_AGENTS` (16) are absolute upper bounds. Any user-configured value is clamped to these ceilings and **cannot** be exceeded.
 
 #### KaalaConfig Interface
@@ -201,8 +201,8 @@ const config: KaalaConfig = {
   budgetDecayFactor: 0.7,        // Token budget multiplier per depth level
   rootTokenBudget: 200_000,      // Root agent's token budget
   orphanPolicy: "cascade",       // "cascade" | "reparent" | "promote"
-  maxAgentDepth: 3,              // Max nesting depth (clamped to 10)
-  maxSubAgents: 4,               // Max children per agent (clamped to 16)
+  maxAgentDepth: 8,              // Max nesting depth (clamped to 10)
+  maxSubAgents: 12,              // Max children per agent (clamped to 16)
   minTokenBudgetForSpawn: 1_000, // Min tokens a child needs to be spawned
 };
 ```
@@ -217,8 +217,8 @@ const kaala = new KaalaBrahma();
 
 // Override specific settings
 const customKaala = new KaalaBrahma({
-  maxAgentDepth: 5,        // Allow deeper nesting (clamped to 10)
-  maxSubAgents: 8,         // Allow more children (clamped to 16)
+  maxAgentDepth: 10,       // Max nesting depth (clamped to 10)
+  maxSubAgents: 16,        // Max children per agent (clamped to 16)
   staleThreshold: 15_000,  // Detect stale agents faster
   orphanPolicy: "promote", // Promote eldest orphan to lead
 });
@@ -305,8 +305,8 @@ console.log(report.overBudgetKilled); // Agents killed for exceeding budget
 
 | Parameter | Default | System Max | Description |
 |-----------|---------|------------|-------------|
-| `maxAgentDepth` | 3 | 10 | Max nesting depth of agent tree |
-| `maxSubAgents` | 4 | 16 | Max children per agent |
+| `maxAgentDepth` | 8 | 10 | Max nesting depth of agent tree |
+| `maxSubAgents` | 12 | 16 | Max children per agent |
 | `minTokenBudgetForSpawn` | 1000 | -- | Min tokens a child needs to be spawned |
 | `heartbeatInterval` | 5000 | -- | Heartbeat check interval (ms) |
 | `staleThreshold` | 30000 | -- | Time before agent marked stale (ms) |
