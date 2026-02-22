@@ -342,8 +342,8 @@ describe("coding_agent MCP tool", () => {
 			// Validate the result shape that would be formatted
 			expect(result.success).toBe(true);
 			expect(result.plan).not.toBeNull();
-			expect(result.plan.task).toBe("Fix login bug");
-			expect(result.plan.steps).toHaveLength(2);
+			expect(result.plan!.task).toBe("Fix login bug");
+			expect(result.plan!.steps).toHaveLength(2);
 			expect(result.git.featureBranch).toBe("feat/fix-login-bug");
 			expect(result.git.commits).toContain("abc1234");
 			expect(result.validationPassed).toBe(true);

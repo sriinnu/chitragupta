@@ -40,11 +40,11 @@ function makeDangerousManifest(): EnhancedSkillManifest {
 			privilege: true,
 			networkPolicy: { allowlist: [] },
 			secrets: ["API_KEY", "DB_PASSWORD"],
-			userData: { location: "read", memory: "write", calendar: true },
-			filesystem: { scope: "full" },
-			piiPolicy: "collect",
+			userData: { location: "precise", memory: "write", calendar: true },
+			filesystem: { scope: "staging_dir" },
+			piiPolicy: "explicit_only",
 		},
-	} as EnhancedSkillManifest;
+	} as unknown as EnhancedSkillManifest;
 }
 
 function createMockSamiti(): SamitiBroadcaster & { calls: Array<{ channel: string; message: unknown }> } {
