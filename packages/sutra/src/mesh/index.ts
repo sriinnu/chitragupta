@@ -42,6 +42,10 @@ export { NetworkGossip } from "./network-gossip.js";
 export type { ActorLocationMap, NetworkGossipConfig, NetworkGossipEvent } from "./network-gossip.js";
 export { WsPeerChannel } from "./ws-peer-channel.js";
 export { PeerConnectionManager } from "./peer-connection.js";
+export { PeerGuard } from "./peer-guard.js";
+export type { PeerGuardConfig, PeerScore } from "./peer-guard.js";
+export { PeerAddrDb } from "./peer-addr-db.js";
+export type { PeerAddr, PeerAddrSource, PeerAddrBucket, PeerAddrDbConfig } from "./peer-addr-db.js";
 export type {
 	PeerNodeInfo,
 	PeerConnectionState,
@@ -50,8 +54,9 @@ export type {
 	PeerNetworkConfig,
 	PeerNetworkEvent,
 	PeerNetworkEventHandler,
+	VersionInfo,
 } from "./peer-types.js";
-export { PEER_NETWORK_DEFAULTS } from "./peer-types.js";
+export { PEER_NETWORK_DEFAULTS, MESH_PROTOCOL_VERSION } from "./peer-types.js";
 export {
 	serializePeerMessage,
 	deserializePeerMessage,

@@ -62,6 +62,25 @@ export interface PeerConnectionStats {
 	deathReason?: string;
 }
 
+// ─── Version Handshake ───────────────────────────────────────────────────────
+
+/** Protocol version info exchanged during handshake (Bitcoin version message). */
+export interface VersionInfo {
+	/** Wire protocol identifier (e.g. "mesh/1.0"). */
+	protocol: string;
+	/** User agent string (e.g. "chitragupta-sutra/0.1.0"). */
+	userAgent?: string;
+	/** Advertised services (e.g. ["actor", "gossip", "discovery", "samiti"]). */
+	services?: string[];
+	/** Minimum protocol version this node will accept. */
+	minProtocol?: string;
+	/** Unix epoch ms — used for time offset calculation between peers. */
+	timestamp?: number;
+}
+
+/** Current mesh protocol version. */
+export const MESH_PROTOCOL_VERSION = "mesh/1.0";
+
 // ─── Wire Protocol ──────────────────────────────────────────────────────────
 
 /**
@@ -70,7 +89,7 @@ export interface PeerConnectionStats {
  * Every message is a JSON object with a `type` discriminator.
  * Envelopes carry MeshEnvelope payloads (actor messages).
  * Gossip carries PeerView arrays for failure detection.
- * Auth handles mutual authentication on connect.
+ * Auth handles mutual authentication + version handshake on connect.
  */
 export type PeerMessage =
 	| { type: "envelope"; data: MeshEnvelope }
@@ -79,8 +98,8 @@ export type PeerMessage =
 	| { type: "samiti"; channel: string; data: unknown }
 	| { type: "ping"; ts: number }
 	| { type: "pong"; ts: number }
-	| { type: "auth"; token: string; nodeId: string; info: PeerNodeInfo; nonce?: string; hmac?: string }
-	| { type: "auth:ok"; nodeId: string; info: PeerNodeInfo }
+	| { type: "auth"; token: string; nodeId: string; info: PeerNodeInfo; nonce?: string; hmac?: string; version?: VersionInfo }
+	| { type: "auth:ok"; nodeId: string; info: PeerNodeInfo; version?: VersionInfo }
 	| { type: "auth:fail"; reason: string };
 
 // ─── Network Configuration ──────────────────────────────────────────────────
@@ -119,6 +138,30 @@ export interface PeerNetworkConfig {
 	capabilities?: string[];
 	/** Human-readable label for this node. */
 	label?: string;
+
+	// ─── TLS Configuration ───────────────────────────────────────
+	/** Enable TLS (wss://) for the mesh listener. Default: false */
+	tls?: boolean;
+	/** PEM-encoded TLS certificate (or path). Required when tls=true. */
+	tlsCert?: string | Buffer;
+	/** PEM-encoded TLS private key (or path). Required when tls=true. */
+	tlsKey?: string | Buffer;
+	/** PEM-encoded CA certificate(s) for verifying peer certs. */
+	tlsCa?: string | Buffer | Array<string | Buffer>;
+	/** Allow self-signed certificates from peers. Default: false */
+	tlsAllowSelfSigned?: boolean;
+
+	// ─── Peer Discovery ──────────────────────────────────────────
+	/** Enable peer-exchange discovery (share peers on connect). Default: true */
+	enablePeerExchange?: boolean;
+	/** Max discovered peers to auto-connect. Default: 10 */
+	maxDiscoveredPeers?: number;
+	/** Interval between peer exchange rounds (ms). Default: 30_000 */
+	peerExchangeIntervalMs?: number;
+
+	// ─── Security ────────────────────────────────────────────────
+	/** Anti-eclipse connection guard configuration. */
+	guard?: import("./peer-guard.js").PeerGuardConfig;
 }
 
 /** Defaults for PeerNetworkConfig. */
