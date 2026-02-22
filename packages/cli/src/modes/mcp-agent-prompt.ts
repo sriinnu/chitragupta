@@ -1,5 +1,6 @@
 import { DEFAULT_PROVIDER_PRIORITY, loadGlobalSettings } from "@chitragupta/core";
 import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
+import type { HeartbeatCallback } from "./mcp-prompt-jobs.js";
 
 type PromptRunner = {
 	prompt: (message: string) => Promise<string>;
@@ -36,6 +37,8 @@ export async function runAgentPromptWithFallback(
 		provider?: string;
 		model?: string;
 		timeoutMs?: number;
+		/** Heartbeat callback — fired at each execution phase so the caller can detect liveness. */
+		onHeartbeat?: HeartbeatCallback;
 	},
 	deps?: Partial<AgentPromptFallbackDeps>,
 ): Promise<{ response: string; providerId: string; attempts: number }> {
@@ -63,26 +66,32 @@ export async function runAgentPromptWithFallback(
 		{ provider: explicitProvider, model: explicitModel },
 		...fallbackProviders.map((providerId) => ({ provider: providerId })),
 	];
+	const hb = params.onHeartbeat;
 	const failures: string[] = [];
 	for (let index = 0; index < attempts.length; index += 1) {
 		const attempt = attempts[index];
 		const providerId = attempt.provider ?? "auto";
+		const attemptNum = index + 1;
 		let runner: PromptRunner | null = null;
 		try {
+			hb?.({ activity: `connecting to ${providerId}`, attempt: attemptNum, provider: providerId });
 			runner = await createChitragupta({
 				...(attempt.provider ? { provider: attempt.provider } : {}),
 				...(attempt.model ? { model: attempt.model } : {}),
 			});
+			hb?.({ activity: `prompting ${providerId}`, attempt: attemptNum, provider: providerId });
 			const response = await Promise.race([
 				runner.prompt(params.message),
 				new Promise<never>((_, reject) => {
 					setTimeout(() => reject(new Error(`Prompt timed out after ${timeoutMs}ms`)), timeoutMs);
 				}),
 			]);
-			return { response, providerId, attempts: index + 1 };
+			hb?.({ activity: "completed", attempt: attemptNum, provider: providerId });
+			return { response, providerId, attempts: attemptNum };
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
 			failures.push(`${providerId}: ${detail}`);
+			hb?.({ activity: `failed ${providerId}, retrying`, attempt: attemptNum, provider: providerId });
 		} finally {
 			if (runner) {
 				try {
