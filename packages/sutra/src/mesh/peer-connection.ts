@@ -251,7 +251,7 @@ export class PeerConnectionManager {
 					socket.destroy();
 					return;
 				}
-				this.wss!.handleUpgrade(req, socket, head, (ws) => {
+				this.wss!.handleUpgrade(req, socket, head, (ws: WsLike & { once: Function }) => {
 					this.handleInboundConnection(ws, req);
 				});
 			});
