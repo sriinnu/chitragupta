@@ -10,7 +10,6 @@
  */
 
 import Database from "better-sqlite3";
-import type BetterSqlite3 from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 import { getChitraguptaHome } from "@chitragupta/core";
@@ -38,9 +37,9 @@ const DEFAULT_PRAGMAS: Record<string, string | number> = {
  */
 export class DatabaseManager {
 	private static _instance: DatabaseManager | null = null;
-	private _databases = new Map<DatabaseName, BetterSqlite3.Database>();
-	private _dbDir: string;
-	private _closed = false;
+	readonly _databases = new Map<DatabaseName, unknown>();
+	readonly _dbDir: string;
+	_closed = false;
 
 	private constructor(dbDir?: string) {
 		this._dbDir = dbDir ?? getChitraguptaHome();
@@ -71,12 +70,12 @@ export class DatabaseManager {
 	/**
 	 * Get a database connection by name. Opens it on first access.
 	 */
-	get(name: DatabaseName): BetterSqlite3.Database {
+	get(name: DatabaseName): Database.Database {
 		if (this._closed) {
 			throw new Error("DatabaseManager has been closed");
 		}
 
-		let db = this._databases.get(name);
+		let db = this._databases.get(name) as Database.Database | undefined;
 		if (!db) {
 			db = this._open(name);
 			this._databases.set(name, db);
@@ -97,7 +96,7 @@ export class DatabaseManager {
 	closeAll(): void {
 		for (const [name, db] of this._databases) {
 			try {
-				db.close();
+				(db as Database.Database).close();
 			} catch {
 				// Best effort — db may already be closed
 			}
@@ -110,7 +109,7 @@ export class DatabaseManager {
 	 * Close a specific database connection.
 	 */
 	close(name: DatabaseName): void {
-		const db = this._databases.get(name);
+		const db = this._databases.get(name) as Database.Database | undefined;
 		if (db) {
 			db.close();
 			this._databases.delete(name);
@@ -136,7 +135,7 @@ export class DatabaseManager {
 	/**
 	 * Open a database file and apply pragmas.
 	 */
-	private _open(name: DatabaseName): BetterSqlite3.Database {
+	_open(name: DatabaseName): Database.Database {
 		const dbPath = this.getPath(name);
 		const db = new Database(dbPath);
 

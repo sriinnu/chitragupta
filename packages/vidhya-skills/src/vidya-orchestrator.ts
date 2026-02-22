@@ -59,80 +59,38 @@ import {
 
 
 const log = createLogger("vidhya:orchestrator");
-// ─── Types ──────────────────────────────────────────────────────────────────
+// Re-export types for consumers
+export type {
+	VidyaOrchestratorConfig,
+	InitResult,
+	LifecycleReport,
+	LearnResult,
+	SkillReport,
+	EcosystemStats,
+	VidyaPersistedState,
+} from "./vidya-orchestrator-types.js";
+import type {
+	VidyaOrchestratorConfig,
+	InitResult,
+	LifecycleReport,
+	LearnResult,
+	SkillReport,
+	EcosystemStats,
+	VidyaPersistedState,
+} from "./vidya-orchestrator-types.js";
+import {
+	evaluateLifecycles as doEvaluateLifecycles,
+	learnSkill as doLearnSkill,
+	promoteSkill as doPromoteSkill,
+	deprecateSkill as doDeprecateSkill,
+	recommend as doRecommend,
+	getSkillReport as doGetSkillReport,
+	getEcosystemStats as doGetEcosystemStats,
+	persist as doPersist,
+	restore as doRestore,
+	buildSkillReport as doBuildSkillReport,
+} from "./vidya-orchestrator-lifecycle.js";
 
-export interface VidyaOrchestratorConfig {
-	/** Paths to scan for skill.md files, with kula tier per path. */
-	readonly skillPaths?: ReadonlyArray<{ path: string; kula: KulaType }>;
-	/** Path for persisting orchestrator state. Default: .chitragupta/vidya-state.json */
-	readonly persistPath?: string;
-	/** Auto-trigger Shiksha on detected skill gaps. */
-	readonly enableAutoLearn?: boolean;
-	/** Auto-discover Yoga compositions from session patterns. */
-	readonly enableAutoComposition?: boolean;
-}
-
-export interface InitResult {
-	readonly loaded: number;
-	readonly shadowed: number;
-	readonly excluded: number;
-	readonly errors: ReadonlyArray<{ name: string; error: string }>;
-	readonly restored: boolean;
-}
-
-export interface LifecycleReport {
-	readonly promotions: string[];
-	readonly demotions: string[];
-	readonly archived: string[];
-	readonly extinctionCandidates: string[];
-	readonly speciationCandidates: Array<{ skill: string; suggestedVariant: string; reason: string }>;
-	readonly deprecationCandidates: string[];
-	readonly newCompositions: YogaComposition[];
-}
-
-export interface LearnResult {
-	readonly success: boolean;
-	readonly skillName?: string;
-	readonly status: "registered" | "quarantined" | "failed";
-	readonly quarantineId?: string;
-	readonly error?: string;
-	readonly durationMs: number;
-}
-
-export interface SkillReport {
-	readonly name: string;
-	readonly manifest: EnhancedSkillManifest;
-	readonly ashrama: AshramamState;
-	readonly kosha: PanchaKoshaScores;
-	readonly mastery: AnandamayaMastery;
-	readonly health: SkillHealthReport;
-	readonly parampara?: ParamparaChain;
-	readonly vamsha?: VamshaLineage;
-	readonly compositions: YogaComposition[];
-	readonly kula: KulaType | null;
-}
-
-export interface EcosystemStats {
-	readonly totalSkills: number;
-	readonly byKula: Record<KulaType, number>;
-	readonly byAshrama: Record<AshramamStage, number>;
-	readonly avgKosha: PanchaKoshaScores;
-	readonly topCompositions: YogaComposition[];
-	readonly extinctionCandidates: string[];
-	readonly deprecationCandidates: string[];
-}
-
-export interface VidyaPersistedState {
-	readonly version: 1;
-	readonly timestamp: string;
-	readonly samskara: SerializedSamskaraState;
-	readonly yoga: ReturnType<YogaEngine["serialize"]>;
-	readonly vamsha: Array<[string, VamshaLineage]>;
-	readonly evolution: SkillEvolutionState;
-	readonly parampara: Record<string, string>;
-	readonly ashrama: Record<string, AshramamState>;
-	readonly kosha: Record<string, PanchaKoshaScores>;
-}
 
 // ─── Dependencies (injected) ────────────────────────────────────────────────
 
@@ -150,6 +108,7 @@ interface ShikshaLike {
 interface ScannerLike {
 	scan(skillName: string, content: string): SurakshaScanResult;
 }
+
 
 // ─── VidyaOrchestrator ─────────────────────────────────────────────────────
 
@@ -384,410 +343,37 @@ export class VidyaOrchestrator {
 		}
 	}
 
-	// ─── 7. evaluateLifecycles ──────────────────────────────────────────────
+	// ─── Delegated Lifecycle Methods ──────────────────────────────────────
 
-	evaluateLifecycles(): LifecycleReport {
-		const promotions: string[] = [];
-		const demotions: string[] = [];
-		const archived: string[] = [];
+	/** Evaluate all skill lifecycles. */
+	evaluateLifecycles(): LifecycleReport { return doEvaluateLifecycles(this); }
 
-		// Evaluate all Ashrama states
-		for (const [skillName, state] of this.ashramamStates) {
-			const health = this.evolution.getSkillHealth(skillName);
-			const chain = this.chains.get(skillName);
-			const trustScore = chain?.trust.score ?? 0.5;
-			const observations = health.useCount;
+	/** Learn a new skill from a query. */
+	async learnSkill(query: string): Promise<LearnResult> { return doLearnSkill(this, query); }
 
-			const oldStage = state.stage;
-			const newState = this.ashrama.evaluate(state, health.health, trustScore, observations);
-			this.ashramamStates.set(skillName, newState);
+	/** Promote a skill to grihastha stage. */
+	promoteSkill(skillName: string, reviewer?: string): boolean { return doPromoteSkill(this, skillName, reviewer); }
 
-			if (newState.stage !== oldStage) {
-				if (newState.stage === "grihastha") promotions.push(skillName);
-				else if (newState.stage === "vanaprastha") demotions.push(skillName);
-				else if (newState.stage === "sannyasa") archived.push(skillName);
-			}
-		}
+	/** Deprecate a skill. */
+	deprecateSkill(skillName: string, reason?: string): boolean { return doDeprecateSkill(this, skillName, reason); }
 
-		// Detect Vamsha candidates
-		const masteryMap = this.samskara.getAllMastery();
-		const healthMap = new Map<string, number>();
-		for (const [name] of this.ashramamStates) {
-			healthMap.set(name, this.evolution.getSkillHealth(name).health);
-		}
+	/** Recommend skills for a query. */
+	recommend(query: string, context?: Partial<MatchContext>): VidyaTantraMatch[] { return doRecommend(this, query, context); }
 
-		const extinctionCandidates = this.vamsha.detectExtinctionCandidates(masteryMap, healthMap);
+	/** Get a skill report or all reports. */
+	getSkillReport(skillName?: string): SkillReport | SkillReport[] { return doGetSkillReport(this, skillName); }
 
-		// Get manifests for speciation detection
-		const allEntries = this.kula.getAll();
-		const manifests = allEntries.map((e) => e.manifest);
-		const speciationCandidates = this.vamsha.detectSpeciationCandidates(manifests);
+	/** Get ecosystem statistics. */
+	getEcosystemStats(): EcosystemStats { return doGetEcosystemStats(this); }
 
-		// Check SkillEvolution deprecation candidates
-		const deprecationCandidates = this.evolution.getDeprecationCandidates().map((r) => r.name);
+	/** Persist orchestrator state. */
+	async persist(): Promise<void> { return doPersist(this); }
 
-		// Discover new Yoga compositions
-		let newCompositions: YogaComposition[] = [];
-		if (this.config.enableAutoComposition) {
-			const activeSkills = Array.from(this.ashramamStates.entries())
-				.filter(([, s]) => s.stage === "grihastha")
-				.map(([name]) => name);
-			newCompositions = this.yoga.suggestCompositions(activeSkills);
-		}
-
-		return {
-			promotions,
-			demotions,
-			archived,
-			extinctionCandidates,
-			speciationCandidates,
-			deprecationCandidates,
-			newCompositions,
-		};
-	}
-
-	// ─── 8. learnSkill ──────────────────────────────────────────────────────
-
-	async learnSkill(query: string): Promise<LearnResult> {
-		if (!this.shiksha) {
-			return { success: false, status: "failed", error: "Shiksha controller not available", durationMs: 0 };
-		}
-
-		const start = Date.now();
-		try {
-			const result = await this.shiksha.learn(query);
-			const durationMs = Date.now() - start;
-
-			if (result.success && result.skill) {
-				if (result.autoApproved) {
-					// Register via onToolRegistered in shiksha kula
-					this.onToolRegistered(
-						{
-							name: result.skill.manifest.name,
-							description: result.skill.manifest.description,
-							inputSchema: result.skill.manifest.inputSchema as Record<string, unknown>,
-						},
-						"shiksha",
-					);
-					return {
-						success: true,
-						skillName: result.skill.manifest.name,
-						status: "registered",
-						durationMs,
-					};
-				}
-
-				return {
-					success: true,
-					skillName: result.skill.manifest.name,
-					status: "quarantined",
-					quarantineId: result.quarantineId,
-					durationMs,
-				};
-			}
-
-			return { success: false, status: "failed", error: result.error, durationMs };
-		} catch (err) {
-			return {
-				success: false,
-				status: "failed",
-				error: err instanceof Error ? err.message : String(err),
-				durationMs: Date.now() - start,
-			};
-		}
-	}
-
-	// ─── 9. promoteSkill ────────────────────────────────────────────────────
-
-	promoteSkill(skillName: string, reviewer?: string): boolean {
-		const state = this.ashramamStates.get(skillName);
-		if (!state) return false;
-
-		const { allowed } = this.ashrama.canTransition(state, "grihastha");
-		if (!allowed) return false;
-
-		try {
-			const health = this.evolution.getSkillHealth(skillName);
-			const newState = this.ashrama.transition(
-				state, "grihastha",
-				`promoted by ${reviewer ?? "system"}`,
-				health.health,
-			);
-			this.ashramamStates.set(skillName, newState);
-
-			// Append Parampara "promoted" link
-			const chain = this.chains.get(skillName);
-			if (chain) {
-				const contentHash = computeContentHash(`${skillName}:promoted`);
-				this.chains.set(
-					skillName,
-					appendLink(chain, "promoted", reviewer ?? "system", contentHash, "promoted to grihastha"),
-				);
-			}
-
-			// Recompute PanchaKosha
-			const entry = this.kula.get(skillName);
-			if (entry) {
-				const mastery = this.samskara.getMastery(skillName);
-				this.koshaScores.set(skillName, buildPanchaKosha(entry.manifest, mastery));
-			}
-
-			return true;
-		} catch {
-			return false;
-		}
-	}
-
-	// ─── 10. deprecateSkill ─────────────────────────────────────────────────
-
-	deprecateSkill(skillName: string, reason?: string): boolean {
-		const state = this.ashramamStates.get(skillName);
-		if (!state) return false;
-
-		const { allowed } = this.ashrama.canTransition(state, "vanaprastha");
-		if (!allowed) return false;
-
-		try {
-			const health = this.evolution.getSkillHealth(skillName);
-			const newState = this.ashrama.transition(
-				state, "vanaprastha",
-				reason ?? "deprecated by system",
-				health.health,
-			);
-			this.ashramamStates.set(skillName, newState);
-
-			// Append Parampara "demoted" link
-			const chain = this.chains.get(skillName);
-			if (chain) {
-				const contentHash = computeContentHash(`${skillName}:deprecated`);
-				this.chains.set(
-					skillName,
-					appendLink(chain, "demoted", "system", contentHash, reason ?? "deprecated"),
-				);
-			}
-
-			// Record Vamsha extinction event
-			this.vamsha.recordExtinction(skillName, reason ?? "deprecated");
-
-			return true;
-		} catch {
-			return false;
-		}
-	}
-
-	// ─── 11. recommend ──────────────────────────────────────────────────────
-
-	recommend(query: string, context?: Partial<MatchContext>): VidyaTantraMatch[] {
-		const samskaraContext = this.bridge.buildContextFromSamskara();
-		const mergedContext: MatchContext | undefined = samskaraContext
-			? { ...samskaraContext, ...context } as MatchContext
-			: context as MatchContext | undefined;
-
-		return this.bridge.recommendSkillsV2(query, mergedContext);
-	}
-
-	// ─── 12. getSkillReport ─────────────────────────────────────────────────
-
-	getSkillReport(skillName?: string): SkillReport | SkillReport[] {
-		if (skillName) {
-			return this.buildSkillReport(skillName);
-		}
-
-		const reports: SkillReport[] = [];
-		const allEntries = this.kula.getAll();
-		for (const entry of allEntries) {
-			reports.push(this.buildSkillReport(entry.manifest.name));
-		}
-		return reports;
-	}
-
-	private buildSkillReport(skillName: string): SkillReport {
-		const entry = this.kula.get(skillName);
-		const manifest = (entry?.manifest ?? this.registry.get(skillName) ?? {
-			name: skillName,
-			version: "0.0.0",
-			description: "",
-			capabilities: [],
-			tags: [],
-			source: { type: "tool" as const, toolName: skillName },
-			updatedAt: new Date().toISOString(),
-		}) as EnhancedSkillManifest;
-
-		const ashrama = this.ashramamStates.get(skillName) ?? createInitialState();
-		const kosha = this.koshaScores.get(skillName) ?? buildPanchaKosha(manifest, INITIAL_ANANDAMAYA);
-		const mastery = this.samskara.getMastery(skillName);
-		const health = this.evolution.getSkillHealth(skillName);
-		const parampara = this.chains.get(skillName);
-		const vamsha = this.vamsha.getLineage(skillName) ?? undefined;
-		const compositions = this.yoga.findCompositions(skillName);
-		const kula = entry?.kula ?? this.kula.getTier(skillName);
-
-		return { name: skillName, manifest, ashrama, kosha, mastery, health, parampara, vamsha, compositions, kula };
-	}
-
-	// ─── 13. getEcosystemStats ──────────────────────────────────────────────
-
-	getEcosystemStats(): EcosystemStats {
-		const byKula: Record<KulaType, number> = { antara: 0, bahya: 0, shiksha: 0 };
-		const byAshrama: Record<AshramamStage, number> = {
-			brahmacharya: 0, grihastha: 0, vanaprastha: 0, sannyasa: 0,
-		};
-
-		const allEntries = this.kula.getAll();
-		for (const entry of allEntries) {
-			byKula[entry.kula]++;
-			const state = this.ashramamStates.get(entry.manifest.name);
-			if (state) {
-				byAshrama[state.stage]++;
-			}
-		}
-
-		// Compute average kosha scores
-		let totalAnnamaya = 0, totalPranamaya = 0, totalManomaya = 0;
-		let totalVijnanamaya = 0, totalAnandamaya = 0, totalOverall = 0;
-		let count = 0;
-
-		for (const scores of this.koshaScores.values()) {
-			totalAnnamaya += scores.annamaya;
-			totalPranamaya += scores.pranamaya;
-			totalManomaya += scores.manomaya;
-			totalVijnanamaya += scores.vijnanamaya;
-			totalAnandamaya += scores.anandamaya;
-			totalOverall += scores.overall;
-			count++;
-		}
-
-		const avg = (v: number) => count > 0 ? v / count : 0;
-		const avgKosha: PanchaKoshaScores = {
-			annamaya: avg(totalAnnamaya),
-			pranamaya: avg(totalPranamaya),
-			manomaya: avg(totalManomaya),
-			vijnanamaya: avg(totalVijnanamaya),
-			anandamaya: avg(totalAnandamaya),
-			overall: avg(totalOverall),
-		};
-
-		// Get top compositions
-		const topCompositions = this.yoga.getAll().slice(0, 5);
-
-		// Get candidates
-		const masteryMap = this.samskara.getAllMastery();
-		const healthMap = new Map<string, number>();
-		for (const [name] of this.ashramamStates) {
-			healthMap.set(name, this.evolution.getSkillHealth(name).health);
-		}
-		const extinctionCandidates = this.vamsha.detectExtinctionCandidates(masteryMap, healthMap);
-		const deprecationCandidates = this.evolution.getDeprecationCandidates().map((r) => r.name);
-
-		return {
-			totalSkills: allEntries.length,
-			byKula,
-			byAshrama,
-			avgKosha,
-			topCompositions,
-			extinctionCandidates,
-			deprecationCandidates,
-		};
-	}
-
-	// ─── 14. persist ────────────────────────────────────────────────────────
-
-	async persist(): Promise<void> {
-		if (!this.config.persistPath) return;
-
-		const paramparaMap: Record<string, string> = {};
-		for (const [name, chain] of this.chains) {
-			paramparaMap[name] = serializeChain(chain);
-		}
-
-		const ashramamMap: Record<string, AshramamState> = {};
-		for (const [name, state] of this.ashramamStates) {
-			ashramamMap[name] = state;
-		}
-
-		const koshaMap: Record<string, PanchaKoshaScores> = {};
-		for (const [name, scores] of this.koshaScores) {
-			koshaMap[name] = scores;
-		}
-
-		const state: VidyaPersistedState = {
-			version: 1,
-			timestamp: new Date().toISOString(),
-			samskara: this.samskara.serialize(),
-			yoga: this.yoga.serialize(),
-			vamsha: this.vamsha.serialize(),
-			evolution: this.evolution.serialize(),
-			parampara: paramparaMap,
-			ashrama: ashramamMap,
-			kosha: koshaMap,
-		};
-
-		const json = JSON.stringify(state);
-		const dir = dirname(this.config.persistPath);
-		await mkdir(dir, { recursive: true });
-
-		// Atomic write: tmp → rename (fall back to direct write if rename fails)
-		const tmpPath = this.config.persistPath + ".tmp";
-		await writeFile(tmpPath, json, "utf-8");
-		try {
-			await rename(tmpPath, this.config.persistPath);
-		} catch {
-			// rename can fail on some OS/FS combos — fall back to direct write
-			await writeFile(this.config.persistPath, json, "utf-8");
-		}
-	}
-
-	// ─── 15. restore ────────────────────────────────────────────────────────
-
-	async restore(): Promise<boolean> {
-		if (!this.config.persistPath) return false;
-
-		try {
-			const json = await readFile(this.config.persistPath, "utf-8");
-			const state = JSON.parse(json) as VidyaPersistedState;
-
-			if (state.version !== 1) return false;
-
-			// Deserialize all subsystems
-			this.samskara.deserialize(state.samskara);
-			this.yoga.deserialize(state.yoga);
-			this.vamsha.deserialize(state.vamsha);
-
-			// Restore evolution via static deserialize
-			const restoredEvolution = SkillEvolution.deserialize(state.evolution);
-			// Copy internal state — SkillEvolution.deserialize returns a new instance,
-			// so we replicate its state into our owned instance via serialize/deserialize cycle
-			const evoState = restoredEvolution.serialize();
-			// Re-create and assign
-			Object.assign(this.evolution, SkillEvolution.deserialize(evoState));
-
-			// Restore Parampara chains
-			for (const [name, chainStr] of Object.entries(state.parampara)) {
-				try {
-					const kula = this.kula.getTier(name) ?? "bahya";
-					this.chains.set(name, deserializeChain(chainStr, kula));
-				} catch {
-					// Skip corrupted chains
-				}
-			}
-
-			// Restore Ashrama states
-			for (const [name, ashramamState] of Object.entries(state.ashrama)) {
-				this.ashramamStates.set(name, ashramamState);
-			}
-
-			// Restore Kosha scores
-			for (const [name, koshaScore] of Object.entries(state.kosha)) {
-				this.koshaScores.set(name, koshaScore);
-			}
-
-			return true;
-		} catch {
-			return false;
-		}
-	}
+	/** Restore orchestrator state. */
+	async restore(): Promise<boolean> { return doRestore(this); }
 
 	// ─── Accessors ──────────────────────────────────────────────────────────
+
 
 	get isInitialized(): boolean {
 		return this.initialized;
