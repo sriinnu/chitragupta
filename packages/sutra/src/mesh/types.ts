@@ -82,6 +82,8 @@ export interface MessageReceiver {
 /** Any entity that can route a MeshEnvelope to a destination. */
 export interface MessageSender {
 	route(envelope: MeshEnvelope): void;
+	/** Register a reply route for cross-node ask/reply (used by P2P mesh layer). */
+	registerReplyRoute?(correlationId: string, channel: PeerChannel): void;
 }
 
 /** A channel to a peer (remote router, bridge, etc.). */
@@ -100,6 +102,8 @@ export interface PeerView {
 	/** Lamport generation counter — higher generation wins during merge. */
 	generation: number;
 	lastSeen: number;
+	/** Origin node that hosts this actor (for transitive gossip location tracking). */
+	originNodeId?: string;
 }
 
 // ─── System Configuration ───────────────────────────────────────────────────

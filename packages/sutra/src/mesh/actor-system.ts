@@ -1,20 +1,8 @@
 /**
  * @chitragupta/sutra/mesh — ActorSystem: top-level coordinator.
  *
- * The ActorSystem is the Brahma of the mesh — it creates, manages,
- * and destroys actors, wires them to the router and gossip protocol,
- * and exposes a high-level API for inter-actor communication.
- *
- * It owns:
- *   - A MeshRouter for message delivery
- *   - A GossipProtocol for membership and failure detection
- *   - A registry of spawned Actor instances
- *   - Lifecycle management (start/shutdown)
- *
- * ActorRef is a lightweight handle to a remote actor — it does not
- * hold a reference to the Actor itself, only to the router. This
- * decoupling allows ActorRefs to survive actor restarts and be safely
- * passed across boundaries.
+ * Owns the MeshRouter, GossipProtocol, actor registry, and lifecycle.
+ * ActorRef is a lightweight handle that survives restarts.
  */
 
 import { randomUUID } from "node:crypto";
@@ -354,21 +342,35 @@ export class ActorSystem {
 			{ exchangeIntervalMs: networkConfig.gossipIntervalMs },
 		);
 
-		this.router.setActorLocationResolver((actorId) =>
-			this.networkGossip?.findNode(actorId),
-		);
+		// P2P mesh resolver: actorId → gossip location → peer channel
+		this.router.setPeerChannelResolver((actorId) => {
+			const nodeId = this.networkGossip?.findNode(actorId);
+			if (!nodeId) return undefined;
+			const channels = this.connectionManager!.getConnectedChannels();
+			return channels.find((ch) =>
+				ch.peerId === nodeId || ch.remoteNodeInfo?.nodeId === nodeId,
+			);
+		});
 
-		const port = await this.connectionManager.start();
+		// Start gossip before connections so handler is wired for first connect
 		this.networkGossip.start();
+		const port = await this.connectionManager.start();
 
 		this.connectionManager.on((event) => {
 			if (event.type === "peer:connected") {
+				// Register channel with router for broadcast support
+				const ch = this.connectionManager!.getConnectedChannels()
+					.find((c) => c.peerId === event.peerId);
+				if (ch) this.router.addChannel(ch);
 				this.emit({ type: "peer:discovered", peer: {
 					actorId: event.peerId,
 					status: "alive",
 					generation: 0,
 					lastSeen: Date.now(),
 				}});
+			}
+			if (event.type === "peer:disconnected" || event.type === "peer:dead") {
+				this.router.removeChannel(event.peerId);
 			}
 		});
 

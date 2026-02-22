@@ -136,6 +136,11 @@ export class NetworkGossip {
 		if (this.running) return;
 		this.running = true;
 
+		// Wire gossip message handling on all peer channels
+		this.connections.setGossipHandler((fromNodeId, views) => {
+			this.receiveGossip(fromNodeId, views);
+		});
+
 		this.peerEventUnsub = this.connections.on((event) => {
 			this.handlePeerEvent(event);
 		});
@@ -173,11 +178,16 @@ export class NetworkGossip {
 		if (channels.length === 0) return;
 
 		const localView = this.gossip.getView().slice(0, this.maxViewSize);
+		// Stamp originNodeId for transitive gossip location tracking
+		const stamped = localView.map((v) => ({
+			...v,
+			originNodeId: v.originNodeId ?? this.localNodeId,
+		}));
 		const targets = this.selectGossipTargets(channels);
 
 		for (const channel of targets) {
-			channel.sendGossip(localView);
-			this.emit({ type: "gossip:sent", peerId: channel.peerId, viewSize: localView.length });
+			channel.sendGossip(stamped);
+			this.emit({ type: "gossip:sent", peerId: channel.peerId, viewSize: stamped.length });
 		}
 	}
 
@@ -189,7 +199,8 @@ export class NetworkGossip {
 		const changed = this.gossip.merge(views);
 
 		for (const view of views) {
-			this.updateLocation(view.actorId, fromNodeId);
+			// Use originNodeId for correct location even through transitive gossip
+			this.updateLocation(view.actorId, view.originNodeId ?? fromNodeId);
 		}
 
 		this.emit({
@@ -246,10 +257,14 @@ export class NetworkGossip {
 	private handlePeerEvent(event: PeerNetworkEvent): void {
 		if (event.type === "peer:connected") {
 			const localView = this.gossip.getView().slice(0, this.maxViewSize);
+			const stamped = localView.map((v) => ({
+				...v,
+				originNodeId: v.originNodeId ?? this.localNodeId,
+			}));
 			const channels = this.connections.getConnectedChannels();
 			const channel = channels.find((c) => c.peerId === event.peerId);
-			if (channel && localView.length > 0) {
-				channel.sendGossip(localView);
+			if (channel && stamped.length > 0) {
+				channel.sendGossip(stamped);
 			}
 		}
 		if (event.type === "peer:dead" || event.type === "peer:disconnected") {

@@ -1,28 +1,24 @@
 /**
- * Peer Connection Manager — Orchestrates P2P Mesh Connections.
- *
- * Manages the lifecycle of all peer connections: outbound connects
- * with exponential backoff reconnect, inbound acceptance from the
- * mesh WebSocket listener, authentication, and coordinated shutdown.
- *
- * Also runs the mesh WebSocket server (listener) that accepts
- * incoming connections from remote Chitragupta nodes.
- *
+ * Peer Connection Manager — Orchestrates P2P mesh connections.
+ * Manages outbound/inbound WebSocket lifecycle, TLS, reconnect,
+ * authentication, and peer discovery exchange.
  * @module
  */
 
 import { createServer, type Server, type IncomingMessage } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { randomUUID } from "node:crypto";
-import type { MessageSender } from "./types.js";
+import type { MessageSender, PeerView } from "./types.js";
 import type {
 	PeerNetworkConfig,
 	PeerNodeInfo,
 	PeerNetworkEvent,
 	PeerNetworkEventHandler,
 } from "./peer-types.js";
-import { PEER_NETWORK_DEFAULTS } from "./peer-types.js";
+import { PEER_NETWORK_DEFAULTS, MESH_PROTOCOL_VERSION } from "./peer-types.js";
 import { WsPeerChannel, type WsLike } from "./ws-peer-channel.js";
 import { verifySignature } from "./peer-envelope.js";
+import { PeerGuard, type PeerGuardConfig } from "./peer-guard.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -36,15 +32,7 @@ interface ManagedPeer {
 
 // ─── PeerConnectionManager ──────────────────────────────────────────────────
 
-/**
- * Manages all P2P mesh connections for this Chitragupta node.
- *
- * Responsibilities:
- * - Listen for incoming peer WebSocket connections
- * - Connect to configured static peers with auto-reconnect
- * - Track all peer channels and their health
- * - Provide unified event stream for the mesh layer
- */
+/** Manages all P2P mesh connections, discovery, TLS, and reconnect. */
 export class PeerConnectionManager {
 	readonly nodeId: string;
 	readonly nodeInfo: PeerNodeInfo;
@@ -60,7 +48,13 @@ export class PeerConnectionManager {
 	/** `ws` WebSocketServer instance — loaded dynamically. */
 	private wss: { close(): void; handleUpgrade: Function } | null = null;
 	private eventHandlers: PeerNetworkEventHandler[] = [];
+	private gossipHandler: ((fromNodeId: string, views: PeerView[]) => void) | null = null;
 	private running = false;
+	/** Tracks all known peer endpoints to prevent redundant connect attempts. */
+	private readonly knownEndpoints = new Set<string>();
+	private peerExchangeTimer: ReturnType<typeof setInterval> | null = null;
+	/** Anti-eclipse connection guard. */
+	readonly guard: PeerGuard;
 
 	constructor(config: PeerNetworkConfig = {}) {
 		this.nodeId = config.nodeId ?? randomUUID();
@@ -75,9 +69,11 @@ export class PeerConnectionManager {
 			maxPeers: config.maxPeers ?? PEER_NETWORK_DEFAULTS.maxPeers,
 			gossipIntervalMs: config.gossipIntervalMs ?? PEER_NETWORK_DEFAULTS.gossipIntervalMs,
 		};
+		this.guard = new PeerGuard(config.guard);
+		const scheme = config.tls ? "wss" : "ws";
 		this.nodeInfo = {
 			nodeId: this.nodeId,
-			endpoint: `ws://${this.config.listenHost}:${this.config.listenPort}/mesh`,
+			endpoint: `${scheme}://${this.config.listenHost}:${this.config.listenPort}/mesh`,
 			label: config.label,
 			capabilities: config.capabilities,
 			joinedAt: Date.now(),
@@ -103,6 +99,14 @@ export class PeerConnectionManager {
 		}
 	}
 
+	/** Set a handler for incoming gossip views (propagated to all channels). */
+	setGossipHandler(handler: (fromNodeId: string, views: PeerView[]) => void): void {
+		this.gossipHandler = handler;
+		for (const [, peer] of this.peers) {
+			peer.channel.setGossipHandler(handler);
+		}
+	}
+
 	/** Get all connected peer channels (for router registration). */
 	getConnectedChannels(): WsPeerChannel[] {
 		const result: WsPeerChannel[] = [];
@@ -114,14 +118,10 @@ export class PeerConnectionManager {
 
 	/** Get info about all known peers. */
 	getPeers(): Array<{ peerId: string; endpoint: string; state: string; outbound: boolean }> {
-		return Array.from(this.peers.entries()).map(([id, p]) => ({
-			peerId: id,
-			endpoint: p.endpoint,
-			state: p.channel.state,
-			outbound: p.outbound,
+		return [...this.peers].map(([id, p]) => ({
+			peerId: id, endpoint: p.endpoint, state: p.channel.state, outbound: p.outbound,
 		}));
 	}
-
 	get peerCount(): number { return this.peers.size; }
 	get connectedCount(): number {
 		let n = 0;
@@ -140,12 +140,19 @@ export class PeerConnectionManager {
 		this.running = true;
 
 		const port = await this.startListener();
-		this.nodeInfo.endpoint = `ws://${this.config.listenHost}:${port}/mesh`;
+		const scheme = this.config.tls ? "wss" : "ws";
+		this.nodeInfo.endpoint = `${scheme}://${this.config.listenHost}:${port}/mesh`;
+		this.knownEndpoints.add(this.nodeInfo.endpoint);
 
 		if (this.config.staticPeers) {
 			for (const endpoint of this.config.staticPeers) {
+				this.knownEndpoints.add(endpoint);
 				void this.connectToPeer(endpoint);
 			}
+		}
+
+		if (this.config.enablePeerExchange !== false) {
+			this.startPeerExchange();
 		}
 
 		return port;
@@ -154,6 +161,10 @@ export class PeerConnectionManager {
 	/** Gracefully shut down all connections and the listener. */
 	async stop(): Promise<void> {
 		this.running = false;
+		if (this.peerExchangeTimer) {
+			clearInterval(this.peerExchangeTimer);
+			this.peerExchangeTimer = null;
+		}
 		for (const [, peer] of this.peers) {
 			if (peer.reconnectTimer) clearTimeout(peer.reconnectTimer);
 			peer.channel.destroy();
@@ -179,9 +190,13 @@ export class PeerConnectionManager {
 
 		const channel = this.createChannel(peerId, endpoint, true);
 		try {
+			const start = Date.now();
 			await channel.connect(endpoint);
+			this.guard.recordOutbound(endpoint);
+			this.guard.recordSuccess(channel.remoteNodeInfo?.nodeId ?? peerId, endpoint, Date.now() - start);
 			return channel;
 		} catch {
+			this.guard.recordFailure(peerId, endpoint);
 			this.scheduleReconnect(peerId);
 			return null;
 		}
@@ -194,9 +209,12 @@ export class PeerConnectionManager {
 			meshSecret: this.config.meshSecret,
 			pingIntervalMs: this.config.pingIntervalMs,
 			maxMissedPings: this.config.maxMissedPings,
+			tlsCa: this.config.tlsCa,
+			tlsAllowSelfSigned: this.config.tlsAllowSelfSigned,
 		});
 
 		if (this.localRouter) channel.setRouter(this.localRouter);
+		if (this.gossipHandler) channel.setGossipHandler(this.gossipHandler);
 		channel.on((event) => this.handlePeerEvent(peerId, event));
 
 		this.peers.set(peerId, {
@@ -214,26 +232,16 @@ export class PeerConnectionManager {
 
 	private scheduleReconnect(peerId: string): void {
 		const peer = this.peers.get(peerId);
-		if (!peer || !peer.outbound || !this.running) return;
-
+		if (!peer?.outbound || !this.running) return;
 		peer.reconnectAttempts++;
-		const delay = Math.min(
-			this.config.reconnectBaseMs * Math.pow(2, peer.reconnectAttempts - 1),
-			this.config.reconnectMaxMs,
-		);
-
+		const delay = Math.min(this.config.reconnectBaseMs * 2 ** (peer.reconnectAttempts - 1), this.config.reconnectMaxMs);
 		peer.reconnectTimer = setTimeout(async () => {
 			if (!this.running) return;
 			peer.channel.destroy();
-			const newChannel = this.createChannel(peerId, peer.endpoint, true);
-			this.peers.get(peerId)!.channel = newChannel;
-			try {
-				await newChannel.connect(peer.endpoint);
-				const managed = this.peers.get(peerId);
-				if (managed) managed.reconnectAttempts = 0;
-			} catch {
-				this.scheduleReconnect(peerId);
-			}
+			const ch = this.createChannel(peerId, peer.endpoint, true);
+			this.peers.get(peerId)!.channel = ch;
+			try { await ch.connect(peer.endpoint); peer.reconnectAttempts = 0; }
+			catch { this.scheduleReconnect(peerId); }
 		}, delay);
 	}
 
@@ -241,32 +249,42 @@ export class PeerConnectionManager {
 
 	private startListener(): Promise<number> {
 		return new Promise(async (resolve, reject) => {
-			this.listener = createServer();
-			// Dynamic import of `ws` package for the server side
+			if (this.config.tls && this.config.tlsCert && this.config.tlsKey) {
+				this.listener = createHttpsServer({
+					cert: this.config.tlsCert,
+					key: this.config.tlsKey,
+					ca: this.config.tlsCa,
+					requestCert: false,
+				});
+			} else {
+				this.listener = createServer();
+			}
 			const { WebSocketServer: WsServer } = await import("ws");
 			this.wss = new WsServer({ noServer: true });
 
 			this.listener.on("upgrade", (req: IncomingMessage, socket, head) => {
 				const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
-				if (url.pathname !== "/mesh") {
-					socket.destroy();
-					return;
-				}
+				if (url.pathname !== "/mesh") { socket.destroy(); return; }
 				this.wss!.handleUpgrade(req, socket, head, (ws: WsLike & { once: Function }) => {
 					this.handleInboundConnection(ws, req);
 				});
 			});
-
 			this.listener.listen(this.config.listenPort, this.config.listenHost, () => {
 				const addr = this.listener!.address();
-				const port = typeof addr === "object" && addr ? addr.port : this.config.listenPort;
-				resolve(port);
+				resolve(typeof addr === "object" && addr ? addr.port : this.config.listenPort);
 			});
 			this.listener.on("error", reject);
 		});
 	}
 
-	private handleInboundConnection(ws: WsLike & { once: Function }, _req: IncomingMessage): void {
+	private handleInboundConnection(ws: WsLike & { once: Function }, req: IncomingMessage): void {
+		const remoteIp = req.socket.remoteAddress ?? "unknown";
+		const guardReject = this.guard.shouldAcceptInbound(remoteIp);
+		if (guardReject) {
+			ws.close(1013, guardReject);
+			this.emit({ type: "error", error: `guard rejected: ${guardReject}` });
+			return;
+		}
 		if (this.peers.size >= this.config.maxPeers) {
 			ws.close(1013, "max peers reached");
 			return;
@@ -292,6 +310,7 @@ export class PeerConnectionManager {
 						type: "auth:ok",
 						nodeId: this.nodeId,
 						info: this.nodeInfo,
+						version: { protocol: MESH_PROTOCOL_VERSION, timestamp: Date.now(), userAgent: "chitragupta-sutra" },
 					}));
 
 					if (this.peers.has(resolvedPeerId)) {
@@ -300,7 +319,9 @@ export class PeerConnectionManager {
 					}
 					const channel = this.createChannel(resolvedPeerId, "", false);
 					channel.attachSocket(ws, parsed.info);
+					this.guard.recordInbound(remoteIp);
 					this.emit({ type: "peer:connected", peerId: resolvedPeerId, info: parsed.info ?? this.nodeInfo });
+					setTimeout(() => this.sendPeerExchangeTo(resolvedPeerId), 50);
 				}
 			} catch {
 				ws.close(1002, "invalid auth frame");
@@ -308,39 +329,39 @@ export class PeerConnectionManager {
 		});
 	}
 
-	/**
-	 * Verify the inbound auth frame's HMAC signature.
-	 *
-	 * The connecting peer signs a nonce with the shared meshSecret.
-	 * We re-compute the HMAC and compare using constant-time equality.
-	 * If no nonce/hmac is provided but meshSecret is set, auth fails.
-	 */
+	/** Verify inbound auth HMAC-SHA256 (constant-time comparison). */
 	private verifyAuth(raw: string): boolean {
 		if (!this.config.meshSecret) return true;
 		try {
 			const parsed = JSON.parse(raw) as { nonce?: string; hmac?: string };
 			if (!parsed.nonce || !parsed.hmac) return false;
 			return verifySignature(parsed.nonce, parsed.hmac, this.config.meshSecret);
-		} catch {
-			return false;
-		}
+		} catch { return false; }
 	}
 
 	// ─── Event Routing ──────────────────────────────────────────────
 
 	private handlePeerEvent(peerId: string, event: PeerNetworkEvent): void {
+		if (event.type === "peer:connected") {
+			this.sendPeerExchangeTo(peerId);
+		}
 		if (event.type === "peer:disconnected") {
 			const peer = this.peers.get(peerId);
-			if (peer?.outbound && this.running) {
-				this.scheduleReconnect(peerId);
+			if (peer) {
+				this.guard.removeConnection(peer.endpoint, peer.outbound);
+				if (peer.outbound && this.running) this.scheduleReconnect(peerId);
 			}
 		}
 		if (event.type === "peer:dead") {
 			const peer = this.peers.get(peerId);
 			if (peer) {
+				this.guard.removeConnection(peer.endpoint, peer.outbound);
 				peer.channel.destroy();
 				if (!peer.outbound) this.peers.delete(peerId);
 			}
+		}
+		if (event.type === "peer:discovered") {
+			this.handleDiscoveredPeer(event.info);
 		}
 		this.emit(event);
 	}
@@ -351,14 +372,74 @@ export class PeerConnectionManager {
 		}
 	}
 
+	// ─── Peer Discovery ─────────────────────────────────────────────
+
+	/** Send our known peers to a newly connected peer. */
+	private sendPeerExchangeTo(peerId: string): void {
+		if (this.config.enablePeerExchange === false) return;
+		const peer = this.peers.get(peerId);
+		if (!peer || peer.channel.state !== "connected") return;
+
+		const knownPeers: PeerNodeInfo[] = [];
+		for (const [id, p] of this.peers) {
+			if (id === peerId) continue;
+			if (p.channel.state !== "connected") continue;
+			const info = p.channel.remoteNodeInfo;
+			if (info?.endpoint) knownPeers.push(info);
+		}
+		if (this.nodeInfo.endpoint) knownPeers.push(this.nodeInfo);
+		if (knownPeers.length > 0) peer.channel.sendDiscovery(knownPeers);
+	}
+
+	/**
+	 * Handle a discovered peer (Bitcoin-style addr relay).
+	 * Auto-connects if unknown, then relays to all other connected
+	 * peers so the address propagates transitively through the mesh.
+	 */
+	private handleDiscoveredPeer(info: PeerNodeInfo): void {
+		if (!info.endpoint || !this.running) return;
+		if (info.nodeId === this.nodeId) return;
+		if (this.knownEndpoints.has(info.endpoint)) return;
+
+		// Deduplicate by nodeId (endpoint strings may vary for same node)
+		for (const [, peer] of this.peers) {
+			if (peer.channel.remoteNodeInfo?.nodeId === info.nodeId) return;
+		}
+
+		const maxDiscovered = this.config.maxDiscoveredPeers ?? 10;
+		if (this.peers.size >= maxDiscovered || this.peers.size >= this.config.maxPeers) return;
+
+		this.knownEndpoints.add(info.endpoint);
+
+		// Bitcoin-style: relay newly discovered peer to all connected peers
+		this.relayPeerAddr(info);
+
+		void this.connectToPeer(info.endpoint);
+	}
+
+	/** Relay a peer address to all connected peers (transitive propagation). */
+	private relayPeerAddr(info: PeerNodeInfo): void {
+		for (const [, peer] of this.peers) {
+			if (peer.channel.state !== "connected") continue;
+			if (peer.channel.remoteNodeInfo?.nodeId === info.nodeId) continue;
+			peer.channel.sendDiscovery([info]);
+		}
+	}
+
+	/** Start periodic peer exchange with all connected peers. */
+	private startPeerExchange(): void {
+		const interval = this.config.peerExchangeIntervalMs ?? 30_000;
+		this.peerExchangeTimer = setInterval(() => {
+			if (!this.running) return;
+			for (const [peerId] of this.peers) {
+				this.sendPeerExchangeTo(peerId);
+			}
+		}, interval);
+	}
+
 	// ─── Helpers ────────────────────────────────────────────────────
 
-	private peerIdFromEndpoint(endpoint: string): string {
-		try {
-			const url = new URL(endpoint);
-			return `${url.hostname}:${url.port}`;
-		} catch {
-			return endpoint;
-		}
+	private peerIdFromEndpoint(ep: string): string {
+		try { const u = new URL(ep); return `${u.hostname}:${u.port}`; } catch { return ep; }
 	}
 }
