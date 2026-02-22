@@ -22,6 +22,7 @@ import type {
 } from "./peer-types.js";
 import { PEER_NETWORK_DEFAULTS } from "./peer-types.js";
 import { WsPeerChannel, type WsLike } from "./ws-peer-channel.js";
+import { verifySignature } from "./peer-envelope.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -307,8 +308,22 @@ export class PeerConnectionManager {
 		});
 	}
 
-	private verifyAuth(_raw: string): boolean {
-		return true;
+	/**
+	 * Verify the inbound auth frame's HMAC signature.
+	 *
+	 * The connecting peer signs a nonce with the shared meshSecret.
+	 * We re-compute the HMAC and compare using constant-time equality.
+	 * If no nonce/hmac is provided but meshSecret is set, auth fails.
+	 */
+	private verifyAuth(raw: string): boolean {
+		if (!this.config.meshSecret) return true;
+		try {
+			const parsed = JSON.parse(raw) as { nonce?: string; hmac?: string };
+			if (!parsed.nonce || !parsed.hmac) return false;
+			return verifySignature(parsed.nonce, parsed.hmac, this.config.meshSecret);
+		} catch {
+			return false;
+		}
 	}
 
 	// ─── Event Routing ──────────────────────────────────────────────

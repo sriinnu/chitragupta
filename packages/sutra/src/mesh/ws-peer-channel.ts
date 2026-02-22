@@ -262,10 +262,14 @@ export class WsPeerChannel implements PeerChannel {
 			case "ping":
 				this.sendMessage({ type: "pong", ts: msg.ts });
 				break;
-			case "pong":
+			case "pong": {
+				const now = Date.now();
 				this.missedPings = 0;
-				this._stats.lastPingMs = Date.now() - msg.ts;
+				this._stats.missedPings = 0;
+				this._stats.lastPingMs = now - msg.ts;
+				this._stats.lastPongReceived = now;
 				break;
+			}
 			case "auth:ok":
 				this.remoteInfo = msg.info;
 				break;
@@ -281,10 +285,15 @@ export class WsPeerChannel implements PeerChannel {
 	// ─── Authentication ─────────────────────────────────────────────
 
 	private async authenticate(): Promise<void> {
+		// Generate nonce and sign it if meshSecret is configured
+		const nonce = `${this.localNodeId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+		const hmac = this.meshSecret ? signMessage(nonce, this.meshSecret) : undefined;
 		const authMsg: PeerMessage = {
 			type: "auth",
-			token: this.meshSecret ?? "",
+			token: this.meshSecret ? "" : "", // never send raw secret
 			nodeId: this.localNodeId,
+			nonce,
+			hmac,
 			info: {
 				nodeId: this.localNodeId,
 				endpoint: "",
@@ -338,20 +347,29 @@ export class WsPeerChannel implements PeerChannel {
 		});
 	}
 
-	// ─── Ping/Pong ──────────────────────────────────────────────────
+	// ─── Ping/Pong (Heartbeat Liveness) ─────────────────────────────
 
 	private startPingLoop(): void {
 		this.stopPingLoop();
 		this.missedPings = 0;
+		this._stats.missedPings = 0;
 		this.pingInterval = setInterval(() => {
 			if (this._state !== "connected") return;
 			this.missedPings++;
+			this._stats.missedPings = this.missedPings;
 			if (this.missedPings > this.maxMissedPings) {
+				// Declare peer dead — kill connection, clean up, notify
+				const reason = `no heartbeat for ${this.missedPings} pings (${this.missedPings * this.pingIntervalMs}ms)`;
+				this._stats.declaredDeadAt = Date.now();
+				this._stats.deathReason = reason;
+				this.setState("dead");
 				this.emit({ type: "peer:dead", peerId: this.peerId });
-				this.close("ping timeout");
+				this.killConnection(reason);
 				return;
 			}
-			this.sendMessage({ type: "ping", ts: Date.now() });
+			const now = Date.now();
+			this._stats.lastPingSent = now;
+			this.sendMessage({ type: "ping", ts: now });
 		}, this.pingIntervalMs);
 	}
 
@@ -360,6 +378,17 @@ export class WsPeerChannel implements PeerChannel {
 			clearInterval(this.pingInterval);
 			this.pingInterval = null;
 		}
+	}
+
+	/** Force-close and destroy the connection (dead peer or timeout). */
+	private killConnection(reason: string): void {
+		this.stopPingLoop();
+		if (this.ws) {
+			try { this.ws.close(1001, reason); } catch { /* socket may already be gone */ }
+			this.ws = null;
+		}
+		if (this._state !== "dead") this.setState("disconnected");
+		this.emit({ type: "peer:disconnected", peerId: this.peerId, reason });
 	}
 
 	// ─── Helpers ────────────────────────────────────────────────────
