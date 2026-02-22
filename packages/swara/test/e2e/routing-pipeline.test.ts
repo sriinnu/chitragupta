@@ -557,11 +557,13 @@ describe("Routing Pipeline E2E", () => {
 
 		it("should escalate from error event to a working provider that returns done", async () => {
 			const registry = createProviderRegistry();
-			// Register a provider that yields error + immediately yields done (broken but terminates)
+			// Register a provider that yields error (broken, always fails regardless of model)
 			registry.register(createFailingProvider("ollama"));
 			// Register anthropic as a successful escalation target
 			registry.register(createMockStreamProvider("anthropic", "Escalated OK"));
 
+			// Escalation chain has 3 ollama entries before reaching anthropic,
+			// so we need maxEscalations >= 3 to traverse past all ollama models.
 			const pipeline = new MargaPipeline({
 				registry,
 				bindings: [{
@@ -571,7 +573,7 @@ describe("Routing Pipeline E2E", () => {
 					rationale: "test",
 				}],
 				autoEscalate: true,
-				maxEscalations: 2,
+				maxEscalations: 4,
 			});
 
 			const events = await collectStream(pipeline.stream(userContext("What is the capital of France?")));

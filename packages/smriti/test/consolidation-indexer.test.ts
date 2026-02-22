@@ -40,7 +40,7 @@ beforeEach(async () => {
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "chitragupta-cidx-test-"));
 	DatabaseManager.reset();
 	_resetConsolidationIndexer();
-	const core = vi.mocked(await import("@chitragupta/core"));
+	const core = vi.mocked(await import("@chitragupta/core")) as unknown as typeof import("@chitragupta/core") & { setChitraguptaHome: (h: string) => void };
 	core.setChitraguptaHome(tmpDir);
 	// Pre-initialize the DB singleton so consolidation-indexer picks up tmpDir
 	const dbm = DatabaseManager.instance(tmpDir);
