@@ -15,6 +15,7 @@ import path from "path";
 import {
 	getChitraguptaHome,
 	createLogger,
+	loadGlobalSettings,
 } from "@chitragupta/core";
 import type { AgentProfile, ThinkingLevel } from "@chitragupta/core";
 
@@ -288,7 +289,8 @@ async function wireSandeshaRouter(result: TuiWiringResult): Promise<void> {
 
 function wireKaalaBrahma(result: TuiWiringResult): void {
 	try {
-		result.kaala = new KaalaBrahma({ heartbeatInterval: 5000, staleThreshold: 30000, maxAgentDepth: 5, maxSubAgents: 8 });
+		const agentsCfg = loadGlobalSettings().agents;
+		result.kaala = new KaalaBrahma({ heartbeatInterval: 5000, staleThreshold: 30000, maxAgentDepth: agentsCfg?.maxDepth ?? 8, maxSubAgents: agentsCfg?.maxSubAgents ?? 12 });
 		result.kaala.startMonitoring();
 		if (result.samiti) {
 			const samiti = result.samiti;

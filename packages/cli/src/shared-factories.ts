@@ -184,11 +184,13 @@ export async function createMeshInfrastructure(
 	// KaalaBrahma for lifecycle tracking
 	try {
 		const { KaalaBrahma } = await import("@chitragupta/anina");
+		const { loadGlobalSettings } = await import("@chitragupta/core");
+		const agentsCfg = loadGlobalSettings().agents;
 		result.kaala = new KaalaBrahma({
 			heartbeatInterval: 5000,
 			staleThreshold: 30000,
-			maxAgentDepth: 5,
-			maxSubAgents: 8,
+			maxAgentDepth: agentsCfg?.maxDepth ?? 8,
+			maxSubAgents: agentsCfg?.maxSubAgents ?? 12,
 		}) as unknown as import("@chitragupta/anina").KaalaLifecycle;
 	} catch {
 		// KaalaBrahma is optional

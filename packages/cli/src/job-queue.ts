@@ -91,7 +91,7 @@ const SYSTEM_MAX_EVENTS_PER_JOB = 10_000;
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
-const DEFAULT_MAX_CONCURRENT = 6;
+const DEFAULT_MAX_CONCURRENT = 10;
 const DEFAULT_MAX_QUEUE_SIZE = 50;
 const DEFAULT_JOB_TTL = 3_600_000; // 1 hour
 const DEFAULT_MAX_EVENTS = 1_000;
