@@ -17,21 +17,29 @@ type AgentPromptFallbackDeps = {
 	defaultProviderPriority: readonly string[];
 };
 
+/** Default timeout for a single prompt attempt (2 minutes). */
+const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
+
 /**
  * Execute an agent prompt with provider fallback.
  *
  * Attempts:
  * 1. Requested provider/model (or auto routing when provider is omitted)
  * 2. Remaining providers from settings priority order, one by one
+ *
+ * Each attempt is bounded by `timeoutMs` (default 120s) to prevent
+ * indefinite hangs when a provider is slow or unresponsive.
  */
 export async function runAgentPromptWithFallback(
 	params: {
 		message: string;
 		provider?: string;
 		model?: string;
+		timeoutMs?: number;
 	},
 	deps?: Partial<AgentPromptFallbackDeps>,
 ): Promise<{ response: string; providerId: string; attempts: number }> {
+	const timeoutMs = params.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS;
 	const createChitragupta =
 		deps?.createChitragupta ?? (await import("../api.js")).createChitragupta;
 	const loadSettings = deps?.loadSettings ?? loadGlobalSettings;
@@ -65,7 +73,12 @@ export async function runAgentPromptWithFallback(
 				...(attempt.provider ? { provider: attempt.provider } : {}),
 				...(attempt.model ? { model: attempt.model } : {}),
 			});
-			const response = await runner.prompt(params.message);
+			const response = await Promise.race([
+				runner.prompt(params.message),
+				new Promise<never>((_, reject) => {
+					setTimeout(() => reject(new Error(`Prompt timed out after ${timeoutMs}ms`)), timeoutMs);
+				}),
+			]);
 			return { response, providerId, attempts: index + 1 };
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
@@ -110,6 +123,10 @@ export function createAgentPromptTool(): McpToolHandler {
 						type: "string",
 						description: "Model to use. Default: from config",
 					},
+					timeout: {
+						type: "number",
+						description: "Timeout in milliseconds per attempt. Default: 120000 (2 min)",
+					},
 				},
 				required: ["message"],
 			},
@@ -128,6 +145,7 @@ export function createAgentPromptTool(): McpToolHandler {
 					message,
 					...(args.provider ? { provider: String(args.provider) } : {}),
 					...(args.model ? { model: String(args.model) } : {}),
+					...(args.timeout ? { timeoutMs: Number(args.timeout) } : {}),
 				});
 				return {
 					content: [{ type: "text", text: result.response }],
