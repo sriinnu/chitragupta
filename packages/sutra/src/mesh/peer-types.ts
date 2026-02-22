@@ -37,7 +37,7 @@ export type PeerConnectionState =
 	| "reconnecting"
 	| "dead";
 
-/** Connection statistics for a single peer. */
+/** Connection statistics and health tracking for a single peer. */
 export interface PeerConnectionStats {
 	state: PeerConnectionState;
 	connectedAt?: number;
@@ -47,8 +47,19 @@ export interface PeerConnectionStats {
 	messagesReceived: number;
 	bytesIn: number;
 	bytesOut: number;
+	/** Round-trip latency of the last successful ping/pong (ms). */
 	lastPingMs?: number;
 	lastActivity: number;
+	/** When we last sent a ping frame. */
+	lastPingSent?: number;
+	/** When we last received a pong reply. */
+	lastPongReceived?: number;
+	/** Current count of consecutive missed pings (resets on pong). */
+	missedPings?: number;
+	/** Whether the peer was declared dead. */
+	declaredDeadAt?: number;
+	/** Reason the connection was closed or killed. */
+	deathReason?: string;
 }
 
 // ─── Wire Protocol ──────────────────────────────────────────────────────────
@@ -68,7 +79,7 @@ export type PeerMessage =
 	| { type: "samiti"; channel: string; data: unknown }
 	| { type: "ping"; ts: number }
 	| { type: "pong"; ts: number }
-	| { type: "auth"; token: string; nodeId: string; info: PeerNodeInfo }
+	| { type: "auth"; token: string; nodeId: string; info: PeerNodeInfo; nonce?: string; hmac?: string }
 	| { type: "auth:ok"; nodeId: string; info: PeerNodeInfo }
 	| { type: "auth:fail"; reason: string };
 
