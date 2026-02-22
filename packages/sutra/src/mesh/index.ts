@@ -38,6 +38,8 @@ export { ActorSystem, ActorRef } from "./actor-system.js";
 export type { SpawnOptions } from "./actor-system.js";
 
 // P2P Network Transport
+export { NetworkGossip } from "./network-gossip.js";
+export type { ActorLocationMap, NetworkGossipConfig, NetworkGossipEvent } from "./network-gossip.js";
 export { WsPeerChannel } from "./ws-peer-channel.js";
 export { PeerConnectionManager } from "./peer-connection.js";
 export type {
