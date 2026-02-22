@@ -265,14 +265,41 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 		// ─── Smaran: per-turn memory recall (inject relevant memories) ──
 		const promptMessage = applyMemoryRecall(message, options);
 
-		// ─── Turiya: retroactive rephrase penalty for previous decision ──
-		applyRephrasePenalty(message, routing, options);
+			// ─── Turiya: retroactive rephrase penalty for previous decision ──
+			applyRephrasePenalty(message, routing, options);
 
-		// ─── Model routing (Manas + Turiya / Marga) ─────────────────────
-		routeModelForTurn(message, agent, routing, options, stdout);
+			// ─── Model routing (Manas + Turiya / Marga) ─────────────────────
+			const { noLlmTemplateResponse } = routeModelForTurn(message, agent, routing, options, stdout);
 
-		// ─── Shiksha: pre-prompt skill gap detection ────────────────────
-		const shikshaResult = await tryShikshaIntercept(message, options, stdout);
+			if (noLlmTemplateResponse) {
+				spinner.stop();
+				printAssistantLabel(stdout, profile.name);
+				stdout.write(noLlmTemplateResponse + "\n");
+
+				if (options.turiyaRouter && routing.lastTuriyaDecision) {
+					try {
+						options.turiyaRouter.recordOutcome(routing.lastTuriyaDecision, 0.95);
+					} catch {
+						// Best-effort routing feedback.
+					}
+				}
+
+				if (options.onTurnComplete) {
+					options.onTurnComplete(message, noLlmTemplateResponse);
+				}
+
+				eventState.streamingText = noLlmTemplateResponse;
+				routing.lastUserMessage = message;
+				isStreaming = false;
+				kpState.isStreaming = false;
+				renderStatusBar();
+				stdout.write("\n");
+				renderPrompt();
+				return;
+			}
+
+			// ─── Shiksha: pre-prompt skill gap detection ────────────────────
+			const shikshaResult = await tryShikshaIntercept(message, options, stdout);
 		if (shikshaResult.handled) {
 			isStreaming = false;
 			kpState.isStreaming = false;
