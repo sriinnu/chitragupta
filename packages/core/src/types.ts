@@ -108,6 +108,15 @@ export interface ChitraguptaSettings {
 		selfModelPersistence?: boolean;
 		goalAbandonmentThreshold?: number;
 	};
+	/** Agent tree and concurrency limits. Configurable per-installation. */
+	agents?: {
+		/** Max agent tree depth. Default: 8. Clamped to system ceiling of 10. */
+		maxDepth?: number;
+		/** Max sub-agents per parent agent. Default: 12. Clamped to system ceiling of 16. */
+		maxSubAgents?: number;
+		/** Max concurrent jobs in the HTTP job queue. Default: 10. Clamped to system ceiling of 16. */
+		maxConcurrentJobs?: number;
+	};
 	/** Coding agent (Kartru / Sanyojaka) defaults. */
 	coding?: {
 		/** Default execution mode. Default: "full" */
@@ -177,6 +186,11 @@ export const DEFAULT_SETTINGS: ChitraguptaSettings = {
 			suspectTimeoutMs: 15_000,
 			deadTimeoutMs: 30_000,
 		},
+	},
+	agents: {
+		maxDepth: 8,
+		maxSubAgents: 12,
+		maxConcurrentJobs: 10,
 	},
 	coding: {
 		mode: "full",

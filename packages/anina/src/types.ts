@@ -243,10 +243,10 @@ export const SYSTEM_MAX_AGENT_DEPTH = 10;
 export const SYSTEM_MAX_SUB_AGENTS = 16;
 
 /** Default max agent depth used when no config override is provided. */
-export const DEFAULT_MAX_AGENT_DEPTH = 3;
+export const DEFAULT_MAX_AGENT_DEPTH = 8;
 
 /** Default max sub-agents per parent used when no config override is provided. */
-export const DEFAULT_MAX_SUB_AGENTS = 4;
+export const DEFAULT_MAX_SUB_AGENTS = 12;
 
 /**
  * @deprecated Use DEFAULT_MAX_AGENT_DEPTH or configure via KaalaConfig.maxAgentDepth.
