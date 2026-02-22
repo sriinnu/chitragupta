@@ -19,6 +19,8 @@ import type {
 	ParamparaChain,
 } from "./types-v2.js";
 
+import type { SkillManifest } from "./types.js";
+import type { SurakshaScanResult } from "./suraksha.js";
 import type { SkillHealthReport, SkillEvolutionState } from "./skill-evolution.js";
 import type { SerializedSamskaraState } from "./samskara-skill.js";
 import type { YogaEngine } from "./yoga.js";

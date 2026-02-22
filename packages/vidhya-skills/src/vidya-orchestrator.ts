@@ -122,16 +122,16 @@ export class VidyaOrchestrator {
 	readonly evolution: SkillEvolution;
 
 	// ── Injected deps ──
-	private readonly registry: SkillRegistry;
-	private readonly bridge: VidyaBridge;
+	readonly registry: SkillRegistry;
+	readonly bridge: VidyaBridge;
 	private readonly scanner?: ScannerLike;
-	private readonly shiksha?: ShikshaLike;
+	readonly shiksha?: ShikshaLike;
 
 	// ── Internal state ──
-	private readonly config: VidyaOrchestratorConfig;
-	private readonly ashramamStates: Map<string, AshramamState> = new Map();
-	private readonly koshaScores: Map<string, PanchaKoshaScores> = new Map();
-	private readonly chains: Map<string, ParamparaChain> = new Map();
+	readonly config: VidyaOrchestratorConfig;
+	readonly ashramamStates: Map<string, AshramamState> = new Map();
+	readonly koshaScores: Map<string, PanchaKoshaScores> = new Map();
+	readonly chains: Map<string, ParamparaChain> = new Map();
 	private initialized = false;
 
 	constructor(

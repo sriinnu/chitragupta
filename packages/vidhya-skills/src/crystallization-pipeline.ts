@@ -9,6 +9,7 @@
  */
 
 import { fnv1a } from "./fingerprint.js";
+import { SkillCrystallizer } from "./crystallization.js";
 import type {
 	VidhiLike,
 	CrystallizationConfig,
@@ -289,7 +290,7 @@ export function promoteMatureVidhis(vidhis: VidhiLike[]): {
 	});
 
 	const results = crystallizer.crystallize(vidhis);
-	const approved = results.filter((s) => s.status === "registered" || s.status === "approved");
+	const approved = results.filter((s: CrystallizedSkill) => s.status === "registered" || s.status === "approved");
 
 	return {
 		candidates: vidhis.length,
