@@ -169,6 +169,17 @@ describe("loadProjectMemory", () => {
 		expect(loadProjectMemory("/test/project")).toBeUndefined();
 	});
 
+	it("should load canonical Smriti project memory path first", () => {
+		const crypto = require("crypto");
+		const hash = crypto.createHash("sha256").update("/canonical/project").digest("hex").slice(0, 12);
+		const canonicalDir = path.join(tmpDir, "memory", "projects", hash);
+		fs.mkdirSync(canonicalDir, { recursive: true });
+		fs.writeFileSync(path.join(canonicalDir, "project.md"), "# Canonical Memory\nUse this", "utf-8");
+
+		const result = loadProjectMemory("/canonical/project");
+		expect(result).toBe("# Canonical Memory\nUse this");
+	});
+
 	it("should return content for valid memory file", () => {
 		const crypto = require("crypto");
 		const hash = crypto.createHash("sha256").update("/my/project").digest("hex").slice(0, 12);
@@ -178,6 +189,15 @@ describe("loadProjectMemory", () => {
 
 		const result = loadProjectMemory("/my/project");
 		expect(result).toBe("# Project Notes\nImportant info");
+	});
+
+	it("should fallback to project-local MEMORY.md when home memory is missing", () => {
+		const projectDir = path.join(tmpDir, "workspace", "proj");
+		fs.mkdirSync(projectDir, { recursive: true });
+		fs.writeFileSync(path.join(projectDir, "MEMORY.md"), "# Local Memory\nFrom project root", "utf-8");
+
+		const result = loadProjectMemory(projectDir);
+		expect(result).toBe("# Local Memory\nFrom project root");
 	});
 });
 

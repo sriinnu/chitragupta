@@ -94,6 +94,7 @@ export class MemoryBridge {
 		if (!this.config.enabled || !sessionId) return;
 		this.turnCounter++;
 		await addTurn(sessionId, this.config.project, { turnNumber: this.turnCounter, role: "user", content });
+		this.refreshSessionSnapshot(sessionId);
 	}
 
 	/** Record an assistant turn with optional tool calls. */
@@ -107,7 +108,18 @@ export class MemoryBridge {
 			name: tc.name, input: tc.input, result: tc.result, isError: tc.isError,
 		}));
 		await addTurn(sessionId, this.config.project, { turnNumber: this.turnCounter, role: "assistant", content, toolCalls: mapped });
+		this.refreshSessionSnapshot(sessionId);
 		this.indexTurnAsync(content, toolCalls).catch((e) => { log.debug("background indexing failed", { error: String(e) }); });
+	}
+
+	private refreshSessionSnapshot(sessionId: string): void {
+		try {
+			const latest = loadSession(sessionId, this.config.project);
+			this.session = latest;
+			this.sessionId = latest.meta.id;
+		} catch (e) {
+			log.debug("session snapshot refresh failed", { error: String(e), sessionId });
+		}
 	}
 
 	private async indexTurnAsync(

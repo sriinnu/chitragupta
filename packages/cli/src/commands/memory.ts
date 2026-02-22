@@ -21,31 +21,53 @@ import {
 } from "@chitragupta/ui/ansi";
 
 /**
- * Get the memory directory for a project.
+ * Hash a project path to a short deterministic directory key.
  */
-function getProjectMemoryDir(project: string): string {
-	const hash = crypto.createHash("sha256").update(project).digest("hex").slice(0, 12);
-	return path.join(getChitraguptaHome(), "memory", hash);
+function getProjectHash(project: string): string {
+	return crypto.createHash("sha256").update(project).digest("hex").slice(0, 12);
 }
 
 /**
- * Get the memory file path for a project.
+ * Canonical Smriti project memory path.
+ * ~/.chitragupta/memory/projects/<hash>/project.md
+ */
+function getCanonicalMemoryPath(project: string): string {
+	return path.join(getChitraguptaHome(), "memory", "projects", getProjectHash(project), "project.md");
+}
+
+/**
+ * Legacy CLI project memory path.
+ * ~/.chitragupta/memory/<hash>/MEMORY.md
+ */
+function getLegacyMemoryPath(project: string): string {
+	return path.join(getChitraguptaHome(), "memory", getProjectHash(project), "MEMORY.md");
+}
+
+/**
+ * Get the canonical memory file path for a project.
  */
 function getMemoryPath(project: string): string {
-	return path.join(getProjectMemoryDir(project), "MEMORY.md");
+	return getCanonicalMemoryPath(project);
 }
 
 /**
  * Read the project memory file. Returns undefined if not found.
  */
 function readMemory(project: string): string | undefined {
-	const memPath = getMemoryPath(project);
-	try {
-		if (fs.existsSync(memPath)) {
-			return fs.readFileSync(memPath, "utf-8");
+	const candidates = [
+		getCanonicalMemoryPath(project),
+		getLegacyMemoryPath(project),
+		path.join(project, "MEMORY.md"),
+	];
+
+	for (const memPath of candidates) {
+		try {
+			if (fs.existsSync(memPath)) {
+				return fs.readFileSync(memPath, "utf-8");
+			}
+		} catch {
+			// Not readable; continue fallback chain.
 		}
-	} catch {
-		// Not readable
 	}
 	return undefined;
 }
@@ -87,10 +109,20 @@ export async function show(project?: string): Promise<void> {
 export async function edit(project?: string): Promise<void> {
 	const projectPath = project ?? process.cwd();
 	const memPath = getMemoryPath(projectPath);
+	const legacyPath = getLegacyMemoryPath(projectPath);
 	const memDir = path.dirname(memPath);
 
 	// Ensure directory exists
 	fs.mkdirSync(memDir, { recursive: true });
+
+	// Auto-migrate legacy memory file into canonical path on first edit.
+	if (!fs.existsSync(memPath) && fs.existsSync(legacyPath)) {
+		try {
+			fs.copyFileSync(legacyPath, memPath);
+		} catch {
+			// Best-effort migration.
+		}
+	}
 
 	// Create with template if not existing
 	if (!fs.existsSync(memPath)) {
@@ -155,13 +187,39 @@ export async function search(query: string): Promise<void> {
 	let matchCount = 0;
 
 	try {
-		const projectDirs = fs.readdirSync(memoryRoot, { withFileTypes: true });
+		const memoryFiles: Array<{ id: string; filePath: string }> = [];
+		const seen = new Set<string>();
 
-		for (const entry of projectDirs) {
+		// Canonical Smriti project memory files.
+		const projectsDir = path.join(memoryRoot, "projects");
+		if (fs.existsSync(projectsDir)) {
+			const projectDirs = fs.readdirSync(projectsDir, { withFileTypes: true });
+			for (const entry of projectDirs) {
+				if (!entry.isDirectory()) continue;
+				const memFile = path.join(projectsDir, entry.name, "project.md");
+				if (!fs.existsSync(memFile)) continue;
+				const key = `${entry.name}:${memFile}`;
+				if (seen.has(key)) continue;
+				seen.add(key);
+				memoryFiles.push({ id: entry.name, filePath: memFile });
+			}
+		}
+
+		// Legacy CLI memory files for backward compatibility.
+		const rootDirs = fs.readdirSync(memoryRoot, { withFileTypes: true });
+		for (const entry of rootDirs) {
 			if (!entry.isDirectory()) continue;
-
+			if (entry.name === "projects" || entry.name === "agents") continue;
 			const memFile = path.join(memoryRoot, entry.name, "MEMORY.md");
 			if (!fs.existsSync(memFile)) continue;
+			const key = `${entry.name}:${memFile}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			memoryFiles.push({ id: entry.name, filePath: memFile });
+		}
+
+		for (const memoryFile of memoryFiles) {
+			const memFile = memoryFile.filePath;
 
 			try {
 				const content = fs.readFileSync(memFile, "utf-8");
@@ -177,7 +235,7 @@ export async function search(query: string): Promise<void> {
 				if (matchingLines.length > 0) {
 					matchCount++;
 					process.stdout.write(
-						`  ${cyan(entry.name)} ${gray(`(${memFile})`)}\n`,
+						`  ${cyan(memoryFile.id)} ${gray(`(${memFile})`)}\n`,
 					);
 
 					for (const match of matchingLines.slice(0, 5)) {
