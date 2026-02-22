@@ -12,6 +12,7 @@ import type {
 	InteractiveModeOptions,
 	TuriyaRouterInstance,
 } from "./interactive-types.js";
+import { buildNoLlmTemplateResponse } from "./no-llm-template.js";
 
 /** Mutable routing state shared across turns. */
 export interface RoutingState {
@@ -98,8 +99,9 @@ export function routeModelForTurn(
 	routing: RoutingState,
 	options: InteractiveModeOptions,
 	stdout: NodeJS.WriteStream,
-): void {
+): { noLlmTemplateResponse?: string } {
 	routing.lastTuriyaDecision = undefined;
+	let noLlmTemplateResponse: string | undefined;
 
 	// Path 1: Manas + Turiya (preferred)
 	if (options.manas && options.turiyaRouter && !options.userExplicitModel) {
@@ -111,49 +113,52 @@ export function routeModelForTurn(
 			}));
 			agentMessages.push({ role: "user", content: [{ type: "text", text: message }] });
 
-			const ctx = options.turiyaRouter.extractContext(agentMessages);
-			const decision = options.turiyaRouter.classify(ctx);
-			routing.lastTuriyaDecision = decision;
-
-			const tierModelHints: Record<string, string[]> = {
-				"haiku": ["haiku", "claude-haiku", "gpt-4o-mini", "gemini-flash"],
-				"sonnet": ["sonnet", "claude-sonnet", "gpt-4o", "gemini-pro"],
-				"opus": ["opus", "claude-opus", "gpt-4", "o1", "gemini-ultra"],
-			};
-			const hints = tierModelHints[decision.tier];
-			if (hints && decision.tier !== "no-llm") {
-				const currentLower = routing.currentModel.toLowerCase();
-				const alreadyMatchesTier = hints.some(h => currentLower.includes(h));
-				if (!alreadyMatchesTier && options.margaPipeline) {
-					try {
-						const margaDecision = options.margaPipeline.classify({
-							messages: [{ role: "user", content: [{ type: "text", text: message }] }],
-							systemPrompt: undefined,
-						});
-						if (margaDecision.modelId && margaDecision.modelId !== routing.currentModel) {
-							if (options.providerRegistry) {
-								const newProvider = options.providerRegistry.get(margaDecision.providerId);
-								if (newProvider) {
-									agent.setProvider(newProvider as Parameters<typeof agent.setProvider>[0]);
+				const ctx = options.turiyaRouter.extractContext(agentMessages);
+				const decision = options.turiyaRouter.classify(ctx);
+				routing.lastTuriyaDecision = decision;
+				if (decision.tier === "no-llm") {
+					noLlmTemplateResponse = buildNoLlmTemplateResponse(message, classification.intent);
+				} else {
+					const tierModelHints: Record<string, string[]> = {
+						"haiku": ["haiku", "claude-haiku", "gpt-4o-mini", "gemini-flash"],
+						"sonnet": ["sonnet", "claude-sonnet", "gpt-4o", "gemini-pro"],
+						"opus": ["opus", "claude-opus", "gpt-4", "o1", "gemini-ultra"],
+					};
+					const hints = tierModelHints[decision.tier];
+					if (hints) {
+						const currentLower = routing.currentModel.toLowerCase();
+						const alreadyMatchesTier = hints.some(h => currentLower.includes(h));
+						if (!alreadyMatchesTier && options.margaPipeline) {
+							try {
+								const margaDecision = options.margaPipeline.classify({
+									messages: [{ role: "user", content: [{ type: "text", text: message }] }],
+									systemPrompt: undefined,
+								});
+								if (margaDecision.modelId && margaDecision.modelId !== routing.currentModel) {
+									if (options.providerRegistry) {
+										const newProvider = options.providerRegistry.get(margaDecision.providerId);
+										if (newProvider) {
+											agent.setProvider(newProvider as Parameters<typeof agent.setProvider>[0]);
+										}
+									}
+									agent.setModel(margaDecision.modelId);
+									routing.currentModel = margaDecision.modelId;
 								}
+							} catch {
+								// Marga fallback failed — keep current model
 							}
-							agent.setModel(margaDecision.modelId);
-							routing.currentModel = margaDecision.modelId;
 						}
-					} catch {
-						// Marga fallback failed — keep current model
 					}
 				}
-			}
 
-			stdout.write(
-				dim(`  [${classification.intent} → ${decision.tier} (${(decision.confidence * 100).toFixed(0)}%) ~$${decision.costEstimate.toFixed(4)}]\n`),
-			);
-		} catch {
-			// Manas/Turiya classification failed — continue with current model
+				stdout.write(
+					dim(`  [${classification.intent} → ${decision.tier} (${(decision.confidence * 100).toFixed(0)}%) ~$${decision.costEstimate.toFixed(4)}]\n`),
+				);
+			} catch {
+				// Manas/Turiya classification failed — continue with current model
+			}
+			return { noLlmTemplateResponse };
 		}
-		return;
-	}
 
 	// Path 2: Pure Marga fallback
 	if (options.margaPipeline && !options.userExplicitModel) {
@@ -162,6 +167,13 @@ export function routeModelForTurn(
 				messages: [{ role: "user", content: [{ type: "text", text: message }] }],
 				systemPrompt: undefined,
 			});
+			if (decision.skipLLM) {
+				noLlmTemplateResponse = buildNoLlmTemplateResponse(message, decision.taskType);
+				stdout.write(
+					dim(`  [marga: ${decision.taskType}/${decision.complexity} → no-llm]\n`),
+				);
+				return { noLlmTemplateResponse };
+			}
 			if (decision.modelId && decision.modelId !== routing.currentModel) {
 				if (options.providerRegistry) {
 					const newProvider = options.providerRegistry.get(decision.providerId);
@@ -179,6 +191,7 @@ export function routeModelForTurn(
 			// Marga classification failed — continue with current model
 		}
 	}
+	return { noLlmTemplateResponse };
 }
 
 /**

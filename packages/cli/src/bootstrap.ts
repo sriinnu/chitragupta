@@ -36,19 +36,30 @@ import type { PolicyAction } from "@chitragupta/dharma";
 // ─── Memory Helpers ─────────────────────────────────────────────────────────
 
 /**
- * Load memory content for a project from ~/.chitragupta/memory/<hash>/MEMORY.md.
+ * Load memory content for a project from the canonical Smriti project scope:
+ *   ~/.chitragupta/memory/projects/<hash>/project.md
+ *
+ * Compatibility fallbacks:
+ *   1) Legacy CLI path: ~/.chitragupta/memory/<hash>/MEMORY.md
+ *   2) Project-local file: <project>/MEMORY.md
  */
 export function loadProjectMemory(projectPath: string): string | undefined {
 	const hash = crypto.createHash("sha256").update(projectPath).digest("hex").slice(0, 12);
-	const memPath = path.join(getChitraguptaHome(), "memory", hash, "MEMORY.md");
+	const memoryRoot = path.join(getChitraguptaHome(), "memory");
+	const candidatePaths = [
+		path.join(memoryRoot, "projects", hash, "project.md"),
+		path.join(memoryRoot, hash, "MEMORY.md"),
+		path.join(projectPath, "MEMORY.md"),
+	];
 
-	try {
-		if (fs.existsSync(memPath)) {
+	for (const memPath of candidatePaths) {
+		try {
+			if (!fs.existsSync(memPath)) continue;
 			const content = fs.readFileSync(memPath, "utf-8").trim();
-			return content.length > 0 ? content : undefined;
+			if (content.length > 0) return content;
+		} catch {
+			// Silently skip unreadable candidates and continue fallback chain.
 		}
-	} catch {
-		// Silently skip: memory file not readable (permissions, corrupt, etc.)
 	}
 	return undefined;
 }

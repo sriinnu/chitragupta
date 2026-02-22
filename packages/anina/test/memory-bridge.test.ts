@@ -163,6 +163,13 @@ describe("MemoryBridge", () => {
 			expect(calls[0][2].turnNumber).toBe(1);
 			expect(calls[1][2].turnNumber).toBe(2);
 		});
+
+		it("refreshes cached session snapshot after writing user turns", async () => {
+			const bridge = new MemoryBridge(makeConfig());
+			await bridge.initSession("a", "p", "m", "/proj");
+			await bridge.recordUserTurn("mock-session-id", "First");
+			expect(loadSession).toHaveBeenCalledWith("mock-session-id", "/test/project");
+		});
 	});
 
 	// ── recordAssistantTurn ─────────────────────────────────────────────
@@ -209,6 +216,13 @@ describe("MemoryBridge", () => {
 			await bridge.recordAssistantTurn("mock-session-id", "Just text.");
 			const call = (addTurn as ReturnType<typeof vi.fn>).mock.calls[0];
 			expect(call[2].toolCalls).toBeUndefined();
+		});
+
+		it("refreshes cached session snapshot after writing assistant turns", async () => {
+			const bridge = new MemoryBridge(makeConfig());
+			await bridge.initSession("a", "p", "m", "/proj");
+			await bridge.recordAssistantTurn("mock-session-id", "Done.");
+			expect(loadSession).toHaveBeenCalledWith("mock-session-id", "/test/project");
 		});
 	});
 
