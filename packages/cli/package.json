@@ -1,7 +1,7 @@
 {
 	"name": "@chitragupta/cli",
 	"private": true,
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Bold, opinionated CLI and MCP server for the Chitragupta AI agent platform",
 	"type": "module",
 	"license": "MIT",
