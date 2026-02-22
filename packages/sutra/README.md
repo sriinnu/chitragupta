@@ -348,4 +348,82 @@ router.destroy();
 
 ---
 
+## P2P Actor Mesh
+
+Sutra extends its in-process actor model into a real distributed system. Multiple Chitragupta nodes form a self-organizing mesh network over WebSocket connections, with design principles drawn from **Bitcoin's network layer**.
+
+> Full documentation: [docs/p2p-mesh.md](../../docs/p2p-mesh.md)
+
+### Architecture
+
+| Component | Purpose |
+|-----------|---------|
+| `ActorSystem` | Top-level coordinator — spawn, route, broadcast, P2P bootstrap |
+| `PeerConnectionManager` | WebSocket lifecycle, TLS, reconnect, discovery |
+| `WsPeerChannel` | Single peer connection — auth, ping/pong, message relay |
+| `MeshRouter` | Priority-lane routing with TTL, hop tracking, reply routes |
+| `GossipProtocol` | SWIM failure detection (alive → suspect → dead) |
+| `NetworkGossip` | Bridges gossip with real P2P network |
+| `PeerGuard` | Anti-eclipse: subnet diversity, rate limiting, peer scoring |
+| `PeerAddrDb` | Bitcoin-style persistent peer database (new/tried tables) |
+
+### Quick Start
+
+```typescript
+import { ActorSystem } from "@chitragupta/sutra/mesh";
+
+const system = new ActorSystem({ gossipIntervalMs: 500 });
+system.start();
+
+// Bootstrap P2P mesh
+const port = await system.bootstrapP2P({
+  listenPort: 3142,
+  staticPeers: ["ws://seed.example.com:3142/mesh"],
+  meshSecret: process.env.MESH_SECRET,  // HMAC-SHA256 auth
+  tls: true,                            // wss:// encrypted transport
+  tlsCert: cert,
+  tlsKey: key,
+});
+
+// Actors are now reachable from any peer in the mesh
+system.spawn("my-agent", { behavior: agentBehavior });
+
+// Cross-node communication — same API as local
+const reply = await system.ask("caller", "remote-agent", { task: "analyze" });
+```
+
+### Security
+
+- **HMAC-SHA256 mutual authentication** — nonce-based challenge-response on every connection
+- **Per-frame signing** — all messages signed with shared secret
+- **TLS (wss://)** — encrypted transport with custom CA support
+- **Anti-eclipse (PeerGuard)** — subnet diversity (/24), rate limiting, min outbound preference
+- **Peer scoring** — reliability-weighted reconnection priority
+- **Version handshake** — protocol compatibility negotiation (`mesh/1.0`)
+
+### Bitcoin-Inspired Peer Discovery
+
+- **Static seed peers** — bootstrap nodes for initial mesh entry
+- **Peer exchange** — connected peers share their known peer lists
+- **Addr relay** — newly discovered peers are transitively propagated to all connections
+- **Persistent addr database** — two-table (new/tried) design survives restarts
+- **Subnet diversity** — bootstrap set limited to 2 peers per /24 subnet
+
+### Wire Protocol
+
+| Message | Purpose |
+|---------|---------|
+| `auth` / `auth:ok` / `auth:fail` | Mutual authentication + version handshake |
+| `envelope` | Actor message delivery (tell, ask, reply) |
+| `gossip` | SWIM protocol view exchange |
+| `discovery` | Peer address exchange and relay |
+| `samiti` | Ambient broadcast channel relay |
+| `ping` / `pong` | Heartbeat liveness detection |
+
+### Source (3,724 LOC across 14 files)
+
+All files under 450 LOC. 815+ tests across 22 test files.
+
+---
+
 [Back to Chitragupta root](../../README.md)
