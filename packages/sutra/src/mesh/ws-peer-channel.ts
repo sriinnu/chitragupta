@@ -1,26 +1,20 @@
 /**
- * WebSocket PeerChannel — Real Network Transport for Actor Mesh.
- *
- * Implements the {@link PeerChannel} interface over WebSocket,
- * enabling actual distributed actor communication between
- * Chitragupta nodes. Handles bidirectional messaging, ping/pong
- * liveness, and graceful disconnection.
- *
- * Two modes:
- *   - **Outbound**: This node initiates the connection (client).
- *   - **Inbound**: Remote node connected to us (server accepted).
- *
+ * WebSocket PeerChannel — Real network transport for actor mesh.
+ * Implements PeerChannel over WebSocket (ws:// and wss://) with
+ * HMAC auth, ping/pong liveness, and TLS support.
  * @module
  */
 
-import type { MeshEnvelope, MessageSender, PeerChannel } from "./types.js";
+import type { MeshEnvelope, MessageSender, PeerChannel, PeerView } from "./types.js";
 import type {
 	PeerConnectionState,
 	PeerConnectionStats,
 	PeerMessage,
 	PeerNodeInfo,
 	PeerNetworkEventHandler,
+	VersionInfo,
 } from "./peer-types.js";
+import { MESH_PROTOCOL_VERSION } from "./peer-types.js";
 import {
 	serializePeerMessage,
 	deserializePeerMessage,
@@ -84,6 +78,14 @@ export class WsPeerChannel implements PeerChannel {
 	};
 
 	private eventHandlers: PeerNetworkEventHandler[] = [];
+	private gossipHandler: ((fromNodeId: string, views: PeerView[]) => void) | null = null;
+
+	/** TLS CA cert(s) for verifying wss:// peers. */
+	private tlsCa: string | Buffer | Array<string | Buffer> | undefined;
+	/** Allow self-signed peer certs (insecure — dev/test only). */
+	private tlsAllowSelfSigned: boolean;
+	/** Remote peer's protocol version info (set after handshake). */
+	private remoteVersion: VersionInfo | null = null;
 
 	constructor(opts: {
 		peerId: string;
@@ -91,6 +93,8 @@ export class WsPeerChannel implements PeerChannel {
 		meshSecret?: string;
 		pingIntervalMs?: number;
 		maxMissedPings?: number;
+		tlsCa?: string | Buffer | Array<string | Buffer>;
+		tlsAllowSelfSigned?: boolean;
 	}) {
 		this.peerId = opts.peerId;
 		this.actorId = `peer:${opts.peerId}`;
@@ -98,6 +102,8 @@ export class WsPeerChannel implements PeerChannel {
 		this.meshSecret = opts.meshSecret;
 		this.pingIntervalMs = opts.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS;
 		this.maxMissedPings = opts.maxMissedPings ?? DEFAULT_MAX_MISSED_PINGS;
+		this.tlsCa = opts.tlsCa;
+		this.tlsAllowSelfSigned = opts.tlsAllowSelfSigned ?? false;
 	}
 
 	// ─── Public API ─────────────────────────────────────────────────
@@ -105,6 +111,7 @@ export class WsPeerChannel implements PeerChannel {
 	get state(): PeerConnectionState { return this._state; }
 	get stats(): Readonly<PeerConnectionStats> { return this._stats; }
 	get remoteNodeInfo(): PeerNodeInfo | null { return this.remoteInfo; }
+	get remoteVersionInfo(): VersionInfo | null { return this.remoteVersion; }
 
 	/** Subscribe to peer events. Returns unsubscribe function. */
 	on(handler: PeerNetworkEventHandler): () => void {
@@ -118,6 +125,11 @@ export class WsPeerChannel implements PeerChannel {
 	/** Bind to local router for incoming message dispatch. */
 	setRouter(router: MessageSender): void {
 		this.localRouter = router;
+	}
+
+	/** Set a handler for incoming gossip views from this peer. */
+	setGossipHandler(handler: (fromNodeId: string, views: PeerView[]) => void): void {
+		this.gossipHandler = handler;
 	}
 
 	/**
@@ -134,13 +146,25 @@ export class WsPeerChannel implements PeerChannel {
 
 	/**
 	 * Initiate an outbound WebSocket connection to the remote peer.
+	 *
+	 * For wss:// endpoints, uses the `ws` package with TLS options
+	 * (custom CA, rejectUnauthorized) since native WebSocket doesn't
+	 * expose Node.js TLS agent configuration.
 	 */
 	async connect(endpoint: string): Promise<void> {
 		if (this._state === "connected") return;
 		this.setState("connecting");
 		try {
-			// Use native Node.js 22+ WebSocket (global)
-			this.ws = new globalThis.WebSocket(endpoint) as unknown as WsLike;
+			const isSecure = endpoint.startsWith("wss://");
+			if (isSecure) {
+				const { default: WsClient } = await import("ws");
+				const tlsOpts: Record<string, unknown> = {};
+				if (this.tlsCa) tlsOpts.ca = this.tlsCa;
+				if (this.tlsAllowSelfSigned) tlsOpts.rejectUnauthorized = false;
+				this.ws = new WsClient(endpoint, tlsOpts) as unknown as WsLike;
+			} else {
+				this.ws = new globalThis.WebSocket(endpoint) as unknown as WsLike;
+			}
 			await this.waitForOpen();
 			this.setState("authenticating");
 			await this.authenticate();
@@ -184,20 +208,13 @@ export class WsPeerChannel implements PeerChannel {
 	/** Gracefully close the connection. */
 	close(reason = "local shutdown"): void {
 		this.stopPingLoop();
-		if (this.ws) {
-			try { this.ws.close(CLOSE_GOING_AWAY, reason); } catch { /* best-effort */ }
-			this.ws = null;
-		}
+		if (this.ws) { try { this.ws.close(CLOSE_GOING_AWAY, reason); } catch {} this.ws = null; }
 		this.setState("disconnected");
 		this.emit({ type: "peer:disconnected", peerId: this.peerId, reason });
 	}
 
 	/** Clean up all resources. */
-	destroy(): void {
-		this.close("destroyed");
-		this.eventHandlers.length = 0;
-		this.localRouter = null;
-	}
+	destroy(): void { this.close("destroyed"); this.eventHandlers.length = 0; this.localRouter = null; }
 
 	// ─── Wire Protocol ──────────────────────────────────────────────
 
@@ -248,11 +265,20 @@ export class WsPeerChannel implements PeerChannel {
 		switch (msg.type) {
 			case "envelope":
 				if (validateEnvelope(msg.data) && this.localRouter) {
+					// Mark as network hop to prevent broadcast re-forwarding
+					(msg.data as Record<string, unknown>)._networkHop = true;
+					// Register reply route so cross-node ask replies find their way back
+					if (msg.data.type === "ask") {
+						this.localRouter.registerReplyRoute?.(msg.data.id, this);
+					}
 					this.localRouter.route(msg.data);
 				}
 				break;
 			case "gossip":
-				this.emit({ type: "message:received", from: this.peerId, messageType: "gossip" });
+				if (this.gossipHandler) {
+					const fromId = this.remoteInfo?.nodeId ?? this.peerId;
+					this.gossipHandler(fromId, msg.data);
+				}
 				break;
 			case "discovery":
 				for (const info of msg.data) {
@@ -272,6 +298,7 @@ export class WsPeerChannel implements PeerChannel {
 			}
 			case "auth:ok":
 				this.remoteInfo = msg.info;
+				this.remoteVersion = msg.version ?? null;
 				break;
 			case "auth:fail":
 				this.emit({ type: "peer:auth_failed", peerId: this.peerId, reason: msg.reason });
@@ -284,38 +311,51 @@ export class WsPeerChannel implements PeerChannel {
 
 	// ─── Authentication ─────────────────────────────────────────────
 
+	/**
+	 * Outbound HMAC-SHA256 challenge-response authentication.
+	 *
+	 * Sends auth frame directly (bypassing HMAC frame wrapping since
+	 * the frame itself carries the HMAC signature). Waits for raw
+	 * auth:ok/auth:fail response via a one-time WebSocket listener.
+	 */
 	private async authenticate(): Promise<void> {
-		// Generate nonce and sign it if meshSecret is configured
+		if (!this.ws) throw new Error("no socket");
 		const nonce = `${this.localNodeId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 		const hmac = this.meshSecret ? signMessage(nonce, this.meshSecret) : undefined;
 		const authMsg: PeerMessage = {
 			type: "auth",
-			token: this.meshSecret ? "" : "", // never send raw secret
+			token: "",
 			nodeId: this.localNodeId,
 			nonce,
 			hmac,
-			info: {
-				nodeId: this.localNodeId,
-				endpoint: "",
-				joinedAt: Date.now(),
-			},
+			info: { nodeId: this.localNodeId, endpoint: "", joinedAt: Date.now() },
+			version: { protocol: MESH_PROTOCOL_VERSION, timestamp: Date.now(), userAgent: "chitragupta-sutra" },
 		};
-		this.sendMessage(authMsg);
+		// Send auth directly — not through sendMessage (which wraps with HMAC frame)
+		this.ws.send(serializePeerMessage(authMsg));
 
+		// Wait for auth response via one-time WebSocket listener
 		await new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => reject(new Error("auth timeout")), 10_000);
-			const unsub = this.on((event) => {
-				if (event.type === "peer:auth_failed") {
-					clearTimeout(timeout);
-					unsub();
-					reject(new Error(`auth rejected: ${event.reason}`));
-				}
-				if (event.type === "message:received" && event.messageType === "auth:ok" as string) {
-					clearTimeout(timeout);
-					unsub();
-					resolve();
-				}
-			});
+			this.ws!.addEventListener("message", (event) => {
+				const data = typeof event.data === "string" ? event.data : String(event.data);
+				try {
+					const msg = JSON.parse(data) as {
+						type: string; nodeId?: string;
+						info?: PeerNodeInfo; reason?: string; version?: VersionInfo;
+					};
+					if (msg.type === "auth:ok") {
+						clearTimeout(timeout);
+						this.remoteInfo = msg.info ?? null;
+						this.remoteVersion = msg.version ?? null;
+						resolve();
+					} else if (msg.type === "auth:fail") {
+						clearTimeout(timeout);
+						this.emit({ type: "peer:auth_failed", peerId: this.peerId, reason: msg.reason ?? "rejected" });
+						reject(new Error(`auth rejected: ${msg.reason}`));
+					}
+				} catch { /* ignore non-JSON during auth handshake */ }
+			}, { once: true });
 		});
 	}
 
