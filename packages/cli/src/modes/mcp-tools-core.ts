@@ -9,7 +9,11 @@
  */
 
 import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
-import { ProviderError, loadGlobalSettings } from "@chitragupta/core";
+// Note: ProviderError/loadGlobalSettings moved to mcp-agent-prompt.ts
+import {
+	INLINE_WAIT_MS, createJob, getJob, completeJob, failJob,
+	createHeartbeat, isJobStale,
+} from "./mcp-prompt-jobs.js";
 
 // ─── Output Truncation ──────────────────────────────────────────────────────
 
@@ -255,37 +259,15 @@ export function createMargaDecideTool(): McpToolHandler {
 	};
 }
 
-// ─── Agent Prompt (Async-Safe) ──────────────────────────────────────────────
+// ─── Agent Prompt (Async-Safe with Heartbeat) ──────────────────────────────
 
 /**
- * MCP client timeout is typically 60s. We wait inline for up to 45s.
- * If the prompt finishes within 45s, return the result directly.
- * If not, return the job ID so the caller can poll via `chitragupta_prompt_status`.
+ * Create the `chitragupta_prompt` tool — delegates a task to Chitragupta's agent.
+ *
+ * Waits inline for up to 45s. If the prompt finishes, returns directly.
+ * Otherwise returns a jobId for polling via `chitragupta_prompt_status`.
+ * Heartbeats are emitted during execution so the caller can detect liveness.
  */
-const INLINE_WAIT_MS = 45_000;
-
-/** Module-level store for pending/completed prompt jobs. */
-const promptJobs = new Map<string, {
-	status: "running" | "completed" | "failed";
-	response?: string;
-	error?: string;
-	createdAt: number;
-}>();
-
-/** Generate a short job ID. */
-function generatePromptJobId(): string {
-	return `pj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-}
-
-/** Evict completed jobs older than 30 minutes. */
-function evictStaleJobs(): void {
-	const cutoff = Date.now() - 30 * 60_000;
-	for (const [id, job] of promptJobs) {
-		if (job.status !== "running" && job.createdAt < cutoff) promptJobs.delete(id);
-	}
-}
-
-/** Create the `chitragupta_prompt` tool — delegates a task to Chitragupta's agent. */
 export function createAgentPromptTool(): McpToolHandler {
 	return {
 		definition: {
@@ -294,7 +276,7 @@ export function createAgentPromptTool(): McpToolHandler {
 				"Delegate a task to Chitragupta's AI agent. Returns the result " +
 				"directly if it completes within 45 seconds. For longer tasks, " +
 				"returns a jobId — poll with `chitragupta_prompt_status` to get " +
-				"the result when ready.",
+				"the result and check liveness via heartbeat.",
 			inputSchema: {
 				type: "object",
 				properties: {
@@ -311,11 +293,9 @@ export function createAgentPromptTool(): McpToolHandler {
 				return { content: [{ type: "text", text: "Error: message is required" }], isError: true };
 			}
 
-			evictStaleJobs();
-			const jobId = generatePromptJobId();
-			promptJobs.set(jobId, { status: "running", createdAt: Date.now() });
+			const jobId = createJob();
+			const heartbeat = createHeartbeat(jobId);
 
-			// Launch the prompt asynchronously.
 			const promptPromise = (async () => {
 				try {
 					const { runAgentPromptWithFallback } = await import("./mcp-agent-prompt.js");
@@ -323,23 +303,23 @@ export function createAgentPromptTool(): McpToolHandler {
 						message,
 						...(args.provider ? { provider: String(args.provider) } : {}),
 						...(args.model ? { model: String(args.model) } : {}),
+						onHeartbeat: heartbeat,
 					});
-					const job = promptJobs.get(jobId);
-					if (job) { job.status = "completed"; job.response = result.response; }
+					completeJob(jobId, result.response);
 					return result.response;
 				} catch (err) {
-					const job = promptJobs.get(jobId);
 					const msg = err instanceof Error ? err.message : String(err);
-					if (job) { job.status = "failed"; job.error = msg; }
+					failJob(jobId, msg);
 					throw err;
 				}
 			})();
 
-			// Wait up to INLINE_WAIT_MS for the result. If it finishes in time, return directly.
 			try {
 				const response = await Promise.race([
 					promptPromise,
-					new Promise<"__timeout__">((resolve) => setTimeout(() => resolve("__timeout__"), INLINE_WAIT_MS)),
+					new Promise<"__timeout__">((resolve) =>
+						setTimeout(() => resolve("__timeout__"), INLINE_WAIT_MS),
+					),
 				]);
 				if (response !== "__timeout__") {
 					return { content: [{ type: "text", text: response }] };
@@ -351,11 +331,10 @@ export function createAgentPromptTool(): McpToolHandler {
 				};
 			}
 
-			// Prompt is still running — return job ID for polling.
 			return {
 				content: [{ type: "text", text:
 					`Prompt is still running (jobId: ${jobId}). ` +
-					`Use the chitragupta_prompt_status tool with this jobId to check for the result.`,
+					`Use chitragupta_prompt_status with this jobId to check progress and liveness.`,
 				}],
 				_metadata: { jobId, status: "running" },
 			};
@@ -363,15 +342,20 @@ export function createAgentPromptTool(): McpToolHandler {
 	};
 }
 
-/** Create the `chitragupta_prompt_status` tool — poll for async prompt results. */
+/**
+ * Create the `chitragupta_prompt_status` tool — poll for async prompt results.
+ *
+ * Reports heartbeat liveness: fresh heartbeat means "still executing",
+ * stale heartbeat (>60s) means "likely died — consider retrying."
+ */
 export function createPromptStatusTool(): McpToolHandler {
 	return {
 		definition: {
 			name: "chitragupta_prompt_status",
 			description:
 				"Check the status of a long-running chitragupta_prompt. " +
-				"Call this with the jobId returned by chitragupta_prompt when " +
-				"the prompt didn't complete within the inline timeout.",
+				"Reports heartbeat liveness so you can tell if the job is " +
+				"still executing or died midway. Returns the result when complete.",
 			inputSchema: {
 				type: "object",
 				properties: {
@@ -385,15 +369,36 @@ export function createPromptStatusTool(): McpToolHandler {
 			if (!jobId) {
 				return { content: [{ type: "text", text: "Error: jobId is required" }], isError: true };
 			}
-			const job = promptJobs.get(jobId);
+			const job = getJob(jobId);
 			if (!job) {
 				return { content: [{ type: "text", text: `No prompt job found with id "${jobId}". It may have expired.` }], isError: true };
 			}
 			if (job.status === "running") {
 				const elapsed = Math.round((Date.now() - job.createdAt) / 1000);
+				const heartbeatAge = Math.round((Date.now() - job.lastHeartbeat) / 1000);
+				const activity = job.lastActivity ?? "initializing";
+				const attempt = job.attemptNumber ?? 1;
+				const provider = job.providerAttempt ?? "unknown";
+				const stale = isJobStale(job);
+
+				if (stale) {
+					return {
+						content: [{ type: "text", text:
+							`WARNING: Prompt may have died — no heartbeat for ${heartbeatAge}s. ` +
+							`Last activity: "${activity}" (attempt ${attempt}, provider: ${provider}). ` +
+							`Total elapsed: ${elapsed}s. Consider retrying with a new chitragupta_prompt call.`,
+						}],
+						_metadata: { jobId, status: "stale", elapsedMs: Date.now() - job.createdAt, heartbeatAgeMs: Date.now() - job.lastHeartbeat },
+					};
+				}
+
 				return {
-					content: [{ type: "text", text: `Prompt is still running (${elapsed}s elapsed). Try again in 10-15 seconds.` }],
-					_metadata: { jobId, status: "running", elapsedMs: Date.now() - job.createdAt },
+					content: [{ type: "text", text:
+						`Prompt is alive and executing (${elapsed}s elapsed, heartbeat ${heartbeatAge}s ago). ` +
+						`Activity: ${activity} (attempt ${attempt}, provider: ${provider}). ` +
+						`Poll again in 10-15 seconds.`,
+					}],
+					_metadata: { jobId, status: "running", elapsedMs: Date.now() - job.createdAt, heartbeatAgeMs: Date.now() - job.lastHeartbeat },
 				};
 			}
 			if (job.status === "failed") {
@@ -407,40 +412,3 @@ export function createPromptStatusTool(): McpToolHandler {
 	};
 }
 
-// ─── Agent Prompt With Provider Fallback ────────────────────────────────────
-
-interface PromptableAgent {
-	prompt(message: string): Promise<string>;
-	destroy(): Promise<void>;
-}
-
-type AgentFactory = (opts: { provider: string }) => Promise<PromptableAgent>;
-
-/**
- * Try prompting with each provider in priority order, falling back on
- * {@link ProviderError} or "No provider available" errors.
- */
-export async function runAgentPromptWithFallback(
-	message: string,
-	_opts: Record<string, unknown>,
-	createAgent: AgentFactory,
-): Promise<string> {
-	const settings = loadGlobalSettings();
-	const providers: string[] = settings.providerPriority ?? ["claude-code"];
-
-	for (const provider of providers) {
-		const agent = await createAgent({ provider });
-		try {
-			const result = await agent.prompt(message);
-			await agent.destroy();
-			return result;
-		} catch (err) {
-			await agent.destroy();
-			const isRetryable =
-				err instanceof ProviderError ||
-				(err instanceof Error && err.message.includes("No provider available"));
-			if (!isRetryable) throw err;
-		}
-	}
-	throw new Error("All providers exhausted");
-}

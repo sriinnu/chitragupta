@@ -1,89 +1,111 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
+import {
+	createJob, getJob, completeJob, failJob,
+	createHeartbeat, isJobStale, evictStaleJobs, clearAllJobs,
+	HEARTBEAT_STALE_MS,
+} from "../src/modes/mcp-prompt-jobs.js";
 
-vi.mock("@chitragupta/core", async () => {
-	const actual = await vi.importActual("@chitragupta/core");
-	return {
-		...actual,
-		loadGlobalSettings: vi.fn(),
-	};
-});
-
-import { ProviderError, loadGlobalSettings } from "@chitragupta/core";
-import type { ChitraguptaSettings } from "@chitragupta/core";
-import { runAgentPromptWithFallback } from "../src/modes/mcp-tools-core.js";
-
-const mockedLoadGlobalSettings = vi.mocked(loadGlobalSettings);
-
-describe("runAgentPromptWithFallback", () => {
+describe("mcp-prompt-jobs", () => {
 	beforeEach(() => {
-		vi.resetAllMocks();
-		mockedLoadGlobalSettings.mockReturnValue({
-			providerPriority: ["claude-code", "codex-cli"],
-		} as unknown as ChitraguptaSettings);
+		clearAllJobs();
 	});
 
-	it("tries the next provider when the CLI fails with a ProviderError", async () => {
-		const failingInstance = {
-			prompt: vi.fn().mockRejectedValue(
-				new ProviderError("CLI claude exited with code 1", "claude-code"),
-			),
-			destroy: vi.fn().mockResolvedValue(undefined),
-		};
-		const successInstance = {
-			prompt: vi.fn().mockResolvedValue("fallback result"),
-			destroy: vi.fn().mockResolvedValue(undefined),
-		};
-
-		const createChitragupta = vi.fn(async ({ provider }) => {
-			if (provider === "claude-code") return failingInstance;
-			return successInstance;
-		});
-
-		const result = await runAgentPromptWithFallback("describe architecture", {}, createChitragupta);
-
-		expect(result).toBe("fallback result");
-		expect(createChitragupta).toHaveBeenCalledTimes(2);
-		expect(failingInstance.destroy).toHaveBeenCalledOnce();
-		expect(successInstance.destroy).toHaveBeenCalledOnce();
+	it("creates a running job with fresh heartbeat", () => {
+		const id = createJob();
+		const job = getJob(id);
+		expect(job).toBeDefined();
+		expect(job!.status).toBe("running");
+		expect(job!.lastHeartbeat).toBeGreaterThan(0);
+		expect(isJobStale(job!)).toBe(false);
 	});
 
-	it("propagates fatal errors that are not retryable", async () => {
-		const fatalError = new Error("fatal");
-		const fatalInstance = {
-			prompt: vi.fn().mockRejectedValue(fatalError),
-			destroy: vi.fn().mockResolvedValue(undefined),
-		};
-
-		const createChitragupta = vi.fn(async () => fatalInstance);
-
-		await expect(
-			runAgentPromptWithFallback("plan next steps", {}, createChitragupta),
-		).rejects.toThrow(fatalError);
-
-		expect(createChitragupta).toHaveBeenCalledOnce();
-		expect(fatalInstance.destroy).toHaveBeenCalledOnce();
+	it("completes a job and stores the response", () => {
+		const id = createJob();
+		completeJob(id, "The architecture review is done.");
+		const job = getJob(id)!;
+		expect(job.status).toBe("completed");
+		expect(job.response).toBe("The architecture review is done.");
 	});
 
-	it("continues when the error indicates no provider was available", async () => {
-		const busyInstance = {
-			prompt: vi.fn().mockRejectedValue(new Error("No provider available right now")),
-			destroy: vi.fn().mockResolvedValue(undefined),
-		};
-		const successInstance = {
-			prompt: vi.fn().mockResolvedValue("rolled over"),
-			destroy: vi.fn().mockResolvedValue(undefined),
-		};
+	it("fails a job and stores the error", () => {
+		const id = createJob();
+		failJob(id, "All providers exhausted");
+		const job = getJob(id)!;
+		expect(job.status).toBe("failed");
+		expect(job.error).toBe("All providers exhausted");
+	});
 
-		const createChitragupta = vi.fn(async ({ provider }) => {
-			if (provider === "claude-code") return busyInstance;
-			return successInstance;
-		});
+	it("heartbeat callback updates job activity and timestamp", () => {
+		const id = createJob();
+		const hb = createHeartbeat(id);
 
-		const result = await runAgentPromptWithFallback("remember history", {}, createChitragupta);
+		hb({ activity: "connecting to anthropic", attempt: 1, provider: "anthropic" });
+		const job = getJob(id)!;
+		expect(job.lastActivity).toBe("connecting to anthropic");
+		expect(job.attemptNumber).toBe(1);
+		expect(job.providerAttempt).toBe("anthropic");
 
-		expect(result).toBe("rolled over");
-		expect(createChitragupta).toHaveBeenCalledTimes(2);
-		expect(busyInstance.destroy).toHaveBeenCalledOnce();
-		expect(successInstance.destroy).toHaveBeenCalledOnce();
+		hb({ activity: "prompting anthropic", attempt: 1, provider: "anthropic" });
+		expect(job.lastActivity).toBe("prompting anthropic");
+
+		hb({ activity: "failed anthropic, retrying", attempt: 1, provider: "anthropic" });
+		hb({ activity: "connecting to openai", attempt: 2, provider: "openai" });
+		expect(job.attemptNumber).toBe(2);
+		expect(job.providerAttempt).toBe("openai");
+	});
+
+	it("detects stale heartbeat when threshold exceeded", () => {
+		const id = createJob();
+		const job = getJob(id)!;
+		expect(isJobStale(job)).toBe(false);
+
+		// Simulate stale heartbeat by backdating
+		job.lastHeartbeat = Date.now() - HEARTBEAT_STALE_MS - 1000;
+		expect(isJobStale(job)).toBe(true);
+	});
+
+	it("does not consider completed/failed jobs as stale", () => {
+		const id = createJob();
+		const job = getJob(id)!;
+		job.lastHeartbeat = Date.now() - HEARTBEAT_STALE_MS - 5000;
+
+		completeJob(id, "done");
+		expect(isJobStale(job)).toBe(false);
+
+		const id2 = createJob();
+		const job2 = getJob(id2)!;
+		job2.lastHeartbeat = Date.now() - HEARTBEAT_STALE_MS - 5000;
+		failJob(id2, "error");
+		expect(isJobStale(job2)).toBe(false);
+	});
+
+	it("heartbeat does not update completed jobs", () => {
+		const id = createJob();
+		completeJob(id, "result");
+		const hb = createHeartbeat(id);
+
+		hb({ activity: "should not update", attempt: 99, provider: "ghost" });
+		const job = getJob(id)!;
+		expect(job.lastActivity).toBeUndefined();
+		expect(job.attemptNumber).toBeUndefined();
+	});
+
+	it("evicts old completed jobs but keeps running ones", () => {
+		const runningId = createJob();
+		const completedId = createJob();
+		completeJob(completedId, "done");
+
+		// Backdate the completed job
+		const completedJob = getJob(completedId)!;
+		completedJob.createdAt = Date.now() - 31 * 60_000;
+
+		evictStaleJobs();
+
+		expect(getJob(runningId)).toBeDefined();
+		expect(getJob(completedId)).toBeUndefined();
+	});
+
+	it("returns undefined for unknown job IDs", () => {
+		expect(getJob("pj-nonexistent")).toBeUndefined();
 	});
 });
