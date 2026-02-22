@@ -9,6 +9,7 @@ vi.mock("@chitragupta/core", async () => {
 });
 
 import { ProviderError, loadGlobalSettings } from "@chitragupta/core";
+import type { ChitraguptaSettings } from "@chitragupta/core";
 import { runAgentPromptWithFallback } from "../src/modes/mcp-tools-core.js";
 
 const mockedLoadGlobalSettings = vi.mocked(loadGlobalSettings);
@@ -18,7 +19,7 @@ describe("runAgentPromptWithFallback", () => {
 		vi.resetAllMocks();
 		mockedLoadGlobalSettings.mockReturnValue({
 			providerPriority: ["claude-code", "codex-cli"],
-		});
+		} as unknown as ChitraguptaSettings);
 	});
 
 	it("tries the next provider when the CLI fails with a ProviderError", async () => {

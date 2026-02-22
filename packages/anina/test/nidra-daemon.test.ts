@@ -21,9 +21,9 @@ import type { EventBus } from "@chitragupta/core";
 // The NidraDaemon calls DatabaseManager.instance().get("agent") for persist/restore.
 // We mock it to avoid real SQLite I/O and to verify persistence calls.
 
-const mockRun = vi.fn();
-const mockGet = vi.fn(() => undefined);
-const mockPrepare = vi.fn(() => ({
+const mockRun = vi.fn((..._args: unknown[]) => undefined);
+const mockGet = vi.fn((): Record<string, unknown> | undefined => undefined);
+const mockPrepare = vi.fn((_sql: string) => ({
 	run: mockRun,
 	get: mockGet,
 }));

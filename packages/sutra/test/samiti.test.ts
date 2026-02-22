@@ -166,6 +166,7 @@ describe("Samiti", () => {
 			// Re-create and broadcast — old handler should not fire
 			samiti.createChannel("#security", "Recreated");
 			samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -277,6 +278,7 @@ describe("Samiti", () => {
 	describe("broadcast", () => {
 		it("should return a fully-formed message", () => {
 			const msg = samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "anveshi",
 				severity: "warning",
 				category: "credential-leak",
@@ -294,6 +296,7 @@ describe("Samiti", () => {
 
 		it("should allow custom TTL", () => {
 			const msg = samiti.broadcast("#alerts", {
+				channel: "#alerts",
 				sender: "system",
 				severity: "info",
 				category: "heartbeat",
@@ -305,6 +308,7 @@ describe("Samiti", () => {
 
 		it("should store message in channel history", () => {
 			samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -317,12 +321,14 @@ describe("Samiti", () => {
 
 		it("should preserve message references", () => {
 			const msg1 = samiti.broadcast("#correctness", {
+				channel: "#correctness",
 				sender: "test",
 				severity: "info",
 				category: "test",
 				content: "First",
 			});
 			const msg2 = samiti.broadcast("#correctness", {
+				channel: "#correctness",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -334,6 +340,7 @@ describe("Samiti", () => {
 
 		it("should store structured data in data field", () => {
 			const msg = samiti.broadcast("#performance", {
+				channel: "#performance",
 				sender: "profiler",
 				severity: "warning",
 				category: "slow-query",
@@ -346,6 +353,7 @@ describe("Samiti", () => {
 		it("should throw for non-existent channel", () => {
 			expect(() =>
 				samiti.broadcast("#nonexistent", {
+					channel: "#nonexistent",
 					sender: "test",
 					severity: "info",
 					category: "test",
@@ -358,6 +366,7 @@ describe("Samiti", () => {
 			const hugeContent = "x".repeat(1_048_577);
 			expect(() =>
 				samiti.broadcast("#security", {
+					channel: "#security",
 					sender: "test",
 					severity: "info",
 					category: "test",
@@ -370,6 +379,7 @@ describe("Samiti", () => {
 			const bigData = "y".repeat(1_048_570);
 			expect(() =>
 				samiti.broadcast("#security", {
+					channel: "#security",
 					sender: "test",
 					severity: "info",
 					category: "test",
@@ -389,10 +399,10 @@ describe("Samiti", () => {
 			const s = new Samiti({ defaultMaxHistory: 3, maxChannels: 10 });
 			s.createChannel("#small", "Small buffer", 3);
 
-			s.broadcast("#small", { sender: "t", severity: "info", category: "c", content: "A" });
-			s.broadcast("#small", { sender: "t", severity: "info", category: "c", content: "B" });
-			s.broadcast("#small", { sender: "t", severity: "info", category: "c", content: "C" });
-			s.broadcast("#small", { sender: "t", severity: "info", category: "c", content: "D" }); // A drops
+			s.broadcast("#small", { channel: "#small", sender: "t", severity: "info", category: "c", content: "A" });
+			s.broadcast("#small", { channel: "#small", sender: "t", severity: "info", category: "c", content: "B" });
+			s.broadcast("#small", { channel: "#small", sender: "t", severity: "info", category: "c", content: "C" });
+			s.broadcast("#small", { channel: "#small", sender: "t", severity: "info", category: "c", content: "D" }); // A drops
 
 			const history = s.getHistory("#small");
 			expect(history).toHaveLength(3);
@@ -407,7 +417,7 @@ describe("Samiti", () => {
 			s.createChannel("#tiny", "Tiny buffer", 2);
 
 			for (let i = 0; i < 10; i++) {
-				s.broadcast("#tiny", { sender: "t", severity: "info", category: "c", content: `${i}` });
+				s.broadcast("#tiny", { channel: "#tiny", sender: "t", severity: "info", category: "c", content: `${i}` });
 			}
 
 			const history = s.getHistory("#tiny");
@@ -438,6 +448,7 @@ describe("Samiti", () => {
 			try {
 				const s = new Samiti();
 				s.broadcast("#security", {
+					channel: "#security",
 					sender: "test",
 					severity: "info",
 					category: "test",
@@ -460,6 +471,7 @@ describe("Samiti", () => {
 			try {
 				const s = new Samiti();
 				s.broadcast("#security", {
+					channel: "#security",
 					sender: "test",
 					severity: "info",
 					category: "test",
@@ -482,6 +494,7 @@ describe("Samiti", () => {
 			try {
 				const s = new Samiti();
 				s.broadcast("#security", {
+					channel: "#security",
 					sender: "test",
 					severity: "info",
 					category: "test",
@@ -489,6 +502,7 @@ describe("Samiti", () => {
 					ttl: 500,
 				});
 				s.broadcast("#security", {
+					channel: "#security",
 					sender: "test",
 					severity: "info",
 					category: "test",
@@ -511,6 +525,7 @@ describe("Samiti", () => {
 			try {
 				const s = new Samiti();
 				s.broadcast("#alerts", {
+					channel: "#alerts",
 					sender: "sys",
 					severity: "info",
 					category: "a",
@@ -518,6 +533,7 @@ describe("Samiti", () => {
 					ttl: 100,
 				});
 				s.broadcast("#alerts", {
+					channel: "#alerts",
 					sender: "sys",
 					severity: "warning",
 					category: "b",
@@ -525,6 +541,7 @@ describe("Samiti", () => {
 					ttl: 5000,
 				});
 				s.broadcast("#alerts", {
+					channel: "#alerts",
 					sender: "sys",
 					severity: "critical",
 					category: "c",
@@ -548,6 +565,7 @@ describe("Samiti", () => {
 
 		it("should return 0 when no messages are expired", () => {
 			samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -564,8 +582,8 @@ describe("Samiti", () => {
 
 	describe("listen", () => {
 		it("should return all messages for a channel by default", () => {
-			samiti.broadcast("#security", { sender: "a", severity: "info", category: "c", content: "1" });
-			samiti.broadcast("#security", { sender: "b", severity: "warning", category: "c", content: "2" });
+			samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "info", category: "c", content: "1" });
+			samiti.broadcast("#security", { channel: "#security", sender: "b", severity: "warning", category: "c", content: "2" });
 			const results = samiti.listen("#security");
 			expect(results).toHaveLength(2);
 		});
@@ -575,9 +593,9 @@ describe("Samiti", () => {
 		});
 
 		it("should filter by severity", () => {
-			samiti.broadcast("#security", { sender: "a", severity: "info", category: "c", content: "Info" });
-			samiti.broadcast("#security", { sender: "a", severity: "warning", category: "c", content: "Warn" });
-			samiti.broadcast("#security", { sender: "a", severity: "critical", category: "c", content: "Crit" });
+			samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "info", category: "c", content: "Info" });
+			samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "warning", category: "c", content: "Warn" });
+			samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "critical", category: "c", content: "Crit" });
 
 			const warnings = samiti.listen("#security", { severity: "warning" });
 			expect(warnings).toHaveLength(1);
@@ -588,11 +606,11 @@ describe("Samiti", () => {
 			vi.useFakeTimers();
 			try {
 				const s = new Samiti();
-				s.broadcast("#alerts", { sender: "a", severity: "info", category: "c", content: "Old" });
+				s.broadcast("#alerts", { channel: "#alerts", sender: "a", severity: "info", category: "c", content: "Old" });
 				vi.advanceTimersByTime(1000);
 				const cutoff = Date.now();
 				vi.advanceTimersByTime(1000);
-				s.broadcast("#alerts", { sender: "a", severity: "info", category: "c", content: "New" });
+				s.broadcast("#alerts", { channel: "#alerts", sender: "a", severity: "info", category: "c", content: "New" });
 
 				const results = s.listen("#alerts", { since: cutoff });
 				expect(results).toHaveLength(1);
@@ -605,7 +623,7 @@ describe("Samiti", () => {
 
 		it("should respect limit parameter (most recent N)", () => {
 			for (let i = 0; i < 10; i++) {
-				samiti.broadcast("#security", { sender: "a", severity: "info", category: "c", content: `${i}` });
+				samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "info", category: "c", content: `${i}` });
 			}
 			const results = samiti.listen("#security", { limit: 3 });
 			expect(results).toHaveLength(3);
@@ -619,18 +637,18 @@ describe("Samiti", () => {
 				const s = new Samiti();
 
 				// Old messages
-				s.broadcast("#alerts", { sender: "a", severity: "info", category: "c", content: "Old info" });
-				s.broadcast("#alerts", { sender: "a", severity: "warning", category: "c", content: "Old warn" });
+				s.broadcast("#alerts", { channel: "#alerts", sender: "a", severity: "info", category: "c", content: "Old info" });
+				s.broadcast("#alerts", { channel: "#alerts", sender: "a", severity: "warning", category: "c", content: "Old warn" });
 
 				vi.advanceTimersByTime(1000);
 				const cutoff = Date.now();
 				vi.advanceTimersByTime(1000);
 
 				// New messages
-				s.broadcast("#alerts", { sender: "a", severity: "info", category: "c", content: "New info 1" });
-				s.broadcast("#alerts", { sender: "a", severity: "warning", category: "c", content: "New warn 1" });
-				s.broadcast("#alerts", { sender: "a", severity: "warning", category: "c", content: "New warn 2" });
-				s.broadcast("#alerts", { sender: "a", severity: "info", category: "c", content: "New info 2" });
+				s.broadcast("#alerts", { channel: "#alerts", sender: "a", severity: "info", category: "c", content: "New info 1" });
+				s.broadcast("#alerts", { channel: "#alerts", sender: "a", severity: "warning", category: "c", content: "New warn 1" });
+				s.broadcast("#alerts", { channel: "#alerts", sender: "a", severity: "warning", category: "c", content: "New warn 2" });
+				s.broadcast("#alerts", { channel: "#alerts", sender: "a", severity: "info", category: "c", content: "New info 2" });
 
 				const results = s.listen("#alerts", {
 					severity: "warning",
@@ -646,7 +664,7 @@ describe("Samiti", () => {
 		});
 
 		it("should return empty array for channel with no matching messages", () => {
-			samiti.broadcast("#security", { sender: "a", severity: "info", category: "c", content: "Info" });
+			samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "info", category: "c", content: "Info" });
 			const results = samiti.listen("#security", { severity: "critical" });
 			expect(results).toEqual([]);
 		});
@@ -662,8 +680,8 @@ describe("Samiti", () => {
 		});
 
 		it("should return messages oldest first", () => {
-			samiti.broadcast("#security", { sender: "a", severity: "info", category: "c", content: "First" });
-			samiti.broadcast("#security", { sender: "a", severity: "info", category: "c", content: "Second" });
+			samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "info", category: "c", content: "First" });
+			samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "info", category: "c", content: "Second" });
 			const history = samiti.getHistory("#security");
 			expect(history[0].content).toBe("First");
 			expect(history[1].content).toBe("Second");
@@ -671,7 +689,7 @@ describe("Samiti", () => {
 
 		it("should respect limit parameter", () => {
 			for (let i = 0; i < 5; i++) {
-				samiti.broadcast("#security", { sender: "a", severity: "info", category: "c", content: `${i}` });
+				samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "info", category: "c", content: `${i}` });
 			}
 			const history = samiti.getHistory("#security", 2);
 			expect(history).toHaveLength(2);
@@ -685,6 +703,7 @@ describe("Samiti", () => {
 			try {
 				const s = new Samiti();
 				s.broadcast("#security", {
+					channel: "#security",
 					sender: "a",
 					severity: "info",
 					category: "c",
@@ -713,6 +732,7 @@ describe("Samiti", () => {
 			const handler = vi.fn();
 			samiti.onMessage("#security", handler);
 			samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -728,6 +748,7 @@ describe("Samiti", () => {
 			samiti.onMessage("#security", h1);
 			samiti.onMessage("#security", h2);
 			samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -747,6 +768,7 @@ describe("Samiti", () => {
 			const handler = vi.fn();
 			const unsub = samiti.onMessage("#security", handler);
 			samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -754,6 +776,7 @@ describe("Samiti", () => {
 			});
 			unsub();
 			samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -777,6 +800,7 @@ describe("Samiti", () => {
 
 			unsub1();
 			samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -794,6 +818,7 @@ describe("Samiti", () => {
 			samiti.onMessage("#security", good);
 
 			samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -812,6 +837,7 @@ describe("Samiti", () => {
 			const handler = vi.fn();
 			samiti.onMessage("#security", handler);
 			samiti.broadcast("#performance", {
+				channel: "#performance",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -835,9 +861,9 @@ describe("Samiti", () => {
 		});
 
 		it("should report correct total messages after broadcasts", () => {
-			samiti.broadcast("#security", { sender: "a", severity: "info", category: "c", content: "1" });
-			samiti.broadcast("#security", { sender: "a", severity: "info", category: "c", content: "2" });
-			samiti.broadcast("#performance", { sender: "a", severity: "info", category: "c", content: "3" });
+			samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "info", category: "c", content: "1" });
+			samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "info", category: "c", content: "2" });
+			samiti.broadcast("#performance", { channel: "#performance", sender: "a", severity: "info", category: "c", content: "3" });
 			expect(samiti.stats().totalMessages).toBe(3);
 		});
 
@@ -854,7 +880,7 @@ describe("Samiti", () => {
 
 		it("should update after channel deletion", () => {
 			samiti.subscribe("#security", "agent-1");
-			samiti.broadcast("#security", { sender: "a", severity: "info", category: "c", content: "msg" });
+			samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "info", category: "c", content: "msg" });
 			samiti.deleteChannel("#security");
 			const s = samiti.stats();
 			expect(s.channels).toBe(4);
@@ -870,6 +896,7 @@ describe("Samiti", () => {
 	describe("message IDs", () => {
 		it("should generate IDs with sam- prefix", () => {
 			const msg = samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -880,6 +907,7 @@ describe("Samiti", () => {
 
 		it("should generate different IDs for different messages", () => {
 			const msg1 = samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "a",
 				severity: "info",
 				category: "c",
@@ -887,6 +915,7 @@ describe("Samiti", () => {
 			});
 			// Small delay to ensure different timestamp
 			const msg2 = samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "b",
 				severity: "info",
 				category: "c",
@@ -926,6 +955,7 @@ describe("Samiti", () => {
 			samiti.destroy();
 			expect(() =>
 				samiti.broadcast("#security", {
+					channel: "#security",
 					sender: "test",
 					severity: "info",
 					category: "test",
@@ -957,6 +987,7 @@ describe("Samiti", () => {
 	describe("edge cases", () => {
 		it("should handle empty content message", () => {
 			const msg = samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "test",
 				severity: "info",
 				category: "empty",
@@ -967,6 +998,7 @@ describe("Samiti", () => {
 
 		it("should handle undefined data field", () => {
 			const msg = samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -977,6 +1009,7 @@ describe("Samiti", () => {
 
 		it("should handle empty references array", () => {
 			const msg = samiti.broadcast("#security", {
+				channel: "#security",
 				sender: "test",
 				severity: "info",
 				category: "test",
@@ -997,19 +1030,19 @@ describe("Samiti", () => {
 		});
 
 		it("should handle limit larger than message count", () => {
-			samiti.broadcast("#security", { sender: "a", severity: "info", category: "c", content: "Only one" });
+			samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "info", category: "c", content: "Only one" });
 			const results = samiti.listen("#security", { limit: 100 });
 			expect(results).toHaveLength(1);
 		});
 
 		it("should handle since in the future (returns nothing)", () => {
-			samiti.broadcast("#security", { sender: "a", severity: "info", category: "c", content: "Now" });
+			samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "info", category: "c", content: "Now" });
 			const results = samiti.listen("#security", { since: Date.now() + 999999 });
 			expect(results).toEqual([]);
 		});
 
 		it("should handle limit of 0", () => {
-			samiti.broadcast("#security", { sender: "a", severity: "info", category: "c", content: "A" });
+			samiti.broadcast("#security", { channel: "#security", sender: "a", severity: "info", category: "c", content: "A" });
 			const results = samiti.listen("#security", { limit: 0 });
 			expect(results).toHaveLength(0);
 		});

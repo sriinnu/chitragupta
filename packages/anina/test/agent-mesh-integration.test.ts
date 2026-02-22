@@ -61,7 +61,7 @@ function createBaseConfig(overrides?: Partial<AgentConfig>): AgentConfig {
 			name: "Test Agent",
 			personality: "helpful",
 			expertise: ["testing"],
-			voice: "professional" as const,
+			voice: "friendly" as const,
 			preferredThinking: "medium" as const,
 		},
 		providerId: "test-provider",
@@ -129,12 +129,12 @@ describe("Agent mesh integration", () => {
 				actorSystem,
 				tools: [
 					{
-						definition: { name: "read", description: "Read files", parameters: {} },
-						handler: vi.fn(),
+						definition: { name: "read", description: "Read files", inputSchema: {} },
+						execute: vi.fn(),
 					},
 					{
-						definition: { name: "write", description: "Write files", parameters: {} },
-						handler: vi.fn(),
+						definition: { name: "write", description: "Write files", inputSchema: {} },
+						execute: vi.fn(),
 					},
 				],
 			}));

@@ -269,6 +269,7 @@ export class MargaPipeline {
 
 			try {
 				const stream = provider.stream(currentModel, context, streamOpts);
+				let didEscalate = false;
 				for await (const event of stream) {
 					if (event.type === "error" && this.autoEscalate && escalations < this.maxEscalations) {
 						const next = this.findNextInChain(currentProvider, currentModel);
@@ -276,6 +277,7 @@ export class MargaPipeline {
 							currentProvider = next.providerId;
 							currentModel = next.modelId;
 							escalations++;
+							didEscalate = true;
 							break;
 						}
 					}
@@ -283,8 +285,8 @@ export class MargaPipeline {
 					if (event.type === "done") return;
 				}
 
-				// If we broke for escalation, continue outer loop
-				if (escalations > 0) continue;
+				// If we broke for escalation, continue to the next provider
+				if (didEscalate) continue;
 				return;
 			} catch (err) {
 				if (this.autoEscalate && escalations < this.maxEscalations) {
@@ -297,15 +299,15 @@ export class MargaPipeline {
 					}
 				}
 				// All escalation attempts exhausted — provide a clear message
-			const detail = err instanceof Error ? err.message : String(err);
-			throw new ProviderError(
-				`All available providers exhausted for ${decision.taskType} task ` +
-				`(last: ${currentProvider}/${currentModel}, ${escalations} escalations tried). ` +
-				`Please check provider configuration or try again shortly. Detail: ${detail}`,
-				currentProvider,
-				undefined,
-				err instanceof Error ? err : undefined,
-			);
+				const detail = err instanceof Error ? err.message : String(err);
+				throw new ProviderError(
+					`All available providers exhausted for ${decision.taskType} task ` +
+					`(last: ${currentProvider}/${currentModel}, ${escalations} escalations tried). ` +
+					`Please check provider configuration or try again shortly. Detail: ${detail}`,
+					currentProvider,
+					undefined,
+					err instanceof Error ? err : undefined,
+				);
 			}
 		}
 	}
