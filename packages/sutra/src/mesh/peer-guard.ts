@@ -17,13 +17,13 @@ import type { PeerNodeInfo } from "./peer-types.js";
 
 /** Configuration for peer guard anti-eclipse protections. */
 export interface PeerGuardConfig {
-	/** Max connections per /24 subnet. Default: 2 */
+	/** Max connections per /24 subnet. Default: 8 */
 	maxPerSubnet?: number;
 	/** Minimum outbound connections to maintain. Default: 4 */
 	minOutbound?: number;
 	/** Max inbound connections (separate from maxPeers). Default: 25 */
 	maxInbound?: number;
-	/** Max connection attempts per IP per minute. Default: 5 */
+	/** Max connection attempts per IP per minute. Default: 10 */
 	maxAttemptsPerMinute?: number;
 	/** Evict oldest inbound connection after this age (ms). Default: 3_600_000 (1h) */
 	maxInboundAgeMs?: number;
@@ -219,6 +219,11 @@ export class PeerGuard {
 			subnets: this.subnetCounts.size,
 			scored: this.scores.size,
 		};
+	}
+
+	/** Max inbound age before rotation is allowed. */
+	getMaxInboundAgeMs(): number {
+		return this.config.maxInboundAgeMs;
 	}
 
 	// ─── Rate Limiting ──────────────────────────────────────────
