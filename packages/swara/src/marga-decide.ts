@@ -28,6 +28,11 @@ import type { Context, ContentPart } from "./types.js";
 /** Bump this when the MargaDecision shape or semantics change. */
 export const MARGA_CONTRACT_VERSION = "1.1";
 
+/** Default provider for Marga routing when no binding matches. */
+export const MARGA_DEFAULT_PROVIDER = "ollama";
+/** Default model for Marga routing when no binding matches. */
+export const MARGA_DEFAULT_MODEL = "qwen3:8b";
+
 type ProviderHealthSignal = {
 	healthy?: boolean;
 	status?: string;
@@ -198,8 +203,8 @@ export function margaDecide(request: MargaDecideRequest): MargaDecision {
 	const skipLLM = resolution === "tool-only" || resolution === "local-compute";
 
 	// Step 6: Select provider/model from binding
-	let providerId = binding?.providerId ?? "ollama";
-	let modelId = binding?.modelId ?? "qwen3:8b";
+	let providerId = binding?.providerId ?? MARGA_DEFAULT_PROVIDER;
+	let modelId = binding?.modelId ?? MARGA_DEFAULT_MODEL;
 	let rationale = binding?.rationale ?? "Default fallback";
 
 	// Step 7: Complexity upgrade — if task demands stronger model

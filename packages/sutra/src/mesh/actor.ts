@@ -23,11 +23,16 @@ import type {
 	ActorContext,
 	AskOptions,
 	MeshEnvelope,
-	MeshPriority,
 	MessageReceiver,
 	MessageSender,
 	SendOptions,
 } from "./types.js";
+
+/** Optional interface for recording message success/failure (e.g. CapabilityLearner). */
+export interface ActorLearner {
+	recordSuccess(actorId: string, envelope: MeshEnvelope): void;
+	recordFailure(actorId: string, envelope: MeshEnvelope): void;
+}
 
 /**
  * A single actor in the mesh — receives envelopes, processes them
@@ -38,6 +43,7 @@ export class Actor implements MessageReceiver {
 	private behavior: ActorBehavior;
 	private readonly router: MessageSender;
 	private readonly mailbox: ActorMailbox;
+	private readonly learner?: ActorLearner;
 	private processing = false;
 	private alive = true;
 
@@ -46,11 +52,13 @@ export class Actor implements MessageReceiver {
 		behavior: ActorBehavior,
 		router: MessageSender,
 		mailboxSize?: number,
+		learner?: ActorLearner,
 	) {
 		this.actorId = id;
 		this.behavior = behavior;
 		this.router = router;
 		this.mailbox = new ActorMailbox(mailboxSize);
+		this.learner = learner;
 	}
 
 	// ─── Public ────────────────────────────────────────────────────
@@ -106,9 +114,11 @@ export class Actor implements MessageReceiver {
 				const ctx = this.buildContext(envelope);
 				try {
 					await this.behavior(envelope, ctx);
+					this.learner?.recordSuccess(this.actorId, envelope);
 				} catch (_err) {
 					// Error isolation: a faulty behavior must never crash
 					// the mesh. The actor continues to live.
+					this.learner?.recordFailure(this.actorId, envelope);
 				}
 			}
 		} finally {

@@ -19,6 +19,7 @@ import type { PeerConnectionManager } from "./peer-connection.js";
 import type { NetworkGossip } from "./network-gossip.js";
 import type { PeerAddrDb } from "./peer-addr-db.js";
 import type { CapabilityRouter } from "./capability-router.js";
+import { CapabilityLearner } from "./capability-learner.js";
 const DEFAULTS: Required<ActorSystemConfig> = {
 	maxMailboxSize: 10_000,
 	defaultTTL: 30_000,
@@ -80,6 +81,7 @@ export class ActorSystem {
 	private readonly config: Required<ActorSystemConfig>;
 	private readonly router: MeshRouter;
 	private readonly gossip: GossipProtocol;
+	private readonly capabilityLearner: CapabilityLearner;
 	private readonly actors = new Map<string, Actor>();
 	private readonly eventHandlers: SystemEventHandler[] = [];
 	private running = false;
@@ -87,6 +89,7 @@ export class ActorSystem {
 		this.config = { ...DEFAULTS, ...config };
 		this.router = new MeshRouter(this.config.defaultTTL, this.config.defaultAskTimeout);
 		this.gossip = new GossipProtocol(this.config);
+		this.capabilityLearner = new CapabilityLearner(this.gossip);
 		// Wire router events to system events
 		this.router.on((event) => {
 			if (event.type === "delivered") {
@@ -133,10 +136,11 @@ export class ActorSystem {
 			handlerFn = options.behavior;
 		}
 		const mailboxSize = options.mailboxSize ?? this.config.maxMailboxSize;
-		const actor = new Actor(id, handlerFn, this.router, mailboxSize);
+		const actor = new Actor(id, handlerFn, this.router, mailboxSize, this.capabilityLearner);
 		this.actors.set(id, actor);
 		this.router.addActor(actor);
 		this.gossip.register(id, expertise, capabilities);
+		this.capabilityRouter?.updateLoad(this.connectionManager?.nodeId ?? "local", this.actors.size);
 		this.emit({ type: "actor:spawned", actorId: id });
 		return new ActorRef(id, this.router);
 	}
@@ -147,6 +151,7 @@ export class ActorSystem {
 		this.actors.delete(actorId);
 		this.router.removeActor(actorId);
 		this.gossip.unregister(actorId);
+		this.capabilityRouter?.updateLoad(this.connectionManager?.nodeId ?? "local", this.actors.size);
 		this.emit({ type: "actor:stopped", actorId });
 		return true;
 	}
@@ -324,6 +329,7 @@ export class ActorSystem {
 		if (this.running) return;
 		this.running = true;
 		this.gossip.start();
+		this.capabilityLearner.start();
 	}
 	async shutdown(): Promise<void> {
 		if (!this.running) return;
@@ -343,6 +349,7 @@ export class ActorSystem {
 			this.emit({ type: "actor:stopped", actorId: id });
 		}
 		this.actors.clear();
+		this.capabilityLearner.destroy();
 		this.gossip.stop();
 		this.eventHandlers.length = 0;
 		await this.savePeerAddrDb();
