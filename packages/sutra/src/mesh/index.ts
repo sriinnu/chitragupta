@@ -44,6 +44,10 @@ export type { SpawnOptions } from "./actor-system.js";
 export { CapabilityRouter } from "./capability-router.js";
 export type { CapabilityQuery, CapabilityStrategy, ScoredPeer } from "./capability-router.js";
 
+// Capability Learning
+export { CapabilityLearner } from "./capability-learner.js";
+export type { CapabilityLearnerConfig } from "./capability-learner.js";
+
 // P2P Network Transport
 export { NetworkGossip } from "./network-gossip.js";
 export type { ActorLocationMap, NetworkGossipConfig, NetworkGossipEvent } from "./network-gossip.js";
