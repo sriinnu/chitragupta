@@ -23,6 +23,7 @@ import {
 	getActionType,
 	createEmbeddingProviderInstance,
 } from "./bootstrap.js";
+import { resolveAgentLimits } from "./agent-limits.js";
 
 /** Result of API infrastructure wiring. */
 export interface ApiWiringResult {
@@ -253,11 +254,10 @@ async function wireCommHubAndSamiti(result: ApiWiringResult): Promise<void> {
 async function wireKaalaBrahma(result: ApiWiringResult): Promise<void> {
 	try {
 		const { KaalaBrahma } = await import("@chitragupta/anina");
-		const { loadGlobalSettings } = await import("@chitragupta/core");
-		const agentsCfg = loadGlobalSettings().agents;
+		const agentLimits = resolveAgentLimits();
 		const k = new KaalaBrahma({
 			heartbeatInterval: 5000, staleThreshold: 30000,
-			maxAgentDepth: agentsCfg?.maxDepth ?? 8, maxSubAgents: agentsCfg?.maxSubAgents ?? 12,
+			maxAgentDepth: agentLimits.maxDepth, maxSubAgents: agentLimits.maxSubAgents,
 		});
 		k.startMonitoring();
 		result.kaala = k as unknown as AgentConfig["kaala"];

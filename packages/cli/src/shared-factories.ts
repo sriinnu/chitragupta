@@ -12,6 +12,7 @@
  */
 
 import path from "path";
+import { resolveAgentLimits } from "./agent-limits.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -184,13 +185,12 @@ export async function createMeshInfrastructure(
 	// KaalaBrahma for lifecycle tracking
 	try {
 		const { KaalaBrahma } = await import("@chitragupta/anina");
-		const { loadGlobalSettings } = await import("@chitragupta/core");
-		const agentsCfg = loadGlobalSettings().agents;
+		const agentLimits = resolveAgentLimits();
 		result.kaala = new KaalaBrahma({
 			heartbeatInterval: 5000,
 			staleThreshold: 30000,
-			maxAgentDepth: agentsCfg?.maxDepth ?? 8,
-			maxSubAgents: agentsCfg?.maxSubAgents ?? 12,
+			maxAgentDepth: agentLimits.maxDepth,
+			maxSubAgents: agentLimits.maxSubAgents,
 		}) as unknown as import("@chitragupta/anina").KaalaLifecycle;
 	} catch {
 		// KaalaBrahma is optional

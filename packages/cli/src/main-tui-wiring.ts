@@ -15,7 +15,6 @@ import path from "path";
 import {
 	getChitraguptaHome,
 	createLogger,
-	loadGlobalSettings,
 } from "@chitragupta/core";
 import type { AgentProfile, ThinkingLevel } from "@chitragupta/core";
 
@@ -44,6 +43,7 @@ import {
 	createEmbeddingProviderInstance,
 	loadProjectMemory,
 } from "./bootstrap.js";
+import { resolveAgentLimits } from "./agent-limits.js";
 
 const log = createLogger("cli:main-tui");
 
@@ -294,8 +294,13 @@ async function wireSandeshaRouter(result: TuiWiringResult): Promise<void> {
 
 function wireKaalaBrahma(result: TuiWiringResult): void {
 	try {
-		const agentsCfg = loadGlobalSettings().agents;
-		result.kaala = new KaalaBrahma({ heartbeatInterval: 5000, staleThreshold: 30000, maxAgentDepth: agentsCfg?.maxDepth ?? 8, maxSubAgents: agentsCfg?.maxSubAgents ?? 12 });
+		const agentLimits = resolveAgentLimits();
+		result.kaala = new KaalaBrahma({
+			heartbeatInterval: 5000,
+			staleThreshold: 30000,
+			maxAgentDepth: agentLimits.maxDepth,
+			maxSubAgents: agentLimits.maxSubAgents,
+		});
 		result.kaala.startMonitoring();
 		if (result.samiti) {
 			const samiti = result.samiti;
