@@ -67,8 +67,8 @@ const COMPLEXITY_ORDER: Record<TaskComplexity, number> = {
 
 /** Local-first strategy: free local models for light work, cloud for heavy. */
 export const DEFAULT_TIERS: ModelTier[] = [
-	{ complexity: "trivial", providerId: "ollama", modelId: "llama3.2:1b", costPer1kTokens: 0, maxTokens: 2048 },
-	{ complexity: "simple", providerId: "ollama", modelId: "llama3.2:3b", costPer1kTokens: 0, maxTokens: 4096 },
+	{ complexity: "trivial", providerId: "ollama", modelId: "qwen3:8b", costPer1kTokens: 0, maxTokens: 2048 },
+	{ complexity: "simple", providerId: "ollama", modelId: "qwen3:8b", costPer1kTokens: 0, maxTokens: 4096 },
 	{ complexity: "medium", providerId: "ollama", modelId: "qwen2.5-coder:7b", costPer1kTokens: 0, maxTokens: 8192 },
 	{ complexity: "complex", providerId: "anthropic", modelId: "claude-sonnet-4-5-20250929", costPer1kTokens: 3.0, maxTokens: 16384 },
 	{ complexity: "expert", providerId: "anthropic", modelId: "claude-opus-4-6", costPer1kTokens: 15.0, maxTokens: 32768 },

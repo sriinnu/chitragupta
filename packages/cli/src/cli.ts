@@ -246,7 +246,7 @@ async function handleSubcommand(command: string, subcommand: string | undefined,
 
 		case "serve": {
 			const port = opts?.port ?? 3000;
-			const host = opts?.host ?? "localhost";
+			const host = opts?.host ?? "127.0.0.1";
 
 			// Reuse the main() initialization flow to create a fully-wired agent
 			// then hand it to the HTTP server instead of the TUI.

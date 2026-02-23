@@ -187,7 +187,7 @@ Reference: Li et al. (2010), "A contextual-bandit approach to personalized news 
 | Tier | Description | Typical Models |
 |------|-------------|----------------|
 | `no-llm` | Pure tool execution, zero tokens | Local search, file ops |
-| `haiku` | Fast model for simple queries | Claude Haiku, llama3.2:1b |
+| `haiku` | Fast model for simple queries | Claude Haiku, qwen3:8b |
 | `sonnet` | Standard model for typical work | Claude Sonnet, qwen2.5-coder:7b |
 | `opus` | Full model for complex reasoning | Claude Opus |
 
@@ -247,7 +247,7 @@ const router = new ModelRouter({
 
 // Route: picks cheapest model that can handle the complexity
 const decision = router.route(context);
-// -> trivial: llama3.2:1b, simple: llama3.2:3b, medium: qwen2.5-coder:7b,
+// -> trivial: qwen3:8b, simple: qwen3:8b, medium: qwen2.5-coder:7b,
 //   complex: claude-sonnet, expert: claude-opus
 
 // Stream with auto-escalation on failure

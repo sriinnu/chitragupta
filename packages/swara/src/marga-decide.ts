@@ -78,7 +78,7 @@ export interface MargaDecision {
 
 	/** Selected provider ID (e.g. "anthropic", "ollama", "openai", "none"). */
 	providerId: string;
-	/** Selected model ID (e.g. "claude-sonnet-4-5-20250929", "llama3.2:3b"). */
+	/** Selected model ID (e.g. "claude-sonnet-4-5-20250929", "qwen3:8b"). */
 	modelId: string;
 
 	/** Detected task type (15 discrete categories). */
@@ -129,8 +129,7 @@ export interface MargaDecision {
  * Exported so Vaayu can inspect the chain without calling decide().
  */
 export const ESCALATION_CHAIN: ReadonlyArray<{ providerId: string; modelId: string }> = [
-	{ providerId: "ollama", modelId: "llama3.2:1b" },
-	{ providerId: "ollama", modelId: "llama3.2:3b" },
+	{ providerId: "ollama", modelId: "qwen3:8b" },
 	{ providerId: "ollama", modelId: "qwen2.5-coder:7b" },
 	{ providerId: "anthropic", modelId: "claude-haiku-3-5" },
 	{ providerId: "anthropic", modelId: "claude-sonnet-4-5-20250929" },
@@ -200,7 +199,7 @@ export function margaDecide(request: MargaDecideRequest): MargaDecision {
 
 	// Step 6: Select provider/model from binding
 	let providerId = binding?.providerId ?? "ollama";
-	let modelId = binding?.modelId ?? "llama3.2:3b";
+	let modelId = binding?.modelId ?? "qwen3:8b";
 	let rationale = binding?.rationale ?? "Default fallback";
 
 	// Step 7: Complexity upgrade — if task demands stronger model

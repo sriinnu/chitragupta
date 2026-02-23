@@ -444,7 +444,7 @@ export function startServer(options: ServerModeOptions): {
 	server: Server;
 	shutdown: () => Promise<void>;
 } {
-	const { agent, port = 3000, host = "localhost", projectPath } = options;
+	const { agent, port = 3000, host = "127.0.0.1", projectPath } = options;
 
 	const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
 		// Handle CORS preflight
