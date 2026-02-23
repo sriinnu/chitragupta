@@ -260,7 +260,7 @@ export type {
 
 // Akasha — Shared Knowledge Field (stigmergic traces)
 export { AkashaField } from "./akasha.js";
-export type { StigmergicTrace, TraceType, AkashaConfig } from "./akasha.js";
+export type { StigmergicTrace, TraceType, AkashaConfig, AkashaEvent } from "./akasha.js";
 
 // Kala Chakra — Multi-Scale Temporal Awareness (काल चक्र)
 export { KalaChakra, TEMPORAL_SCALES } from "./kala-chakra.js";

@@ -32,6 +32,7 @@ export {
 export type {
 	ActorBehavior,
 	ActorContext,
+	ActorLearner,
 	ActorSystemConfig,
 	AskOptions,
 	MeshEnvelope,
