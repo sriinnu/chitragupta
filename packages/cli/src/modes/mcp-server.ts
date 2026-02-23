@@ -48,6 +48,16 @@ import {
 	createRecallTool, createVidhisTool, createConsolidateTool,
 } from "./mcp-tools-sync.js";
 import {
+	createMeshStatusTool, createMeshSpawnTool, createMeshSendTool,
+	createMeshAskTool, createMeshFindCapabilityTool, createMeshPeersTool,
+	createMeshGossipTool, createMeshTopologyTool,
+} from "./mcp-tools-mesh.js";
+import {
+	createSkillsFindTool, createSkillsListTool, createSkillsHealthTool,
+	createSkillsLearnTool, createSkillsScanTool, createSkillsEcosystemTool,
+	createSkillsRecommendTool,
+} from "./mcp-tools-skills.js";
+import {
 	createMemoryResource, createSavePrompt, createLastSessionPrompt,
 	createRecallPrompt, createStatusPrompt, createHandoverPrompt,
 	createReviewPrompt, createDebugPrompt, createResearchPrompt,
@@ -141,6 +151,25 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	mcpTools.push(createRecallTool());
 	mcpTools.push(createVidhisTool(projectPath));
 	mcpTools.push(createConsolidateTool(projectPath));
+
+	// P2P Actor Mesh (Sutra)
+	mcpTools.push(createMeshStatusTool());
+	mcpTools.push(createMeshSpawnTool());
+	mcpTools.push(createMeshSendTool());
+	mcpTools.push(createMeshAskTool());
+	mcpTools.push(createMeshFindCapabilityTool());
+	mcpTools.push(createMeshPeersTool());
+	mcpTools.push(createMeshGossipTool());
+	mcpTools.push(createMeshTopologyTool());
+
+	// Vidhya-Skills Pipeline
+	mcpTools.push(createSkillsFindTool());
+	mcpTools.push(createSkillsListTool());
+	mcpTools.push(createSkillsHealthTool());
+	mcpTools.push(createSkillsLearnTool());
+	mcpTools.push(createSkillsScanTool());
+	mcpTools.push(createSkillsEcosystemTool());
+	mcpTools.push(createSkillsRecommendTool());
 
 	// ─── 2. Session recording ───────────────────────────────────────
 
