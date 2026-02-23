@@ -108,6 +108,45 @@ export interface SoulManagerLike {
 	} | undefined;
 }
 
+/** Duck-typed ActorSystem (P2P mesh). */
+export interface ActorSystemLike {
+	readonly actorCount: number;
+	readonly isRunning: boolean;
+	spawn(id: string, behavior: unknown, opts?: Record<string, unknown>): unknown;
+	tell(from: string, to: string, payload: unknown, opts?: Record<string, unknown>): void;
+	ask(from: string, to: string, payload: unknown, opts?: Record<string, unknown>): Promise<unknown>;
+	start(): void;
+	shutdown(): Promise<void>;
+	getRouter(): unknown;
+	getGossipProtocol(): {
+		getView(): Array<{ actorId: string; status: string; expertise?: string[]; capabilities?: string[]; generation: number; lastSeen: number; originNodeId?: string }>;
+		findByCapability(cap: string): Array<{ actorId: string; status: string; capabilities?: string[]; originNodeId?: string; lastSeen: number; generation: number }>;
+		findByExpertise(exp: string): Array<{ actorId: string; status: string; expertise?: string[]; originNodeId?: string; lastSeen: number }>;
+		findAlive(): Array<{ actorId: string; status: string; capabilities?: string[]; expertise?: string[]; originNodeId?: string; lastSeen: number }>;
+	} | null;
+	getConnectionManager(): {
+		readonly nodeId: string;
+		readonly connectedCount: number;
+		readonly peerCount: number;
+		getPeers(): Array<{ peerId: string; endpoint: string; state: string; outbound: boolean }>;
+	} | null;
+	getCapabilityRouter(): {
+		resolve(query: { capabilities: string[]; strategy?: string }): { actorId: string; status: string; capabilities?: string[]; originNodeId?: string } | undefined;
+		findMatchingAll(caps: string[]): Array<{ actorId: string; status: string; capabilities?: string[]; originNodeId?: string }>;
+	} | null;
+	getNetworkGossip(): { readonly locationCount: number; getLocations(): ReadonlyMap<string, string> } | null;
+}
+
+/** Duck-typed SkillRegistry (vidhya-skills). */
+export interface SkillRegistryLike {
+	readonly size: number;
+	register(manifest: Record<string, unknown>): void;
+	getByName(name: string): Record<string, unknown> | undefined;
+	getByTag(tag: string): Array<Record<string, unknown>>;
+	getByVerb(verb: string): Array<Record<string, unknown>>;
+	getAll(): Array<Record<string, unknown>>;
+}
+
 // ─── Lazy Singletons ────────────────────────────────────────────────────────
 
 let _samiti: SamitiLike | undefined;
@@ -117,6 +156,8 @@ let _vasana: VasanaEngineLike | undefined;
 let _triguna: TrigunaLike | undefined;
 let _chetana: ChetanaControllerLike | undefined;
 let _soulManager: SoulManagerLike | undefined;
+let _actorSystem: ActorSystemLike | undefined;
+let _skillRegistry: SkillRegistryLike | undefined;
 
 /** Lazily create or return the Samiti singleton. */
 export async function getSamiti(): Promise<SamitiLike> {
@@ -179,4 +220,24 @@ export async function getSoulManager(): Promise<SoulManagerLike> {
 		_soulManager = new SoulManager({ persist: true }) as unknown as SoulManagerLike;
 	}
 	return _soulManager;
+}
+
+/** Lazily create or return the ActorSystem singleton (local-only, P2P optional). */
+export async function getActorSystem(): Promise<ActorSystemLike> {
+	if (!_actorSystem) {
+		const { ActorSystem } = await import("@chitragupta/sutra");
+		const sys = new ActorSystem();
+		sys.start();
+		_actorSystem = sys as unknown as ActorSystemLike;
+	}
+	return _actorSystem;
+}
+
+/** Lazily create or return the SkillRegistry singleton. */
+export async function getSkillRegistry(): Promise<SkillRegistryLike> {
+	if (!_skillRegistry) {
+		const { SkillRegistry } = await import("@chitragupta/vidhya-skills");
+		_skillRegistry = new SkillRegistry() as unknown as SkillRegistryLike;
+	}
+	return _skillRegistry;
 }
