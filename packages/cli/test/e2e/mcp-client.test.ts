@@ -21,9 +21,59 @@ import { randomUUID } from "node:crypto";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const CLI_DIST = join(import.meta.dirname, "../../dist/mcp-entry.js");
+const CLI_DIST_FILE = join(import.meta.dirname, "../../dist/mcp-entry.js");
+const CLI_SRC_FILE = join(import.meta.dirname, "../../src/mcp-entry.ts");
+const CLI_DIST_DEPENDENCIES = [
+	"@chitragupta/core/dist/index.js",
+	"@chitragupta/swara/dist/index.js",
+	"@chitragupta/anina/dist/index.js",
+	"@chitragupta/smriti/dist/index.js",
+	"@chitragupta/ui/dist/index.js",
+	"@chitragupta/yantra/dist/index.js",
+	"@chitragupta/tantra/dist/index.js",
+	"@chitragupta/vidhya-skills/dist/index.js",
+	"@chitragupta/dharma/dist/index.js",
+	"@chitragupta/niyanta/dist/index.js",
+	"@chitragupta/vayu/dist/index.js",
+	"@chitragupta/sutra/dist/index.js",
+] as const;
 const RESPONSE_TIMEOUT_MS = 8_000;
 const SERVER_STARTUP_MS = 2_000;
+
+type CliLaunchRuntime = "node" | "tsx";
+
+interface CliLaunchTarget {
+	runtime: CliLaunchRuntime;
+	entryPoint: string;
+	reason: string;
+}
+
+function resolveCliLaunchTarget(): CliLaunchTarget {
+	if (!existsSync(CLI_DIST_FILE)) {
+		return {
+			runtime: "tsx",
+			entryPoint: CLI_SRC_FILE,
+			reason: "CLI dist entry is missing",
+		};
+	}
+	const missingDeps = CLI_DIST_DEPENDENCIES.filter((relPath) =>
+		!existsSync(join(import.meta.dirname, "../../node_modules", relPath)));
+	if (missingDeps.length > 0) {
+		return {
+			runtime: "tsx",
+			entryPoint: CLI_SRC_FILE,
+			reason: `CLI dist dependencies missing (${missingDeps.slice(0, 3).join(", ")})`,
+		};
+	}
+	return {
+		runtime: "node",
+		entryPoint: CLI_DIST_FILE,
+		reason: "CLI dist + dependency dist artifacts available",
+	};
+}
+
+const CLI_LAUNCH = resolveCliLaunchTarget();
+const CLI_ENTRY = CLI_LAUNCH.entryPoint;
 
 // ─── JSON-RPC 2.0 Helpers ──────────────────────────────────────────────────
 
@@ -79,11 +129,19 @@ class McpTestClient {
 	/**
 	 * Spawn the MCP server process and begin listening.
 	 */
-	async start(entryPoint: string, args: string[] = []): Promise<void> {
+	async start(
+		entryPoint: string,
+		args: string[] = [],
+		runtime: CliLaunchRuntime = "node",
+	): Promise<void> {
 		this._buffer = Buffer.alloc(0);
 		this._stderr = [];
 
-		this._child = spawn("node", [entryPoint, ...args], {
+		const command = runtime === "tsx" ? "pnpm" : "node";
+		const commandArgs = runtime === "tsx"
+			? ["exec", "tsx", entryPoint, ...args]
+			: [entryPoint, ...args];
+		this._child = spawn(command, commandArgs, {
 			stdio: ["pipe", "pipe", "pipe"],
 			env: {
 				...process.env,
@@ -294,13 +352,14 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 	let client: McpTestClient;
 	let tmpProjectDir: string;
 
-	// Pre-flight check: skip entire suite if dist is not built
+	// Pre-flight: choose dist runtime when available, fallback to tsx source runtime.
 	beforeAll(() => {
-		if (!existsSync(CLI_DIST)) {
-			console.warn(
-				`[SKIP] MCP E2E tests: dist not built. Run "npm run build --workspace=packages/cli" first.`,
-			);
+		if (!existsSync(CLI_ENTRY)) {
+			console.warn("[SKIP] MCP E2E tests: CLI entrypoint not found.");
 			return;
+		}
+		if (CLI_LAUNCH.runtime === "tsx") {
+			console.warn(`[E2E runtime fallback] using tsx source entrypoint: ${CLI_LAUNCH.reason}`);
 		}
 
 		// Create a temporary project directory with a MEMORY.md
@@ -337,7 +396,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		initResponse: JsonRpcResponse;
 	}> {
 		client = new McpTestClient();
-		await client.start(CLI_DIST, ["--project", tmpProjectDir]);
+		await client.start(CLI_ENTRY, ["--project", tmpProjectDir], CLI_LAUNCH.runtime);
 
 		const initResponse = await client.request("initialize", {
 			protocolVersion: "2024-11-05",
@@ -354,7 +413,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 	describe("initialize handshake", () => {
 		it("should complete the MCP initialize handshake", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			const { initResponse } = await startAndInitialize();
 
@@ -373,7 +432,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should advertise tools, resources, and prompts capabilities", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			const { initResponse } = await startAndInitialize();
 			const result = initResponse.result as Record<string, unknown>;
@@ -391,7 +450,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 	describe("tools/list", () => {
 		it("should return all registered tools with correct schemas", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -414,7 +473,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should include proper input schemas for each tool", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -434,7 +493,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should include chitragupta_memory_search with query parameter", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -459,7 +518,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 	describe("resources/list", () => {
 		it("should return the project memory resource", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -487,7 +546,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 	describe("prompts/list", () => {
 		it("should return the code_review prompt template", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -524,7 +583,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 	describe("tools/call", () => {
 		it("should execute chitragupta_memory_search and return results", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -547,7 +606,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should return error for memory_search without query", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -563,7 +622,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should execute chitragupta_session_list and return results", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -585,7 +644,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should return JSON-RPC error for unknown tool", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -601,7 +660,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should return JSON-RPC error when name param is missing", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -622,7 +681,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 	describe("resources/read", () => {
 		it("should read the project memory resource", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -642,7 +701,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should return error for unknown resource URI", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -656,7 +715,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should return error when uri param is missing", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -674,7 +733,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 	describe("prompts/get", () => {
 		it("should return the code_review prompt with arguments", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -703,7 +762,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should return error for unknown prompt", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -717,7 +776,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should return error when name param is missing", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -735,7 +794,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 	describe("error handling", () => {
 		it("should return METHOD_NOT_FOUND for unknown methods", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -747,7 +806,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should handle ping method", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -758,7 +817,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should silently ignore malformed JSON (no crash)", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -778,7 +837,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should ignore messages without jsonrpc: 2.0 field", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -801,7 +860,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 	describe("concurrent requests", () => {
 		it("should handle multiple simultaneous requests correctly", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -845,7 +904,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 20_000);
 
 		it("should maintain request-response correlation under load", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -875,7 +934,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 	describe("full protocol flow", () => {
 		it("should complete initialize -> list -> call -> read -> get sequence", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			// Step 1: Initialize
 			const { initResponse } = await startAndInitialize();
@@ -942,7 +1001,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 	describe("server metadata", () => {
 		it("should log startup info to stderr", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -953,13 +1012,13 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should accept a custom server name via --name flag", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			client = new McpTestClient();
-			await client.start(CLI_DIST, [
+			await client.start(CLI_ENTRY, [
 				"--project", tmpProjectDir,
 				"--name", "custom-chitragupta",
-			]);
+			], CLI_LAUNCH.runtime);
 
 			const initResponse = await client.request("initialize", {
 				protocolVersion: "2024-11-05",
@@ -981,7 +1040,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 	describe("tool schema completeness", () => {
 		it("should expose yantra built-in tools alongside MCP tools", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -1000,7 +1059,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should have chitragupta_session_show with required sessionId param", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -1025,7 +1084,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 	describe("graceful error recovery", () => {
 		it("should continue serving after a tool execution error", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
@@ -1049,7 +1108,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 		}, 15_000);
 
 		it("should handle rapid sequential requests without dropping", async () => {
-			if (!existsSync(CLI_DIST)) return;
+			if (!existsSync(CLI_ENTRY)) return;
 
 			await startAndInitialize();
 
