@@ -67,6 +67,8 @@ export class MeshRouter implements MessageSender {
 	private actorLocationFn: ((actorId: string) => string | undefined) | null = null;
 	/** Direct peer channel resolver for P2P mesh distributed routing. */
 	private peerChannelResolver: ((actorId: string) => PeerChannel | undefined) | null = null;
+	/** Capability-based resolver: capabilities[] → PeerChannel. */
+	private capabilityResolver: ((caps: string[]) => PeerChannel | undefined) | null = null;
 	/** Reply routes for cross-node ask/reply — maps correlationId → originating channel. */
 	private readonly replyRoutes = new Map<string, { channel: PeerChannel; timer: ReturnType<typeof setTimeout> }>();
 
@@ -86,6 +88,11 @@ export class MeshRouter implements MessageSender {
 	/** Set a resolver that directly returns a PeerChannel for a remote actorId. */
 	setPeerChannelResolver(fn: (actorId: string) => PeerChannel | undefined): void {
 		this.peerChannelResolver = fn;
+	}
+
+	/** Set a resolver for capability-based routing (capabilities[] → PeerChannel). */
+	setCapabilityResolver(fn: (caps: string[]) => PeerChannel | undefined): void {
+		this.capabilityResolver = fn;
 	}
 
 	/** Register a reply route for cross-node ask/reply correlation. */
@@ -311,6 +318,21 @@ export class MeshRouter implements MessageSender {
 				channel.receive(envelope);
 				this.emit({ type: "delivered", envelope });
 				return;
+			}
+		}
+
+		// 2.5 Capability-based routing
+		if (this.capabilityResolver) {
+			const caps = envelope.to.startsWith("capability:")
+				? [envelope.to.slice(11)]
+				: envelope.requiredCapabilities;
+			if (caps?.length) {
+				const channel = this.capabilityResolver(caps);
+				if (channel) {
+					channel.receive(envelope);
+					this.emit({ type: "delivered", envelope });
+					return;
+				}
 			}
 		}
 

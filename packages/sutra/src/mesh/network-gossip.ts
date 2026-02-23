@@ -72,6 +72,8 @@ export class NetworkGossip {
 
 	/** actorId → { nodeId, lastSeen } */
 	private readonly actorLocations = new Map<string, { nodeId: string; lastSeen: number }>();
+	/** capability → Set<actorId> for capability-based lookups. */
+	private readonly capabilityIndex = new Map<string, Set<string>>();
 	private exchangeTimer: ReturnType<typeof setInterval> | null = null;
 	private handlers: NetworkGossipEventHandler[] = [];
 	private peerEventUnsub: (() => void) | null = null;
@@ -201,6 +203,7 @@ export class NetworkGossip {
 		for (const view of views) {
 			// Use originNodeId for correct location even through transitive gossip
 			this.updateLocation(view.actorId, view.originNodeId ?? fromNodeId);
+			this.updateCapabilityIndex(view);
 		}
 
 		this.emit({
@@ -225,6 +228,30 @@ export class NetworkGossip {
 		} else {
 			existing.lastSeen = Date.now();
 		}
+	}
+
+	/** Update the capability reverse-index for a gossip view. */
+	private updateCapabilityIndex(view: PeerView): void {
+		// Clear old entries for this actor
+		for (const [, actors] of this.capabilityIndex) actors.delete(view.actorId);
+		if (view.status !== "alive" || !view.capabilities) return;
+		for (const cap of view.capabilities) {
+			let set = this.capabilityIndex.get(cap);
+			if (!set) { set = new Set(); this.capabilityIndex.set(cap, set); }
+			set.add(view.actorId);
+		}
+	}
+
+	/** Find nodeIds hosting actors with the given capability. */
+	findNodesByCapability(capability: string): string[] {
+		const actors = this.capabilityIndex.get(capability);
+		if (!actors) return [];
+		const nodes: string[] = [];
+		for (const actorId of actors) {
+			const nodeId = this.findNode(actorId);
+			if (nodeId && !nodes.includes(nodeId)) nodes.push(nodeId);
+		}
+		return nodes;
 	}
 
 	private evictStaleLocations(): void {

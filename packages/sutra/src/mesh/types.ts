@@ -32,6 +32,8 @@ export interface MeshEnvelope {
 	ttl: number;
 	/** Actor IDs this envelope has traversed — prevents routing loops. */
 	hops: string[];
+	/** Capabilities required by the destination (set by capability routing). */
+	requiredCapabilities?: string[];
 }
 
 // ─── Behavior & Context ─────────────────────────────────────────────────────
@@ -64,6 +66,8 @@ export interface SendOptions {
 	priority?: MeshPriority;
 	topic?: string;
 	ttl?: number;
+	/** Route to a peer matching ALL listed capabilities. */
+	requiredCapabilities?: string[];
 }
 
 export interface AskOptions extends SendOptions {

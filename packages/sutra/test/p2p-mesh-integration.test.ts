@@ -130,8 +130,6 @@ describe("P2P Mesh Integration (real multi-node)", () => {
 		expect(collector.messages[0].payload).toEqual({ data: "cross-node tell" });
 	});
 
-	// ── 3-Node Mesh ─────────────────────────────────────────────────
-
 	it("three nodes form a mesh and route messages", async () => {
 		const nodeA = await createNode({ label: "alpha" });
 		nodes.push(nodeA);
@@ -177,8 +175,6 @@ describe("P2P Mesh Integration (real multi-node)", () => {
 		expect(replyFromC.payload).toEqual({ echo: "ping-from-a", from: "actor-c" });
 	});
 
-	// ── Gossip Convergence ──────────────────────────────────────────
-
 	it("gossip converges: all nodes know all actors", async () => {
 		const nodeA = await createNode({ label: "alpha" });
 		nodes.push(nodeA);
@@ -221,8 +217,6 @@ describe("P2P Mesh Integration (real multi-node)", () => {
 		expect(locationsA.size).toBeGreaterThanOrEqual(2); // at least remote actors
 		expect(locationsC.size).toBeGreaterThanOrEqual(2);
 	});
-
-	// ── Node Failure Detection ──────────────────────────────────────
 
 	it("detects dead peer when node shuts down", async () => {
 		const nodeA = await createNode({ label: "alpha" });
@@ -424,6 +418,19 @@ describe("P2P Mesh Integration (real multi-node)", () => {
 
 		const reply = await nodeC.system.ask("caller-c", "seed-echo", "via discovery");
 		expect(reply.payload).toEqual({ echo: "via discovery", from: "seed-echo" });
+	});
+
+	it("capability routing: messages route to peers by capability prefix", async () => {
+		const nodeA = await createNode({ label: "cap-a" });
+		nodes.push(nodeA);
+		const nodeB = await createNode({ label: "cap-b", staticPeers: [`ws://127.0.0.1:${nodeA.port}/mesh`] });
+		nodes.push(nodeB);
+		nodeB.system.spawn("reviewer", { behavior: echoBehavior, capabilities: ["code-review"] });
+		await waitFor(() => nodeA.system.getConnectionManager()!.connectedCount > 0, 5_000);
+		await waitFor(() => nodeA.system.findByCapability("code-review").length > 0, 10_000);
+		const caps = nodeA.system.findByCapability("code-review");
+		expect(caps.length).toBeGreaterThanOrEqual(1);
+		expect(caps[0].capabilities).toContain("code-review");
 	});
 
 	it("version handshake: peers exchange protocol version on connect", async () => {
