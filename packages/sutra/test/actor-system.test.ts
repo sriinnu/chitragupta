@@ -337,5 +337,90 @@ describe("ActorSystem", () => {
 			const alive = system.findAlive();
 			expect(alive).toHaveLength(2);
 		});
+
+		it("should find peers by capability", () => {
+			system.spawn("reviewer", { behavior: vi.fn(), capabilities: ["code-review"] });
+			system.spawn("coder", { behavior: vi.fn(), capabilities: ["coding"] });
+			const reviewers = system.findByCapability("code-review");
+			expect(reviewers).toHaveLength(1);
+			expect(reviewers[0].actorId).toBe("reviewer");
+		});
+	});
+
+	// ═══════════════════════════════════════════════════════════════════
+	// AUTO-REGISTRATION (CapableActorBehavior)
+	// ═══════════════════════════════════════════════════════════════════
+
+	describe("CapableActorBehavior auto-registration", () => {
+		it("extracts capabilities from CapableActorBehavior", () => {
+			system.spawn("auto-cap", {
+				behavior: {
+					capabilities: ["code-review", "typescript"],
+					handle: vi.fn(),
+				},
+			});
+			const caps = system.findByCapability("code-review");
+			expect(caps).toHaveLength(1);
+			expect(caps[0].actorId).toBe("auto-cap");
+			expect(caps[0].capabilities).toContain("typescript");
+		});
+
+		it("merges CapableActorBehavior caps with explicit caps", () => {
+			system.spawn("merged", {
+				behavior: {
+					capabilities: ["review"],
+					expertise: ["security"],
+					handle: vi.fn(),
+				},
+				capabilities: ["typescript"],
+				expertise: ["coding"],
+			});
+			const byReview = system.findByCapability("review");
+			const byTs = system.findByCapability("typescript");
+			expect(byReview).toHaveLength(1);
+			expect(byTs).toHaveLength(1);
+			const peer = byReview[0];
+			expect(peer.capabilities).toContain("review");
+			expect(peer.capabilities).toContain("typescript");
+			expect(peer.expertise).toContain("security");
+			expect(peer.expertise).toContain("coding");
+		});
+
+		it("plain ActorBehavior still works (no capabilities)", () => {
+			system.spawn("plain", { behavior: vi.fn() });
+			const alive = system.findAlive();
+			expect(alive.some((p) => p.actorId === "plain")).toBe(true);
+		});
+	});
+
+	// ═══════════════════════════════════════════════════════════════════
+	// MCP TOOL INTROSPECTION
+	// ═══════════════════════════════════════════════════════════════════
+
+	describe("spawnFromMCP", () => {
+		it("registers tool names as capabilities", () => {
+			const tools = [
+				{ name: "memory_search", description: "Search memory" },
+				{ name: "session_list", description: "List sessions" },
+				{ name: "recall", description: "Recall data" },
+			];
+			system.spawnFromMCP("chitragupta", tools, async () => ({ ok: true }));
+			const caps1 = system.findByCapability("memory-search");
+			const caps2 = system.findByCapability("session-list");
+			const caps3 = system.findByCapability("recall");
+			expect(caps1).toHaveLength(1);
+			expect(caps2).toHaveLength(1);
+			expect(caps3).toHaveLength(1);
+			expect(caps1[0].actorId).toBe("chitragupta");
+		});
+
+		it("dispatches ask to onToolCall and replies", async () => {
+			const tools = [{ name: "search", description: "Search" }];
+			const onToolCall = vi.fn().mockResolvedValue({ results: ["a", "b"] });
+			const ref = system.spawnFromMCP("searcher", tools, onToolCall);
+			const reply = await ref.ask("caller", { tool: "search", args: { q: "test" } });
+			expect(onToolCall).toHaveBeenCalledWith("search", { q: "test" });
+			expect(reply.payload).toEqual({ results: ["a", "b"] });
+		});
 	});
 });

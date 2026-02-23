@@ -2,14 +2,17 @@ import { randomUUID } from "node:crypto";
 import { Actor } from "./actor.js";
 import { GossipProtocol } from "./gossip-protocol.js";
 import { MeshRouter } from "./mesh-router.js";
-import type {
-	ActorBehavior,
-	ActorSystemConfig,
-	AskOptions,
-	MeshEnvelope,
-	MeshPriority,
-	PeerView,
-	SendOptions,
+import {
+	isCapableBehavior,
+	type ActorBehavior,
+	type ActorSystemConfig,
+	type AskOptions,
+	type CapableActorBehavior,
+	type MCPToolDescriptor,
+	type MeshEnvelope,
+	type MeshPriority,
+	type PeerView,
+	type SendOptions,
 } from "./types.js";
 import type { PeerNetworkConfig } from "./peer-types.js";
 import type { PeerConnectionManager } from "./peer-connection.js";
@@ -35,7 +38,8 @@ type SystemEvent =
 	| { type: "peer:dead"; peer: PeerView };
 type SystemEventHandler = (event: SystemEvent) => void;
 export interface SpawnOptions {
-	behavior: ActorBehavior;
+	/** Plain behavior function or self-declaring CapableActorBehavior. */
+	behavior: ActorBehavior | CapableActorBehavior;
 	expertise?: string[];
 	capabilities?: string[];
 	mailboxSize?: number;
@@ -112,15 +116,27 @@ export class ActorSystem {
 			try { h(event); } catch { /* observer failures are non-fatal */ }
 		}
 	}
-		spawn(id: string, options: SpawnOptions): ActorRef {
+	/** Spawn a new actor. Auto-extracts capabilities from CapableActorBehavior. */
+	spawn(id: string, options: SpawnOptions): ActorRef {
 		if (this.actors.has(id)) {
 			throw new Error(`Actor "${id}" already exists in this system.`);
 		}
+		// Auto-extract from CapableActorBehavior if provided
+		let handlerFn: ActorBehavior;
+		let capabilities = options.capabilities;
+		let expertise = options.expertise;
+		if (isCapableBehavior(options.behavior)) {
+			handlerFn = options.behavior.handle;
+			capabilities = [...(capabilities ?? []), ...options.behavior.capabilities];
+			expertise = [...(expertise ?? []), ...(options.behavior.expertise ?? [])];
+		} else {
+			handlerFn = options.behavior;
+		}
 		const mailboxSize = options.mailboxSize ?? this.config.maxMailboxSize;
-		const actor = new Actor(id, options.behavior, this.router, mailboxSize);
+		const actor = new Actor(id, handlerFn, this.router, mailboxSize);
 		this.actors.set(id, actor);
 		this.router.addActor(actor);
-		this.gossip.register(id, options.expertise, options.capabilities);
+		this.gossip.register(id, expertise, capabilities);
 		this.emit({ type: "actor:spawned", actorId: id });
 		return new ActorRef(id, this.router);
 	}
@@ -137,6 +153,22 @@ export class ActorSystem {
 		ref(actorId: string): ActorRef | undefined {
 		if (!this.actors.has(actorId)) return undefined;
 		return new ActorRef(actorId, this.router);
+	}
+	/** Spawn an actor from MCP tool descriptors. Tool names become capabilities. */
+	spawnFromMCP(
+		id: string,
+		tools: MCPToolDescriptor[],
+		onToolCall: (toolName: string, args: unknown) => Promise<unknown>,
+		opts?: { mailboxSize?: number },
+	): ActorRef {
+		const capabilities = tools.map((t) => t.name.replace(/_/g, "-"));
+		const behavior: ActorBehavior = async (envelope, ctx) => {
+			const payload = envelope.payload as Record<string, unknown> | undefined;
+			const toolName = (payload?.tool as string) ?? capabilities[0];
+			const result = await onToolCall(toolName, payload?.args ?? payload);
+			if (envelope.type === "ask") ctx.reply(result);
+		};
+		return this.spawn(id, { behavior, capabilities, mailboxSize: opts?.mailboxSize });
 	}
 		tell(from: string, to: string, payload: unknown, opts?: SendOptions): void {
 		const envelope: MeshEnvelope = {
