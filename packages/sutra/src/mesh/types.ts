@@ -60,6 +60,36 @@ export interface ActorContext {
 	stop(): void;
 }
 
+/**
+ * An actor behavior that self-declares its capabilities.
+ * The system auto-extracts capabilities on spawn — no manual config needed.
+ */
+export interface CapableActorBehavior {
+	/** Capabilities this actor provides (e.g. ["code-review", "typescript"]). */
+	capabilities: string[];
+	/** Optional expertise tags for gossip discovery. */
+	expertise?: string[];
+	/** The message handler function. */
+	handle: ActorBehavior;
+}
+
+/** Returns true if the value is a CapableActorBehavior (has capabilities + handle). */
+export function isCapableBehavior(
+	v: ActorBehavior | CapableActorBehavior,
+): v is CapableActorBehavior {
+	return typeof v === "object" && v !== null && "capabilities" in v && "handle" in v;
+}
+
+/**
+ * Describes an MCP tool for capability registration.
+ * Matches the MCP protocol's Tool type (name + description + inputSchema).
+ */
+export interface MCPToolDescriptor {
+	name: string;
+	description?: string;
+	inputSchema?: Record<string, unknown>;
+}
+
 // ─── Options ────────────────────────────────────────────────────────────────
 
 export interface SendOptions {

@@ -190,8 +190,11 @@ describe("CapabilityRouter", () => {
 
 	describe("strategy: best", () => {
 		it("returns highest-scored peer", () => {
-			gossip.register("best", [], ["coding"]);
-			gossip.register("okay", [], ["coding"]);
+			// Merge with originNodeId so reliability scoring works
+			gossip.merge([
+				makePeer("best", ["coding"], { originNodeId: "node-best" }),
+				makePeer("okay", ["coding"], { originNodeId: "node-okay" }),
+			]);
 
 			guard.recordSuccess("node-best", "ws://best:8080", 5);
 			guard.recordSuccess("node-best", "ws://best:8080", 5);
@@ -207,20 +210,22 @@ describe("CapabilityRouter", () => {
 
 	describe("strategy: weighted-random", () => {
 		it("distributes roughly proportional to scores", () => {
-			gossip.register("high", [], ["coding"]);
-			gossip.register("low", [], ["coding"]);
+			// Merge with originNodeId so reliability scoring works
+			gossip.merge([
+				makePeer("high", ["coding"], { originNodeId: "node-high" }),
+				makePeer("low", ["coding"], { originNodeId: "node-low" }),
+			]);
 
-			// Make "high" much more reliable
-			for (let i = 0; i < 10; i++) {
+			// Make "high" vastly more reliable
+			for (let i = 0; i < 50; i++) {
 				guard.recordSuccess("node-high", "ws://high:8080", 5);
 			}
-			for (let i = 0; i < 10; i++) {
+			for (let i = 0; i < 50; i++) {
 				guard.recordFailure("node-low", "ws://low:8080");
 			}
-			guard.recordSuccess("node-low", "ws://low:8080", 100);
 
 			const counts: Record<string, number> = { high: 0, low: 0 };
-			for (let i = 0; i < 200; i++) {
+			for (let i = 0; i < 500; i++) {
 				const result = router.resolve({
 					capabilities: ["coding"],
 					strategy: "weighted-random",
@@ -228,7 +233,7 @@ describe("CapabilityRouter", () => {
 				if (result) counts[result.actorId]++;
 			}
 			// "high" should be selected significantly more often
-			expect(counts.high).toBeGreaterThan(counts.low);
+			expect(counts.high).toBeGreaterThan(counts.low * 1.5);
 		});
 	});
 
