@@ -107,11 +107,7 @@ const DEFAULT_CONFIG: AkashaConfig = {
 };
 
 /** System hard ceilings -- user config is clamped to these values. */
-const HARD_CEILINGS = {
-	maxTraces: 50_000,
-	minDecayHalfLife: 3_600_000,
-	maxContentSize: 10_000,
-} as const;
+const HARD_CEILINGS = { maxTraces: 50_000, minDecayHalfLife: 3_600_000, maxContentSize: 10_000 } as const;
 
 // ─── AkashaField ─────────────────────────────────────────────────────────────
 
@@ -122,11 +118,15 @@ const HARD_CEILINGS = {
  * (pheromones) that decay over time and are reinforced when other agents
  * find them useful, creating emergent "highways" of collective knowledge.
  */
+/** Event emitted by Akasha on trace lifecycle changes. */
+export interface AkashaEvent { type: string; traceId: string; topic: string }
+
 export class AkashaField {
 	private readonly config: AkashaConfig;
 	private readonly traces: Map<string, StigmergicTrace> = new Map();
 	/** Tracks which agents reinforced which traces (prevents self/duplicate). */
 	private readonly reinforcedBy: Map<string, Set<string>> = new Map();
+	private onEvent?: (event: AkashaEvent) => void;
 
 	constructor(config?: Partial<AkashaConfig>) {
 		this.config = {
@@ -142,6 +142,9 @@ export class AkashaField {
 			),
 		};
 	}
+
+	/** Set a callback for trace lifecycle events. */
+	setOnEvent(handler: (event: AkashaEvent) => void): void { this.onEvent = handler; }
 
 	// ─── Leaving Traces ─────────────────────────────────────────────────
 
@@ -176,6 +179,7 @@ export class AkashaField {
 		this.traces.set(id, trace);
 		this.reinforcedBy.set(id, new Set([agentId]));
 		if (this.traces.size > this.config.maxTraces) this.evictWeakest();
+		this.onEvent?.({ type: "trace:created", traceId: id, topic });
 		return trace;
 	}
 
@@ -203,6 +207,7 @@ export class AkashaField {
 		} else {
 			agents.add(agentId);
 		}
+		this.onEvent?.({ type: "trace:reinforced", traceId, topic: trace.topic });
 		return trace;
 	}
 

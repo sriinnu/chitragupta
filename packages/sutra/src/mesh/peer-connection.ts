@@ -239,7 +239,12 @@ export class PeerConnectionManager {
 		}
 		const tempId = `inbound-${randomUUID().slice(0, 8)}`;
 		let resolvedPeerId = tempId;
+		const authTimeout = setTimeout(() => {
+			ws.close(1008, "auth timeout");
+			this.emit({ type: "error", error: `inbound auth timeout for ${tempId}` });
+		}, this.nonceWindowMs);
 		ws.once("message", (raw: Buffer | string) => {
+			clearTimeout(authTimeout);
 			const data = typeof raw === "string" ? raw : raw.toString("utf-8");
 			try {
 				const parsed = JSON.parse(data) as { type: string; nodeId?: string; info?: PeerNodeInfo };
