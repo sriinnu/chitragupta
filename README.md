@@ -396,7 +396,7 @@ Chitragupta agents communicate via **Sutra** (सूत्र — Thread), a ful
 |-----------|-------------|
 | **ActorSystem** | Top-level coordinator: spawn, stop, route, broadcast, P2P bootstrap |
 | **PeerConnectionManager** | WebSocket lifecycle, TLS, reconnect, peer exchange, addr relay |
-| **MeshRouter** | Message delivery with TTL, hop tracking, 5 priority lanes |
+| **MeshRouter** | Message delivery with TTL, hop tracking, 4 priority lanes |
 | **GossipProtocol** | SWIM-style failure detection (alive → suspect → dead) |
 | **PeerGuard** | Anti-eclipse: subnet diversity, rate limiting, peer scoring |
 | **PeerAddrDb** | Bitcoin-style persistent peer database (new/tried tables) |
@@ -423,6 +423,7 @@ const reply = await system.ask("caller", "remote-agent", { task: "analyze" });
 ### Security
 
 - **HMAC-SHA256 authentication** — nonce-based mutual auth on every connection
+- **Replay protection** — nonce windowing rejects stale or replayed auth frames
 - **Per-frame signing** — all messages signed with shared secret
 - **TLS (wss://)** — encrypted transport with custom CA support
 - **Anti-eclipse (PeerGuard)** — subnet diversity (/24), rate limiting, min outbound

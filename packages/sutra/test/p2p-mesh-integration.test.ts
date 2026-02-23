@@ -3,13 +3,14 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { ActorSystem } from "../src/mesh/actor-system.js";
 import type { MeshEnvelope, ActorBehavior } from "../src/mesh/types.js";
-import type { PeerNetworkConfig } from "../src/mesh/peer-types.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /** Create a mesh node with P2P networking on a random port. */
 async function createNode(opts: {
-	label: string; staticPeers?: string[]; meshSecret?: string;
+	label: string;
+	staticPeers?: string[];
+	meshSecret?: string;
 }): Promise<{ system: ActorSystem; port: number; nodeId: string }> {
 	const system = new ActorSystem({
 		maxMailboxSize: 5_000, gossipIntervalMs: 500, gossipFanout: 3,
@@ -26,13 +27,13 @@ async function createNode(opts: {
 
 /** Wait for a condition with timeout. */
 async function waitFor(
-	condition: () => boolean,
+	condition: () => boolean | Promise<boolean>,
 	timeoutMs = 10_000,
 	intervalMs = 100,
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
-		if (condition()) return;
+		if (await condition()) return;
 		await new Promise((r) => setTimeout(r, intervalMs));
 	}
 	throw new Error(`waitFor timed out after ${timeoutMs}ms`);
@@ -252,6 +253,7 @@ describe("P2P Mesh Integration (real multi-node)", () => {
 
 		// Connection to B should be gone
 		expect(nodeA.system.getConnectionManager()!.connectedCount).toBe(0);
+		expect(nodeA.system.getConnectionManager()!.guard.getCounts().inbound).toBe(0);
 	});
 
 	// ── HMAC Authentication ─────────────────────────────────────────

@@ -116,6 +116,8 @@ export interface PeerNetworkConfig {
 	staticPeers?: string[];
 	/** Shared secret for peer authentication (HMAC-SHA256). */
 	meshSecret?: string;
+	/** Max nonce age and replay window for auth verification (ms). Default: 120_000 */
+	authNonceWindowMs?: number;
 	/** Interval between ping frames (ms). Default: 10_000 */
 	pingIntervalMs?: number;
 	/** Mark peer dead after this many missed pings. Default: 3 */
@@ -158,6 +160,14 @@ export interface PeerNetworkConfig {
 	maxDiscoveredPeers?: number;
 	/** Interval between peer exchange rounds (ms). Default: 30_000 */
 	peerExchangeIntervalMs?: number;
+
+	// ─── Peer Address DB Persistence ──────────────────────────────
+	/** Path to persisted PeerAddrDb JSON file. When set, bootstrap peers are loaded from disk. */
+	peerAddrDbPath?: string;
+	/** Number of bootstrap peers to load from PeerAddrDb. Default: 20 */
+	peerAddrDbBootstrapCount?: number;
+	/** Periodic save interval for PeerAddrDb (ms). Default: 30_000 */
+	peerAddrDbSaveIntervalMs?: number;
 
 	// ─── Security ────────────────────────────────────────────────
 	/** Anti-eclipse connection guard configuration. */
