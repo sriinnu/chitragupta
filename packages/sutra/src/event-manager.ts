@@ -2,137 +2,26 @@
  * Vaarta — Event streaming and webhook manager.
  * Sanskrit: Vaarta (वार्ता) = news, report, communication.
  *
- * Manages SSE streams for real-time event delivery to external clients
- * and webhook dispatch for event-driven integrations.
+ * SSE streams for real-time event delivery and webhook dispatch
+ * with retry for event-driven integrations.
  *
- * Two complementary pathways:
- *   - SSE (Server-Sent Events): push-based streaming to connected clients,
- *     like a river (nadi) that flows continuously to all who listen.
- *   - Webhooks: fire-and-forget HTTP callbacks with retry, like a messenger
- *     (duta) dispatched to deliver a decree to a distant kingdom.
+ * Types and defaults live in `event-manager-types.ts`.
+ * Uses shared `RingBuffer<T>` from `ring-buffer.ts`.
  */
 
-import { randomUUID } from "node:crypto";
-import { createHmac } from "node:crypto";
+import { randomUUID, createHmac } from "node:crypto";
+import { RingBuffer } from "./ring-buffer.js";
+import {
+	DEFAULT_EVENT_MANAGER_CONFIG,
+	type SSEClient,
+	type SSEClientInternal,
+	type WebhookConfig,
+	type WebhookDelivery,
+	type EventManagerConfig,
+} from "./event-manager-types.js";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-export interface SSEClient {
-	/** Unique client identifier. */
-	id: string;
-	/** Write an SSE event to this client. */
-	send(event: string, data: unknown, eventId?: string): void;
-	/** Close this client's connection. */
-	close(): void;
-	/** Whether this client is still connected. */
-	isConnected: boolean;
-}
-
-export interface WebhookConfig {
-	/** Unique webhook identifier. */
-	id: string;
-	/** Target URL to POST events to. */
-	url: string;
-	/** Event topics this webhook subscribes to. */
-	events: string[];
-	/** Optional HMAC-SHA256 signing secret. */
-	secret?: string;
-	/** Number of retry attempts on failure. Default: 3 */
-	retries?: number;
-	/** Request timeout in ms. Default: 10000 */
-	timeout?: number;
-	/** Whether this webhook is active. */
-	active: boolean;
-}
-
-export interface WebhookDelivery {
-	/** Unique delivery identifier. */
-	id: string;
-	/** The webhook this delivery belongs to. */
-	webhookId: string;
-	/** The event topic that triggered the delivery. */
-	event: string;
-	/** The payload delivered. */
-	payload: unknown;
-	/** Current delivery status. */
-	status: "pending" | "success" | "failed";
-	/** Number of attempts made. */
-	attempts: number;
-	/** Timestamp of the last attempt. */
-	lastAttempt?: number;
-	/** Response from the last attempt. */
-	response?: { status: number; body: string };
-}
-
-export interface EventManagerConfig {
-	/** Maximum number of SSE clients. Default: 100 */
-	maxSSEClients?: number;
-	/** Maximum number of webhooks. Default: 50 */
-	maxWebhooks?: number;
-	/** Maximum delivery history per webhook (ring buffer). Default: 100 */
-	maxDeliveriesPerWebhook?: number;
-	/** Default retry count for webhooks. Default: 3 */
-	defaultRetries?: number;
-	/** Default timeout in ms for webhook requests. Default: 10000 */
-	defaultTimeout?: number;
-	/** HMAC signing header name. Default: "x-chitragupta-signature" */
-	signatureHeader?: string;
-}
-
-// ─── Internal ────────────────────────────────────────────────────────────────
-
-interface SSEClientInternal {
-	id: string;
-	writeFn: (data: string) => void;
-	closeFn: () => void;
-	connected: boolean;
-}
-
-/** Ring buffer for delivery history. */
-class DeliveryRingBuffer {
-	private readonly buffer: (WebhookDelivery | undefined)[];
-	private head = 0;
-	private count = 0;
-
-	constructor(private readonly capacity: number) {
-		this.buffer = new Array<WebhookDelivery | undefined>(capacity);
-	}
-
-	push(item: WebhookDelivery): void {
-		this.buffer[this.head] = item;
-		this.head = (this.head + 1) % this.capacity;
-		if (this.count < this.capacity) this.count++;
-	}
-
-	toArray(limit?: number): WebhookDelivery[] {
-		const total = limit !== undefined ? Math.min(limit, this.count) : this.count;
-		const result: WebhookDelivery[] = [];
-		const start = this.count < this.capacity ? 0 : this.head;
-		const offset = this.count - total;
-		for (let i = 0; i < total; i++) {
-			const idx = (start + offset + i) % this.capacity;
-			result.push(this.buffer[idx] as WebhookDelivery);
-		}
-		return result;
-	}
-
-	clear(): void {
-		this.buffer.fill(undefined);
-		this.head = 0;
-		this.count = 0;
-	}
-}
-
-// ─── EventManager ────────────────────────────────────────────────────────────
-
-const DEFAULT_CONFIG: Required<EventManagerConfig> = {
-	maxSSEClients: 100,
-	maxWebhooks: 50,
-	maxDeliveriesPerWebhook: 100,
-	defaultRetries: 3,
-	defaultTimeout: 10_000,
-	signatureHeader: "x-chitragupta-signature",
-};
+// Re-export public types for backward compatibility
+export type { SSEClient, WebhookConfig, WebhookDelivery, EventManagerConfig };
 
 /**
  * Event streaming and webhook manager for external integrations.
@@ -140,20 +29,11 @@ const DEFAULT_CONFIG: Required<EventManagerConfig> = {
  * @example
  * ```ts
  * const manager = new EventManager();
- *
- * // SSE streaming
  * const client = manager.addSSEClient(
  *   (data) => response.write(data),
  *   () => response.end(),
  * );
  * manager.broadcastSSE("status", { running: true });
- *
- * // Webhooks
- * const whId = manager.addWebhook({
- *   url: "https://example.com/hook",
- *   events: ["agent:complete"],
- *   active: true,
- * });
  * await manager.dispatchWebhook("agent:complete", { result: "ok" });
  * ```
  */
@@ -161,11 +41,11 @@ export class EventManager {
 	private readonly config: Required<EventManagerConfig>;
 	private readonly sseClients = new Map<string, SSEClientInternal>();
 	private readonly webhooks = new Map<string, WebhookConfig>();
-	private readonly deliveries = new Map<string, DeliveryRingBuffer>();
+	private readonly deliveries = new Map<string, RingBuffer<WebhookDelivery>>();
 	private destroyed = false;
 
 	constructor(config?: EventManagerConfig) {
-		this.config = { ...DEFAULT_CONFIG, ...config };
+		this.config = { ...DEFAULT_EVENT_MANAGER_CONFIG, ...config };
 	}
 
 	// ═══════════════════════════════════════════════════════════════
@@ -174,9 +54,6 @@ export class EventManager {
 
 	/**
 	 * Register an SSE client.
-	 *
-	 * The `writeFn` is called with fully-formatted SSE strings. The `closeFn`
-	 * is called when the client is removed or the manager is destroyed.
 	 *
 	 * @param writeFn - Function that writes raw SSE data to the HTTP response.
 	 * @param closeFn - Function that closes the HTTP connection.
@@ -243,7 +120,6 @@ export class EventManager {
 			}
 		}
 
-		// Clean up dead clients
 		for (const id of dead) {
 			this.removeSSEClient(id);
 		}
@@ -292,7 +168,10 @@ export class EventManager {
 			retries: config.retries ?? this.config.defaultRetries,
 			timeout: config.timeout ?? this.config.defaultTimeout,
 		});
-		this.deliveries.set(id, new DeliveryRingBuffer(this.config.maxDeliveriesPerWebhook));
+		this.deliveries.set(
+			id,
+			new RingBuffer<WebhookDelivery>(this.config.maxDeliveriesPerWebhook),
+		);
 
 		return id;
 	}
@@ -312,11 +191,6 @@ export class EventManager {
 	/**
 	 * Dispatch an event to all matching webhooks.
 	 *
-	 * Each webhook whose `events` array includes the given event topic
-	 * will receive a POST request with the JSON payload. If a signing
-	 * secret is configured, an HMAC-SHA256 signature is included in the
-	 * headers for verification.
-	 *
 	 * Retries use exponential backoff: delay = 1000 * 2^(attempt-1) ms.
 	 *
 	 * @param event - The event topic being dispatched.
@@ -330,11 +204,9 @@ export class EventManager {
 			(wh) => wh.active && wh.events.includes(event),
 		);
 
-		const results = await Promise.all(
+		return Promise.all(
 			matching.map((wh) => this.deliverToWebhook(wh, event, payload)),
 		);
-
-		return results;
 	}
 
 	/**
@@ -350,11 +222,7 @@ export class EventManager {
 		return ring.toArray(limit);
 	}
 
-	/**
-	 * Get all registered webhooks.
-	 *
-	 * @returns Array of webhook configurations.
-	 */
+	/** Get all registered webhooks. */
 	getWebhooks(): WebhookConfig[] {
 		return [...this.webhooks.values()];
 	}
@@ -368,20 +236,14 @@ export class EventManager {
 	 * The manager becomes inert — further calls will throw.
 	 */
 	destroy(): void {
-		// Close all SSE clients
 		for (const client of this.sseClients.values()) {
 			if (client.connected) {
 				client.connected = false;
-				try {
-					client.closeFn();
-				} catch (_err) {
-					// Swallow
-				}
+				try { client.closeFn(); } catch (_err) { /* swallow */ }
 			}
 		}
 		this.sseClients.clear();
 
-		// Clear webhook delivery history
 		for (const ring of this.deliveries.values()) ring.clear();
 		this.deliveries.clear();
 		this.webhooks.clear();
@@ -399,50 +261,27 @@ export class EventManager {
 		}
 	}
 
-	/**
-	 * Format a Server-Sent Event string per the SSE specification.
-	 *
-	 * Format:
-	 *   event: <event>\n
-	 *   data: <json>\n
-	 *   id: <eventId>\n
-	 *   \n
-	 */
+	/** Format a Server-Sent Event string per the SSE specification. */
 	private formatSSE(event: string, data: unknown, eventId: string): string {
-		const jsonData = JSON.stringify(data);
-		return `event: ${event}\ndata: ${jsonData}\nid: ${eventId}\n\n`;
+		return `event: ${event}\ndata: ${JSON.stringify(data)}\nid: ${eventId}\n\n`;
 	}
 
-	/**
-	 * Build the public SSEClient interface from an internal record.
-	 */
+	/** Build the public SSEClient interface from an internal record. */
 	private buildSSEClient(internal: SSEClientInternal): SSEClient {
 		const manager = this;
 		return {
 			id: internal.id,
-			get isConnected(): boolean {
-				return internal.connected;
-			},
+			get isConnected(): boolean { return internal.connected; },
 			send(event: string, data: unknown, eventId?: string): void {
 				if (!internal.connected) return;
 				const formatted = manager.formatSSE(event, data, eventId ?? randomUUID());
-				try {
-					internal.writeFn(formatted);
-				} catch (_err) {
-					internal.connected = false;
-				}
+				try { internal.writeFn(formatted); } catch (_err) { internal.connected = false; }
 			},
-			close(): void {
-				manager.removeSSEClient(internal.id);
-			},
+			close(): void { manager.removeSSEClient(internal.id); },
 		};
 	}
 
-	/**
-	 * Deliver a payload to a single webhook with retry logic.
-	 *
-	 * Exponential backoff: 1s, 2s, 4s, 8s, ...
-	 */
+	/** Deliver a payload to a single webhook with exponential-backoff retry. */
 	private async deliverToWebhook(
 		webhook: WebhookConfig,
 		event: string,
@@ -466,15 +305,11 @@ export class EventManager {
 			delivery.lastAttempt = Date.now();
 
 			try {
-				const headers: Record<string, string> = {
-					"Content-Type": "application/json",
-				};
+				const headers: Record<string, string> = { "Content-Type": "application/json" };
 
-				// HMAC-SHA256 signature if secret is configured
 				if (webhook.secret) {
 					const signature = createHmac("sha256", webhook.secret)
-						.update(body)
-						.digest("hex");
+						.update(body).digest("hex");
 					headers[this.config.signatureHeader] = `sha256=${signature}`;
 				}
 
@@ -483,10 +318,7 @@ export class EventManager {
 
 				try {
 					const response = await fetch(webhook.url, {
-						method: "POST",
-						headers,
-						body,
-						signal: controller.signal,
+						method: "POST", headers, body, signal: controller.signal,
 					});
 
 					const responseBody = await response.text();
@@ -501,17 +333,14 @@ export class EventManager {
 					clearTimeout(timer);
 				}
 			} catch (_err) {
-				// Network error or abort — will retry if attempts remain
 				delivery.response = {
 					status: 0,
 					body: _err instanceof Error ? _err.message : "Unknown error",
 				};
 			}
 
-			// Exponential backoff before next retry (skip if last attempt)
 			if (attempt < maxAttempts - 1) {
-				const delay = 1000 * Math.pow(2, attempt);
-				await this.sleep(delay);
+				await this.sleep(1000 * Math.pow(2, attempt));
 			}
 		}
 

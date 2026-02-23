@@ -1,259 +1,48 @@
 /**
  * Samiti (सामीति — Assembly) — Ambient Communication Channels.
  *
- * Provides persistent, topic-based channels that agents can listen to
- * and broadcast observations to asynchronously. Unlike CommHub (direct
- * message routing) or MessageBus (fire-and-forget pub/sub), Samiti
- * channels retain a bounded history and support severity/time filtering.
+ * Persistent, topic-based channels where agents broadcast observations
+ * and listen asynchronously. Channels retain bounded history via ring
+ * buffers and support severity/time filtering with real-time callbacks.
  *
- * Named after the Vedic samiti — the assembly of the people, where
- * every voice echoes through the hall and the wisest words linger
- * longest. Each channel is a dharma-kshetra (धर्मक्षेत्र) — a field
- * of collective awareness where ambient intelligence crystallizes
- * from the murmur of many agents.
+ * Types, constants, and helpers live in `samiti-types.ts`.
+ * The shared `RingBuffer<T>` lives in `ring-buffer.ts`.
  *
  * @module samiti
  */
 
-// ─── FNV-1a (inline, zero-dependency) ────────────────────────────────────────
+import { RingBuffer } from "./ring-buffer.js";
+import {
+	fnv1a,
+	HARD_CEILINGS,
+	DEFAULT_SAMITI_CONFIG,
+	DEFAULT_CHANNELS,
+	type SamitiMessage,
+	type SamitiChannel,
+	type SamitiConfig,
+	type SamitiStats,
+	type ListenOptions,
+	type InternalChannel,
+} from "./samiti-types.js";
 
-/** FNV-1a offset basis for 32-bit. */
-const FNV_OFFSET = 0x811c9dc5;
-/** FNV-1a prime for 32-bit. */
-const FNV_PRIME = 0x01000193;
-
-/**
- * Compute a 32-bit FNV-1a hash of the input string, returned as a
- * zero-padded hex string.
- */
-function fnv1a(input: string): string {
-	let hash = FNV_OFFSET;
-	for (let i = 0; i < input.length; i++) {
-		hash ^= input.charCodeAt(i);
-		hash = Math.imul(hash, FNV_PRIME);
-	}
-	return (hash >>> 0).toString(16).padStart(8, "0");
-}
-
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-/** A message broadcast to a Samiti channel. */
-export interface SamitiMessage {
-	/** Deterministic ID — FNV-1a hash of timestamp + channel + sender. */
-	id: string;
-	/** Channel name (e.g., '#security', '#performance'). */
-	channel: string;
-	/** Agent ID or system component that sent the message. */
-	sender: string;
-	/** Severity level of the observation. */
-	severity: "info" | "warning" | "critical";
-	/** Freeform category tag (e.g., 'credential-leak', 'slow-query'). */
-	category: string;
-	/** Human-readable message content. */
-	content: string;
-	/** Optional structured payload data. */
-	data?: unknown;
-	/** Unix epoch ms when the message was created. */
-	timestamp: number;
-	/** Time-to-live in ms. 0 means infinite (never expires). */
-	ttl: number;
-	/** IDs of related messages for threading/correlation. */
-	references?: string[];
-}
-
-/** A persistent, topic-based ambient channel. */
-export interface SamitiChannel {
-	/** Channel name (must start with '#'). */
-	name: string;
-	/** Human-readable description. */
-	description: string;
-	/** Maximum messages retained in the ring buffer. */
-	maxHistory: number;
-	/** Set of subscribed agent IDs. */
-	subscribers: Set<string>;
-	/** Ring buffer of messages (oldest first on read). */
-	messages: SamitiMessage[];
-	/** Unix epoch ms when the channel was created. */
-	createdAt: number;
-}
-
-/** Configuration for the Samiti ambient channel system. */
-export interface SamitiConfig {
-	/** Maximum number of channels allowed. Default: 20. */
-	maxChannels: number;
-	/** Default ring buffer size for new channels. Default: 100. */
-	defaultMaxHistory: number;
-	/** Default TTL for messages in ms. Default: 86400000 (24h). */
-	defaultTTL: number;
-	/** Whether to enable persistence (reserved for future use). Default: false. */
-	enablePersistence: boolean;
-}
-
-/** Options for filtering messages when listening. */
-export interface ListenOptions {
-	/** Only return messages after this timestamp (Unix epoch ms). */
-	since?: number;
-	/** Only return messages of this severity. */
-	severity?: SamitiMessage["severity"];
-	/** Maximum number of messages to return. */
-	limit?: number;
-}
-
-/** Aggregate statistics for the Samiti system. */
-export interface SamitiStats {
-	/** Number of active channels. */
-	channels: number;
-	/** Total messages across all channels. */
-	totalMessages: number;
-	/** Total unique subscribers across all channels. */
-	subscribers: number;
-}
-
-// ─── Hard Ceilings ───────────────────────────────────────────────────────────
-
-/** System hard ceilings — cannot be exceeded regardless of configuration. */
-const HARD_CEILINGS = {
-	maxChannels: 100,
-	maxHistory: 10_000,
-	maxMessageSize: 1_048_576, // 1MB
-	maxSubscribersPerChannel: 50,
-} as const;
-
-// ─── Defaults ────────────────────────────────────────────────────────────────
-
-const DEFAULT_CONFIG: SamitiConfig = {
-	maxChannels: 20,
-	defaultMaxHistory: 100,
-	defaultTTL: 86_400_000, // 24 hours
-	enablePersistence: false,
-};
-
-/** Pre-configured channels created on construction. */
-const DEFAULT_CHANNELS: Array<{ name: string; description: string }> = [
-	{ name: "#security", description: "Security findings, credential leaks, vulnerability alerts" },
-	{ name: "#performance", description: "Performance regressions, memory leaks, slow queries" },
-	{ name: "#correctness", description: "Logic errors, test failures, type mismatches" },
-	{ name: "#style", description: "Code style violations, naming inconsistencies" },
-	{ name: "#alerts", description: "System alerts, daemon events, threshold breaches" },
-];
-
-// ─── Ring Buffer ─────────────────────────────────────────────────────────────
-
-/**
- * Fixed-size circular buffer. When at capacity, the oldest entry is
- * silently overwritten. Reads always return items oldest-first.
- */
-class RingBuffer<T> {
-	private readonly buffer: (T | undefined)[];
-	private head = 0;
-	private count = 0;
-
-	constructor(private readonly capacity: number) {
-		this.buffer = new Array<T | undefined>(capacity);
-	}
-
-	/** Add an item, overwriting the oldest if at capacity. */
-	push(item: T): void {
-		this.buffer[this.head] = item;
-		this.head = (this.head + 1) % this.capacity;
-		if (this.count < this.capacity) this.count++;
-	}
-
-	/** Return all items as an array, oldest first. Optionally limit count. */
-	toArray(limit?: number): T[] {
-		const total = limit !== undefined ? Math.min(limit, this.count) : this.count;
-		const result: T[] = [];
-		const start = this.count < this.capacity ? 0 : this.head;
-		const offset = this.count - total;
-		for (let i = 0; i < total; i++) {
-			const idx = (start + offset + i) % this.capacity;
-			result.push(this.buffer[idx] as T);
-		}
-		return result;
-	}
-
-	/** Current number of items in the buffer. */
-	get size(): number {
-		return this.count;
-	}
-
-	/**
-	 * Remove items that match a predicate. Returns the count of removed items.
-	 * After removal, the buffer is compacted to maintain contiguous storage.
-	 */
-	removeWhere(predicate: (item: T) => boolean): number {
-		const kept: T[] = [];
-		const arr = this.toArray();
-		for (const item of arr) {
-			if (!predicate(item)) kept.push(item);
-		}
-		const removed = this.count - kept.length;
-		if (removed > 0) {
-			this.buffer.fill(undefined);
-			this.head = 0;
-			this.count = 0;
-			for (const item of kept) {
-				this.push(item);
-			}
-		}
-		return removed;
-	}
-
-	/** Clear the buffer entirely. */
-	clear(): void {
-		this.buffer.fill(undefined);
-		this.head = 0;
-		this.count = 0;
-	}
-}
-
-// ─── Internal Channel State ──────────────────────────────────────────────────
-
-/** Internal channel representation using a proper ring buffer. */
-interface InternalChannel {
-	name: string;
-	description: string;
-	maxHistory: number;
-	subscribers: Set<string>;
-	ring: RingBuffer<SamitiMessage>;
-	createdAt: number;
-}
-
-// ─── Samiti ──────────────────────────────────────────────────────────────────
+// Re-export public types for backward compatibility
+export type { SamitiMessage, SamitiChannel, SamitiConfig, SamitiStats, ListenOptions };
 
 /**
  * Ambient Communication Channels for collective agent intelligence.
  *
- * Samiti provides persistent, topic-based channels where agents broadcast
- * observations (security findings, performance regressions, style violations)
- * and other agents or systems listen asynchronously. Each channel maintains
- * a bounded message history via a ring buffer, supports severity and time
- * filtering, and delivers real-time notifications to registered callbacks.
- *
  * @example
  * ```ts
  * const samiti = new Samiti();
- *
- * // Listen for security alerts in real-time
  * const unsub = samiti.onMessage("#security", (msg) => {
  *   if (msg.severity === "critical") escalate(msg);
  * });
- *
- * // Broadcast a finding
  * samiti.broadcast("#security", {
- *   sender: "anveshi-agent",
- *   severity: "warning",
+ *   sender: "anveshi-agent", severity: "warning",
  *   category: "credential-leak",
- *   content: "Hardcoded API key detected in config.ts:42",
+ *   content: "Hardcoded API key in config.ts:42",
  * });
- *
- * // Query recent critical alerts
- * const criticals = samiti.listen("#security", {
- *   severity: "critical",
- *   since: Date.now() - 3600000,
- * });
- *
- * unsub(); // Clean up
+ * unsub();
  * ```
  */
 export class Samiti {
@@ -271,20 +60,18 @@ export class Samiti {
 	 */
 	constructor(config?: Partial<SamitiConfig>) {
 		this.config = {
-			...DEFAULT_CONFIG,
+			...DEFAULT_SAMITI_CONFIG,
 			...config,
-			// Clamp to hard ceilings
 			maxChannels: Math.min(
-				config?.maxChannels ?? DEFAULT_CONFIG.maxChannels,
+				config?.maxChannels ?? DEFAULT_SAMITI_CONFIG.maxChannels,
 				HARD_CEILINGS.maxChannels,
 			),
 			defaultMaxHistory: Math.min(
-				config?.defaultMaxHistory ?? DEFAULT_CONFIG.defaultMaxHistory,
+				config?.defaultMaxHistory ?? DEFAULT_SAMITI_CONFIG.defaultMaxHistory,
 				HARD_CEILINGS.maxHistory,
 			),
 		};
 
-		// Auto-create default channels
 		for (const ch of DEFAULT_CHANNELS) {
 			this.createChannel(ch.name, ch.description);
 		}
@@ -443,7 +230,6 @@ export class Samiti {
 			throw new Error(`Channel "${channel}" does not exist.`);
 		}
 
-		// Validate message size
 		const contentSize = message.content.length + JSON.stringify(message.data ?? "").length;
 		if (contentSize > HARD_CEILINGS.maxMessageSize) {
 			throw new Error(
@@ -470,7 +256,6 @@ export class Samiti {
 
 		ch.ring.push(full);
 
-		// Notify real-time listeners
 		const channelListeners = this.listeners.get(channel);
 		if (channelListeners) {
 			for (const handler of channelListeners) {
@@ -501,22 +286,18 @@ export class Samiti {
 		const ch = this.channels.get(channel);
 		if (!ch) return [];
 
-		// Lazy TTL pruning
 		this.pruneChannel(ch);
 
 		let messages = ch.ring.toArray();
 
-		// Filter by since
 		if (opts?.since !== undefined) {
 			messages = messages.filter((m) => m.timestamp >= opts.since!);
 		}
 
-		// Filter by severity
 		if (opts?.severity !== undefined) {
 			messages = messages.filter((m) => m.severity === opts.severity);
 		}
 
-		// Limit (return most recent N)
 		if (opts?.limit !== undefined && messages.length > opts.limit) {
 			messages = messages.slice(messages.length - opts.limit);
 		}
