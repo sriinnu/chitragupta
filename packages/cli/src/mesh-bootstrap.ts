@@ -37,6 +37,12 @@ export interface MeshNetworkConfig {
 	label?: string;
 	/** Capabilities advertised to peers. */
 	capabilities?: string[];
+	/** Path to PeerAddrDb JSON persistence file. */
+	peerAddrDbPath?: string;
+	/** Number of bootstrap peers loaded from PeerAddrDb. */
+	peerAddrDbBootstrapCount?: number;
+	/** Save interval for PeerAddrDb persistence (ms). */
+	peerAddrDbSaveIntervalMs?: number;
 }
 
 /** Result of a successful mesh bootstrap. */
@@ -83,10 +89,13 @@ export async function bootstrapMeshNetwork(
 		meshSecret: config.meshSecret,
 		pingIntervalMs: config.pingIntervalMs,
 		maxPeers: config.maxPeers,
-		gossipIntervalMs: config.gossipIntervalMs,
-		label: config.label,
-		capabilities: config.capabilities,
-	};
+			gossipIntervalMs: config.gossipIntervalMs,
+			label: config.label,
+			capabilities: config.capabilities,
+			peerAddrDbPath: config.peerAddrDbPath,
+			peerAddrDbBootstrapCount: config.peerAddrDbBootstrapCount,
+			peerAddrDbSaveIntervalMs: config.peerAddrDbSaveIntervalMs,
+		};
 
 	const meshPort = await sys.bootstrapP2P(networkConfig);
 	const connMgr = sys.getConnectionManager();
@@ -123,9 +132,10 @@ export async function bootstrapMeshNetwork(
  * Environment variables override settings values:
  * - `CHITRAGUPTA_MESH_PORT` — listener port
  * - `CHITRAGUPTA_MESH_HOST` — listener host
- * - `CHITRAGUPTA_MESH_PEERS` — comma-separated peer endpoints
- * - `CHITRAGUPTA_MESH_SECRET` — shared HMAC secret
- * - `CHITRAGUPTA_MESH_LABEL` — node label
+	 * - `CHITRAGUPTA_MESH_PEERS` — comma-separated peer endpoints
+	 * - `CHITRAGUPTA_MESH_SECRET` — shared HMAC secret
+	 * - `CHITRAGUPTA_MESH_LABEL` — node label
+	 * - `CHITRAGUPTA_MESH_ADDR_DB_PATH` — PeerAddrDb persistence file
  *
  * @param settings - Settings object (may contain `mesh` or `meshNetwork` key).
  * @returns Resolved config, or `undefined` if mesh is not enabled.
@@ -142,8 +152,9 @@ export function resolveMeshConfig(
 	const envPeers = process.env.CHITRAGUPTA_MESH_PEERS;
 	const envSecret = process.env.CHITRAGUPTA_MESH_SECRET;
 	const envLabel = process.env.CHITRAGUPTA_MESH_LABEL;
+	const envAddrDbPath = process.env.CHITRAGUPTA_MESH_ADDR_DB_PATH;
 
-	const hasEnv = envPort || envHost || envPeers || envSecret || envLabel;
+	const hasEnv = envPort || envHost || envPeers || envSecret || envLabel || envAddrDbPath;
 	if (!meshSettings && !hasEnv) return undefined;
 
 	return {
@@ -152,13 +163,16 @@ export function resolveMeshConfig(
 		staticPeers: envPeers
 			? envPeers.split(",").map((s) => s.trim()).filter(Boolean)
 			: meshSettings?.staticPeers,
-		meshSecret: envSecret ?? meshSettings?.meshSecret,
-		label: envLabel ?? meshSettings?.label,
-		pingIntervalMs: meshSettings?.pingIntervalMs,
-		maxPeers: meshSettings?.maxPeers,
-		gossipIntervalMs: meshSettings?.gossipIntervalMs,
-		capabilities: meshSettings?.capabilities,
-	};
+			meshSecret: envSecret ?? meshSettings?.meshSecret,
+			label: envLabel ?? meshSettings?.label,
+			pingIntervalMs: meshSettings?.pingIntervalMs,
+			maxPeers: meshSettings?.maxPeers,
+			gossipIntervalMs: meshSettings?.gossipIntervalMs,
+			capabilities: meshSettings?.capabilities,
+			peerAddrDbPath: envAddrDbPath ?? meshSettings?.peerAddrDbPath,
+			peerAddrDbBootstrapCount: meshSettings?.peerAddrDbBootstrapCount,
+			peerAddrDbSaveIntervalMs: meshSettings?.peerAddrDbSaveIntervalMs,
+		};
 }
 
 // ─── Status ─────────────────────────────────────────────────────────────────

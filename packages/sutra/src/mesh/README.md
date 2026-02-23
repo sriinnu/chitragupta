@@ -164,6 +164,7 @@ CHITRAGUPTA_MESH_HOST=0.0.0.0   # Bind host
 CHITRAGUPTA_MESH_PEERS=ws://10.0.0.2:3142/mesh,ws://10.0.0.3:3142/mesh
 CHITRAGUPTA_MESH_SECRET=your-shared-hmac-secret
 CHITRAGUPTA_MESH_LABEL=node-alpha
+CHITRAGUPTA_MESH_ADDR_DB_PATH=~/.chitragupta/peers.json
 ```
 
 ### Settings (chitragupta.json)
@@ -174,10 +175,14 @@ CHITRAGUPTA_MESH_LABEL=node-alpha
     "listenHost": "0.0.0.0",
     "staticPeers": ["ws://10.0.0.2:3142/mesh"],
     "meshSecret": "shared-secret",
+    "authNonceWindowMs": 120000,
     "pingIntervalMs": 10000,
     "maxMissedPings": 3,
     "maxPeers": 50,
     "gossipIntervalMs": 5000,
+    "peerAddrDbPath": "~/.chitragupta/peers.json",
+    "peerAddrDbBootstrapCount": 20,
+    "peerAddrDbSaveIntervalMs": 30000,
     "label": "node-alpha",
     "capabilities": ["agent", "memory"]
   }
@@ -193,10 +198,14 @@ const meshPort = await system.bootstrapP2P({
   listenPort: 3142,
   staticPeers: ["ws://10.0.0.2:3142/mesh"],
   meshSecret: "shared-hmac-secret",
+  authNonceWindowMs: 120_000,
   pingIntervalMs: 10_000,
   maxMissedPings: 3,
   maxPeers: 50,
   gossipIntervalMs: 5_000,
+  peerAddrDbPath: "~/.chitragupta/peers.json",
+  peerAddrDbBootstrapCount: 20,
+  peerAddrDbSaveIntervalMs: 30_000,
   label: "node-alpha",
   capabilities: ["agent", "memory"],
 });

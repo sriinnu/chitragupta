@@ -145,8 +145,9 @@ Every connection is mutually authenticated using a shared `meshSecret`:
 
 1. Outbound peer sends `auth` frame with nonce + HMAC(nonce, secret)
 2. Inbound peer verifies HMAC using constant-time comparison
-3. If valid, responds with `auth:ok`; otherwise `auth:fail` and closes
-4. All subsequent messages are signed with HMAC per-frame
+3. Nonce freshness and replay window are enforced before accept
+4. If valid, responds with `auth:ok`; otherwise `auth:fail` and closes
+5. All subsequent messages are signed with HMAC per-frame
 
 ```typescript
 await system.bootstrapP2P({
@@ -250,6 +251,7 @@ Bitcoin-style persistent peer storage with a two-table design:
 - JSON persistence to disk for fast restart
 - Automatic pruning of entries older than 7 days
 - Event-driven integration with PeerConnectionManager
+- Automatic runtime wiring when `peerAddrDbPath` is configured in `bootstrapP2P`
 
 ```typescript
 import { PeerAddrDb } from "@chitragupta/sutra/mesh";
@@ -345,6 +347,7 @@ interface PeerNetworkConfig {
 
   // Authentication
   meshSecret?: string;                // HMAC-SHA256 shared secret
+  authNonceWindowMs?: number;         // default: 120_000 (replay window)
 
   // Heartbeat
   pingIntervalMs?: number;            // default: 10_000
@@ -369,6 +372,11 @@ interface PeerNetworkConfig {
   maxDiscoveredPeers?: number;        // default: 10
   peerExchangeIntervalMs?: number;    // default: 30_000
 
+  // PeerAddrDb Persistence
+  peerAddrDbPath?: string;            // optional JSON file path
+  peerAddrDbBootstrapCount?: number;  // default: 20
+  peerAddrDbSaveIntervalMs?: number;  // default: 30_000
+
   // Security
   guard?: PeerGuardConfig;            // anti-eclipse config
 }
@@ -380,21 +388,21 @@ interface PeerNetworkConfig {
 
 | File | LOC | Purpose |
 |------|-----|---------|
-| `actor-system.ts` | 446 | Top-level coordinator, P2P bootstrap |
-| `peer-connection.ts` | 445 | Connection manager, TLS, discovery, reconnect |
-| `ws-peer-channel.ts` | 448 | Single WebSocket peer, auth, ping/pong |
-| `mesh-router.ts` | 422 | Message routing, priority lanes, TTL |
-| `peer-addr-db.ts` | 269 | Bitcoin-style persistent peer database |
+| `actor-system.ts` | 329 | Top-level coordinator, P2P bootstrap |
+| `peer-connection.ts` | 404 | Connection manager, TLS, discovery, reconnect |
+| `ws-peer-channel.ts` | 449 | Single WebSocket peer, auth, ping/pong |
+| `mesh-router.ts` | 423 | Message routing, priority lanes, TTL |
+| `peer-addr-db.ts` | 369 | Bitcoin-style persistent peer database |
 | `network-gossip.ts` | 290 | Network-level gossip bridge |
-| `peer-guard.ts` | 272 | Anti-eclipse protections, peer scoring |
+| `peer-guard.ts` | 277 | Anti-eclipse protections, peer scoring |
 | `gossip-protocol.ts` | 272 | SWIM failure detection |
-| `peer-types.ts` | 194 | Type definitions, wire protocol, config |
+| `peer-types.ts` | 204 | Type definitions, wire protocol, config |
 | `peer-envelope.ts` | 143 | Serialization, HMAC signing, validation |
 | `actor.ts` | 210 | Actor lifecycle, mailbox processing |
 | `actor-mailbox.ts` | 123 | Priority mailbox (4 lanes) |
 | `types.ts` | 120 | Core types (MeshEnvelope, PeerChannel) |
 | `index.ts` | 70 | Module exports |
-| **Total** | **3,724** | |
+| **Total** | **3,683** | |
 
 ---
 

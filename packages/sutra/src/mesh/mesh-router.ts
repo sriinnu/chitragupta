@@ -359,7 +359,8 @@ export class MeshRouter implements MessageSender {
 		}
 
 		// Only forward to channels for locally-originated broadcasts
-		if (!(envelope as Record<string, unknown>)._networkHop) {
+		const networkHop = (envelope as MeshEnvelope & { _networkHop?: boolean })._networkHop;
+		if (!networkHop) {
 			for (const channel of this.channels.values()) {
 				if (channel.peerId === envelope.from) continue;
 				channel.receive(envelope);

@@ -263,14 +263,15 @@ export class WsPeerChannel implements PeerChannel {
 
 	private dispatchMessage(msg: PeerMessage): void {
 		switch (msg.type) {
-			case "envelope":
-				if (validateEnvelope(msg.data) && this.localRouter) {
-					// Mark as network hop to prevent broadcast re-forwarding
-					(msg.data as Record<string, unknown>)._networkHop = true;
-					// Register reply route so cross-node ask replies find their way back
-					if (msg.data.type === "ask") {
-						this.localRouter.registerReplyRoute?.(msg.data.id, this);
-					}
+				case "envelope":
+					if (validateEnvelope(msg.data) && this.localRouter) {
+						// Mark as network hop to prevent broadcast re-forwarding
+						const networkHopEnvelope = msg.data as MeshEnvelope & { _networkHop?: boolean };
+						networkHopEnvelope._networkHop = true;
+						// Register reply route so cross-node ask replies find their way back
+						if (msg.data.type === "ask") {
+							this.localRouter.registerReplyRoute?.(msg.data.id, this);
+						}
 					this.localRouter.route(msg.data);
 				}
 				break;
