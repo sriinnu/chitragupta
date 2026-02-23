@@ -12,6 +12,8 @@ export type {
 	ActorContext,
 	ActorSystemConfig,
 	AskOptions,
+	CapableActorBehavior,
+	MCPToolDescriptor,
 	MeshEnvelope,
 	MeshPriority,
 	MessageReceiver,
@@ -20,6 +22,7 @@ export type {
 	PeerView,
 	SendOptions,
 } from "./types.js";
+export { isCapableBehavior } from "./types.js";
 
 // Mailbox
 export { ActorMailbox } from "./actor-mailbox.js";
@@ -36,6 +39,10 @@ export { GossipProtocol } from "./gossip-protocol.js";
 // System
 export { ActorSystem, ActorRef } from "./actor-system.js";
 export type { SpawnOptions } from "./actor-system.js";
+
+// Capability Routing
+export { CapabilityRouter } from "./capability-router.js";
+export type { CapabilityQuery, CapabilityStrategy, ScoredPeer } from "./capability-router.js";
 
 // P2P Network Transport
 export { NetworkGossip } from "./network-gossip.js";
