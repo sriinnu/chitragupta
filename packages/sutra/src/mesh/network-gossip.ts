@@ -169,6 +169,7 @@ export class NetworkGossip {
 	destroy(): void {
 		this.stop();
 		this.actorLocations.clear();
+		this.capabilityIndex.clear();
 		this.handlers.length = 0;
 	}
 

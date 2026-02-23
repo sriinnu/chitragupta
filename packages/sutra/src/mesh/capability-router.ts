@@ -264,7 +264,7 @@ export class CapabilityRouter {
 		scored: ScoredPeer[],
 		capabilities: string[],
 	): PeerView {
-		const key = capabilities.sort().join(",");
+		const key = [...capabilities].sort().join(",");
 		const lastIdx = this.roundRobinState.get(key) ?? -1;
 
 		// Sort by actorId for stable ordering
