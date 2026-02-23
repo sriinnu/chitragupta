@@ -109,8 +109,7 @@ export interface MargaPipelineConfig {
  * Ordered from weakest to strongest.
  */
 const ESCALATION_CHAIN: Array<{ providerId: string; modelId: string }> = [
-	{ providerId: "ollama", modelId: "llama3.2:1b" },
-	{ providerId: "ollama", modelId: "llama3.2:3b" },
+	{ providerId: "ollama", modelId: "qwen3:8b" },
 	{ providerId: "ollama", modelId: "qwen2.5-coder:7b" },
 	{ providerId: "anthropic", modelId: "claude-haiku-3-5" },
 	{ providerId: "anthropic", modelId: "claude-sonnet-4-5-20250929" },
@@ -180,7 +179,7 @@ export class MargaPipeline {
 
 		// Step 6: Select provider/model
 		let providerId = binding?.providerId ?? "ollama";
-		let modelId = binding?.modelId ?? "llama3.2:3b";
+		let modelId = binding?.modelId ?? "qwen3:8b";
 		let rationale = binding?.rationale ?? "Default fallback";
 
 		// Step 7: Complexity upgrade — if complexity demands a stronger model

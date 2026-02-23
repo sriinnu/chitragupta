@@ -400,14 +400,14 @@ describe("Routing Pipeline E2E", () => {
 			expect(decision.modelId).toBe("custom-model");
 		});
 
-		it("should fall back to ollama/llama3.2:3b when no binding matches", () => {
+		it("should fall back to ollama/qwen3:8b when no binding matches", () => {
 			// Use empty bindings — no task type will match
 			const pipeline = createTestPipeline({ bindings: [] });
 			const decision = pipeline.classify(userContext("What is the capital of France?"));
 
 			// Fallback defaults
 			expect(decision.providerId).toBe("ollama");
-			expect(decision.modelId).toBe("llama3.2:3b");
+			expect(decision.modelId).toBe("qwen3:8b");
 		});
 
 		it("should use HYBRID_BINDINGS by default", () => {
@@ -517,7 +517,7 @@ describe("Routing Pipeline E2E", () => {
 				bindings: [{
 					taskType: "chat",
 					providerId: "ollama",
-					modelId: "llama3.2:3b",
+					modelId: "qwen3:8b",
 					rationale: "Local first",
 				}],
 				autoEscalate: true,
@@ -541,7 +541,7 @@ describe("Routing Pipeline E2E", () => {
 				bindings: [{
 					taskType: "chat",
 					providerId: "ollama",
-					modelId: "llama3.2:3b",
+					modelId: "qwen3:8b",
 					rationale: "Local first",
 				}],
 				autoEscalate: true,
@@ -562,18 +562,18 @@ describe("Routing Pipeline E2E", () => {
 			// Register anthropic as a successful escalation target
 			registry.register(createMockStreamProvider("anthropic", "Escalated OK"));
 
-			// Escalation chain has 3 ollama entries before reaching anthropic,
-			// so we need maxEscalations >= 3 to traverse past all ollama models.
+			// Escalation chain has 2 ollama entries before reaching anthropic,
+			// so we need maxEscalations >= 2 to traverse past all ollama models.
 			const pipeline = new MargaPipeline({
 				registry,
 				bindings: [{
 					taskType: "chat",
 					providerId: "ollama",
-					modelId: "llama3.2:1b",
+					modelId: "qwen3:8b",
 					rationale: "test",
 				}],
 				autoEscalate: true,
-				maxEscalations: 4,
+				maxEscalations: 3,
 			});
 
 			const events = await collectStream(pipeline.stream(userContext("What is the capital of France?")));
@@ -666,7 +666,7 @@ describe("Routing Pipeline E2E", () => {
 				bindings: [{
 					taskType: "chat",
 					providerId: "ollama",
-					modelId: "llama3.2:3b",
+					modelId: "qwen3:8b",
 					rationale: "test",
 				}],
 				autoEscalate: true,
@@ -688,7 +688,7 @@ describe("Routing Pipeline E2E", () => {
 				bindings: [{
 					taskType: "chat",
 					providerId: "ollama",
-					modelId: "llama3.2:3b",
+					modelId: "qwen3:8b",
 					rationale: "test",
 				}],
 				autoEscalate: false,

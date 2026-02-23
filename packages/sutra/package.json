@@ -1,5 +1,5 @@
 {
-	"name": "@yugenlab/sutra",
+	"name": "@chitragupta/sutra",
 	"version": "0.1.2",
 	"description": "Inter-process communication hub with event routing and agent message delivery",
 	"type": "module",
