@@ -149,3 +149,38 @@ export interface McpClientConfig {
 // ─── Connection State ───────────────────────────────────────────────────────
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
+
+// ─── Typed Tool Response Schemas ────────────────────────────────────────────
+
+/** Typed response for the `vasana_tendencies` tool. */
+export interface VasanaTendencyResult {
+	tendency: string;
+	valence: string;
+	strength: number;
+	stability: number;
+	predictiveAccuracy: number;
+	reinforcementCount: number;
+	description: string;
+}
+
+/** Typed response for the `health_status` tool. */
+export interface HealthStatusResult {
+	state: { sattva: number; rajas: number; tamas: number };
+	dominant: string;
+	trend: { sattva: string; rajas: string; tamas: string };
+	alerts: string[];
+	history: Array<{
+		timestamp: number;
+		state: { sattva: number; rajas: number; tamas: number };
+		dominant: string;
+	}>;
+}
+
+/** Typed response for the `mesh_status` tool. */
+export interface MeshStatusResult {
+	running: boolean;
+	actorCount: number;
+	gossipAlive: number;
+	peersConnected: number;
+	nodeId: string | null;
+}

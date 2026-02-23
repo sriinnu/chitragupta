@@ -156,6 +156,9 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 
 	const actualPort = await server.start();
 
+	// Wire Akasha trace events → WS broadcast
+	if (server.ws) { const ak = modules.servAkasha as { setOnEvent?: (h: (e: { type: string }) => void) => void } | undefined; ak?.setOnEvent?.((e) => server.ws!.broadcast("akasha:" + e.type, e)); }
+
 	// Bootstrap P2P mesh if config is present
 	if (meshConfig && meshActorSystem) {
 		try {
@@ -214,11 +217,10 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 
 /** Phase modules wired for serve mode. All fields are optional/unknown since each is best-effort. */
 interface ServePhaseModules {
-	vasanaEngine: unknown; vidhiEngine: unknown; servNidraDaemon: unknown;
-	servTriguna: unknown; servRtaEngine: unknown; servBuddhi: unknown;
-	servDatabase: unknown; servSamiti: unknown; servSabhaEngine: unknown;
-	servLokapala: unknown; servAkasha: unknown; servKartavyaEngine: unknown;
-	servKalaChakra: unknown; servVidyaOrchestrator: unknown;
+	vasanaEngine: unknown; vidhiEngine: unknown; servNidraDaemon: unknown; servTriguna: unknown;
+	servRtaEngine: unknown; servBuddhi: unknown; servDatabase: unknown; servSamiti: unknown;
+	servSabhaEngine: unknown; servLokapala: unknown; servAkasha: unknown;
+	servKartavyaEngine: unknown; servKalaChakra: unknown; servVidyaOrchestrator: unknown;
 }
 
 interface ServeCleanups { skillWatcherCleanups: Array<() => void>; servKartavyaDispatcher?: { start(): void; stop(): void }; }
@@ -245,11 +247,10 @@ async function wireServePhaseModules(
 	projectPath: string,
 ): Promise<{ modules: ServePhaseModules; cleanups: ServeCleanups }> {
 	const m: ServePhaseModules = {
-		vasanaEngine: undefined, vidhiEngine: undefined, servNidraDaemon: undefined,
-		servTriguna: undefined, servRtaEngine: undefined, servBuddhi: undefined,
-		servDatabase: undefined, servSamiti: undefined, servSabhaEngine: undefined,
-		servLokapala: undefined, servAkasha: undefined, servKartavyaEngine: undefined,
-		servKalaChakra: undefined, servVidyaOrchestrator: undefined,
+		vasanaEngine: undefined, vidhiEngine: undefined, servNidraDaemon: undefined, servTriguna: undefined,
+		servRtaEngine: undefined, servBuddhi: undefined, servDatabase: undefined, servSamiti: undefined,
+		servSabhaEngine: undefined, servLokapala: undefined, servAkasha: undefined,
+		servKartavyaEngine: undefined, servKalaChakra: undefined, servVidyaOrchestrator: undefined,
 	};
 	const c: ServeCleanups = { skillWatcherCleanups: [] };
 
@@ -439,15 +440,12 @@ function buildServerHandlers(opts: {
 		listProviders: () => registry.getAll().map((p) => ({ id: p.id, name: p.name })),
 		listTools: () => getAllTools().map((t) => ({ name: (t as unknown as Record<string, Record<string, string>>).definition?.name, description: (t as unknown as Record<string, Record<string, string>>).definition?.description })),
 		prompt: serverAgent ? async (message: string) => { const result = await (serverAgent as Agent).prompt(message); return result.content.filter((p): p is { type: "text"; text: string } => p.type === "text").map((p) => p.text).join(""); } : undefined,
-		getVasanaEngine: () => m.vasanaEngine, getNidraDaemon: () => m.servNidraDaemon,
-		getVidhiEngine: () => m.vidhiEngine, getTuriyaRouter: () => turiyaRouter,
-		getTriguna: () => m.servTriguna, getRtaEngine: () => m.servRtaEngine,
-		getBuddhi: () => m.servBuddhi, getDatabase: () => m.servDatabase,
-		getSamiti: () => m.servSamiti, getSabhaEngine: () => m.servSabhaEngine,
-		getLokapala: () => m.servLokapala, getAkasha: () => m.servAkasha,
+		getVasanaEngine: () => m.vasanaEngine, getNidraDaemon: () => m.servNidraDaemon, getVidhiEngine: () => m.vidhiEngine,
+		getTuriyaRouter: () => turiyaRouter, getTriguna: () => m.servTriguna, getRtaEngine: () => m.servRtaEngine,
+		getBuddhi: () => m.servBuddhi, getDatabase: () => m.servDatabase, getSamiti: () => m.servSamiti,
+		getSabhaEngine: () => m.servSabhaEngine, getLokapala: () => m.servLokapala, getAkasha: () => m.servAkasha,
 		getKartavyaEngine: () => m.servKartavyaEngine, getKalaChakra: () => m.servKalaChakra,
-		getVidyaOrchestrator: () => m.servVidyaOrchestrator, getProjectPath: () => projectPath,
-		getPairingEngine: () => pairingEngine, getBudgetTracker: () => budgetTracker,
+		getVidyaOrchestrator: () => m.servVidyaOrchestrator, getProjectPath: () => projectPath, getPairingEngine: () => pairingEngine, getBudgetTracker: () => budgetTracker,
 		...buildMeshApiHandlers(opts.meshActorSystem, opts.getMeshBootstrapResult ?? (() => undefined)),
 	};
 }

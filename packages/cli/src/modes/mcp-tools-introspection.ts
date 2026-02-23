@@ -47,7 +47,18 @@ export function createVasanaTendenciesTool(projectPath: string): McpToolHandler 
 					`  ${v.description}`,
 				).join("\n\n");
 
-				return { content: [{ type: "text", text: `Vasanas (${tendencies.length}):\n\n${formatted}` }] };
+				return {
+					content: [{ type: "text", text: `Vasanas (${tendencies.length}):\n\n${formatted}` }],
+					_metadata: {
+						typed: tendencies.map((v) => ({
+							tendency: v.tendency, valence: v.valence,
+							strength: v.strength, stability: v.stability,
+							predictiveAccuracy: v.predictiveAccuracy,
+							reinforcementCount: v.reinforcementCount,
+							description: v.description,
+						})),
+					},
+				};
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: `vasana_tendencies failed: ${err instanceof Error ? err.message : String(err)}` }],
@@ -112,7 +123,10 @@ export function createHealthStatusTool(): McpToolHandler {
 					historyLines || "  (no history yet)",
 				].join("\n");
 
-				return { content: [{ type: "text", text }] };
+				return {
+					content: [{ type: "text", text }],
+					_metadata: { typed: { state, dominant, trend, alerts, history } },
+				};
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: `health_status failed: ${err instanceof Error ? err.message : String(err)}` }],
