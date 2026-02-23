@@ -81,8 +81,8 @@ describe("ESCALATION_CHAIN", () => {
 		expect(ESCALATION_CHAIN[ESCALATION_CHAIN.length - 1].modelId).toContain("opus");
 	});
 
-	it("should have 7 tiers", () => {
-		expect(ESCALATION_CHAIN).toHaveLength(7);
+	it("should have 6 tiers", () => {
+		expect(ESCALATION_CHAIN).toHaveLength(6);
 	});
 
 	it("escalation chain from decision should be a strict subset of ESCALATION_CHAIN", () => {

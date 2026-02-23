@@ -64,20 +64,20 @@ export const LOCAL_BINDINGS: TaskModelBinding[] = [
 	{
 		taskType: "chat",
 		providerId: "ollama",
-		modelId: "llama3.2:3b",
-		rationale: "General chat handled by 3B Llama locally. Fast and free.",
+		modelId: "qwen3:8b",
+		rationale: "General chat handled by Qwen 3 8B locally. Fast and free.",
 	},
 	{
 		taskType: "summarize",
 		providerId: "ollama",
-		modelId: "llama3.2:3b",
-		rationale: "Summarization is compression — 3B local handles it well.",
+		modelId: "qwen3:8b",
+		rationale: "Summarization is compression — Qwen 3 8B local handles it well.",
 	},
 	{
 		taskType: "translate",
 		providerId: "ollama",
-		modelId: "llama3.2:3b",
-		rationale: "Basic translation at 3B level. Upgrade for rare languages.",
+		modelId: "qwen3:8b",
+		rationale: "Basic translation at 8B level. Upgrade for rare languages.",
 	},
 	{
 		taskType: "tool-exec",
@@ -256,19 +256,19 @@ export const HYBRID_BINDINGS: TaskModelBinding[] = [
 	{
 		taskType: "chat",
 		providerId: "ollama",
-		modelId: "llama3.2:3b",
-		rationale: "Chat: local 3B handles casual conversation.",
+		modelId: "qwen3:8b",
+		rationale: "Chat: local Qwen 3 8B handles casual conversation.",
 	},
 	{
 		taskType: "summarize",
 		providerId: "ollama",
-		modelId: "llama3.2:3b",
+		modelId: "qwen3:8b",
 		rationale: "Summarize: local compression is fast and free.",
 	},
 	{
 		taskType: "translate",
 		providerId: "ollama",
-		modelId: "llama3.2:3b",
+		modelId: "qwen3:8b",
 		rationale: "Translate: local for common languages.",
 	},
 	{
