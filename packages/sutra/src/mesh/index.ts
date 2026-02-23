@@ -29,6 +29,7 @@ export { ActorMailbox } from "./actor-mailbox.js";
 
 // Actor
 export { Actor } from "./actor.js";
+export type { ActorLearner } from "./actor.js";
 
 // Router
 export { MeshRouter } from "./mesh-router.js";
