@@ -15,6 +15,7 @@ import type { PeerNetworkConfig } from "./peer-types.js";
 import type { PeerConnectionManager } from "./peer-connection.js";
 import type { NetworkGossip } from "./network-gossip.js";
 import type { PeerAddrDb } from "./peer-addr-db.js";
+import type { CapabilityRouter } from "./capability-router.js";
 const DEFAULTS: Required<ActorSystemConfig> = {
 	maxMailboxSize: 10_000,
 	defaultTTL: 30_000,
@@ -149,6 +150,7 @@ export class ActorSystem {
 			timestamp: Date.now(),
 			ttl: opts?.ttl ?? this.config.defaultTTL,
 			hops: [from],
+			requiredCapabilities: opts?.requiredCapabilities,
 		};
 		this.router.route(envelope);
 	}
@@ -187,12 +189,19 @@ export class ActorSystem {
 		findAlive(): PeerView[] {
 		return this.gossip.findAlive();
 	}
+	/** Find alive peers declaring the given capability. */
+	findByCapability(capability: string): PeerView[] {
+		return this.gossip.findByCapability(capability);
+	}
+	/** Get the capability router (null if P2P not bootstrapped). */
+	getCapabilityRouter(): CapabilityRouter | null { return this.capabilityRouter; }
 	private connectionManager: PeerConnectionManager | null = null;
 	private networkGossip: NetworkGossip | null = null;
 	private peerAddrDb: PeerAddrDb | null = null;
 	private peerAddrDbPath: string | null = null;
 	private peerAddrDbUnsub: (() => void) | null = null;
 	private peerAddrDbSaveTimer: ReturnType<typeof setInterval> | null = null;
+	private capabilityRouter: CapabilityRouter | null = null;
 		async bootstrapP2P(networkConfig: PeerNetworkConfig): Promise<number> {
 		const { PeerConnectionManager: ConnMgr } = await import("./peer-connection.js");
 		const { NetworkGossip: NetGossip } = await import("./network-gossip.js");
@@ -235,6 +244,16 @@ export class ActorSystem {
 			return channels.find((ch) =>
 				ch.peerId === nodeId || ch.remoteNodeInfo?.nodeId === nodeId,
 			);
+		});
+		// Wire capability-based routing (dynamic import to avoid circular deps)
+		const { CapabilityRouter: CapRouter } = await import("./capability-router.js");
+		const guard = this.connectionManager.guard;
+		this.capabilityRouter = new CapRouter(this.gossip, guard);
+		this.router.setCapabilityResolver((caps) => {
+			const peer = this.capabilityRouter!.resolve({ capabilities: caps });
+			if (!peer?.originNodeId) return undefined;
+			return this.connectionManager!.getConnectedChannels()
+				.find((ch) => ch.peerId === peer.originNodeId || ch.remoteNodeInfo?.nodeId === peer.originNodeId);
 		});
 		// Start gossip before connections so handler is wired for first connect
 		this.networkGossip.start();

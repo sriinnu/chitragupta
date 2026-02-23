@@ -190,6 +190,20 @@ export class GossipProtocol {
 	}
 
 	/**
+	 * Find alive peers that declare the given capability.
+	 */
+	findByCapability(capability: string): PeerView[] {
+		const results: PeerView[] = [];
+		for (const peer of this.peers.values()) {
+			if (peer.status !== "alive") continue;
+			if (peer.capabilities?.includes(capability)) {
+				results.push(peer);
+			}
+		}
+		return results;
+	}
+
+	/**
 	 * Return all alive peers.
 	 */
 	findAlive(): PeerView[] {
