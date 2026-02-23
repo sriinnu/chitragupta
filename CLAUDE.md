@@ -1,5 +1,12 @@
 # Chitragupta MCP
 
+## Repos & Publishing
+- **GitHub**: `sriinnu/AUriva.git` (monorepo), `sriinnu/chitragupta.git` (subtree push)
+- **Git remotes**: `origin` = `sriinnu/AUriva.git`, `chitragupta-repo` = `sriinnu/chitragupta.git`
+- **npm org**: `@yugenlab` — publish as `@yugenlab/chitragupta`, `@yugenlab/sutra`, etc.
+- **Push flow**: main → subtree push to `chitragupta-repo` → npm version patch + publish under `@yugenlab`
+
+## Git Rules
 - with git push, dont add co-authored information AT ALL.
 - before git push, check what files/folders need to be ignored and add them to .gitignore, report to jaanu whats been done.
 
