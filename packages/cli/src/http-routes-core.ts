@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChitraguptaServer } from "./http-server.js";
 import type { ApiDeps, ServerConfig } from "./http-server-types.js";
+import { okResponse, errorResponse } from "./server-response.js";
 import {
 	HealthChecker,
 	MetricsRegistry,
@@ -76,23 +77,23 @@ export function mountCoreRoutes(
 
 	server.route("GET", "/api/health", async () => ({
 		status: 200,
-		body: {
+		body: okResponse({
 			status: "ok",
 			version,
 			uptime: server.uptime,
 			timestamp: new Date().toISOString(),
-		},
+		}),
 	}));
 
 	server.route("GET", "/api/health/deep", async () => {
 		try {
 			const report = await healthChecker.getStatus();
 			const httpStatus = report.status === "DOWN" ? 503 : 200;
-			return { status: httpStatus, body: report };
+			return { status: httpStatus, body: okResponse(report) };
 		} catch (err) {
 			return {
 				status: 500,
-				body: { error: `Health check failed: ${(err as Error).message}` },
+				body: errorResponse(`Health check failed: ${(err as Error).message}`),
 			};
 		}
 	});
@@ -107,9 +108,12 @@ export function mountCoreRoutes(
 	server.route("GET", "/api/sessions", async () => {
 		try {
 			const sessions = deps.listSessions();
-			return { status: 200, body: { sessions } };
+			return {
+				status: 200,
+				body: okResponse({ sessions }, { count: sessions.length }),
+			};
 		} catch (err) {
-			return { status: 500, body: { error: `Failed to list sessions: ${(err as Error).message}` } };
+			return { status: 500, body: errorResponse(`Failed to list sessions: ${(err as Error).message}`) };
 		}
 	});
 
@@ -117,11 +121,11 @@ export function mountCoreRoutes(
 		try {
 			const session = deps.getSession();
 			if (!session || (session as Record<string, unknown>).id !== req.params.id) {
-				return { status: 404, body: { error: `Session not found: ${req.params.id}` } };
+				return { status: 404, body: errorResponse(`Session not found: ${req.params.id}`) };
 			}
-			return { status: 200, body: { session } };
+			return { status: 200, body: okResponse({ session }) };
 		} catch (err) {
-			return { status: 500, body: { error: `Failed to get session: ${(err as Error).message}` } };
+			return { status: 500, body: errorResponse(`Failed to get session: ${(err as Error).message}`) };
 		}
 	});
 
@@ -275,9 +279,12 @@ export function mountCoreRoutes(
 	server.route("GET", "/api/tools", async () => {
 		try {
 			const tools = deps.listTools?.() ?? [];
-			return { status: 200, body: { tools } };
+			return {
+				status: 200,
+				body: okResponse({ tools }, { count: tools.length }),
+			};
 		} catch (err) {
-			return { status: 500, body: { error: `Failed to list tools: ${(err as Error).message}` } };
+			return { status: 500, body: errorResponse(`Failed to list tools: ${(err as Error).message}`) };
 		}
 	});
 
@@ -286,19 +293,19 @@ export function mountCoreRoutes(
 		try {
 			const agent = deps.getAgent() as Record<string, unknown> | null;
 			if (!agent) {
-				return { status: 503, body: { error: "Agent not initialized" } };
+				return { status: 503, body: errorResponse("Agent not initialized") };
 			}
 			return {
 				status: 200,
-				body: {
+				body: okResponse({
 					initialized: true,
 					model: agent.model ?? null,
 					providerId: agent.providerId ?? null,
 					tokenUsage: agent.tokenUsage ?? null,
-				},
+				}),
 			};
 		} catch (err) {
-			return { status: 500, body: { error: `Failed to get agent status: ${(err as Error).message}` } };
+			return { status: 500, body: errorResponse(`Failed to get agent status: ${(err as Error).message}`) };
 		}
 	});
 

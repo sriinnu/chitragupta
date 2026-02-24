@@ -4,6 +4,7 @@
  */
 
 import type { ChitraguptaServer } from "./http-server.js";
+import { okResponse, errorResponse } from "./server-response.js";
 import {
 	updateMemory,
 	appendMemory,
@@ -21,9 +22,12 @@ export function mountMemoryRoutes(server: ChitraguptaServer): void {
 	server.route("GET", "/api/memory/scopes", async () => {
 		try {
 			const scopes = listAllScopes();
-			return { status: 200, body: { scopes } };
+			return {
+				status: 200,
+				body: okResponse({ scopes }, { count: scopes.length }),
+			};
 		} catch (err) {
-			return { status: 500, body: { error: `Failed to list memory scopes: ${(err as Error).message}` } };
+			return { status: 500, body: errorResponse(`Failed to list memory scopes: ${(err as Error).message}`) };
 		}
 	});
 
@@ -33,7 +37,7 @@ export function mountMemoryRoutes(server: ChitraguptaServer): void {
 			const body = (req.body ?? {}) as Record<string, unknown>;
 			const query = body.query;
 			if (typeof query !== "string" || query.trim().length === 0) {
-				return { status: 400, body: { error: "Missing or empty 'query' field in request body" } };
+				return { status: 400, body: errorResponse("Missing or empty 'query' field in request body") };
 			}
 			const limit = typeof body.limit === "number" && body.limit > 0
 				? Math.floor(body.limit)
@@ -44,9 +48,12 @@ export function mountMemoryRoutes(server: ChitraguptaServer): void {
 				score: r.relevance ?? 0,
 				source: r.scope.type,
 			}));
-			return { status: 200, body: { results } };
+			return {
+				status: 200,
+				body: okResponse({ results }, { count: results.length }),
+			};
 		} catch (err) {
-			return { status: 500, body: { error: `Memory search failed: ${(err as Error).message}` } };
+			return { status: 500, body: errorResponse(`Memory search failed: ${(err as Error).message}`) };
 		}
 	});
 
@@ -59,12 +66,12 @@ export function mountMemoryRoutes(server: ChitraguptaServer): void {
 				const msg = isSession
 					? "Session-scoped memory is accessed via the session API, not /api/memory"
 					: `Invalid scope format: "${scopeStr}". Use "global", "project:<path>", or "agent:<id>"`;
-				return { status: 400, body: { error: msg } };
+				return { status: 400, body: errorResponse(msg) };
 			}
 			const entry = getMemoryEntry(scope);
-			return { status: 200, body: entry };
+			return { status: 200, body: okResponse(entry) };
 		} catch (err) {
-			return { status: 500, body: { error: `Failed to get memory: ${(err as Error).message}` } };
+			return { status: 500, body: errorResponse(`Failed to get memory: ${(err as Error).message}`) };
 		}
 	});
 

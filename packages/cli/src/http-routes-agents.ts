@@ -5,6 +5,7 @@
 
 import type { ChitraguptaServer } from "./http-server.js";
 import type { ApiDeps } from "./http-server-types.js";
+import { okResponse, errorResponse } from "./server-response.js";
 import type { Agent, SpawnConfig } from "@chitragupta/anina";
 import {
 	serializeAgent,
@@ -50,15 +51,18 @@ export function mountAgentRoutes(server: ChitraguptaServer, deps: ApiDeps): void
 	server.route("GET", "/api/agents", async (req) => {
 		try {
 			const root = getRootAgent(deps);
-			if (!root) return { status: 503, body: { error: "Agent not initialized" } };
+			if (!root) return { status: 503, body: errorResponse("Agent not initialized") };
 			let agents = listAllAgents(root);
 			const statusFilter = req.query.status;
 			if (statusFilter) {
 				agents = agents.filter((a) => a.status === statusFilter);
 			}
-			return { status: 200, body: { agents } };
+			return {
+				status: 200,
+				body: okResponse({ agents }, { count: agents.length }),
+			};
 		} catch (err) {
-			return { status: 500, body: { error: `Failed to list agents: ${(err as Error).message}` } };
+			return { status: 500, body: errorResponse(`Failed to list agents: ${(err as Error).message}`) };
 		}
 	});
 

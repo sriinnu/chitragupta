@@ -90,7 +90,8 @@ describe("ChitraguptaServer", () => {
 			const port = await server.start();
 			const { status, body } = await req(port, "/api/health");
 			expect(status).toBe(200);
-			expect(body.status).toBe("ok");
+			expect(body.ok).toBe(true);
+			expect((body.data as Record<string, unknown>).status).toBe("ok");
 		});
 
 		it("should reject requests without auth header", async () => {
@@ -115,7 +116,8 @@ describe("ChitraguptaServer", () => {
 				headers: { Authorization: `Bearer ${token}` },
 			});
 			expect(status).toBe(200);
-			expect(body.sessions).toBeDefined();
+			expect(body.ok).toBe(true);
+			expect((body.data as Record<string, unknown>).sessions).toBeDefined();
 		});
 
 		it("should reject POST without auth", async () => {
@@ -173,7 +175,8 @@ describe("ChitraguptaServer", () => {
 				headers: { "X-API-Key": "key-alpha" },
 			});
 			expect(status).toBe(200);
-			expect(body.sessions).toBeDefined();
+			expect(body.ok).toBe(true);
+			expect((body.data as Record<string, unknown>).sessions).toBeDefined();
 		});
 
 		it("should accept Bearer header with valid API key", async () => {
@@ -182,7 +185,8 @@ describe("ChitraguptaServer", () => {
 				headers: { Authorization: "Bearer key-beta" },
 			});
 			expect(status).toBe(200);
-			expect(body.sessions).toBeDefined();
+			expect(body.ok).toBe(true);
+			expect((body.data as Record<string, unknown>).sessions).toBeDefined();
 		});
 
 		it("should reject X-API-Key header with invalid key", async () => {
