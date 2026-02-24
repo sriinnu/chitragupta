@@ -144,13 +144,14 @@ export class ActorSystem {
 		this.emit({ type: "actor:spawned", actorId: id });
 		return new ActorRef(id, this.router);
 	}
-		stop(actorId: string): boolean {
+	stop(actorId: string): boolean {
 		const actor = this.actors.get(actorId);
 		if (!actor) return false;
 		actor.kill();
 		this.actors.delete(actorId);
 		this.router.removeActor(actorId);
 		this.gossip.unregister(actorId);
+		this.capabilityLearner.forgetActor(actorId);
 		this.capabilityRouter?.updateLoad(this.connectionManager?.nodeId ?? "local", this.actors.size);
 		this.emit({ type: "actor:stopped", actorId });
 		return true;
@@ -346,6 +347,7 @@ export class ActorSystem {
 		this.peerAddrDbUnsub = null;
 		for (const [id, actor] of this.actors) {
 			actor.kill();
+			this.capabilityLearner.forgetActor(id);
 			this.emit({ type: "actor:stopped", actorId: id });
 		}
 		this.actors.clear();

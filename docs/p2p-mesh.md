@@ -411,11 +411,27 @@ interface PeerNetworkConfig {
 | Test File | Tests | What It Covers |
 |-----------|-------|----------------|
 | `p2p-mesh-integration.test.ts` | 12 | Multi-node connect, ask/reply, broadcast, 5-node cluster, discovery, version handshake |
+| `p2p-mesh-churn.integration.test.ts` | 1 | Repeated worker restarts and cross-node route recovery |
 | `p2p-mesh.test.ts` | ~50 | Unit tests for MeshRouter, WsPeerChannel, envelope handling |
 | `peer-guard.test.ts` | 13 | Rate limiting, subnet diversity, peer scoring, counts |
 | `peer-addr-db.test.ts` | 18 | Two-table storage, bootstrap, persistence, event integration |
 | `mesh.test.ts` | ~30 | Actor, Mailbox, GossipProtocol unit tests |
 | `mesh-router.test.ts` | ~20 | Routing, TTL, priority, broadcast |
+
+---
+
+## Soak / Chaos Harness
+
+Use this harness to run a real multi-node mesh under node churn with assertion gates:
+
+```bash
+pnpm -C chitragupta benchmark:mesh-soak -- --duration-sec 20 --churn-every-sec 5 --nodes 3 --assert-success-rate 0.85 --assert-p95-ms 1200 --json
+```
+
+It continuously sends ask/reply traffic while restarting one worker node and reports:
+- request attempts/success/failure and success rate
+- latency percentiles (p50/p95/p99)
+- churn event count
 
 ---
 
