@@ -193,7 +193,7 @@ export function createRecallTool(): McpToolHandler {
 					if (r.date) lines.push(`  Date: ${r.date}`);
 					lines.push("");
 				}
-				return { content: [{ type: "text", text: truncateOutput(lines.join("\n")) }], _metadata: { action: "recall", query, resultCount: results.length } };
+				return { content: [{ type: "text", text: truncateOutput(lines.join("\n")) }], _metadata: { action: "recall", query, resultCount: results.length, typed: { query, results: results.map((r) => ({ score: r.score, answer: r.answer, source: r.primarySource, sessionId: r.sessionId })) } } };
 			} catch (err) {
 				return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
 			}

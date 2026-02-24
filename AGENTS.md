@@ -1,5 +1,13 @@
 # Parallel Agent Orchestration Protocol
 
+## Persistent User Priorities (Sriinnu)
+- Treat user intent as persistent context: do not ask for repeated restatement of direction.
+- Optimize for feature depth and orchestration power, not shallow provider-only progress.
+- Always preserve hard guardrails during implementation:
+   - source files < 450 LOC
+   - strict typing and test-backed changes
+   - explicit gap analysis vs referenced benchmark systems when asked about parity
+
 This document defines how the **master orchestrator** (the primary Claude Code session) coordinates parallel worker sessions across the chitragupta monorepo.
 
 ## Roles

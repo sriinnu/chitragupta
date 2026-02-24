@@ -1,5 +1,17 @@
 # Chitragupta MCP
 
+## Sriinnu Non-Negotiables (Persisted)
+- Do not wait to be reminded about product direction. Assume these defaults every session.
+- Prioritize overall capability and orchestration depth over cosmetic/provider-only changes.
+- Build toward master-orchestrator behavior (parallel workers, long-running/background execution, resilient resume/attach flows).
+- Keep explicit competitive parity tracking against systems previously referenced in this workspace (e.g., pi/zeroshot-style runtime UX). If a gap exists, call it out and propose concrete next steps.
+- Enforce engineering guardrails strictly:
+  - no source file should exceed 450 LOC
+  - TypeScript strictness, no `any`
+  - evidence-backed status updates (tests/build/diffs)
+
+When responding to roadmap/priority discussions, treat these as baseline constraints, not optional preferences.
+
 ## Repos & Publishing
 - **GitHub**: `sriinnu/AUriva.git` (monorepo), `sriinnu/chitragupta.git` (subtree push)
 - **Git remotes**: `origin` = `sriinnu/AUriva.git`, `chitragupta-repo` = `sriinnu/chitragupta.git`

@@ -226,6 +226,14 @@ export interface AgentConfig {
 	enableChetana?: boolean;
 	/** Configuration overrides for the Chetana consciousness layer. */
 	chetanaConfig?: Partial<import("./chetana/types.js").ChetanaConfig>;
+	/**
+	 * EventBridge instance for realtime event fan-out.
+	 * When provided, agent events (tool:start, tool:done, stream:text, etc.)
+	 * are bridged to transport sinks (MCP notifications, WebSocket, SSE).
+	 */
+	eventBridge?: {
+		emitTyped(agentId: string, type: string, payload: Record<string, unknown>, sessionId?: string): void;
+	};
 }
 
 // ─── Sub-Agent Spawning ─────────────────────────────────────────────────────

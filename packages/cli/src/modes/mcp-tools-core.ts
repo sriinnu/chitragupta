@@ -89,7 +89,10 @@ export function createMemorySearchTool(projectPath: string): McpToolHandler {
 					return `[${i + 1}] (score: ${(r.relevance ?? 0).toFixed(2)}, source: ${source})\n${r.content}`;
 				}).join("\n\n---\n\n");
 
-				return { content: [{ type: "text", text: truncateOutput(formatted) }] };
+				return {
+					content: [{ type: "text", text: truncateOutput(formatted) }],
+					_metadata: { typed: { query, results: limited.map((r) => ({ text: r.content.slice(0, 200), score: r.relevance ?? 0, source: r.scope.type })) } },
+				};
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: `Memory search failed: ${err instanceof Error ? err.message : String(err)}` }],
@@ -134,7 +137,10 @@ export function createSessionListTool(projectPath: string): McpToolHandler {
 				const lines = limited.map((s) =>
 					`- ${s.id} | "${s.title}" | ${s.agent}/${s.model} | ${s.created}`,
 				);
-				return { content: [{ type: "text", text: `Sessions (${limited.length}):\n\n${lines.join("\n")}` }] };
+				return {
+					content: [{ type: "text", text: `Sessions (${limited.length}):\n\n${lines.join("\n")}` }],
+					_metadata: { typed: { sessions: limited.map((s) => ({ id: s.id, title: s.title, agent: s.agent, model: s.model, created: s.created })) } },
+				};
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: `Failed to list sessions: ${err instanceof Error ? err.message : String(err)}` }],
@@ -191,7 +197,10 @@ export function createSessionShowTool(projectPath: string): McpToolHandler {
 				].join("\n");
 
 				const full = `${header}\n\n${"=".repeat(60)}\n\n${formatted}`;
-				return { content: [{ type: "text", text: truncateOutput(full) }] };
+				return {
+					content: [{ type: "text", text: truncateOutput(full) }],
+					_metadata: { typed: { meta: { id: session.meta.id, title: session.meta.title, agent: session.meta.agent, model: session.meta.model, created: session.meta.created, turnCount: session.turns.length }, turns: turns.map((t) => ({ turnNumber: t.turnNumber, role: t.role, contentPreview: t.content.slice(0, 100), toolCalls: t.toolCalls?.map((tc) => tc.name) })) } },
+				};
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: `Failed to load session: ${err instanceof Error ? err.message : String(err)}` }],
