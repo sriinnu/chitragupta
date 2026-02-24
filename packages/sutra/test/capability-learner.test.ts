@@ -160,6 +160,30 @@ describe("CapabilityLearner", () => {
 
 			expect(learner.getLearnedCapabilities("worker")).toContain("lint");
 		});
+
+		it("demotes unstable promoted capabilities when failure ratio is too high", () => {
+			const governedLearner = new CapabilityLearner(gossip, {
+				promotionThreshold: 3,
+				demotionMinSamples: 6,
+				demotionFailureRatio: 0.6,
+			});
+			gossip.register("worker");
+			const env = makeEnvelope({ payload: { type: "lint" } });
+
+			for (let i = 0; i < 3; i++) {
+				governedLearner.recordSuccess("worker", env);
+			}
+			expect(governedLearner.getLearnedCapabilities("worker")).toContain("lint");
+
+			for (let i = 0; i < 5; i++) {
+				governedLearner.recordFailure("worker", env);
+			}
+
+			expect(governedLearner.getLearnedCapabilities("worker")).not.toContain("lint");
+			const view = gossip.getView().find((v) => v.actorId === "worker");
+			expect(view?.capabilities).not.toContain("lint");
+			governedLearner.destroy();
+		});
 	});
 
 	// ═══════════════════════════════════════════════════════════════════
@@ -184,6 +208,31 @@ describe("CapabilityLearner", () => {
 			// Even after destroy + clear, the gossip still has the capability
 			const view = gossip.getView().find((v) => v.actorId === "worker");
 			expect(view?.capabilities).toContain("lint");
+		});
+
+		it("demotes stale promoted capabilities after inactivity window", () => {
+			vi.useFakeTimers();
+			try {
+				const governedLearner = new CapabilityLearner(gossip, {
+					promotionThreshold: 3,
+					decayIntervalMs: 1_000,
+					inactivityDemotionMs: 1_000,
+				});
+				gossip.register("worker");
+				const env = makeEnvelope({ payload: { type: "lint" } });
+				for (let i = 0; i < 3; i++) governedLearner.recordSuccess("worker", env);
+				expect(governedLearner.getLearnedCapabilities("worker")).toContain("lint");
+
+				governedLearner.start();
+				vi.advanceTimersByTime(1_500);
+
+				expect(governedLearner.getLearnedCapabilities("worker")).not.toContain("lint");
+				const view = gossip.getView().find((v) => v.actorId === "worker");
+				expect(view?.capabilities).not.toContain("lint");
+				governedLearner.destroy();
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 	});
 
@@ -235,6 +284,16 @@ describe("CapabilityLearner", () => {
 			expect(learner.getLearnedCapabilities("worker-a")).not.toContain("test");
 			expect(learner.getLearnedCapabilities("worker-b")).toContain("test");
 			expect(learner.getLearnedCapabilities("worker-b")).not.toContain("lint");
+		});
+
+		it("forgets actor state on explicit cleanup", () => {
+			gossip.register("worker-a");
+			const env = makeEnvelope({ payload: { type: "lint" } });
+			learner.recordSuccess("worker-a", env);
+			expect(learner.getStats("worker-a", "lint")?.successes).toBe(1);
+
+			learner.forgetActor("worker-a");
+			expect(learner.getStats("worker-a", "lint")).toBeUndefined();
 		});
 	});
 });
