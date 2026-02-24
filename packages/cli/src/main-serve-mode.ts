@@ -66,12 +66,7 @@ export interface ServeCommandOptions {
 	turiyaRouter?: TuriyaRouter;
 }
 
-/**
- * Handle the `serve` subcommand.
- *
- * Starts the HTTP API server with full module wiring. Blocks until
- * SIGINT is received, then performs graceful shutdown.
- */
+/** Handle the `serve` subcommand — HTTP API server with full module wiring. */
 export async function handleServeCommand(opts: ServeCommandOptions): Promise<void> {
 	const { args, settings, profile, registry, project, projectPath, turiyaRouter } = opts;
 	const { createChitraguptaAPI } = await import("./http-server.js");
@@ -156,6 +151,7 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 
 	const actualPort = await server.start();
 
+	try { const { EventBridge: EB, WebSocketSink: WSS } = await import("@chitragupta/sutra"); const eb = new EB(); if (server.ws) eb.addSink(new WSS((t: string, d: unknown) => server.ws!.broadcast(t, d))); (server as unknown as Record<string, unknown>)._eventBridge = eb; } catch { /* EventBridge optional */ }
 	// Wire Akasha trace events → WS broadcast
 	if (server.ws) { const ak = modules.servAkasha as { setOnEvent?: (h: (e: { type: string }) => void) => void } | undefined; ak?.setOnEvent?.((e) => server.ws!.broadcast("akasha:" + e.type, e)); }
 

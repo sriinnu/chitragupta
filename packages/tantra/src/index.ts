@@ -103,3 +103,29 @@ export type {
 	CircuitBreakerState,
 	McpHealthReport,
 } from "./mcp-autonomous.js";
+
+/** Typed result interfaces for MCP tool responses. */
+export type {
+	SessionListResult,
+	SessionShowResult,
+	MemorySearchResult,
+	RecallResult,
+	ContextResult,
+	HandoverResult,
+	HandoverSinceResult,
+	MemoryChangesSinceResult,
+	DayShowResult,
+	DayListResult,
+	DaySearchResult,
+	SyncStatusResult,
+	AtmanReportResult,
+	ConsolidateResult,
+	VidhisResult,
+} from "./tool-result-types.js";
+
+/** Realtime event types re-exported from sutra for consumer convenience. */
+export type {
+	ChitraguptaEvent,
+	ChitraguptaEventBase,
+	ChitraguptaEventType,
+} from "@chitragupta/sutra";

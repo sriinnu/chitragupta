@@ -341,6 +341,63 @@ export function findSessionByMetadata(
 	}
 }
 
+// ─── Incremental Query API ───────────────────────────────────────────────────
+
+/**
+ * Get turns added after a given turn number for a session.
+ * Used by `handover_since` to provide incremental deltas.
+ *
+ * @param sessionId - The session to query.
+ * @param sinceTurnNumber - Only return turns with turnNumber > this value.
+ * @returns Array of turns added since the given turn number.
+ */
+export function getTurnsSince(sessionId: string, sinceTurnNumber: number): SessionTurn[] {
+	try {
+		const db = getAgentDb();
+		const rows = db
+			.prepare(
+				"SELECT turn_number, role, content, agent, model, tool_calls FROM turns WHERE session_id = ? AND turn_number > ? ORDER BY turn_number ASC",
+			)
+			.all(sessionId, sinceTurnNumber) as Array<Record<string, unknown>>;
+
+		return rows.map((row) => ({
+			turnNumber: row.turn_number as number,
+			role: row.role as "user" | "assistant",
+			content: row.content as string,
+			agent: (row.agent as string) ?? undefined,
+			model: (row.model as string) ?? undefined,
+			toolCalls: row.tool_calls ? JSON.parse(row.tool_calls as string) : undefined,
+		}));
+	} catch (err: unknown) {
+		process.stderr.write(`[smriti:session-queries] getTurnsSince SQLite failed: ${err instanceof Error ? err.message : String(err)}\n`);
+		return [];
+	}
+}
+
+/**
+ * Get sessions created or updated after a timestamp.
+ * Used by `memory_changes_since` to detect new/modified sessions.
+ *
+ * @param project - The project path to filter sessions.
+ * @param sinceMs - Epoch ms threshold (exclusive).
+ * @returns Array of session metadata for new/updated sessions.
+ */
+export function getSessionsModifiedSince(project: string, sinceMs: number): SessionMeta[] {
+	try {
+		const db = getAgentDb();
+		const rows = db
+			.prepare(
+				"SELECT * FROM sessions WHERE project = ? AND updated_at > ? ORDER BY updated_at ASC",
+			)
+			.all(project, sinceMs) as Array<Record<string, unknown>>;
+
+		return rows.map(rowToSessionMeta);
+	} catch (err: unknown) {
+		process.stderr.write(`[smriti:session-queries] getSessionsModifiedSince SQLite failed: ${err instanceof Error ? err.message : String(err)}\n`);
+		return [];
+	}
+}
+
 /**
  * Update session metadata fields in SQLite.
  * Only updates the fields provided — does not touch other columns.

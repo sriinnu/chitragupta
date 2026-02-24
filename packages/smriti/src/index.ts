@@ -36,6 +36,7 @@ export type {
 	VidhiStep,
 	VidhiParam,
 	ConsolidationLogEntry,
+	HandoverDelta,
 } from "./types.js";
 
 /** Parse session markdown files into structured SessionMeta + turns. */
@@ -60,6 +61,8 @@ export {
 	findSessionByMetadata,
 	updateSessionMeta,
 	getMaxTurnNumber,
+	getTurnsSince,
+	getSessionsModifiedSince,
 } from "./session-store.js";
 
 /** Key-value memory store for scoped persistent memory (project, global, user). */
@@ -336,3 +339,18 @@ export type { ConsolidationLevel, ConsolidationSummaryIndex } from "./consolidat
 /** Top-down temporal drill search: years to months to days for time-scoped retrieval. */
 export { hierarchicalTemporalSearch } from "./hierarchical-temporal-search.js";
 export type { TemporalSearchResult } from "./hierarchical-temporal-search.js";
+
+/** Persistent critique memory for task evaluation findings with BM25 search and deduplication. */
+export { CritiqueStore } from "./critique-store.js";
+export type { CritiqueFinding, CritiqueStoreConfig, CritiqueStats, CritiqueSeverity } from "./critique-store.js";
+
+/** Durable orchestration checkpoint/resume system with idempotency guarantees for multi-step jobs. */
+export { OrchestratorCheckpoint } from "./orchestrator-checkpoint.js";
+export type {
+	StepStatus,
+	StepCheckpoint,
+	JobCheckpoint,
+	OrchestratorCheckpointConfig,
+	StepDefinition,
+	JobListFilter,
+} from "./orchestrator-checkpoint.js";

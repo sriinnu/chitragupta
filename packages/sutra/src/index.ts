@@ -127,3 +127,26 @@ export type {
 	Sabha,
 	SabhaConfig,
 } from "./sabha.js";
+
+/** Realtime event bridge — fan-out hub for agent events to transport sinks. */
+export { EventBridge } from "./event-bridge.js";
+export type {
+	ChitraguptaEvent,
+	ChitraguptaEventBase,
+	ChitraguptaEventType,
+	EventSink,
+	EventBridgeConfig,
+} from "./event-bridge-types.js";
+
+/** Transport sink implementations for MCP, WebSocket, and SSE. */
+export { McpNotificationSink, WebSocketSink, SSEManagerSink } from "./event-bridge-sinks.js";
+export type { McpNotificationSendFn, WsBroadcastFn, SseBroadcastFn } from "./event-bridge-sinks.js";
+
+/** Runtime event stream — job lifecycle monitoring layer on top of EventBridge. */
+export { RuntimeEventStream } from "./runtime-events.js";
+export type {
+	RuntimeJobEvent,
+	JobStatus,
+	RuntimeEventStreamConfig,
+	ActiveJobSnapshot,
+} from "./runtime-events-types.js";

@@ -39,6 +39,8 @@ export {
 	listTurnsWithTimestamps,
 	findSessionByMetadata,
 	updateSessionMeta,
+	getTurnsSince,
+	getSessionsModifiedSince,
 } from "./session-queries.js";
 
 /**
