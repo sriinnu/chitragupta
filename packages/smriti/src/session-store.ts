@@ -48,10 +48,11 @@ export {
 function atomicRename(tmpPath: string, targetPath: string): void {
 	try {
 		nodeRenameSync(tmpPath, targetPath);
-	} catch {
+	} catch (err: unknown) {
 		// Fallback: direct write (non-atomic but still correct)
+		process.stderr.write(`[smriti:session-store] atomic rename failed, using direct write: ${err instanceof Error ? err.message : String(err)}\n`);
 		fs.writeFileSync(targetPath, fs.readFileSync(tmpPath, "utf-8"), "utf-8");
-		try { fs.unlinkSync(tmpPath); } catch { /* ignore orphan tmp */ }
+		try { fs.unlinkSync(tmpPath); } catch { /* intentional: orphan tmp cleanup is best-effort */ }
 	}
 }
 
@@ -286,8 +287,8 @@ export function deleteSession(id: string, project: string): void {
 		}
 		db.prepare("DELETE FROM turns WHERE session_id = ?").run(id);
 		db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
-	} catch {
-		// Best-effort cleanup
+	} catch (err: unknown) {
+		process.stderr.write(`[smriti:session-store] deleteSession SQLite cleanup failed for ${id}: ${err instanceof Error ? err.message : String(err)}\n`);
 	}
 }
 /** Per-session write queue to prevent concurrent write races. */

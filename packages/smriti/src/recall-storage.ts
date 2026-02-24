@@ -115,7 +115,8 @@ export function migrateEmbeddingsJson(): { migrated: number; skipped: number } {
   try {
     const raw = fs.readFileSync(jsonPath, "utf-8");
     entries = JSON.parse(raw) as EmbeddingEntry[];
-  } catch {
+  } catch (err: unknown) {
+    process.stderr.write(`[smriti:recall-storage] embeddings JSON parse failed: ${err instanceof Error ? err.message : String(err)}\n`);
     return { migrated: 0, skipped: 0 };
   }
 
@@ -160,7 +161,8 @@ export function migrateEmbeddingsJson(): { migrated: number; skipped: number } {
           } else {
             skipped++;
           }
-        } catch {
+        } catch (err: unknown) {
+          process.stderr.write(`[smriti:recall-storage] migration insert failed for ${entry.id}: ${err instanceof Error ? err.message : String(err)}\n`);
           skipped++;
         }
       }
@@ -170,10 +172,11 @@ export function migrateEmbeddingsJson(): { migrated: number; skipped: number } {
     // Rename JSON file to .bak on success
     try {
       fs.renameSync(jsonPath, jsonPath + ".bak");
-    } catch {
-      // Non-fatal: file may be locked or read-only
+    } catch (err: unknown) {
+      process.stderr.write(`[smriti:recall-storage] JSON backup rename failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
-  } catch {
+  } catch (err: unknown) {
+    process.stderr.write(`[smriti:recall-storage] migration transaction failed: ${err instanceof Error ? err.message : String(err)}\n`);
     return { migrated: 0, skipped: entries.length };
   }
 

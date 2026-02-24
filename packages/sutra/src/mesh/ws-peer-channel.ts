@@ -208,7 +208,7 @@ export class WsPeerChannel implements PeerChannel {
 	/** Gracefully close the connection. */
 	close(reason = "local shutdown"): void {
 		this.stopPingLoop();
-		if (this.ws) { try { this.ws.close(CLOSE_GOING_AWAY, reason); } catch {} this.ws = null; }
+		if (this.ws) { try { this.ws.close(CLOSE_GOING_AWAY, reason); } catch { /* intentional: socket may already be closed */ } this.ws = null; }
 		this.setState("disconnected");
 		this.emit({ type: "peer:disconnected", peerId: this.peerId, reason });
 	}
@@ -230,7 +230,7 @@ export class WsPeerChannel implements PeerChannel {
 			this._stats.bytesOut += frame.length;
 			this._stats.lastActivity = Date.now();
 			this.emit({ type: "message:sent", to: this.peerId, messageType: msg.type });
-		} catch { /* connection might be closing */ }
+		} catch (err: unknown) { process.stderr.write(`[mesh:ws-channel] send failed to ${this.peerId}: ${err instanceof Error ? err.message : String(err)}\n`); }
 	}
 
 	private handleIncoming(raw: string): void {
@@ -246,7 +246,8 @@ export class WsPeerChannel implements PeerChannel {
 					return;
 				}
 				payload = frame.body;
-			} catch {
+			} catch (err: unknown) {
+				this.emit({ type: "error", peerId: this.peerId, error: `incoming frame parse failed: ${err instanceof Error ? err.message : String(err)}` });
 				return;
 			}
 		} else {
@@ -355,7 +356,7 @@ export class WsPeerChannel implements PeerChannel {
 						this.emit({ type: "peer:auth_failed", peerId: this.peerId, reason: msg.reason ?? "rejected" });
 						reject(new Error(`auth rejected: ${msg.reason}`));
 					}
-				} catch { /* ignore non-JSON during auth handshake */ }
+				} catch (err: unknown) { process.stderr.write(`[mesh:ws-channel] auth handshake parse error: ${err instanceof Error ? err.message : String(err)}\n`); }
 			}, { once: true });
 		});
 	}
@@ -425,7 +426,7 @@ export class WsPeerChannel implements PeerChannel {
 	private killConnection(reason: string): void {
 		this.stopPingLoop();
 		if (this.ws) {
-			try { this.ws.close(1001, reason); } catch { /* socket may already be gone */ }
+			try { this.ws.close(1001, reason); } catch { /* intentional: socket may already be closed/destroyed */ }
 			this.ws = null;
 		}
 		if (this._state !== "dead") this.setState("disconnected");
@@ -443,7 +444,7 @@ export class WsPeerChannel implements PeerChannel {
 
 	private emit(event: import("./peer-types.js").PeerNetworkEvent): void {
 		for (const handler of this.eventHandlers) {
-			try { handler(event); } catch { /* non-fatal */ }
+			try { handler(event); } catch (err: unknown) { process.stderr.write(`[mesh:ws-channel] event handler error: ${err instanceof Error ? err.message : String(err)}\n`); }
 		}
 	}
 }

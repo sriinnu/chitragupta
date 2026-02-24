@@ -101,7 +101,7 @@ export class RecallEngine {
       const rows = db.prepare("SELECT * FROM embeddings").all() as EmbeddingRow[];
       this.entries = rows.map((row) => {
         let metadata: { title?: string; summary?: string; tags?: string[]; date?: string; deviceId?: string } = {};
-        try { metadata = JSON.parse(row.metadata ?? "{}"); } catch { /* corrupted metadata */ }
+        try { metadata = JSON.parse(row.metadata ?? "{}"); } catch { /* intentional: corrupted metadata row uses empty defaults */ }
         return {
           id: row.id,
           vector: blobToVector(row.vector),
@@ -115,8 +115,9 @@ export class RecallEngine {
           deviceId: metadata.deviceId,
         };
       });
-    } catch {
+    } catch (err: unknown) {
       // SQLite unavailable — try JSON fallback for migration
+      process.stderr.write(`[smriti:recall] SQLite load failed, trying JSON fallback: ${err instanceof Error ? err.message : String(err)}\n`);
       this.loadIndexJson();
     }
     this.loaded = true;
@@ -153,8 +154,9 @@ export class RecallEngine {
         }
       });
       txn();
-    } catch {
+    } catch (err: unknown) {
       // Non-fatal: try JSON fallback
+      process.stderr.write(`[smriti:recall] SQLite save failed, using JSON fallback: ${err instanceof Error ? err.message : String(err)}\n`);
       this.saveIndexJson();
     }
   }
@@ -168,7 +170,8 @@ export class RecallEngine {
         const raw = fs.readFileSync(indexPath, "utf-8");
         this.entries = JSON.parse(raw) as EmbeddingEntry[];
       }
-    } catch {
+    } catch (err: unknown) {
+      process.stderr.write(`[smriti:recall] JSON index load failed: ${err instanceof Error ? err.message : String(err)}\n`);
       this.entries = [];
     }
   }
@@ -182,8 +185,8 @@ export class RecallEngine {
         JSON.stringify(this.entries, null, "\t"),
         "utf-8",
       );
-    } catch {
-      // Non-fatal
+    } catch (err: unknown) {
+      process.stderr.write(`[smriti:recall] JSON index save failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   }
 
@@ -330,8 +333,8 @@ export class RecallEngine {
       try {
         const session = loadSession(meta.id, meta.project);
         await this.indexSession(session);
-      } catch {
-        // Skip sessions that fail to load
+      } catch (err: unknown) {
+        process.stderr.write(`[smriti:recall] reindex session ${meta.id} failed: ${err instanceof Error ? err.message : String(err)}\n`);
       }
     }
 

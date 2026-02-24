@@ -240,9 +240,7 @@ export class SessionCompactor {
         signal: AbortSignal.timeout(3000),
       });
       ollamaAvailable = response.ok;
-    } catch {
-      ollamaAvailable = false;
-    }
+    } catch { /* intentional: Ollama network check failure means unavailable */ ollamaAvailable = false; }
 
     if (ollamaAvailable) {
       return llmExtractSignals(session);
@@ -260,8 +258,8 @@ export class SessionCompactor {
       const filePath = path.join(dir, `${delta.sessionId}.md`);
       const markdown = writeDeltaMarkdown(delta);
       fs.writeFileSync(filePath, markdown, "utf-8");
-    } catch {
-      // Delta save is non-fatal
+    } catch (err: unknown) {
+      process.stderr.write(`[smriti:compactor] delta save failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   }
 
@@ -295,8 +293,8 @@ export class SessionCompactor {
 
       const filePath = path.join(dir, `${sessionId}.json`);
       fs.writeFileSync(filePath, JSON.stringify(data, null, "\t"), "utf-8");
-    } catch {
-      // Compaction audit save is non-fatal
+    } catch (err: unknown) {
+      process.stderr.write(`[smriti:compactor] mixing matrix save failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   }
 }

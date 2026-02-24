@@ -116,7 +116,7 @@ export class ActorSystem {
 	}
 	private emit(event: SystemEvent): void {
 		for (const h of this.eventHandlers) {
-			try { h(event); } catch { /* observer failures are non-fatal */ }
+			try { h(event); } catch (err: unknown) { process.stderr.write(`[mesh:actor-system] observer error: ${err instanceof Error ? err.message : String(err)}\n`); }
 		}
 	}
 	/** Spawn a new actor. Auto-extracts capabilities from CapableActorBehavior. */
@@ -373,17 +373,16 @@ export class ActorSystem {
 		try {
 			const url = new URL(endpoint);
 			return `${url.hostname}:${url.port}`;
-		} catch {
-			return endpoint;
-		}
+		} catch { /* intentional: non-URL endpoints use raw string as peerId */ return endpoint; }
 	}
 	private async savePeerAddrDb(): Promise<void> {
 		if (!this.peerAddrDb || !this.peerAddrDbPath) return;
 		try {
 			this.peerAddrDb.prune();
 			await this.peerAddrDb.save(this.peerAddrDbPath);
-		} catch {
+		} catch (err: unknown) {
 			// Non-fatal: mesh must continue even if persistence fails.
+			process.stderr.write(`[mesh:actor-system] peer addr DB save failed: ${err instanceof Error ? err.message : String(err)}\n`);
 		}
 	}
 }

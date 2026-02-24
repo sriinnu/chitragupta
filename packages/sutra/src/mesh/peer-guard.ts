@@ -270,8 +270,6 @@ export class PeerGuard {
 		try {
 			const url = new URL(endpoint);
 			return url.hostname;
-		} catch {
-			return endpoint;
-		}
+		} catch { /* intentional: non-URL endpoints use raw string as IP */ return endpoint; }
 	}
 }
