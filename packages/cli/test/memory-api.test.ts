@@ -291,7 +291,9 @@ describe("Memory HTTP routes", () => {
 		it("should return empty scopes list", async () => {
 			const { status, body } = await req(port, "/api/memory/scopes");
 			expect(status).toBe(200);
-			expect(body.scopes).toEqual([]);
+			expect(body.ok).toBe(true);
+			const data = body.data as Record<string, unknown>;
+			expect(data.scopes).toEqual([]);
 		});
 
 		it("should return scopes when memory exists", async () => {
@@ -300,7 +302,9 @@ describe("Memory HTTP routes", () => {
 
 			const { status, body } = await req(port, "/api/memory/scopes");
 			expect(status).toBe(200);
-			const scopes = body.scopes as Array<Record<string, unknown>>;
+			expect(body.ok).toBe(true);
+			const data = body.data as Record<string, unknown>;
+			const scopes = data.scopes as Array<Record<string, unknown>>;
 			expect(scopes.length).toBe(2);
 		});
 	});
@@ -313,25 +317,31 @@ describe("Memory HTTP routes", () => {
 
 			const { status, body } = await req(port, "/api/memory/global");
 			expect(status).toBe(200);
-			expect(body.scope).toBe("global");
-			expect(body.content).toBe("Global knowledge");
+			expect(body.ok).toBe(true);
+			const data = body.data as Record<string, unknown>;
+			expect(data.scope).toBe("global");
+			expect(data.content).toBe("Global knowledge");
 		});
 
 		it("should return empty content for nonexistent scope", async () => {
 			const { status, body } = await req(port, "/api/memory/global");
 			expect(status).toBe(200);
-			expect(body.content).toBe("");
+			expect(body.ok).toBe(true);
+			const data = body.data as Record<string, unknown>;
+			expect(data.content).toBe("");
 		});
 
 		it("should return 400 for invalid scope format", async () => {
 			const { status, body } = await req(port, "/api/memory/invalid");
 			expect(status).toBe(400);
+			expect(body.ok).toBe(false);
 			expect(body.error).toContain("Invalid scope format");
 		});
 
 		it("should return 400 for session scope with helpful message", async () => {
 			const { status, body } = await req(port, "/api/memory/session:abc");
 			expect(status).toBe(400);
+			expect(body.ok).toBe(false);
 			expect(body.error).toContain("session API");
 		});
 	});
@@ -443,7 +453,9 @@ describe("Memory HTTP routes", () => {
 				body: { query: "TypeScript" },
 			});
 			expect(status).toBe(200);
-			const results = body.results as Array<Record<string, unknown>>;
+			expect(body.ok).toBe(true);
+			const data = body.data as Record<string, unknown>;
+			const results = data.results as Array<Record<string, unknown>>;
 			expect(results.length).toBeGreaterThanOrEqual(1);
 			expect(results[0].content).toContain("TypeScript");
 			expect(results[0].score).toBeDefined();
@@ -456,6 +468,7 @@ describe("Memory HTTP routes", () => {
 				body: {},
 			});
 			expect(status).toBe(400);
+			expect(body.ok).toBe(false);
 			expect(body.error).toContain("query");
 		});
 
@@ -465,6 +478,7 @@ describe("Memory HTTP routes", () => {
 				body: { query: "  " },
 			});
 			expect(status).toBe(400);
+			expect(body.ok).toBe(false);
 			expect(body.error).toContain("query");
 		});
 
@@ -478,7 +492,9 @@ describe("Memory HTTP routes", () => {
 				body: { query: "data", limit: 1 },
 			});
 			expect(status).toBe(200);
-			const results = body.results as Array<Record<string, unknown>>;
+			expect(body.ok).toBe(true);
+			const data = body.data as Record<string, unknown>;
+			const results = data.results as Array<Record<string, unknown>>;
 			expect(results.length).toBeLessThanOrEqual(1);
 		});
 
@@ -488,7 +504,9 @@ describe("Memory HTTP routes", () => {
 				body: { query: "nonexistent-term-xyz" },
 			});
 			expect(status).toBe(200);
-			expect(body.results).toEqual([]);
+			expect(body.ok).toBe(true);
+			const data = body.data as Record<string, unknown>;
+			expect(data.results).toEqual([]);
 		});
 	});
 });
