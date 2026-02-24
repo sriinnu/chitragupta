@@ -1,7 +1,7 @@
 /**
  * @chitragupta/smriti — Svapna Consolidation (Dream Cycle)
  *
- * In Yoga Nidra, svapna (स्वप्न) is the dream state where the mind
+ * In Yoga Nidra, svapna is the dream state where the mind
  * reorganizes experience into lasting knowledge. This module orchestrates
  * the 5-phase consolidation cycle:
  *
@@ -11,6 +11,7 @@
  *   4. PROCEDURALIZE — Vidhi extraction: learn parameterized tool sequences
  *   5. COMPRESS     — Sushupti: Sinkhorn-Knopp weighted by epistemological source
  *
+ * Types, defaults, and constants are in `svapna-types.ts`.
  * Performance target: full cycle < 20 seconds for 50 sessions.
  */
 
@@ -22,119 +23,30 @@ import { estimateTokens } from "./graphrag-scoring.js";
 import { svapnaReplay, svapnaRecombine, parseToolCalls } from "./svapna-extraction.js";
 import { svapnaCrystallize } from "./svapna-rules.js";
 import { svapnaProceduralize } from "./svapna-vidhi.js";
+import { DEFAULT_CONFIG, PRAMANA_PRESERVATION } from "./svapna-types.js";
+import type {
+	SvapnaConfig,
+	ScoredTurn,
+	ReplayResult,
+	RecombineResult,
+	CrystallizeResult,
+	ProceduralizeResult,
+	CompressResult,
+	SvapnaResult,
+} from "./svapna-types.js";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-/** Configuration for the Svapna consolidation cycle. */
-export interface SvapnaConfig {
-	/** Maximum sessions to process per cycle. Default: 50. */
-	maxSessionsPerCycle: number;
-	/** Surprise threshold in [0, 1]. Turns above this are "high surprise". Default: 0.7. */
-	surpriseThreshold: number;
-	/** Minimum observation count for a pattern to become a vasana candidate. Default: 3. */
-	minPatternFrequency: number;
-	/** Minimum n-gram length for tool sequence extraction. Default: 2. */
-	minSequenceLength: number;
-	/** Minimum success rate for a tool sequence to become a Vidhi. Default: 0.8. */
-	minSuccessRate: number;
-	/** Project scope for this consolidation cycle. */
-	project: string;
-}
-
-/** A turn scored with surprise value during the REPLAY phase. */
-export interface ScoredTurn {
-	turnId: number;
-	sessionId: string;
-	turnNumber: number;
-	role: "user" | "assistant";
-	content: string;
-	toolCalls: SessionToolCall[];
-	/** Information-theoretic surprise: -log P(outcome | context). */
-	surprise: number;
-	/** Retention weight: higher surprise = higher weight. */
-	retentionWeight: number;
-	createdAt: number;
-}
-
-/** Result of the REPLAY phase. */
-export interface ReplayResult {
-	allTurns: ScoredTurn[];
-	highSurpriseTurns: ScoredTurn[];
-	turnsScored: number;
-	highSurprise: number;
-	durationMs: number;
-}
-
-/** A cross-session association discovered in the RECOMBINE phase. */
-export interface CrossSessionAssociation {
-	anchorTurnId: number;
-	anchorSessionId: string;
-	matchedSessionId: string;
-	similarity: number;
-	anchorFingerprint: string;
-	matchedFingerprint: string;
-}
-
-/** Result of the RECOMBINE phase. */
-export interface RecombineResult {
-	associations: CrossSessionAssociation[];
-	crossSessions: number;
-	durationMs: number;
-}
-
-/** Result of the CRYSTALLIZE phase. */
-export interface CrystallizeResult {
-	vasanasCreated: number;
-	vasanasReinforced: number;
-	durationMs: number;
-}
-
-/** Result of the PROCEDURALIZE phase. */
-export interface ProceduralizeResult {
-	vidhisCreated: number;
-	vidhis: import("./types.js").Vidhi[];
-	durationMs: number;
-}
-
-/** Result of the COMPRESS phase. */
-export interface CompressResult {
-	tokensCompressed: number;
-	compressionRatio: number;
-	durationMs: number;
-}
-
-/** Full result of a Svapna consolidation cycle. */
-export interface SvapnaResult {
-	phases: {
-		replay: { turnsScored: number; highSurprise: number; durationMs: number };
-		recombine: { associations: number; crossSessions: number; durationMs: number };
-		crystallize: { vasanasCreated: number; vasanasReinforced: number; durationMs: number };
-		proceduralize: { vidhisCreated: number; durationMs: number };
-		compress: { tokensCompressed: number; compressionRatio: number; durationMs: number };
-	};
-	totalDurationMs: number;
-	cycleId: string;
-}
-
-/** Default configuration values. */
-const DEFAULT_CONFIG: SvapnaConfig = {
-	maxSessionsPerCycle: 50,
-	surpriseThreshold: 0.7,
-	minPatternFrequency: 3,
-	minSequenceLength: 2,
-	minSuccessRate: 0.8,
-	project: "",
-};
-
-/** Pramana compression weights — higher = resists compression more. */
-const PRAMANA_PRESERVATION: Record<PramanaType, number> = {
-	pratyaksha: 0.95,
-	shabda: 0.80,
-	anumana: 0.65,
-	upamana: 0.50,
-	arthapatti: 0.40,
-	anupalabdhi: 0.25,
-};
+// Re-export for backward compatibility
+export type {
+	SvapnaConfig,
+	ScoredTurn,
+	ReplayResult,
+	CrossSessionAssociation,
+	RecombineResult,
+	CrystallizeResult,
+	ProceduralizeResult,
+	CompressResult,
+	SvapnaResult,
+} from "./svapna-types.js";
 
 // ─── SvapnaConsolidation ────────────────────────────────────────────────────
 
@@ -174,9 +86,7 @@ export class SvapnaConsolidation {
 	 * @param onProgress - Progress callback (phase, progress).
 	 * @returns The consolidated result with metrics for each phase.
 	 */
-	async run(
-		onProgress?: (phase: string, progress: number) => void,
-	): Promise<SvapnaResult> {
+	async run(onProgress?: (phase: string, progress: number) => void): Promise<SvapnaResult> {
 		const cycleStart = performance.now();
 		const report = onProgress ?? (() => {});
 
@@ -207,30 +117,11 @@ export class SvapnaConsolidation {
 
 			const result: SvapnaResult = {
 				phases: {
-					replay: {
-						turnsScored: replayResult.turnsScored,
-						highSurprise: replayResult.highSurprise,
-						durationMs: replayResult.durationMs,
-					},
-					recombine: {
-						associations: recombineResult.associations.length,
-						crossSessions: recombineResult.crossSessions,
-						durationMs: recombineResult.durationMs,
-					},
-					crystallize: {
-						vasanasCreated: crystallizeResult.vasanasCreated,
-						vasanasReinforced: crystallizeResult.vasanasReinforced,
-						durationMs: crystallizeResult.durationMs,
-					},
-					proceduralize: {
-						vidhisCreated: proceduralizeResult.vidhisCreated,
-						durationMs: proceduralizeResult.durationMs,
-					},
-					compress: {
-						tokensCompressed: compressResult.tokensCompressed,
-						compressionRatio: compressResult.compressionRatio,
-						durationMs: compressResult.durationMs,
-					},
+					replay: { turnsScored: replayResult.turnsScored, highSurprise: replayResult.highSurprise, durationMs: replayResult.durationMs },
+					recombine: { associations: recombineResult.associations.length, crossSessions: recombineResult.crossSessions, durationMs: recombineResult.durationMs },
+					crystallize: { vasanasCreated: crystallizeResult.vasanasCreated, vasanasReinforced: crystallizeResult.vasanasReinforced, durationMs: crystallizeResult.durationMs },
+					proceduralize: { vidhisCreated: proceduralizeResult.vidhisCreated, durationMs: proceduralizeResult.durationMs },
+					compress: { tokensCompressed: compressResult.tokensCompressed, compressionRatio: compressResult.compressionRatio, durationMs: compressResult.durationMs },
 				},
 				totalDurationMs,
 				cycleId: this.cycleId,
@@ -312,7 +203,6 @@ export class SvapnaConsolidation {
 		for (const turn of turns) {
 			const tokens = estimateTokens(turn.content);
 			totalOriginalTokens += tokens;
-
 			const calls = parseToolCalls(turn.tool_calls);
 			const pramana = this.classifyPramana(turn.content, calls);
 			const preservation = PRAMANA_PRESERVATION[pramana];
@@ -320,8 +210,7 @@ export class SvapnaConsolidation {
 			const recency = Math.max(0, 1 - age / maxAge);
 
 			chunks.push({
-				id: `turn-${turn.id}`, recency,
-				relevance: preservation,
+				id: `turn-${turn.id}`, recency, relevance: preservation,
 				importance: calls.some((tc) => tc.isError) ? 0.9 : preservation,
 				tokenCount: tokens,
 			});
@@ -331,7 +220,20 @@ export class SvapnaConsolidation {
 			return { tokensCompressed: totalOriginalTokens, compressionRatio: 1.0, durationMs: performance.now() - start };
 		}
 
-		// Build Pramana-weighted affinity matrix
+		// Build Pramana-weighted affinity matrix and compress
+		const { compressedTotal } = this.applyCompression(chunks, turns, totalOriginalTokens);
+		const compressionRatio = totalOriginalTokens > 0 ? compressedTotal / totalOriginalTokens : 1.0;
+		return { tokensCompressed: totalOriginalTokens, compressionRatio, durationMs: performance.now() - start };
+	}
+
+	// ─── Private Helpers ──────────────────────────────────────────────────
+
+	/** Build affinity matrix, run Sinkhorn, compute budgets, and write compressed content. */
+	private applyCompression(
+		chunks: SessionChunk[],
+		turns: Array<{ id: number; session_id: string; content: string; tool_calls: string | null; created_at: number }>,
+		totalOriginalTokens: number,
+	): { compressedTotal: number } {
 		const n = chunks.length;
 		const affinity: number[][] = [];
 
@@ -348,10 +250,8 @@ export class SvapnaConsolidation {
 
 		const { result: dsMatrix } = sinkhornAccelerated(affinity, { maxIterations: 150, epsilon: 1e-6 });
 
-		// Compute compression budgets from doubly stochastic matrix
 		let budgetTotal = 0;
 		const rawBudgets: number[] = new Array(n);
-
 		for (let i = 0; i < n; i++) {
 			let rowSum = 0;
 			for (let j = 0; j < n; j++) rowSum += dsMatrix[i][j];
@@ -362,10 +262,8 @@ export class SvapnaConsolidation {
 		const targetTokens = Math.floor(totalOriginalTokens * 0.7);
 		let compressedTotal = 0;
 
-		// Compute per-turn budgets and apply Memora-style harmonic compression
-		const updateStmt = agentDb.prepare(
-			`UPDATE turns SET content = ? WHERE id = ?`,
-		);
+		const agentDb = this.db.get("agent");
+		const updateStmt = agentDb.prepare(`UPDATE turns SET content = ? WHERE id = ?`);
 		const insertRuleStmt = agentDb.prepare(
 			`INSERT INTO consolidation_rules
 			 (project, category, rule_text, source_sessions, confidence, created_at, updated_at)
@@ -374,44 +272,27 @@ export class SvapnaConsolidation {
 
 		const compressBatch = agentDb.transaction(() => {
 			for (let i = 0; i < n; i++) {
-				const budget = budgetTotal > 0
-					? Math.floor((rawBudgets[i] / budgetTotal) * targetTokens)
-					: Math.floor(targetTokens / n);
+				const budget = budgetTotal > 0 ? Math.floor((rawBudgets[i] / budgetTotal) * targetTokens) : Math.floor(targetTokens / n);
 				const turnTokens = chunks[i].tokenCount;
 				const allocated = Math.min(budget, turnTokens);
 				compressedTotal += allocated;
 
-				// Only compress turns where budget < 60% of original tokens
 				if (turnTokens > 20 && allocated < turnTokens * 0.6) {
 					const turn = turns[i];
 					const gist = this.generateGist(turn.content, allocated);
 					const cueAnchors = this.extractCueAnchors(turn.content);
 
-					// Write compressed abstraction back to the turn
 					updateStmt.run(gist, turn.id);
+					insertRuleStmt.run(this.config.project, gist, JSON.stringify([turn.session_id]), chunks[i].relevance, Date.now(), Date.now());
 
-					// Store abstraction as a consolidation rule for auditability
-					insertRuleStmt.run(
-						this.config.project, gist,
-						JSON.stringify([turn.session_id]),
-						chunks[i].relevance, Date.now(), Date.now(),
-					);
-
-					// Store cue anchors as GraphRAG metadata for retrieval
 					if (cueAnchors.length > 0) {
 						try {
 							const graphDb = this.db.get("graph");
 							const upsertNode = graphDb.prepare(
-								`INSERT OR REPLACE INTO nodes (id, type, label, content, metadata)
-								 VALUES (?, 'concept', ?, ?, ?)`,
+								`INSERT OR REPLACE INTO nodes (id, type, label, content, metadata) VALUES (?, 'concept', ?, ?, ?)`,
 							);
 							for (const cue of cueAnchors) {
-								upsertNode.run(
-									`cue-${turn.id}-${cue.slice(0, 20)}`,
-									cue,
-									gist.slice(0, 200),
-									JSON.stringify({ source: `turn:${turn.id}`, cycle: this.cycleId }),
-								);
+								upsertNode.run(`cue-${turn.id}-${cue.slice(0, 20)}`, cue, gist.slice(0, 200), JSON.stringify({ source: `turn:${turn.id}`, cycle: this.cycleId }));
 							}
 						} catch {
 							// GraphRAG cue anchors are best-effort
@@ -421,85 +302,50 @@ export class SvapnaConsolidation {
 			}
 		});
 
-		try {
-			compressBatch();
-		} catch {
-			// Compression write-back is best-effort — don't fail the cycle
-		}
-
-		const compressionRatio = totalOriginalTokens > 0 ? compressedTotal / totalOriginalTokens : 1.0;
-
-		return { tokensCompressed: totalOriginalTokens, compressionRatio, durationMs: performance.now() - start };
+		try { compressBatch(); } catch { /* Compression write-back is best-effort */ }
+		return { compressedTotal };
 	}
 
-	// ── Private Helpers ──────────────────────────────────────────────────
-
-	/**
-	 * Generate a compressed gist (abstraction) of turn content.
-	 * Uses extractive summarization: keeps the first and last sentences,
-	 * plus any sentences containing tool calls or decisions.
-	 */
+	/** Generate a compressed gist (abstraction) of turn content. */
 	private generateGist(content: string, tokenBudget: number): string {
 		const sentences = content.split(/(?<=[.!?\n])\s+/).filter((s) => s.trim().length > 0);
 		if (sentences.length <= 2) return content;
 
-		// Always keep first and last sentence as framing
 		const kept: string[] = [sentences[0]];
-
-		// Keep sentences with high signal (tool calls, decisions, errors)
 		const signalPattern = /\b(error|decided|created|modified|fixed|found|returned|result|output)\b/i;
 		for (let i = 1; i < sentences.length - 1; i++) {
-			if (signalPattern.test(sentences[i])) {
-				kept.push(sentences[i]);
-			}
+			if (signalPattern.test(sentences[i])) kept.push(sentences[i]);
 		}
-
 		kept.push(sentences[sentences.length - 1]);
 
-		// Truncate to budget
 		let gist = kept.join(" ");
 		const words = gist.split(/\s+/);
-		const wordBudget = Math.max(5, Math.floor(tokenBudget * 0.75)); // ~0.75 words per token
-		if (words.length > wordBudget) {
-			gist = words.slice(0, wordBudget).join(" ") + "…";
-		}
+		const wordBudget = Math.max(5, Math.floor(tokenBudget * 0.75));
+		if (words.length > wordBudget) gist = words.slice(0, wordBudget).join(" ") + "...";
 
 		return `[compressed] ${gist}`;
 	}
 
-	/**
-	 * Extract cue anchors (trigger phrases) from turn content.
-	 * These serve as retrieval hooks in GraphRAG for finding compressed turns.
-	 */
+	/** Extract cue anchors (trigger phrases) from turn content. */
 	private extractCueAnchors(content: string): string[] {
 		const anchors: string[] = [];
 		const lower = content.toLowerCase();
 
-		// Extract verb-object phrases as cue anchors
 		const voPattern = /\b(create|fix|refactor|implement|add|remove|update|debug|test|deploy|configure)\s+(\w+(?:\s+\w+)?)\b/gi;
 		let match: RegExpExecArray | null;
-		while ((match = voPattern.exec(lower)) !== null) {
-			anchors.push(match[0].trim());
-		}
+		while ((match = voPattern.exec(lower)) !== null) anchors.push(match[0].trim());
 
-		// Extract file paths as cue anchors
 		const pathPattern = /[\w\-]+\.(?:ts|js|py|rs|go|java|tsx|jsx|json|yaml|toml)\b/gi;
-		while ((match = pathPattern.exec(content)) !== null) {
-			anchors.push(match[0]);
-		}
+		while ((match = pathPattern.exec(content)) !== null) anchors.push(match[0]);
 
-		// Deduplicate and limit
 		return [...new Set(anchors)].slice(0, 5);
 	}
 
 	/** Classify epistemological source (Pramana) of a turn's content. */
 	private classifyPramana(content: string, calls: SessionToolCall[]): PramanaType {
-		if (calls.length > 0 && calls.some((tc) => !tc.isError && tc.result.length > 0)) {
-			return "pratyaksha";
-		}
+		if (calls.length > 0 && calls.some((tc) => !tc.isError && tc.result.length > 0)) return "pratyaksha";
 
 		const lower = content.toLowerCase();
-
 		if (/\b(?:maybe|possibly|might|perhaps|could be|not sure|unsure)\b/.test(lower)) return "anupalabdhi";
 		if (/\b(?:must be|likely|probably|implies|therefore)\b/.test(lower)) return "arthapatti";
 		if (/\b(?:similar to|like|analogous|compared to|just as)\b/.test(lower)) return "upamana";
@@ -509,10 +355,7 @@ export class SvapnaConsolidation {
 	}
 
 	/** Write an entry to the consolidation_log table for audit trail. */
-	private logCycle(
-		status: ConsolidationLogEntry["status"],
-		result?: SvapnaResult,
-	): void {
+	private logCycle(status: ConsolidationLogEntry["status"], result?: SvapnaResult): void {
 		const agentDb = this.db.get("agent");
 
 		agentDb

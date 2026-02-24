@@ -1,32 +1,11 @@
 /**
- * Pratiksha (प्रतीक्षा — Waiting) — Filesystem Staging Manager for Skills.
+ * Pratiksha — Filesystem Staging Manager for Skills.
  *
  * Manages the disk-based staging area where quarantined skills wait for
  * human review. Skills are staged as human-readable files (Markdown + JSON)
  * that can be inspected with any editor before promotion.
  *
- * ## Directory Structure
- *
- * ```
- * ~/.chitragupta/skills/
- *   staging/<quarantine-id>/
- *     manifest.json          # QuarantinedSkill + metadata
- *     skill.md               # Original skill content
- *     scan-report.json       # SurakshaScanResult
- *   approved/<skill-name>/
- *     skill.md + manifest.json
- *   archived/<quarantine-id>/
- *     manifest.json + skill.md + rejection-reason.txt
- *   evolution.json           # Serialized SkillEvolutionState
- * ```
- *
- * ## Security
- *
- * - Directories: 0o700 (owner-only rwx)
- * - Files: 0o600 (owner-only rw)
- * - Quarantine IDs validated: ^[a-z0-9_]+$
- * - fs.lstat (never follow symlinks)
- * - Path traversal prevention on all inputs
+ * Types, constants, and filesystem utilities are in `pratiksha-types.ts`.
  *
  * @packageDocumentation
  */
@@ -37,104 +16,33 @@ import { getChitraguptaHome } from "@chitragupta/core";
 import type { QuarantinedSkill } from "./skill-sandbox.js";
 import type { SurakshaScanResult } from "./suraksha.js";
 import type { SkillEvolutionState } from "./skill-evolution.js";
+import {
+	CEILING_EXPIRATION_MS,
+	DEFAULT_EXPIRATION_MS,
+	assertExists,
+	ensureDir,
+	readManifest,
+	sanitizeSkillName,
+	validateId,
+	writeSecure,
+} from "./pratiksha-types.js";
+import type { DiskManifest } from "./pratiksha-types.js";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-/** Summary of a staged (pending review) skill. */
-export interface StagedSkillSummary {
-	/** Quarantine ID. */
-	quarantineId: string;
-	/** Skill name. */
-	skillName: string;
-	/** Why the skill is in quarantine. */
-	reason: string;
-	/** Current status. */
-	status: string;
-	/** Health score from sandbox validation. */
-	healthScore: number;
-	/** Risk score from Suraksha scan (if available). */
-	riskScore?: number;
-	/** Source of the skill. */
-	source?: string;
-	/** When the skill was staged (ISO timestamp). */
-	stagedAt: string;
-	/** Absolute path to the staging directory. */
-	path: string;
-}
-
-/** Summary of an approved skill. */
-export interface ApprovedSkillSummary {
-	/** Skill name. */
-	skillName: string;
-	/** When the skill was approved (ISO timestamp). */
-	approvedAt: string;
-	/** Absolute path to the approved directory. */
-	path: string;
-}
-
-/** Summary of an archived (rejected) skill. */
-export interface ArchivedSkillSummary {
-	/** Quarantine ID. */
-	quarantineId: string;
-	/** Skill name. */
-	skillName: string;
-	/** Why the skill was rejected. */
-	rejectionReason: string;
-	/** When the skill was archived (ISO timestamp). */
-	archivedAt: string;
-	/** Absolute path to the archive directory. */
-	path: string;
-}
-
-/** Configuration for PratikshaManager. */
-export interface PratikshaConfig {
-	/** Base directory for skills. Default: ~/.chitragupta/skills */
-	baseDir?: string;
-	/** Auto-expire staged skills older than this (ms). Default: 604800000 (7 days), ceiling: 2592000000 (30 days). */
-	expirationMs?: number;
-}
-
-// ─── Constants ──────────────────────────────────────────────────────────────
-
-const DIR_PERMS = 0o700;
-const FILE_PERMS = 0o600;
-
-/** Valid quarantine ID pattern: lowercase alphanumeric + underscore. */
-const VALID_ID_RE = /^[a-z0-9_]+$/;
-
-/** Valid skill name pattern: lowercase alphanumeric + hyphens. */
-const VALID_NAME_RE = /^[a-z][a-z0-9-]*$/;
-
-/** Ceiling for expiration: 30 days. */
-const CEILING_EXPIRATION_MS = 30 * 24 * 60 * 60 * 1000;
-
-/** Default expiration: 7 days. */
-const DEFAULT_EXPIRATION_MS = 7 * 24 * 60 * 60 * 1000;
-
-// ─── Manifest on disk ───────────────────────────────────────────────────────
-
-/** What gets persisted as manifest.json in staging/approved/archived dirs. */
-interface DiskManifest {
-	quarantineId: string;
-	skillName: string;
-	reason: string;
-	status: string;
-	healthScore: number;
-	riskScore?: number;
-	source?: string;
-	stagedAt: string;
-	approvedAt?: string;
-	archivedAt?: string;
-	rejectionReason?: string;
-	skill: QuarantinedSkill["skill"];
-}
+// Re-export for backward compatibility
+export type {
+	StagedSkillSummary,
+	ApprovedSkillSummary,
+	ArchivedSkillSummary,
+	PratikshaConfig,
+} from "./pratiksha-types.js";
+import type { PratikshaConfig } from "./pratiksha-types.js";
 
 // ─── PratikshaManager ───────────────────────────────────────────────────────
 
 /**
- * Pratiksha (प्रतीक्षा) — Filesystem staging manager for quarantined skills.
+ * Pratiksha — Filesystem staging manager for quarantined skills.
  *
- * Skills go through: staging → (approve → approved) or (reject → archived).
+ * Skills go through: staging -> (approve -> approved) or (reject -> archived).
  * All operations are owner-only permissions, symlink-safe, and path-traversal-resistant.
  *
  * @example
@@ -142,9 +50,9 @@ interface DiskManifest {
  * const mgr = new PratikshaManager();
  * const id = await mgr.stage(quarantinedSkill, scanResult);
  * const pending = await mgr.listStaged();
- * await mgr.promote(id);    // → approved/
+ * await mgr.promote(id);    // -> approved/
  * // or
- * await mgr.reject(id, "Contains network calls");  // → archived/
+ * await mgr.reject(id, "Contains network calls");  // -> archived/
  * ```
  */
 export class PratikshaManager {
@@ -172,46 +80,26 @@ export class PratikshaManager {
 	 * @param scanResult - Optional Suraksha scan result.
 	 * @returns The quarantine ID used for the staging directory.
 	 */
-	async stage(
-		entry: QuarantinedSkill,
-		scanResult?: SurakshaScanResult,
-	): Promise<string> {
+	async stage(entry: QuarantinedSkill, scanResult?: SurakshaScanResult): Promise<string> {
 		validateId(entry.id);
-
 		const skillDir = path.join(this.stagingDir, entry.id);
 		await ensureDir(skillDir);
 
-		// Write manifest.json
 		const manifest: DiskManifest = {
-			quarantineId: entry.id,
-			skillName: entry.skill.name,
-			reason: entry.reason,
-			status: entry.status,
-			healthScore: entry.healthScore,
-			riskScore: scanResult?.riskScore,
-			source: entry.reason,
-			stagedAt: new Date().toISOString(),
+			quarantineId: entry.id, skillName: entry.skill.name,
+			reason: entry.reason, status: entry.status,
+			healthScore: entry.healthScore, riskScore: scanResult?.riskScore,
+			source: entry.reason, stagedAt: new Date().toISOString(),
 			skill: entry.skill,
 		};
-		await writeSecure(
-			path.join(skillDir, "manifest.json"),
-			JSON.stringify(manifest, null, "\t"),
-		);
+		await writeSecure(path.join(skillDir, "manifest.json"), JSON.stringify(manifest, null, "\t"));
 
-		// Write skill.md (original content)
 		if (entry.skill.content) {
-			await writeSecure(
-				path.join(skillDir, "skill.md"),
-				entry.skill.content,
-			);
+			await writeSecure(path.join(skillDir, "skill.md"), entry.skill.content);
 		}
 
-		// Write scan-report.json (if available)
 		if (scanResult) {
-			await writeSecure(
-				path.join(skillDir, "scan-report.json"),
-				JSON.stringify(scanResult, null, "\t"),
-			);
+			await writeSecure(path.join(skillDir, "scan-report.json"), JSON.stringify(scanResult, null, "\t"));
 		}
 
 		return entry.id;
@@ -220,25 +108,19 @@ export class PratikshaManager {
 	/**
 	 * Promote a staged skill to the approved directory.
 	 *
-	 * Moves the skill from staging/ to approved/<skill-name>/.
-	 *
 	 * @param quarantineId - The quarantine ID to promote.
 	 * @returns Path to the approved skill directory.
 	 */
 	async promote(quarantineId: string): Promise<string> {
 		validateId(quarantineId);
-
 		const stagingPath = path.join(this.stagingDir, quarantineId);
 		await assertExists(stagingPath);
 
 		const manifest = await readManifest(stagingPath);
 		const skillName = sanitizeSkillName(manifest.skillName);
 		const approvedPath = path.join(this.approvedDir, skillName);
-
-		// Ensure approved dir exists, overwrite if re-approving
 		await ensureDir(approvedPath);
 
-		// Copy files from staging to approved
 		const entries = await fs.promises.readdir(stagingPath);
 		for (const entry of entries) {
 			const src = path.join(stagingPath, entry);
@@ -250,15 +132,9 @@ export class PratikshaManager {
 			}
 		}
 
-		// Update manifest with approval timestamp
 		manifest.status = "approved";
 		manifest.approvedAt = new Date().toISOString();
-		await writeSecure(
-			path.join(approvedPath, "manifest.json"),
-			JSON.stringify(manifest, null, "\t"),
-		);
-
-		// Remove staging directory
+		await writeSecure(path.join(approvedPath, "manifest.json"), JSON.stringify(manifest, null, "\t"));
 		await fs.promises.rm(stagingPath, { recursive: true, force: true });
 
 		return approvedPath;
@@ -272,14 +148,12 @@ export class PratikshaManager {
 	 */
 	async reject(quarantineId: string, reason: string): Promise<void> {
 		validateId(quarantineId);
-
 		const stagingPath = path.join(this.stagingDir, quarantineId);
 		await assertExists(stagingPath);
 
 		const archivedPath = path.join(this.archivedDir, quarantineId);
 		await ensureDir(archivedPath);
 
-		// Copy files from staging to archived
 		const entries = await fs.promises.readdir(stagingPath);
 		for (const entry of entries) {
 			const src = path.join(stagingPath, entry);
@@ -291,23 +165,12 @@ export class PratikshaManager {
 			}
 		}
 
-		// Update manifest with rejection info
 		const manifest = await readManifest(stagingPath);
 		manifest.status = "rejected";
 		manifest.archivedAt = new Date().toISOString();
 		manifest.rejectionReason = reason;
-		await writeSecure(
-			path.join(archivedPath, "manifest.json"),
-			JSON.stringify(manifest, null, "\t"),
-		);
-
-		// Write rejection reason as separate readable file
-		await writeSecure(
-			path.join(archivedPath, "rejection-reason.txt"),
-			reason,
-		);
-
-		// Remove staging directory
+		await writeSecure(path.join(archivedPath, "manifest.json"), JSON.stringify(manifest, null, "\t"));
+		await writeSecure(path.join(archivedPath, "rejection-reason.txt"), reason);
 		await fs.promises.rm(stagingPath, { recursive: true, force: true });
 	}
 
@@ -323,27 +186,18 @@ export class PratikshaManager {
 		await fs.promises.rm(stagingPath, { recursive: true, force: true });
 	}
 
-	/**
-	 * List all skills currently in staging (pending review).
-	 */
-	async listStaged(): Promise<StagedSkillSummary[]> {
+	/** List all skills currently in staging (pending review). */
+	async listStaged(): Promise<import("./pratiksha-types.js").StagedSkillSummary[]> {
 		return this.listDir(this.stagingDir, (manifest, dirPath) => ({
-			quarantineId: manifest.quarantineId,
-			skillName: manifest.skillName,
-			reason: manifest.reason,
-			status: manifest.status,
-			healthScore: manifest.healthScore,
-			riskScore: manifest.riskScore,
-			source: manifest.source,
-			stagedAt: manifest.stagedAt,
-			path: dirPath,
+			quarantineId: manifest.quarantineId, skillName: manifest.skillName,
+			reason: manifest.reason, status: manifest.status,
+			healthScore: manifest.healthScore, riskScore: manifest.riskScore,
+			source: manifest.source, stagedAt: manifest.stagedAt, path: dirPath,
 		}));
 	}
 
-	/**
-	 * List all approved skills.
-	 */
-	async listApproved(): Promise<ApprovedSkillSummary[]> {
+	/** List all approved skills. */
+	async listApproved(): Promise<import("./pratiksha-types.js").ApprovedSkillSummary[]> {
 		return this.listDir(this.approvedDir, (manifest, dirPath) => ({
 			skillName: manifest.skillName,
 			approvedAt: manifest.approvedAt ?? manifest.stagedAt,
@@ -351,22 +205,16 @@ export class PratikshaManager {
 		}));
 	}
 
-	/**
-	 * List all archived (rejected) skills.
-	 */
-	async listArchived(): Promise<ArchivedSkillSummary[]> {
+	/** List all archived (rejected) skills. */
+	async listArchived(): Promise<import("./pratiksha-types.js").ArchivedSkillSummary[]> {
 		return this.listDir(this.archivedDir, (manifest, dirPath) => ({
-			quarantineId: manifest.quarantineId,
-			skillName: manifest.skillName,
+			quarantineId: manifest.quarantineId, skillName: manifest.skillName,
 			rejectionReason: manifest.rejectionReason ?? "Unknown",
-			archivedAt: manifest.archivedAt ?? manifest.stagedAt,
-			path: dirPath,
+			archivedAt: manifest.archivedAt ?? manifest.stagedAt, path: dirPath,
 		}));
 	}
 
-	/**
-	 * Clean expired staged skills. Returns count of cleaned entries.
-	 */
+	/** Clean expired staged skills. Returns count of cleaned entries. */
 	async cleanExpired(): Promise<number> {
 		const now = Date.now();
 		let count = 0;
@@ -383,42 +231,24 @@ export class PratikshaManager {
 						const manifest = JSON.parse(raw) as DiskManifest;
 						const stagedTime = new Date(manifest.stagedAt).getTime();
 						if (now - stagedTime > this.expirationMs) {
-							await fs.promises.rm(
-								path.join(this.stagingDir, entry.name),
-								{ recursive: true, force: true },
-							);
+							await fs.promises.rm(path.join(this.stagingDir, entry.name), { recursive: true, force: true });
 							count++;
 						}
 					}
-				} catch {
-					// Skip unreadable entries
-				}
+				} catch { /* Skip unreadable entries */ }
 			}
-		} catch {
-			// Staging dir may not exist yet
-		}
+		} catch { /* Staging dir may not exist yet */ }
 
 		return count;
 	}
 
-	/**
-	 * Save skill evolution state to disk.
-	 *
-	 * @param state - The serialized SkillEvolutionState.
-	 */
+	/** Save skill evolution state to disk. */
 	async saveEvolutionState(state: SkillEvolutionState): Promise<void> {
 		await ensureDir(this.baseDir);
-		await writeSecure(
-			path.join(this.baseDir, "evolution.json"),
-			JSON.stringify(state, null, "\t"),
-		);
+		await writeSecure(path.join(this.baseDir, "evolution.json"), JSON.stringify(state, null, "\t"));
 	}
 
-	/**
-	 * Load skill evolution state from disk.
-	 *
-	 * @returns The deserialized state, or null if not found.
-	 */
+	/** Load skill evolution state from disk. */
 	async loadEvolutionState(): Promise<SkillEvolutionState | null> {
 		const filePath = path.join(this.baseDir, "evolution.json");
 		try {
@@ -431,31 +261,20 @@ export class PratikshaManager {
 		}
 	}
 
-	/**
-	 * Get the base directory path for skills.
-	 */
-	getBaseDir(): string {
-		return this.baseDir;
-	}
+	/** Get the base directory path for skills. */
+	getBaseDir(): string { return this.baseDir; }
 
-	/**
-	 * Get the staging directory path.
-	 */
-	getStagingDir(): string {
-		return this.stagingDir;
-	}
+	/** Get the staging directory path. */
+	getStagingDir(): string { return this.stagingDir; }
 
 	// ─── Private Helpers ────────────────────────────────────────────────
 
-	/**
-	 * Generic directory lister: reads subdirs, parses manifests, maps to summaries.
-	 */
+	/** Generic directory lister: reads subdirs, parses manifests, maps to summaries. */
 	private async listDir<T>(
 		dirPath: string,
 		mapper: (manifest: DiskManifest, entryPath: string) => T,
 	): Promise<T[]> {
 		const results: T[] = [];
-
 		try {
 			const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
 			for (const entry of entries) {
@@ -464,91 +283,9 @@ export class PratikshaManager {
 					const entryPath = path.join(dirPath, entry.name);
 					const manifest = await readManifest(entryPath);
 					results.push(mapper(manifest, entryPath));
-				} catch {
-					// Skip unreadable entries
-				}
+				} catch { /* Skip unreadable entries */ }
 			}
-		} catch {
-			// Directory may not exist yet — return empty
-		}
-
+		} catch { /* Directory may not exist yet */ }
 		return results;
 	}
-}
-
-// ─── Secure File Operations ─────────────────────────────────────────────────
-
-/**
- * Create a directory with owner-only permissions.
- * Creates parent directories as needed.
- */
-async function ensureDir(dirPath: string): Promise<void> {
-	await fs.promises.mkdir(dirPath, { recursive: true, mode: DIR_PERMS });
-}
-
-/**
- * Write a file with owner-only permissions.
- * Never follows symlinks — uses lstat to verify first.
- */
-async function writeSecure(filePath: string, content: string): Promise<void> {
-	// Prevent symlink attacks: if file exists and is a symlink, refuse
-	try {
-		const stat = await fs.promises.lstat(filePath);
-		if (stat.isSymbolicLink()) {
-			throw new Error(`Refusing to write to symlink: ${filePath}`);
-		}
-	} catch (err) {
-		// ENOENT is expected (file doesn't exist yet)
-		if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-			// Re-throw the symlink error
-			if (err instanceof Error && err.message.startsWith("Refusing")) throw err;
-		}
-	}
-
-	await fs.promises.writeFile(filePath, content, { mode: FILE_PERMS });
-}
-
-/**
- * Read and parse a manifest.json from a skill directory.
- */
-async function readManifest(dirPath: string): Promise<DiskManifest> {
-	const manifestPath = path.join(dirPath, "manifest.json");
-	const raw = await fs.promises.readFile(manifestPath, "utf-8");
-	return JSON.parse(raw) as DiskManifest;
-}
-
-/**
- * Assert that a path exists and is a directory (not a symlink).
- */
-async function assertExists(dirPath: string): Promise<void> {
-	const stat = await fs.promises.lstat(dirPath);
-	if (!stat.isDirectory()) {
-		throw new Error(`Not a directory: ${dirPath}`);
-	}
-}
-
-// ─── Validation ─────────────────────────────────────────────────────────────
-
-/**
- * Validate a quarantine ID to prevent path traversal.
- * Only allows lowercase alphanumeric and underscores.
- */
-function validateId(id: string): void {
-	if (!id || !VALID_ID_RE.test(id)) {
-		throw new Error(
-			`Invalid quarantine ID: "${id}". Must match /^[a-z0-9_]+$/`,
-		);
-	}
-}
-
-/**
- * Sanitize a skill name for use as a directory name.
- * Falls back to the original if it's already valid.
- */
-function sanitizeSkillName(name: string): string {
-	const sanitized = name.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "");
-	if (!sanitized || !VALID_NAME_RE.test(sanitized)) {
-		throw new Error(`Invalid skill name: "${name}". Cannot be sanitized to a valid directory name.`);
-	}
-	return sanitized;
 }
