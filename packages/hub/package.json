@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
   "description": "Preact SPA dashboard for the Chitragupta AI agent platform — provides real-time session monitoring, budget tracking, cognitive system visualization, and device pairing",
   "exports": {
     ".": "./src/main.tsx",
