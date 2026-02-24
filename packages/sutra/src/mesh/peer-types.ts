@@ -118,6 +118,8 @@ export interface PeerNetworkConfig {
 	meshSecret?: string;
 	/** Max nonce age and replay window for auth verification (ms). Default: 120_000 */
 	authNonceWindowMs?: number;
+	/** Max size of the seen-auth-nonces map. Default: 10_000 */
+	maxSeenAuthNonces?: number;
 	/** Interval between ping frames (ms). Default: 10_000 */
 	pingIntervalMs?: number;
 	/** Mark peer dead after this many missed pings. Default: 3 */
@@ -126,6 +128,8 @@ export interface PeerNetworkConfig {
 	reconnectBaseMs?: number;
 	/** Reconnect backoff max (ms). Default: 60_000 */
 	reconnectMaxMs?: number;
+	/** Max reconnect attempts before giving up on a peer. Default: 20 */
+	maxReconnectAttempts?: number;
 	/** Max number of peer connections. Default: 50 */
 	maxPeers?: number;
 	/** Enable mDNS discovery on local network. Default: false */
@@ -158,6 +162,8 @@ export interface PeerNetworkConfig {
 	enablePeerExchange?: boolean;
 	/** Max discovered peers to auto-connect. Default: 10 */
 	maxDiscoveredPeers?: number;
+	/** Max known endpoints tracked for peer exchange. Default: 1_000 */
+	maxKnownEndpoints?: number;
 	/** Interval between peer exchange rounds (ms). Default: 30_000 */
 	peerExchangeIntervalMs?: number;
 
@@ -182,8 +188,11 @@ export const PEER_NETWORK_DEFAULTS = {
 	maxMissedPings: 3,
 	reconnectBaseMs: 1_000,
 	reconnectMaxMs: 60_000,
+	maxReconnectAttempts: 20,
 	maxPeers: 50,
 	gossipIntervalMs: 5_000,
+	maxSeenAuthNonces: 10_000,
+	maxKnownEndpoints: 1_000,
 } as const;
 
 // ─── Events ─────────────────────────────────────────────────────────────────
