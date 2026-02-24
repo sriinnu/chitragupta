@@ -316,7 +316,9 @@ describe("Agent Tree HTTP API", () => {
 		it("returns flat list of all agents", async () => {
 			const { status, body } = await req(port, "/api/agents");
 			expect(status).toBe(200);
-			const agents = body.agents as AgentInfo[];
+			expect(body.ok).toBe(true);
+			const data = body.data as Record<string, unknown>;
+			const agents = data.agents as AgentInfo[];
 			expect(agents).toHaveLength(3);
 			expect(agents.map((a) => a.id)).toContain("root-42");
 			expect(agents.map((a) => a.id)).toContain("child-1");
@@ -325,7 +327,9 @@ describe("Agent Tree HTTP API", () => {
 		it("filters by status query param", async () => {
 			const { status, body } = await req(port, "/api/agents?status=running");
 			expect(status).toBe(200);
-			const agents = body.agents as AgentInfo[];
+			expect(body.ok).toBe(true);
+			const data = body.data as Record<string, unknown>;
+			const agents = data.agents as AgentInfo[];
 			expect(agents).toHaveLength(1);
 			expect(agents[0].id).toBe("child-1");
 		});
@@ -333,7 +337,9 @@ describe("Agent Tree HTTP API", () => {
 		it("returns empty array for unmatched status filter", async () => {
 			const { status, body } = await req(port, "/api/agents?status=aborted");
 			expect(status).toBe(200);
-			expect(body.agents).toEqual([]);
+			expect(body.ok).toBe(true);
+			const data = body.data as Record<string, unknown>;
+			expect(data.agents).toEqual([]);
 		});
 	});
 
@@ -515,8 +521,10 @@ describe("Agent Tree HTTP API", () => {
 		});
 
 		it("GET /api/agents returns 503", async () => {
-			const { status } = await req(noAgentPort, "/api/agents");
+			const { status, body } = await req(noAgentPort, "/api/agents");
 			expect(status).toBe(503);
+			expect(body.ok).toBe(false);
+			expect(body.error).toContain("Agent not initialized");
 		});
 
 		it("GET /api/agents/tree returns 503", async () => {
