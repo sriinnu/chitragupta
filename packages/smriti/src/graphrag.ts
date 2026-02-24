@@ -98,9 +98,7 @@ export class GraphRAGEngine {
         method: "GET", signal: AbortSignal.timeout(3000),
       });
       this.ollamaAvailable = response.ok;
-    } catch {
-      this.ollamaAvailable = false;
-    }
+    } catch { /* intentional: Ollama network check failure means unavailable */ this.ollamaAvailable = false; }
     return this.ollamaAvailable;
   }
 
@@ -129,7 +127,8 @@ export class GraphRAGEngine {
     if (isAvailable) {
       try {
         baseEntities = await llmExtractEntities(text, this.config.endpoint, this.config.generationModel);
-      } catch {
+      } catch (err: unknown) {
+        process.stderr.write(`[smriti:graphrag] LLM entity extraction failed, falling back to keywords: ${err instanceof Error ? err.message : String(err)}\n`);
         baseEntities = keywordExtractEntities(text);
       }
     } else {
@@ -157,8 +156,9 @@ export class GraphRAGEngine {
           seen.add(normalized);
         }
       }
-    } catch {
+    } catch (err: unknown) {
       // NER extraction failed — continue with base entities only
+      process.stderr.write(`[smriti:graphrag] NER extraction failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
     return baseEntities;
   }
@@ -321,7 +321,7 @@ export class GraphRAGEngine {
     try {
       const db = this.getGraphDbHandle();
       if (db) { saveToSqlite(db, this.graph, this.pageRankScores, this.embeddingCache); return; }
-    } catch { /* SQLite write failed — fall through to JSON */ }
+    } catch (err: unknown) { process.stderr.write(`[smriti:graphrag] SQLite save failed, falling back to JSON: ${err instanceof Error ? err.message : String(err)}\n`); }
     saveToJson(this.graph, this.pageRankScores, this.embeddingCache);
   }
 
@@ -340,12 +340,12 @@ export class GraphRAGEngine {
           this.graph = jsonData.graph;
           this.pageRankScores = jsonData.pageRankScores;
           if (this.graph.nodes.length > 0) {
-            try { migrateInMemoryToSqlite(db, this.graph, this.pageRankScores); } catch { /* non-fatal */ }
+            try { migrateInMemoryToSqlite(db, this.graph, this.pageRankScores); } catch (err: unknown) { process.stderr.write(`[smriti:graphrag] in-memory to SQLite migration failed: ${err instanceof Error ? err.message : String(err)}\n`); }
           }
         }
         loaded = true;
       }
-    } catch { /* SQLite unavailable */ }
+    } catch (err: unknown) { process.stderr.write(`[smriti:graphrag] SQLite load failed: ${err instanceof Error ? err.message : String(err)}\n`); }
 
     if (!loaded) {
       const jsonData = loadFromJson();
@@ -373,7 +373,7 @@ export class GraphRAGEngine {
     try {
       const db = this.getGraphDbHandle();
       if (db) db.exec("DELETE FROM pagerank; DELETE FROM edges; DELETE FROM nodes;");
-    } catch { /* non-fatal */ }
+    } catch (err: unknown) { process.stderr.write(`[smriti:graphrag] clear DB failed: ${err instanceof Error ? err.message : String(err)}\n`); }
     this.saveToDisk();
   }
 

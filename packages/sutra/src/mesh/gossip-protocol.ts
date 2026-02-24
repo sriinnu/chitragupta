@@ -70,7 +70,7 @@ export class GossipProtocol {
 
 	private emit(event: GossipEvent): void {
 		for (const h of this.handlers) {
-			try { h(event); } catch { /* observer failures are non-fatal */ }
+			try { h(event); } catch (err: unknown) { process.stderr.write(`[mesh:gossip] observer error: ${err instanceof Error ? err.message : String(err)}\n`); }
 		}
 	}
 

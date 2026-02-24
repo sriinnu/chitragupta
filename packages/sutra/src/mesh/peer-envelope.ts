@@ -32,9 +32,7 @@ export function deserializePeerMessage(raw: string): PeerMessage | null {
 		const parsed = JSON.parse(raw) as Record<string, unknown>;
 		if (!parsed || typeof parsed.type !== "string") return null;
 		return parsed as unknown as PeerMessage;
-	} catch {
-		return null;
-	}
+	} catch { /* intentional: malformed JSON returns null, caller handles it */ return null; }
 }
 
 // ─── Envelope Validation ────────────────────────────────────────────────────

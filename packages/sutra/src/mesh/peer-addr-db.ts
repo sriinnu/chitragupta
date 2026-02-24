@@ -264,8 +264,9 @@ export class PeerAddrDb {
 					this.newAddrs.set(addr.nodeId, addr);
 				}
 			}
-		} catch {
+		} catch (err: unknown) {
 			// File doesn't exist or is corrupt — start fresh
+			process.stderr.write(`[mesh:peer-addr-db] load failed (starting fresh): ${err instanceof Error ? err.message : String(err)}\n`);
 		}
 	}
 
@@ -329,9 +330,7 @@ export class PeerAddrDb {
 			const parts = host.split(".");
 			if (parts.length === 4) return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
 			return host;
-		} catch {
-			return endpoint;
-		}
+		} catch { /* intentional: non-URL endpoints use raw string as subnet key */ return endpoint; }
 	}
 
 	/** Count entries in "new" table from a given subnet. */
