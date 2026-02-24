@@ -1,6 +1,6 @@
 // @chitragupta/smriti — Memory & Sessions
 
-// Database layer (SQLite)
+/** SQLite database manager with schema initialization for agents, graphs, and vectors. */
 export { DatabaseManager, initAllSchemas, initAgentSchema, initGraphSchema, initVectorsSchema } from "./db/index.js";
 export type { DatabaseName } from "./db/index.js";
 
@@ -38,11 +38,12 @@ export type {
 	ConsolidationLogEntry,
 } from "./types.js";
 
-// Markdown parser / writer
+/** Parse session markdown files into structured SessionMeta + turns. */
 export { parseSessionMarkdown } from "./markdown-parser.js";
+/** Serialize sessions and turns back to markdown format. */
 export { writeSessionMarkdown, writeTurnMarkdown } from "./markdown-writer.js";
 
-// Session store
+/** CRUD operations for session lifecycle — create, save, load, list, delete, and migrate. */
 export {
 	createSession,
 	saveSession,
@@ -61,7 +62,7 @@ export {
 	getMaxTurnNumber,
 } from "./session-store.js";
 
-// Memory store
+/** Key-value memory store for scoped persistent memory (project, global, user). */
 export {
 	getMemory,
 	updateMemory,
@@ -70,14 +71,14 @@ export {
 	listMemoryScopes,
 } from "./memory-store.js";
 
-// Search
+/** FTS5-backed full-text search across sessions and memory scopes. */
 export { searchSessions, searchMemory } from "./search.js";
 
-// GraphRAG engine
+/** Knowledge graph engine with entity extraction, PageRank scoring, and community detection. */
 export { GraphRAGEngine, migrateGraphJson } from "./graphrag.js";
 export type { GraphRAGConfig } from "./graphrag.js";
 
-// Session export/import
+/** Import/export sessions as JSON or markdown for portability. */
 export {
 	exportSessionToJson,
 	exportSessionToMarkdown,
@@ -86,7 +87,7 @@ export {
 } from "./session-export.js";
 export type { ExportedSession, ExportedMessage, ExportedToolCall } from "./session-export.js";
 
-// Cross-machine sync (day files + memory files)
+/** Cross-machine snapshot sync for day files and memory across devices. */
 export {
 	createCrossMachineSnapshot,
 	writeCrossMachineSnapshot,
@@ -106,10 +107,10 @@ export type {
 	CrossMachineSyncStatus,
 } from "./cross-machine-sync.js";
 
-// Branching
+/** Branch sessions into tree structures for parallel conversation exploration. */
 export { branchSession, getSessionTree } from "./branch.js";
 
-// Streams (Smriti v2)
+/** Four-stream memory architecture (episodic, semantic, procedural, working) with token budgets. */
 export {
 	StreamManager,
 	STREAM_CONFIGS,
@@ -118,7 +119,7 @@ export {
 	estimateTokens,
 } from "./streams.js";
 
-// Sinkhorn-Knopp (doubly stochastic mixing matrix)
+/** Sinkhorn-Knopp algorithm for doubly-stochastic token budget allocation. */
 export {
 	sinkhornKnopp,
 	buildAffinityMatrix,
@@ -126,7 +127,7 @@ export {
 	allocateBudgets,
 } from "./sinkhorn-knopp.js";
 
-// Embedding service
+/** Embedding service with local fallback for vector similarity search. */
 export { EmbeddingService, fallbackEmbedding } from "./embedding-service.js";
 
 // Recall scoring configuration
@@ -135,13 +136,13 @@ export { configureRecallScoring } from "./recall-scoring.js";
 // Compactor signals configuration
 export { configureCompactorSignals } from "./compactor-signals.js";
 
-// Recall engine (vector search across all sessions & streams)
+/** Vector-indexed recall engine for semantic search across all sessions and streams. */
 export { RecallEngine, migrateEmbeddingsJson, vectorToBlob, blobToVector, _resetRecallDbInit } from "./recall.js";
 
-// Session compaction
+/** Session compactor that prunes low-signal turns using stream-weighted scoring. */
 export { SessionCompactor } from "./compactor.js";
 
-// Accelerated Sinkhorn-Knopp (Nesterov momentum + log-domain)
+/** Nesterov-accelerated Sinkhorn in log-domain for fast token budget convergence. */
 export {
 	sinkhornAccelerated,
 	computeTokenBudgetsMHC,
@@ -149,41 +150,41 @@ export {
 } from "./sinkhorn-accelerated.js";
 export type { SinkhornAcceleratedOpts, SessionChunk } from "./sinkhorn-accelerated.js";
 
-// Stream Extractor (4-stream signal classification)
+/** Classify turn content into the four memory streams (episodic, semantic, procedural, working). */
 export {
 	extractSignals,
 	classifyContent,
 	extractSignalsFromTurns,
 } from "./stream-extractor.js";
 
-// Hybrid Search — Samshodhana (RRF fusion: BM25 + Vector + GraphRAG + Pramana)
+/** Hybrid search with RRF fusion across BM25, vector, GraphRAG, and Pramana signals. */
 export { HybridSearchEngine, HybridWeightLearner, shouldRetrieve, PRAMANA_RELIABILITY } from "./hybrid-search.js";
 export type { HybridSearchResult, HybridSearchConfig, HybridSignal, HybridWeightLearnerState } from "./hybrid-search.js";
 
-// Adaptive GraphRAG scoring (Thompson Sampling + MMR)
+/** Thompson Sampling scorer with MMR reranking for adaptive GraphRAG retrieval. */
 export { AdaptiveScorer, mmrRerank } from "./graphrag-adaptive-scoring.js";
 export type { ScoredCandidate, AdaptiveScorerState } from "./graphrag-adaptive-scoring.js";
 
-// Personalized PageRank (topic-biased + incremental)
+/** Topic-biased personalized PageRank with incremental updates for knowledge graphs. */
 export {
 	computePersonalizedPageRank,
 	IncrementalPageRank,
 } from "./graphrag-pagerank-personalized.js";
 export type { PersonalizedPageRankOpts } from "./graphrag-pagerank-personalized.js";
 
-// Leiden Community Detection (Traag, Waltman & van Eck 2019)
+/** Leiden community detection for identifying topic clusters in knowledge graphs. */
 export { leiden, annotateCommunities, communitySummary, filterByCommunity, findBridgeNodes } from "./graphrag-leiden.js";
 export type { LeidenConfig, LeidenResult, Community } from "./graphrag-leiden.js";
 
-// Checkpoint Manager (Sthiti)
+/** Snapshot-based checkpoint manager for session state persistence and recovery. */
 export { CheckpointManager } from "./checkpoint.js";
 export type { CheckpointConfig, Checkpoint, CheckpointData } from "./checkpoint.js";
 
-// Named Entity Recognition (Naama)
+/** Rule-based named entity recognizer for extracting people, projects, tools, and dates. */
 export { NERExtractor } from "./ner-extractor.js";
 export type { EntityType, ExtractedEntity, NERConfig } from "./ner-extractor.js";
 
-// Bi-Temporal Edge Engine (Dvikala)
+/** Bi-temporal edge engine tracking both valid-time and transaction-time for graph edges. */
 export {
 	createEdge,
 	supersedEdge,
@@ -194,7 +195,7 @@ export {
 	compactEdges,
 } from "./bitemporal.js";
 
-// Memory Consolidation (Samskaara)
+/** Pattern-based memory consolidation that detects recurring rules across sessions. */
 export { ConsolidationEngine } from "./consolidation.js";
 export type {
 	KnowledgeRule,
@@ -204,7 +205,7 @@ export type {
 	ConsolidationConfig,
 } from "./consolidation.js";
 
-// Multi-Round Retrieval — Anveshana (heuristic query decomposition + fusion)
+/** Multi-round retrieval with heuristic query decomposition and result fusion. */
 export { AnveshanaEngine } from "./multi-round-retrieval.js";
 export type {
 	SubQuery,
@@ -213,25 +214,25 @@ export type {
 	MultiRoundConfig,
 } from "./multi-round-retrieval.js";
 
-// Smaran — Explicit Memory Store (structured, categorical, BM25 recall)
+/** Explicit memory store with categorical indexing and BM25 recall. */
 export { SmaranStore } from "./smaran.js";
 export type { SmaranEntry, SmaranCategory, SmaranConfig } from "./smaran.js";
 
-// Memory NLU — detect "remember"/"forget"/"recall" commands in user text
+/** Detect remember/forget/recall intents in user text for implicit memory operations. */
 export { detectMemoryIntent, detectCategory } from "./memory-nlu.js";
 export type { MemoryIntent } from "./memory-nlu.js";
 
-// Identity Context — load SOUL.md, IDENTITY.md, personality.md, USER.md
+/** Load and merge identity files (SOUL.md, IDENTITY.md, personality.md, USER.md). */
 export { IdentityContext } from "./identity-context.js";
 export type { IdentityConfig, IdentityFileType } from "./identity-context.js";
 
 // ─── Phase 1: Self-Evolution Engine ─────────────────────────────────────────
 
-// Vasana Engine (BOCPD behavioral crystallization)
+/** BOCPD-based behavioral crystallization that detects stable usage patterns. */
 export { VasanaEngine } from "./vasana-engine.js";
 export type { VasanaConfig, CrystallizationResult, PromotionResult, DeviationType } from "./vasana-engine.js";
 
-// Svapna Consolidation (5-phase dream cycle)
+/** Five-phase dream-cycle consolidation: score, replay, associate, recombine, compress. */
 export { SvapnaConsolidation } from "./svapna-consolidation.js";
 export type {
 	SvapnaConfig,
@@ -245,11 +246,11 @@ export type {
 	CompressResult,
 } from "./svapna-consolidation.js";
 
-// Vidhi Engine (procedural memory — learned tool sequences)
+/** Procedural memory engine that learns and recalls tool-call sequences from past sessions. */
 export { VidhiEngine } from "./vidhi-engine.js";
 export type { VidhiConfig, ExtractionResult } from "./vidhi-engine.js";
 
-// Periodic Consolidation (monthly/yearly reports)
+/** Periodic consolidation engine that generates monthly and yearly summary reports. */
 export { PeriodicConsolidation } from "./periodic-consolidation.js";
 export type {
 	PeriodicConfig,
@@ -258,11 +259,11 @@ export type {
 	ReportEntry,
 } from "./periodic-consolidation.js";
 
-// Akasha — Shared Knowledge Field (stigmergic traces)
+/** Shared knowledge field with stigmergic traces for cross-agent collective memory. */
 export { AkashaField } from "./akasha.js";
 export type { StigmergicTrace, TraceType, AkashaConfig, AkashaEvent } from "./akasha.js";
 
-// Kala Chakra — Multi-Scale Temporal Awareness (काल चक्र)
+/** Multi-scale temporal awareness from turns to years for time-contextualized retrieval. */
 export { KalaChakra, TEMPORAL_SCALES } from "./kala-chakra.js";
 export type {
 	TemporalScale,
@@ -278,7 +279,7 @@ export type {
 	KalaChakraConfig,
 } from "./kala-chakra.js";
 
-// Pancha Vritti -- Five Fluctuations of Mind (Yoga Sutras 1.5-11)
+/** Five mental fluctuation classifier (pramana, viparyaya, vikalpa, nidra, smriti). */
 export { PanchaVritti, VRITTI_CONFIDENCE_WEIGHTS, VRITTI_TYPES } from "./pancha-vritti.js";
 export type {
 	VrittiType,
@@ -289,7 +290,7 @@ export type {
 	VrittiSerializedState,
 } from "./pancha-vritti.js";
 
-// Day Consolidation — Diary Writer (daily cross-project summaries)
+/** Daily diary writer that consolidates cross-project session summaries. */
 export {
 	consolidateDay,
 	getDaysRoot,
@@ -302,11 +303,11 @@ export {
 } from "./day-consolidation.js";
 export type { DayConsolidationResult } from "./day-consolidation.js";
 
-// Unified Recall Engine — searches ALL layers (FTS5, memory, day files)
+/** Unified recall that searches all memory layers: FTS5, vector, memory scopes, and day files. */
 export { recall } from "./unified-recall.js";
 export type { RecallAnswer, RecallOptions as UnifiedRecallOptions } from "./unified-recall.js";
 
-// Event Chain Extractor (session turns → typed event chains)
+/** Extract typed event chains from session turns for pattern analysis. */
 export {
 	detectSessionType,
 	extractEventChain,
@@ -320,18 +321,18 @@ export type {
 	EventChain,
 } from "./event-extractor.js";
 
-// Fact Extractor (real-time personal fact detection from user turns)
+/** Real-time personal fact extractor that detects preferences, names, and context from user turns. */
 export { FactExtractor, getFactExtractor } from "./fact-extractor.js";
 export type { ExtractedFact, FactExtractorConfig } from "./fact-extractor.js";
 
-// Provider Bridge (memory injection on session start — provider-agnostic)
+/** Provider-agnostic memory bridge that injects context on session start. */
 export { loadProviderContext } from "./provider-bridge.js";
 export type { ProviderContext } from "./provider-bridge.js";
 
-// Consolidation Indexer (vector-indexed daily/monthly/yearly summaries)
+/** Vector-indexed consolidation summaries for semantic search across daily/monthly/yearly reports. */
 export { indexConsolidationSummary, searchConsolidationSummaries, backfillConsolidationIndices, extractSummaryText } from "./consolidation-indexer.js";
 export type { ConsolidationLevel, ConsolidationSummaryIndex } from "./consolidation-indexer.js";
 
-// Hierarchical Temporal Search (top-down drill: years → months → days)
+/** Top-down temporal drill search: years to months to days for time-scoped retrieval. */
 export { hierarchicalTemporalSearch } from "./hierarchical-temporal-search.js";
 export type { TemporalSearchResult } from "./hierarchical-temporal-search.js";
