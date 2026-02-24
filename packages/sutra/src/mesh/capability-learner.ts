@@ -27,6 +27,21 @@ export interface CapabilityLearnerConfig {
 	decayIntervalMs?: number;
 	/** Decay factor (multiply counters by this each interval). Default: 0.8 */
 	decayFactor?: number;
+	/**
+	 * Minimum samples before demotion can trigger for promoted capabilities.
+	 * Default: 8.
+	 */
+	demotionMinSamples?: number;
+	/**
+	 * Demote when failure ratio >= threshold over tracked samples.
+	 * Default: 0.6 (60% failures).
+	 */
+	demotionFailureRatio?: number;
+	/**
+	 * Demote inactive promoted capabilities after this idle duration.
+	 * Default: 30 minutes.
+	 */
+	inactivityDemotionMs?: number;
 }
 
 /** Tracking entry for a single message type on a single actor. */
@@ -35,6 +50,8 @@ interface TypeTracker {
 	failures: number;
 	lastSeen: number;
 	promoted: boolean;
+	promotedAt?: number;
+	demotedAt?: number;
 }
 
 // ─── Defaults ───────────────────────────────────────────────────────────────
@@ -43,6 +60,9 @@ const DEFAULT_PROMOTION_THRESHOLD = 5;
 const DEFAULT_MAX_TRACKED_TYPES = 50;
 const DEFAULT_DECAY_INTERVAL_MS = 300_000;
 const DEFAULT_DECAY_FACTOR = 0.8;
+const DEFAULT_DEMOTION_MIN_SAMPLES = 8;
+const DEFAULT_DEMOTION_FAILURE_RATIO = 0.6;
+const DEFAULT_INACTIVITY_DEMOTION_MS = 30 * 60_000;
 
 // ─── CapabilityLearner ──────────────────────────────────────────────────────
 
@@ -77,6 +97,9 @@ export class CapabilityLearner {
 			maxTrackedTypes: config?.maxTrackedTypes ?? DEFAULT_MAX_TRACKED_TYPES,
 			decayIntervalMs: config?.decayIntervalMs ?? DEFAULT_DECAY_INTERVAL_MS,
 			decayFactor: config?.decayFactor ?? DEFAULT_DECAY_FACTOR,
+			demotionMinSamples: config?.demotionMinSamples ?? DEFAULT_DEMOTION_MIN_SAMPLES,
+			demotionFailureRatio: config?.demotionFailureRatio ?? DEFAULT_DEMOTION_FAILURE_RATIO,
+			inactivityDemotionMs: config?.inactivityDemotionMs ?? DEFAULT_INACTIVITY_DEMOTION_MS,
 		};
 	}
 
@@ -97,6 +120,9 @@ export class CapabilityLearner {
 		if (!tracker.promoted && tracker.successes >= this.config.promotionThreshold) {
 			this.promote(actorId, msgType);
 			tracker.promoted = true;
+			tracker.promotedAt = tracker.lastSeen;
+		} else if (tracker.promoted) {
+			this.evaluateDemotion(actorId, msgType, tracker, tracker.lastSeen);
 		}
 	}
 
@@ -111,6 +137,7 @@ export class CapabilityLearner {
 		const tracker = this.getOrCreateTracker(actorId, msgType);
 		tracker.failures++;
 		tracker.lastSeen = Date.now();
+		this.evaluateDemotion(actorId, msgType, tracker, tracker.lastSeen);
 	}
 
 	// ─── Query ──────────────────────────────────────────────────────
@@ -133,6 +160,11 @@ export class CapabilityLearner {
 
 	/** Number of actors being tracked. */
 	get trackedActorCount(): number { return this.tracking.size; }
+
+	/** Remove all learner state for one actor (called when actor stops). */
+	forgetActor(actorId: string): void {
+		this.tracking.delete(actorId);
+	}
 
 	// ─── Lifecycle ──────────────────────────────────────────────────
 
@@ -199,17 +231,53 @@ export class CapabilityLearner {
 		this.gossip.register(actorId, expertise, [...existingCaps, capability]);
 	}
 
+	/** Remove a promoted capability from gossip and mark tracker as demoted. */
+	private demote(actorId: string, capability: string, tracker: TypeTracker, now: number): void {
+		const view = this.gossip.getView().find((v) => v.actorId === actorId);
+		if (!view) return;
+		const nextCaps = (view.capabilities ?? []).filter((cap) => cap !== capability);
+		this.gossip.register(actorId, view.expertise, nextCaps);
+		tracker.promoted = false;
+		tracker.demotedAt = now;
+		// Prevent immediate promote-demote flapping.
+		tracker.successes = Math.min(tracker.successes, this.config.promotionThreshold - 1);
+	}
+
 	/** Decay all counters by the decay factor. */
 	private decay(): void {
-		for (const [, actorMap] of this.tracking) {
+		const now = Date.now();
+		for (const [actorId, actorMap] of this.tracking) {
 			for (const [msgType, tracker] of actorMap) {
 				tracker.successes = Math.floor(tracker.successes * this.config.decayFactor);
 				tracker.failures = Math.floor(tracker.failures * this.config.decayFactor);
+				this.evaluateDemotion(actorId, msgType, tracker, now);
 				// Remove zeroed-out entries (except promoted ones)
 				if (tracker.successes === 0 && tracker.failures === 0 && !tracker.promoted) {
 					actorMap.delete(msgType);
 				}
 			}
+		}
+	}
+
+	/** Evaluate whether a promoted capability should be demoted. */
+	private evaluateDemotion(
+		actorId: string,
+		msgType: string,
+		tracker: TypeTracker,
+		now: number,
+	): void {
+		if (!tracker.promoted) return;
+
+		const total = tracker.successes + tracker.failures;
+		const failureRatio = total > 0 ? tracker.failures / total : 0;
+		const inactiveForMs = now - tracker.lastSeen;
+		const stale = inactiveForMs >= this.config.inactivityDemotionMs;
+		const unstable =
+			total >= this.config.demotionMinSamples &&
+			failureRatio >= this.config.demotionFailureRatio;
+
+		if (unstable || stale) {
+			this.demote(actorId, msgType, tracker, now);
 		}
 	}
 

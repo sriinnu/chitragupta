@@ -25,7 +25,7 @@ Make Marga task typing production-safe for smalltalk and heartbeat so Vaayu can 
 
 - [x] Add multilingual phrase fixtures for smalltalk classifier (Indic + Romance + Turkic + Slavic + Arabic).
 - [x] Add regression corpus that mixes greeting tokens with actionable verbs to prevent false smalltalk captures.
-- [ ] Add benchmark target: p95 task-classification latency <= 2ms on baseline hardware.
+- [x] Add benchmark target: p95 task-classification latency <= 2ms on baseline hardware.
 
 ## Validation Notes
 
@@ -34,3 +34,6 @@ Make Marga task typing production-safe for smalltalk and heartbeat so Vaayu can 
   - `packages/swara/test/router-pipeline.test.ts`
   - `packages/swara/test/marga-decide.test.ts`
   - Targeted subset in `packages/swara/test/e2e/routing-pipeline.test.ts` for smalltalk/heartbeat.
+- Benchmark harness:
+  - `pnpm -C chitragupta benchmark:marga -- --runs 180 --warmup 60 --assert-p95-ms 2 --json`
+  - Result (2026-02-24): wall-clock p95 `0.0057ms`, internal decision p95 `0.0055ms`.
