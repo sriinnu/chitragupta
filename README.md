@@ -8,10 +8,11 @@
 
 <p align="center">
   <a href="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml"><img src="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/tests-10%2C682-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-10%2C849-brightgreen" alt="Tests" />
   <img src="https://img.shields.io/badge/node-%3E%3D22-blue" alt="Node" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
   <img src="https://img.shields.io/badge/packages-16-orange" alt="Packages" />
+  <a href="https://deepwiki.com/sriinnu/chitragupta"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" /></a>
 </p>
 
 ---
@@ -165,7 +166,7 @@ Once initialized, your AI agent automatically:
 - **Preserves work state** — when context compacts, the handover tool saves what you were doing
 - **Learns your patterns** — coding style, preferred approaches, recurring workflows
 
-### 32 MCP Tools
+### 38 MCP Tools
 
 | Category | Tools | What They Do |
 |----------|-------|-------------|
@@ -174,7 +175,10 @@ Once initialized, your AI agent automatically:
 | **Day Files** | `chitragupta_day_show`, `chitragupta_day_list`, `chitragupta_day_search` | Consolidated daily diaries across all projects |
 | **Collective** | `akasha_traces`, `akasha_deposit`, `samiti_channels`, `samiti_broadcast`, `sabha_deliberate` | Shared knowledge, multi-agent deliberation |
 | **Self-Awareness** | `vasana_tendencies`, `health_status`, `atman_report` | Learned patterns, health, identity |
+| **Mesh (P2P)** | `mesh_status`, `mesh_spawn`, `mesh_send`, `mesh_ask`, `mesh_find_capability`, `mesh_peers`, `mesh_gossip`, `mesh_topology` | Distributed actor mesh |
+| **Skills** | `skills_find`, `skills_list`, `skills_health`, `skills_learn`, `skills_scan`, `skills_ecosystem`, `skills_recommend` | Self-evolving skill discovery |
 | **Agent** | `coding_agent`, `swara_marga_decide` | Autonomous coding, model routing |
+| **Sync** | `chitragupta_sync_status`, `chitragupta_sync_export`, `chitragupta_sync_import`, `chitragupta_vidhis`, `chitragupta_consolidate` | Cross-device sync, consolidation |
 | **File & Shell** | `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `diff`, `watch`, `memory`, `session`, `project_analysis` | Full development toolkit |
 
 ### Manual Setup (if you prefer)
@@ -187,7 +191,7 @@ Once initialized, your AI agent automatically:
   "mcpServers": {
     "chitragupta": {
       "command": "npx",
-      "args": ["-y", "chitragupta-mcp", "--stdio"],
+      "args": ["-y", "-p", "@yugenlab/chitragupta", "chitragupta-mcp"],
       "env": {
         "CHITRAGUPTA_MCP_PROJECT": "/path/to/your/project"
       }
@@ -223,7 +227,7 @@ Then add to your project's `CLAUDE.md`:
   "mcpServers": {
     "chitragupta": {
       "command": "npx",
-      "args": ["-y", "chitragupta-mcp", "--stdio"],
+      "args": ["-y", "-p", "@yugenlab/chitragupta", "chitragupta-mcp"],
       "env": {
         "CHITRAGUPTA_MCP_PROJECT": "/path/to/your/project"
       }
@@ -249,6 +253,58 @@ chitragupta mcp-server --sse --port 3001
 ```
 
 </details>
+
+### Adding Chitragupta to a New Project
+
+For any project where you want AI agents to have persistent memory:
+
+```bash
+# Option 1: Automatic setup (creates .mcp.json + CLAUDE.md)
+cd /path/to/your/project
+npx -y -p @yugenlab/chitragupta chitragupta init
+
+# Option 2: Manual setup
+# 1. Create .mcp.json in your project root:
+cat > .mcp.json << 'EOF'
+{
+  "mcpServers": {
+    "chitragupta": {
+      "command": "npx",
+      "args": ["-y", "-p", "@yugenlab/chitragupta", "chitragupta-mcp", "--agent"],
+      "env": { "CHITRAGUPTA_MCP_AGENT": "true" }
+    }
+  }
+}
+EOF
+
+# 2. Add instructions to CLAUDE.md (for Claude Code) or .codex/instructions.md (for Codex):
+cat >> CLAUDE.md << 'EOF'
+
+# Chitragupta MCP
+## Session Start
+- At the START of every session, call `chitragupta_memory_search` with the current task.
+- Call `chitragupta_session_list` to see recent sessions.
+
+## During Work
+- Search past sessions before making architectural decisions.
+- Call `akasha_deposit` after completing significant work.
+
+## Context Limits
+- Call `chitragupta_handover` when approaching context limits.
+EOF
+```
+
+The `.mcp.json` file tells Claude Code (or Codex) to auto-start Chitragupta's MCP server. The `CLAUDE.md` instructions teach the AI agent *when* to call which tools — this is what makes it agentic.
+
+### Troubleshooting
+
+If the MCP server doesn't work, run the built-in diagnostic:
+
+```bash
+npx -y -p @yugenlab/chitragupta chitragupta-mcp --check
+```
+
+This verifies Node.js version (>=22), native module loading (better-sqlite3), data directory access, and core package imports.
 
 ### How It Works
 
@@ -456,8 +512,8 @@ SWIM-based protocol: `alive` → `suspect` (no heartbeat) → `dead` (evicted). 
 
 | Metric | Value |
 |--------|-------|
-| Test files | 300+ |
-| Total tests | 10,682 |
+| Test files | 340+ |
+| Total tests | 10,849 |
 | Failures | 0 |
 | TypeScript errors | 0 |
 | Packages | 16 |

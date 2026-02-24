@@ -239,14 +239,14 @@ function buildMcpServerEntry(entryPoint: string, projectRoot: string): Record<st
 	if (isNpx) {
 		return {
 			command: "npx",
-			args: ["-y", "chitragupta-mcp", "--stdio"],
-			env: { CHITRAGUPTA_MCP_PROJECT: projectRoot },
+			args: ["-y", "-p", "@yugenlab/chitragupta", "chitragupta-mcp", "--agent"],
+			env: { CHITRAGUPTA_MCP_PROJECT: projectRoot, CHITRAGUPTA_MCP_AGENT: "true" },
 		};
 	}
 	return {
 		command: "node",
-		args: [entryPoint, "--stdio"],
-		env: { CHITRAGUPTA_MCP_PROJECT: projectRoot },
+		args: [entryPoint, "--agent"],
+		env: { CHITRAGUPTA_MCP_PROJECT: projectRoot, CHITRAGUPTA_MCP_AGENT: "true" },
 	};
 }
 
