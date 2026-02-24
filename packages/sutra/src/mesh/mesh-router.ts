@@ -117,7 +117,7 @@ export class MeshRouter implements MessageSender {
 
 	private emit(event: RouterEvent): void {
 		for (const h of this.eventHandlers) {
-			try { h(event); } catch { /* observer failures are non-fatal */ }
+			try { h(event); } catch (err: unknown) { process.stderr.write(`[mesh:router] event handler error: ${err instanceof Error ? err.message : String(err)}\n`); }
 		}
 	}
 

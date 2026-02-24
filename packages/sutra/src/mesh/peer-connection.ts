@@ -150,7 +150,8 @@ export class PeerConnectionManager {
 			this.guard.recordOutbound(endpoint);
 			this.guard.recordSuccess(channel.remoteNodeInfo?.nodeId ?? peerId, endpoint, Date.now() - start);
 			return channel;
-		} catch {
+		} catch (err: unknown) {
+			this.emit({ type: "error", error: `connectToPeer failed for ${endpoint}: ${err instanceof Error ? err.message : String(err)}` });
 			this.guard.recordFailure(peerId, endpoint);
 			this.scheduleReconnect(peerId);
 			return null;
@@ -191,7 +192,7 @@ export class PeerConnectionManager {
 			const ch = this.createChannel(peerId, peer.endpoint, true);
 			this.peers.get(peerId)!.channel = ch;
 			try { await ch.connect(peer.endpoint); peer.reconnectAttempts = 0; }
-			catch { this.scheduleReconnect(peerId); }
+			catch (err: unknown) { this.emit({ type: "error", error: `reconnect failed for ${peerId}: ${err instanceof Error ? err.message : String(err)}` }); this.scheduleReconnect(peerId); }
 		}, delay);
 	}
 	private startListener(): Promise<number> {
@@ -280,7 +281,8 @@ export class PeerConnectionManager {
 						this.emit({ type: "peer:connected", peerId: resolvedPeerId, info: parsed.info ?? this.nodeInfo });
 						setTimeout(() => this.sendPeerExchangeTo(resolvedPeerId), 50);
 					}
-			} catch {
+			} catch (err: unknown) {
+				this.emit({ type: "error", error: `inbound auth parse failed: ${err instanceof Error ? err.message : String(err)}` });
 				ws.close(1002, "invalid auth frame");
 			}
 		});
@@ -299,7 +301,7 @@ export class PeerConnectionManager {
 			if (!verifySignature(parsed.nonce, parsed.hmac, this.config.meshSecret)) return false;
 			this.seenAuthNonces.set(parsed.nonce, now);
 			return true;
-		} catch { return false; }
+		} catch { /* intentional: malformed auth JSON is treated as invalid, not a crash */ return false; }
 	}
 	private handlePeerEvent(peerId: string, event: PeerNetworkEvent): void {
 		if (event.type === "peer:connected") {
@@ -327,7 +329,7 @@ export class PeerConnectionManager {
 	}
 	private emit(event: PeerNetworkEvent): void {
 		for (const handler of this.eventHandlers) {
-			try { handler(event); } catch { /* non-fatal */ }
+			try { handler(event); } catch (err: unknown) { process.stderr.write(`[mesh:peer-connection] event handler error: ${err instanceof Error ? err.message : String(err)}\n`); }
 		}
 	}
 		private sendPeerExchangeTo(peerId: string): void {
@@ -376,7 +378,7 @@ export class PeerConnectionManager {
 		}, interval);
 	}
 	private peerIdFromEndpoint(ep: string): string {
-		try { const u = new URL(ep); return `${u.hostname}:${u.port}`; } catch { return ep; }
+		try { const u = new URL(ep); return `${u.hostname}:${u.port}`; } catch { /* intentional: non-URL endpoints use raw string as peerId */ return ep; }
 	}
 	private rotateOldestInboundIfStale(): boolean {
 		const maxInboundAgeMs = this.guard.getMaxInboundAgeMs();

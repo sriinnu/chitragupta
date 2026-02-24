@@ -106,7 +106,7 @@ export class SharedMemoryManager {
 		const watchers = this.regionWatchers.get(regionName);
 		if (watchers) {
 			for (const handler of watchers) {
-				try { handler(key, value, region.version); } catch { /* swallow */ }
+				try { handler(key, value, region.version); } catch (err: unknown) { process.stderr.write(`[hub-memory] region watcher error for ${regionName}.${key}: ${err instanceof Error ? err.message : String(err)}\n`); }
 			}
 		}
 	}

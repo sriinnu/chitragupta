@@ -312,7 +312,7 @@ export class NetworkGossip {
 
 	private emit(event: NetworkGossipEvent): void {
 		for (const handler of this.handlers) {
-			try { handler(event); } catch { /* non-fatal */ }
+			try { handler(event); } catch (err: unknown) { process.stderr.write(`[mesh:network-gossip] event handler error: ${err instanceof Error ? err.message : String(err)}\n`); }
 		}
 	}
 }

@@ -77,13 +77,14 @@ function scanDirRecursive(dir: string): SessionMeta[] {
 					const content = fs.readFileSync(fullPath, "utf-8");
 					const session = parseSessionMarkdown(content);
 					metas.push(session.meta);
-				} catch {
-					// Skip unparseable files
+				} catch (err: unknown) {
+					process.stderr.write(`[smriti:session-queries] skip unparseable file ${fullPath}: ${err instanceof Error ? err.message : String(err)}\n`);
 				}
 			}
 		}
-	} catch {
+	} catch (err: unknown) {
 		// Directory may have been removed
+		process.stderr.write(`[smriti:session-queries] directory scan failed for ${dir}: ${err instanceof Error ? err.message : String(err)}\n`);
 	}
 
 	return metas;
@@ -174,8 +175,8 @@ export function listSessionsByDateRange(startMs: number, endMs: number, project?
 		if (rows.length > 0) {
 			return rows.map(rowToSessionMeta);
 		}
-	} catch {
-		// SQLite unavailable — fall through to filesystem scan
+	} catch (err: unknown) {
+		process.stderr.write(`[smriti:session-queries] listSessionsByDateRange SQLite failed: ${err instanceof Error ? err.message : String(err)}\n`);
 	}
 
 	// Fallback: scan filesystem and filter by date
@@ -213,8 +214,8 @@ export function listSessionDates(project?: string): string[] {
 		}
 
 		return rows.map((r) => r.session_date as string).filter(Boolean);
-	} catch {
-		// SQLite unavailable — fall through to filesystem scan
+	} catch (err: unknown) {
+		process.stderr.write(`[smriti:session-queries] listSessionDates SQLite failed: ${err instanceof Error ? err.message : String(err)}\n`);
 		const allSessions = listSessionsFromFilesystem(project);
 		const dates = new Set<string>();
 		for (const s of allSessions) {
@@ -244,7 +245,8 @@ export function listSessionProjects(): Array<{ project: string; sessionCount: nu
 			sessionCount: r.count as number,
 			lastActive: new Date(r.last_active as number).toISOString(),
 		}));
-	} catch {
+	} catch (err: unknown) {
+		process.stderr.write(`[smriti:session-queries] listSessionProjects SQLite failed: ${err instanceof Error ? err.message : String(err)}\n`);
 		return [];
 	}
 }
@@ -284,8 +286,8 @@ export function listTurnsWithTimestamps(
 				createdAt: row.created_at as number,
 			}));
 		}
-	} catch {
-		// SQLite unavailable — fall through
+	} catch (err: unknown) {
+		process.stderr.write(`[smriti:session-queries] listTurnsWithTimestamps SQLite failed: ${err instanceof Error ? err.message : String(err)}\n`);
 	}
 
 	// Fallback: load from markdown and synthesize timestamps
@@ -299,7 +301,8 @@ export function listTurnsWithTimestamps(
 			...turn,
 			createdAt: baseTime + i * 1000, // 1-second spacing
 		}));
-	} catch {
+	} catch (err: unknown) {
+		process.stderr.write(`[smriti:session-queries] listTurnsWithTimestamps markdown fallback failed: ${err instanceof Error ? err.message : String(err)}\n`);
 		return [];
 	}
 }
@@ -332,7 +335,8 @@ export function findSessionByMetadata(
 			: [`$.${key}`, value];
 		const row = db.prepare(sql).get(...params) as Record<string, unknown> | undefined;
 		return row ? rowToSessionMeta(row) : undefined;
-	} catch {
+	} catch (err: unknown) {
+		process.stderr.write(`[smriti:session-queries] findSessionByMetadata failed: ${err instanceof Error ? err.message : String(err)}\n`);
 		return undefined;
 	}
 }
@@ -376,7 +380,7 @@ export function updateSessionMeta(
 		params.updated_at = Date.now();
 
 		db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = @id`).run(params);
-	} catch {
-		// Best-effort
+	} catch (err: unknown) {
+		process.stderr.write(`[smriti:session-queries] updateSessionMeta failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}\n`);
 	}
 }

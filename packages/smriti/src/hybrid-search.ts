@@ -252,8 +252,9 @@ export class HybridSearchEngine {
 								content: r.matchedContent || r.summary,
 							})),
 						});
-					} catch {
+					} catch (err: unknown) {
 						// Vector search unavailable — continue without it
+						process.stderr.write(`[smriti:hybrid-search] vector search failed: ${err instanceof Error ? err.message : String(err)}\n`);
 					}
 				})(),
 			);
@@ -273,8 +274,9 @@ export class HybridSearchEngine {
 								content: node.content,
 							})),
 						});
-					} catch {
+					} catch (err: unknown) {
 						// GraphRAG unavailable — continue without it
+						process.stderr.write(`[smriti:hybrid-search] graphRAG search failed: ${err instanceof Error ? err.message : String(err)}\n`);
 					}
 				})(),
 			);
