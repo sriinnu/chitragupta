@@ -1,5 +1,8 @@
 // @chitragupta/tantra — MCP Server & Client + Pluggable Registry
+
+/** MCP protocol types (Tool, Resource, Prompt, and JSON-RPC primitives). */
 export * from "./types.js";
+/** JSON-RPC 2.0 message creation, parsing, and standard error codes. */
 export {
 	createRequest,
 	createResponse,
@@ -16,10 +19,15 @@ export {
 	INTERNAL_ERROR,
 	type JsonRpcMessage,
 } from "./jsonrpc.js";
+/** Stdio-based transport for MCP server and client communication. */
 export { StdioServerTransport, StdioClientTransport } from "./transport/stdio.js";
+/** SSE-based transport for MCP server and client over HTTP. */
 export { SSEServerTransport, SSEClientTransport } from "./transport/sse.js";
+/** MCP server that exposes tools, resources, and prompts over JSON-RPC. */
 export { McpServer } from "./server.js";
+/** MCP client that connects to remote servers and invokes their tools. */
 export { McpClient } from "./client.js";
+/** Bidirectional bridge between Chitragupta tool format and MCP tool format. */
 export {
 	chitraguptaToolToMcp,
 	mcpToolToChitragupta,
@@ -33,6 +41,7 @@ export {
 } from "./bridge.js";
 
 // ─── Pluggable MCP Architecture ───────────────────────────────────────────
+/** Typed MCP error hierarchy for transport, protocol, health, and timeout failures. */
 export {
 	McpError,
 	McpNotFoundError,
@@ -56,11 +65,13 @@ export {
 	DEFAULT_MAX_RESTARTS,
 	MAX_RESTART_BACKOFF,
 } from "./registry-types.js";
+/** Lifecycle manager for MCP servers with state transitions and health checks. */
 export {
 	ServerLifecycleManager,
 	type StateChangeCallback,
 	type ToolsChangedCallback,
 } from "./server-lifecycle.js";
+/** Aggregate tools and resources across multiple MCP servers with namespacing. */
 export {
 	CapabilityAggregator,
 	type NamespacedTool,
@@ -68,11 +79,13 @@ export {
 	type ToolCallRoute,
 	type ToolSearchResult,
 } from "./capability-aggregator.js";
+/** Registry for managing multiple MCP server connections with filtering. */
 export {
 	createMcpServerRegistry,
 	type McpServerRegistry,
 	type ServerFilter,
 } from "./server-registry.js";
+/** Auto-discover MCP servers from Claude, Cursor, and custom config files. */
 export {
 	ServerDiscovery,
 	type McpConfigSource,
@@ -81,7 +94,7 @@ export {
 	type DiscoveryCallback,
 } from "./server-discovery.js";
 
-// Autonomous MCP management (self-healing, discovery, circuit breaker)
+/** Self-healing MCP manager with circuit breaker, auto-restart, and quarantine. */
 export { AutonomousMcpManager } from "./mcp-autonomous.js";
 export type {
 	AutonomousMcpConfig,
