@@ -166,7 +166,10 @@ export function createHandoverTool(projectPath: string): McpToolHandler {
 					lastTool: "chitragupta_handover",
 				});
 
-				return { content: [{ type: "text", text: truncateOutput(sections.join("\n")) }] };
+				return {
+					content: [{ type: "text", text: truncateOutput(sections.join("\n")) }],
+					_metadata: { typed: { sessionId: session.meta.id, cursor: allTurns.length, filesModified: [...filesModified], filesRead: [...filesRead].slice(0, 30), decisions: uniqueDecisions, errors: errors.slice(0, 10), commands: commands.slice(0, 10) } },
+				};
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: `Handover failed: ${err instanceof Error ? err.message : String(err)}` }],
@@ -301,7 +304,7 @@ export function createContextTool(projectPath: string): McpToolHandler {
 				if (ctx.itemCount === 0) {
 					return { content: [{ type: "text", text: "No memory context found. This appears to be a fresh start." }], _metadata: { action: "context", itemCount: 0 } };
 				}
-				return { content: [{ type: "text", text: truncateOutput(ctx.assembled) }], _metadata: { action: "context", itemCount: ctx.itemCount } };
+				return { content: [{ type: "text", text: truncateOutput(ctx.assembled) }], _metadata: { action: "context", itemCount: ctx.itemCount, typed: { project, itemCount: ctx.itemCount } } };
 			} catch (err) {
 				return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
 			}

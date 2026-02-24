@@ -46,6 +46,15 @@ const log = createLogger("anina:agent");
 const DEFAULT_MAX_TURNS = 25;
 const DEFAULT_WORKING_DIR = process.cwd();
 
+/** Map agent event → EventBridge payload, or null for unmapped events. */
+function bridgeEventPayload(ev: string, d: Record<string, unknown>): { type: string; payload: Record<string, unknown> } | null {
+	if (ev === "stream:text" || ev === "stream:thinking") return { type: ev, payload: { text: String(d.text ?? "") } };
+	if (ev === "tool:start") return { type: ev, payload: { toolName: String(d.toolName ?? d.name ?? ""), input: (d.input ?? {}) as Record<string, unknown> } };
+	if (ev === "tool:done") return { type: ev, payload: { toolName: String(d.toolName ?? d.name ?? ""), durationMs: Number(d.durationMs ?? 0), isError: Boolean(d.isError) } };
+	if (ev === "turn:start" || ev === "turn:done") return { type: ev, payload: { turnNumber: Number(d.turnNumber ?? 0) } };
+	return null;
+}
+
 export class Agent implements TreeAgent {
 	private state: AgentState;
 	private config: AgentConfig;
@@ -124,8 +133,6 @@ export class Agent implements TreeAgent {
 	getAgentStatus() { return this.agentStatus; }
 	getProfileId(): string { return this.config.profile.id; }
 	getModel(): string { return this.state.model; }
-
-	// ── Core API ─────────────────────────────────────────────────
 	setProvider(provider: ProviderDefinition): void { this.provider = provider; }
 	getProvider(): ProviderDefinition | null { return this.provider; }
 
@@ -226,8 +233,6 @@ export class Agent implements TreeAgent {
 		};
 	}
 	getChetana(): ChetanaController | null { return this.chetana; }
-
-	// ── Sandesha Input Routing ───────────────────────────────────
 	requestInput(
 		prompt: string,
 		options?: { choices?: string[]; defaultValue?: string; timeoutMs?: number },
@@ -242,8 +247,6 @@ export class Agent implements TreeAgent {
 		resolveInputFn(this.pendingInputs, requestId, value, denied, denyReason);
 	}
 	getPendingInputIds(): string[] { return [...this.pendingInputs.keys()]; }
-
-	// ── Mesh Communication ───────────────────────────────────────
 	getActorRef(): MeshActorRef | null { return this.actorRef; }
 	getActorSystem(): MeshActorSystem | null { return this.actorSystem; }
 	getSamiti(): MeshSamiti | null { return this.samiti; }
@@ -264,7 +267,6 @@ export class Agent implements TreeAgent {
 		);
 	}
 
-	// ── Sub-Agent Spawning ───────────────────────────────────────
 	spawn(spawnConfig: SpawnConfig): Agent {
 		if (this.children.length >= MAX_SUB_AGENTS) {
 			throw new Error(`Cannot spawn sub-agent: parent already has ${MAX_SUB_AGENTS} children (max).`);
@@ -418,6 +420,11 @@ export class Agent implements TreeAgent {
 				sourceAgentId: this.id, sourcePurpose: this.purpose,
 				sourceDepth: this.depth, originalEvent: event, data,
 			});
+		}
+		// Bridge mapped events to EventBridge for realtime transport delivery
+		if (this.config.eventBridge) {
+			const bp = bridgeEventPayload(event, (data ?? {}) as Record<string, unknown>);
+			if (bp) this.config.eventBridge.emitTyped(this.id, bp.type, bp.payload, this.state.sessionId);
 		}
 	}
 

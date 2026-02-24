@@ -423,6 +423,15 @@ export class McpServer {
 		}
 	}
 
+	/** Send a one-way JSON-RPC notification (no `id`, no response expected). */
+	sendNotification(notification: JsonRpcNotification): void {
+		if (this._stdioTransport) {
+			this._stdioTransport.send(notification as unknown as JsonRpcResponse);
+		} else if (this._sseTransport) {
+			this._sseTransport.broadcast(notification as unknown as JsonRpcResponse);
+		}
+	}
+
 	/**
 	 * Send a response via the active transport.
 	 */

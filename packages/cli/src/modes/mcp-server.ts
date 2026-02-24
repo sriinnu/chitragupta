@@ -44,6 +44,9 @@ import {
 	createDaySearchTool, createContextTool,
 } from "./mcp-tools-memory.js";
 import {
+	createHandoverSinceTool, createMemoryChangesSinceTool,
+} from "./mcp-tools-delta.js";
+import {
 	createSyncStatusTool, createSyncExportTool, createSyncImportTool,
 	createRecallTool, createVidhisTool, createConsolidateTool,
 } from "./mcp-tools-sync.js";
@@ -124,6 +127,8 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 
 	// Memory, handover & day files
 	mcpTools.push(createHandoverTool(projectPath));
+	mcpTools.push(createHandoverSinceTool(projectPath));
+	mcpTools.push(createMemoryChangesSinceTool(projectPath));
 	mcpTools.push(createDayShowTool());
 	mcpTools.push(createDayListTool());
 	mcpTools.push(createDaySearchTool());
@@ -200,6 +205,21 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		],
 		onToolCall: (info) => recorder.recordToolCall(info),
 	});
+
+	// ─── 3b. EventBridge + MCP notification sink ────────────────────
+	//
+	// Wire realtime events so agent subsystems can push notifications
+	// to MCP clients via JSON-RPC notifications.
+	try {
+		const { EventBridge, McpNotificationSink } = await import("@chitragupta/sutra");
+		const eventBridge = new EventBridge();
+		const mcpSink = new McpNotificationSink((n) => server.sendNotification(n));
+		eventBridge.addSink(mcpSink);
+		// Store bridge on server for external access (e.g. agent wiring)
+		(server as unknown as Record<string, unknown>)._eventBridge = eventBridge;
+	} catch {
+		// EventBridge is optional — MCP server works without it
+	}
 
 	// ─── 4. State file + graceful shutdown ───────────────────────────
 

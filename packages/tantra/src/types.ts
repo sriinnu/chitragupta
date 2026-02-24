@@ -184,3 +184,31 @@ export interface MeshStatusResult {
 	peersConnected: number;
 	nodeId: string | null;
 }
+
+// ─── Realtime Event Re-exports ──────────────────────────────────────────────
+
+export type {
+	ChitraguptaEvent,
+	ChitraguptaEventBase,
+	ChitraguptaEventType,
+} from "@chitragupta/sutra";
+
+// ─── Tool Result Type Re-exports ────────────────────────────────────────────
+
+export type {
+	SessionListResult,
+	SessionShowResult,
+	MemorySearchResult,
+	RecallResult,
+	ContextResult,
+	HandoverResult,
+	HandoverSinceResult,
+	MemoryChangesSinceResult,
+	DayShowResult,
+	DayListResult,
+	DaySearchResult,
+	SyncStatusResult,
+	AtmanReportResult,
+	ConsolidateResult,
+	VidhisResult,
+} from "./tool-result-types.js";

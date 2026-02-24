@@ -236,7 +236,10 @@ export function createAtmanReportTool(): McpToolHandler {
 					sections.push("", "## Identity (Atman): not available");
 				}
 
-				return { content: [{ type: "text", text: `# Atman Report\n\n${sections.join("\n")}` }] };
+				return {
+					content: [{ type: "text", text: `# Atman Report\n\n${sections.join("\n")}` }],
+					_metadata: { typed: { hasChetana: sections.some((s) => s.includes("Chetana") && !s.includes("not available")), hasTriguna: sections.some((s) => s.includes("Triguna") && !s.includes("not available")), hasSoul: sections.some((s) => s.includes("Atman") && !s.includes("not available") && !s.includes("no souls")) } },
+				};
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: `atman_report failed: ${err instanceof Error ? err.message : String(err)}` }],

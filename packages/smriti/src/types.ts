@@ -435,3 +435,6 @@ export interface RecallResult {
 	/** The actual text that matched. */
 	matchedContent: string;
 }
+
+// HandoverDelta extracted to handover-types.ts for 450 LOC limit
+export type { HandoverDelta } from "./handover-types.js";
