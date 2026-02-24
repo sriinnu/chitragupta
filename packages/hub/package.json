@@ -3,11 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "Preact SPA dashboard for the Chitragupta AI agent platform — provides real-time session monitoring, budget tracking, cognitive system visualization, and device pairing",
+  "exports": {
+    ".": "./src/main.tsx",
+    "./api": "./src/api.ts",
+    "./signals/auth": "./src/signals/auth.ts",
+    "./signals/budget": "./src/signals/budget.ts",
+    "./signals/cognitive": "./src/signals/cognitive.ts",
+    "./signals/realtime": "./src/signals/realtime.ts"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config ../../vitest.config.ts packages/hub/test/"
   },
   "dependencies": {
     "preact": "^10.25.0",
