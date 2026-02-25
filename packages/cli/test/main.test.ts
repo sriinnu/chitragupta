@@ -615,10 +615,21 @@ describe("main()", () => {
 	let stdoutSpy: ReturnType<typeof spyOnStdout>;
 
 	let originalFetch: typeof globalThis.fetch;
+	let originalAnthropicKey: string | undefined;
+	let originalOpenAIKey: string | undefined;
+	let originalGoogleKey: string | undefined;
 
 	beforeEach(() => {
 		vi.clearAllMocks();
 		restoreDefaults();
+
+		// Keep provider-selection paths deterministic in CI-like environments.
+		originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
+		originalOpenAIKey = process.env.OPENAI_API_KEY;
+		originalGoogleKey = process.env.GOOGLE_API_KEY;
+		process.env.ANTHROPIC_API_KEY = originalAnthropicKey ?? "test-anthropic-key";
+		process.env.OPENAI_API_KEY = originalOpenAIKey ?? "test-openai-key";
+		process.env.GOOGLE_API_KEY = originalGoogleKey ?? "test-google-key";
 
 		// Mock fetch for Ollama probe (returns failure by default)
 		originalFetch = globalThis.fetch;
@@ -631,6 +642,12 @@ describe("main()", () => {
 
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+		if (originalAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+		else process.env.ANTHROPIC_API_KEY = originalAnthropicKey;
+		if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+		else process.env.OPENAI_API_KEY = originalOpenAIKey;
+		if (originalGoogleKey === undefined) delete process.env.GOOGLE_API_KEY;
+		else process.env.GOOGLE_API_KEY = originalGoogleKey;
 		exitSpy.mockRestore();
 		stderrSpy.mockRestore();
 		stdoutSpy.mockRestore();
