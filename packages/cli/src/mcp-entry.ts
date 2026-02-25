@@ -27,6 +27,7 @@
 import { runMcpServerMode } from "./modes/mcp-server.js";
 import { loadCredentials } from "./bootstrap.js";
 import { configureLogging, ConsoleTransport } from "@chitragupta/core";
+import { CLI_PACKAGE_VERSION } from "./version.js";
 
 // ─── Stdout Guard ───────────────────────────────────────────────────────────
 // In stdio mode, stdout is EXCLUSIVELY for MCP JSON-RPC framed messages.
@@ -161,7 +162,7 @@ function parseArgs(argv: string[]): {
 			);
 			process.exit(0);
 		} else if (arg === "-v" || arg === "--version") {
-			process.stderr.write("chitragupta-mcp v0.1.0\n");
+			process.stderr.write(`chitragupta-mcp v${CLI_PACKAGE_VERSION}\n`);
 			process.exit(0);
 		}
 	}

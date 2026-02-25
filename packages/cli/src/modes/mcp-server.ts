@@ -23,6 +23,7 @@ import { McpServer, ToolRegistry, chitraguptaToolToMcp } from "@chitragupta/tant
 import fs from "fs";
 import path from "path";
 import { getBuiltinTools } from "../bootstrap.js";
+import { CLI_PACKAGE_VERSION } from "../version.js";
 
 // ─── Extracted modules ───────────────────────────────────────────────────────
 
@@ -204,7 +205,7 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 
 	const server = new McpServer({
 		name,
-		version: "0.1.0",
+		version: CLI_PACKAGE_VERSION,
 		transport,
 		ssePort: port,
 		tools: mcpTools,
