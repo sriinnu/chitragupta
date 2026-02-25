@@ -128,7 +128,8 @@ export class Editor {
 
 	/**
 	 * Get character, token, line, and word statistics for the current content.
-	 * Token estimation uses ceil(chars / 4) as an approximation.
+	 * Token estimation uses ceil(chars / 3.7) as a weighted average across
+	 * typical LLM workloads (prose ~4, code ~3.5, JSON ~3).
 	 */
 	getStats(): EditorStats {
 		const text = this.value;
@@ -137,7 +138,7 @@ export class Editor {
 		const words = text.trim().length === 0
 			? 0
 			: text.trim().split(/\s+/).length;
-		const tokens = Math.ceil(chars / 4);
+		const tokens = Math.ceil(chars / 3.7);
 		return { chars, tokens, lines, words };
 	}
 

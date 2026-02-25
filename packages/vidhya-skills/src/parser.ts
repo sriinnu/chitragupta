@@ -26,6 +26,10 @@ import type {
 	GranularFilesystemPermissions,
 	ApproachLadderEntry,
 	EvalCase,
+	SkillUIContributions,
+	SkillWidgetContribution,
+	SkillKeybindContribution,
+	SkillPanelContribution,
 } from "./types-v2.js";
 import { EMPTY_PRANAMAYA } from "./types-v2.js";
 
@@ -154,6 +158,12 @@ export function parseSkillMarkdown(content: string): EnhancedSkillManifest {
 			}))
 		: undefined;
 
+	// UI contribution points (widgets, keybinds, panels)
+	const rawUI = frontmatter.ui as Record<string, unknown> | undefined;
+	const ui: SkillUIContributions | undefined = rawUI
+		? parseUIContributions(rawUI)
+		: undefined;
+
 	const manifest: EnhancedSkillManifest = {
 		name: String(frontmatter.name ?? ""),
 		version: String(resolvedVersion ?? "0.0.0"),
@@ -179,6 +189,7 @@ export function parseSkillMarkdown(content: string): EnhancedSkillManifest {
 		...(permissions !== undefined && { permissions }),
 		...(approachLadder !== undefined && approachLadder.length > 0 && { approachLadder }),
 		...(evalCases !== undefined && evalCases.length > 0 && { evalCases }),
+		...(ui !== undefined && { ui }),
 	};
 
 	return manifest;
@@ -312,4 +323,125 @@ function isValidInlineEvalCase(obj: Record<string, unknown>): boolean {
 		obj.input !== null &&
 		obj.expected !== undefined
 	);
+}
+
+// ─── UI Contribution Parsers ────────────────────────────────────────────────
+
+/** Valid widget position values. */
+const WIDGET_POSITIONS = new Set(["left", "center", "right"]);
+
+/** Valid panel type values. */
+const PANEL_TYPES = new Set(["sidebar", "modal", "overlay", "tab"]);
+
+/** Valid output format values. */
+const OUTPUT_FORMATS = new Set(["plain", "ansi", "json", "markdown"]);
+
+/**
+ * Parse UI contribution points from a raw frontmatter `ui` object.
+ * Returns undefined if none of the sub-sections are present or valid.
+ */
+function parseUIContributions(raw: Record<string, unknown>): SkillUIContributions | undefined {
+	const result: Record<string, unknown> = {};
+	let hasContent = false;
+
+	// Widgets
+	if (Array.isArray(raw.widgets)) {
+		const widgets = (raw.widgets as Array<Record<string, unknown>>)
+			.filter(isValidWidget)
+			.map(parseWidget);
+		if (widgets.length > 0) {
+			result.widgets = widgets;
+			hasContent = true;
+		}
+	}
+
+	// Keybinds
+	if (Array.isArray(raw.keybinds)) {
+		const keybinds = (raw.keybinds as Array<Record<string, unknown>>)
+			.filter(isValidKeybind)
+			.map(parseKeybind);
+		if (keybinds.length > 0) {
+			result.keybinds = keybinds;
+			hasContent = true;
+		}
+	}
+
+	// Panels
+	if (Array.isArray(raw.panels)) {
+		const panels = (raw.panels as Array<Record<string, unknown>>)
+			.filter(isValidPanel)
+			.map(parsePanel);
+		if (panels.length > 0) {
+			result.panels = panels;
+			hasContent = true;
+		}
+	}
+
+	return hasContent ? (result as unknown as SkillUIContributions) : undefined;
+}
+
+/** Type guard: widget must have id and label. */
+function isValidWidget(obj: Record<string, unknown>): boolean {
+	return typeof obj.id === "string" && obj.id.length > 0 &&
+		typeof obj.label === "string" && obj.label.length > 0;
+}
+
+/** Parse a single widget contribution. */
+function parseWidget(raw: Record<string, unknown>): SkillWidgetContribution {
+	const w: Record<string, unknown> = {
+		id: String(raw.id),
+		label: String(raw.label),
+	};
+	if (raw.position !== undefined && WIDGET_POSITIONS.has(String(raw.position))) {
+		w.position = String(raw.position);
+	}
+	if (raw.refreshMs !== undefined) w.refreshMs = Number(raw.refreshMs);
+	if (raw.script !== undefined) w.script = String(raw.script);
+	if (raw.channel !== undefined) w.channel = String(raw.channel);
+	if (raw.format !== undefined && OUTPUT_FORMATS.has(String(raw.format))) {
+		w.format = String(raw.format);
+	}
+	return w as unknown as SkillWidgetContribution;
+}
+
+/** Type guard: keybind must have key, description, and command. */
+function isValidKeybind(obj: Record<string, unknown>): boolean {
+	return typeof obj.key === "string" && obj.key.length > 0 &&
+		typeof obj.description === "string" &&
+		typeof obj.command === "string" && obj.command.length > 0;
+}
+
+/** Parse a single keybind contribution. */
+function parseKeybind(raw: Record<string, unknown>): SkillKeybindContribution {
+	const kb: Record<string, unknown> = {
+		key: String(raw.key),
+		description: String(raw.description),
+		command: String(raw.command),
+	};
+	if (raw.args !== undefined && typeof raw.args === "object" && raw.args !== null) {
+		kb.args = raw.args as Record<string, unknown>;
+	}
+	return kb as unknown as SkillKeybindContribution;
+}
+
+/** Type guard: panel must have id, title, and type. */
+function isValidPanel(obj: Record<string, unknown>): boolean {
+	return typeof obj.id === "string" && obj.id.length > 0 &&
+		typeof obj.title === "string" && obj.title.length > 0 &&
+		typeof obj.type === "string" && PANEL_TYPES.has(String(obj.type));
+}
+
+/** Parse a single panel contribution. */
+function parsePanel(raw: Record<string, unknown>): SkillPanelContribution {
+	const p: Record<string, unknown> = {
+		id: String(raw.id),
+		title: String(raw.title),
+		type: String(raw.type),
+	};
+	if (raw.script !== undefined) p.script = String(raw.script);
+	if (raw.channel !== undefined) p.channel = String(raw.channel);
+	if (raw.format !== undefined && OUTPUT_FORMATS.has(String(raw.format))) {
+		p.format = String(raw.format);
+	}
+	return p as unknown as SkillPanelContribution;
 }

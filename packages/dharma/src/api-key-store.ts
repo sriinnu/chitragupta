@@ -38,8 +38,14 @@ const KEY_PREFIX = "chg_";
 /** Length of the random hex portion of a key. */
 const KEY_RANDOM_LENGTH = 32;
 
+/** Length of the per-key salt in bytes. */
+const SALT_LENGTH = 16;
+
 /** Default rate-limit sliding window (1 minute). */
 const DEFAULT_RATE_WINDOW_MS = 60_000;
+
+/** Default rate limit applied to unknown/invalid tokens to prevent brute-force. */
+const UNKNOWN_TOKEN_RATE_LIMIT = 10;
 
 // ─── Internal row shape ─────────────────────────────────────────────────────
 
@@ -47,6 +53,8 @@ const DEFAULT_RATE_WINDOW_MS = 60_000;
 interface ApiKeyRow {
 	id: string;
 	key_hash: string;
+	/** Hex-encoded per-key salt (empty string for legacy unsalted keys). */
+	key_salt: string;
 	name: string;
 	tenant_id: string;
 	scopes: string;
@@ -97,9 +105,14 @@ function generateRawKey(): string {
 	return `${KEY_PREFIX}${random}`;
 }
 
-/** SHA-256 hash a raw key for storage. */
-function hashKey(raw: string): string {
-	return crypto.createHash("sha256").update(raw).digest("hex");
+/** Generate a random hex-encoded salt of {@link SALT_LENGTH} bytes. */
+function generateSalt(): string {
+	return crypto.randomBytes(SALT_LENGTH).toString("hex");
+}
+
+/** SHA-256 hash a raw key with an optional salt prefix. */
+function hashKey(raw: string, salt = ""): string {
+	return crypto.createHash("sha256").update(salt + raw).digest("hex");
 }
 
 /** Convert a DB row to a public ApiKey (masks the hash). */
@@ -141,13 +154,14 @@ export class ApiKeyStore {
 
 	// ─── Schema ────────────────────────────────────────────────────────
 
-	/** Lazily create the `api_keys` table and indices. */
+	/** Lazily create the `api_keys` table, indices, and apply migrations. */
 	private ensureSchema(): void {
 		if (this.schemaReady) return;
 		this.db.exec(`
 			CREATE TABLE IF NOT EXISTS api_keys (
 				id          TEXT PRIMARY KEY,
-				key_hash    TEXT NOT NULL UNIQUE,
+				key_hash    TEXT NOT NULL,
+				key_salt    TEXT NOT NULL DEFAULT '',
 				name        TEXT NOT NULL,
 				tenant_id   TEXT NOT NULL,
 				scopes      TEXT NOT NULL DEFAULT '[]',
@@ -160,6 +174,12 @@ export class ApiKeyStore {
 			CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id);
 			CREATE INDEX IF NOT EXISTS idx_api_keys_hash   ON api_keys(key_hash);
 		`);
+		// Migration: add key_salt column to existing tables that lack it
+		try {
+			this.db.exec("ALTER TABLE api_keys ADD COLUMN key_salt TEXT NOT NULL DEFAULT ''");
+		} catch {
+			// Column already exists — ignore the error
+		}
 		this.schemaReady = true;
 	}
 
@@ -184,16 +204,18 @@ export class ApiKeyStore {
 	): { key: string; record: ApiKey } {
 		this.ensureSchema();
 		const rawKey = generateRawKey();
-		const keyHash = hashKey(rawKey);
+		const salt = generateSalt();
+		const keyHash = hashKey(rawKey, salt);
 		const id = crypto.randomUUID();
 		const now = Date.now();
 
 		this.db.prepare(`
-			INSERT INTO api_keys (id, key_hash, name, tenant_id, scopes, created_at, expires_at, rate_limit, revoked)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+			INSERT INTO api_keys (id, key_hash, key_salt, name, tenant_id, scopes, created_at, expires_at, rate_limit, revoked)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 		`).run(
 			id,
 			keyHash,
+			salt,
 			name,
 			tenantId,
 			JSON.stringify(scopes),
@@ -219,20 +241,27 @@ export class ApiKeyStore {
 	/**
 	 * Validate a raw API key and return the associated tenant + scopes.
 	 *
-	 * Rejects revoked, expired, or unknown keys.
+	 * Iterates all stored keys and computes SHA-256(salt + token) for each,
+	 * because each key has its own random salt. Rejects revoked, expired, or
+	 * unknown keys.
+	 *
+	 * Rate limiting is applied even for unknown tokens (using the unsalted
+	 * token hash as the limiter key) to prevent brute-force enumeration.
 	 *
 	 * @param rawKey - The full raw key string (e.g. `chg_abc123...`).
 	 * @returns An {@link AuthResult} indicating success or failure.
 	 */
 	validateKey(rawKey: string): AuthResult {
 		this.ensureSchema();
-		const keyHash = hashKey(rawKey);
 
-		const row = this.db.prepare(
-			"SELECT * FROM api_keys WHERE key_hash = ?",
-		).get(keyHash) as ApiKeyRow | undefined;
+		const row = this.findKeyByToken(rawKey);
 
 		if (!row) {
+			// Apply rate limiting for unknown tokens to prevent brute-force
+			const tokenFingerprint = hashKey(rawKey);
+			if (!this.limiter.check(tokenFingerprint, UNKNOWN_TOKEN_RATE_LIMIT)) {
+				return { authenticated: false, error: "Rate limit exceeded" };
+			}
 			return { authenticated: false, error: "Invalid API key" };
 		}
 
@@ -253,8 +282,33 @@ export class ApiKeyStore {
 		return {
 			authenticated: true,
 			tenantId: row.tenant_id,
+			keyId: row.id,
 			scopes,
 		};
+	}
+
+	/**
+	 * Find a key row by iterating all keys and comparing salted hashes.
+	 *
+	 * Supports both salted (new) and unsalted (legacy) keys. Legacy keys
+	 * have an empty `key_salt` column and use SHA-256(token) directly.
+	 *
+	 * @param rawKey - The raw API key string to look up.
+	 * @returns The matching row or `undefined`.
+	 */
+	private findKeyByToken(rawKey: string): ApiKeyRow | undefined {
+		const rows = this.db.prepare(
+			"SELECT * FROM api_keys",
+		).all() as ApiKeyRow[];
+
+		for (const row of rows) {
+			const salt = row.key_salt ?? "";
+			const candidateHash = hashKey(rawKey, salt);
+			if (candidateHash === row.key_hash) {
+				return row;
+			}
+		}
+		return undefined;
 	}
 
 	/**

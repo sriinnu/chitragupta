@@ -44,6 +44,7 @@
 	},
 	"dependencies": {
 		"@chitragupta/core": "workspace:*",
+		"@chitragupta/sutra": "workspace:*",
 		"@chitragupta/ui": "workspace:*"
 	},
 	"files": [

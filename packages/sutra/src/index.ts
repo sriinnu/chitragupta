@@ -150,3 +150,12 @@ export type {
 	RuntimeEventStreamConfig,
 	ActiveJobSnapshot,
 } from "./runtime-events-types.js";
+
+/** Widget data protocol — secure script execution and TUI update streaming. */
+export { WidgetDataStream } from "./widget-protocol.js";
+export type {
+	WidgetSource,
+	WidgetUpdate,
+	WidgetSubscription,
+	WidgetDataStreamConfig,
+} from "./widget-protocol-types.js";

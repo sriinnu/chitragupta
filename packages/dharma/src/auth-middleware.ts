@@ -141,19 +141,20 @@ export function createAuthMiddleware(
 			return;
 		}
 
-		// Validate key
+		// Validate key (also rate-limits unknown tokens internally)
 		const result: AuthResult = keyStore.validateKey(token);
 		if (!result.authenticated) {
+			if (result.error?.includes("Rate limit")) {
+				jsonError(res, 429, result.error);
+				return;
+			}
 			const status = result.error?.includes("revoked") ? 403 : 401;
 			jsonError(res, status, result.error ?? "Authentication failed");
 			return;
 		}
 
-		// Rate limit check — we need the key ID from validation
-		// Re-validate to get the record (the store tracks last_used_at on validate)
-		// We use a lightweight approach: hash the token to look up the key ID
-		const keyRecord = findKeyByToken(keyStore, result.tenantId ?? "");
-		if (keyRecord && !keyStore.checkRateLimit(keyRecord)) {
+		// Per-key rate limit check using the key ID from validation
+		if (result.keyId && !keyStore.checkRateLimit(result.keyId)) {
 			jsonError(res, 429, "Rate limit exceeded");
 			return;
 		}
@@ -162,7 +163,7 @@ export function createAuthMiddleware(
 		req.authContext = {
 			tenantId: result.tenantId ?? "",
 			scopes: result.scopes ?? [],
-			keyId: keyRecord,
+			keyId: result.keyId,
 		};
 
 		// Set response headers for downstream consumers
@@ -173,22 +174,3 @@ export function createAuthMiddleware(
 	};
 }
 
-/**
- * Find the key ID for rate-limit checking by listing keys for the tenant.
- * This is a best-effort lookup; returns the most recently used key ID.
- *
- * @param keyStore - API key store instance.
- * @param tenantId - The tenant to search.
- * @returns The key ID string or `undefined`.
- */
-function findKeyByToken(keyStore: ApiKeyStore, tenantId: string): string | undefined {
-	try {
-		const keys = keyStore.listKeys(tenantId);
-		// Return the one with the most recent lastUsedAt (just validated)
-		if (keys.length === 0) return undefined;
-		const sorted = [...keys].sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0));
-		return sorted[0].id;
-	} catch {
-		return undefined;
-	}
-}

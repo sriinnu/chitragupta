@@ -200,6 +200,21 @@ export function writeSkillMarkdown(manifest: SkillManifest | EnhancedSkillManife
 	if (enhanced.evalCases !== undefined && enhanced.evalCases.length > 0) {
 		frontmatterData.evalCases = enhanced.evalCases;
 	}
+	if (enhanced.ui !== undefined) {
+		const uiData: Record<string, unknown> = {};
+		if (enhanced.ui.widgets !== undefined && enhanced.ui.widgets.length > 0) {
+			uiData.widgets = enhanced.ui.widgets;
+		}
+		if (enhanced.ui.keybinds !== undefined && enhanced.ui.keybinds.length > 0) {
+			uiData.keybinds = enhanced.ui.keybinds;
+		}
+		if (enhanced.ui.panels !== undefined && enhanced.ui.panels.length > 0) {
+			uiData.panels = enhanced.ui.panels;
+		}
+		if (Object.keys(uiData).length > 0) {
+			frontmatterData.ui = uiData;
+		}
+	}
 
 	parts.push("---");
 	parts.push(writeFrontmatter(frontmatterData));

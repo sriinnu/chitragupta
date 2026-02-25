@@ -55,10 +55,12 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 
 /**
  * Estimate token count from text length.
- * Uses the common ~4 characters per token heuristic.
+ *
+ * Uses ~3.7 characters per token as a weighted average across typical
+ * LLM workloads (prose ~4, code ~3.5, JSON ~3).
  */
 export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  return Math.ceil(text.length / 3.7);
 }
 
 // ─── Text Match Scoring (BM25-lite) ─────────────────────────────────────────
