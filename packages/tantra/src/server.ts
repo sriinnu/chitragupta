@@ -223,7 +223,25 @@ export class McpServer {
 		const key = "uri" in handler.definition
 			? handler.definition.uri
 			: handler.definition.uriTemplate;
+		const existing = this._resources.get(key);
 		this._resources.set(key, handler);
+
+		// Notify clients when the list shape changes at runtime.
+		if (!existing) {
+			this._notifyResourcesChanged();
+		}
+	}
+
+	/**
+	 * Send a `notifications/resources/list_changed` notification to connected clients.
+	 */
+	private _notifyResourcesChanged(): void {
+		if (this._initialized) {
+			this.sendNotification({
+				jsonrpc: "2.0",
+				method: "notifications/resources/list_changed",
+			});
+		}
 	}
 
 	// ─── Telemetry ───────────────────────────────────────────────────────
