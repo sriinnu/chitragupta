@@ -18,7 +18,7 @@
 import type { McpToolHandler } from "@chitragupta/tantra";
 import type { ChitraguptaToolHandler } from "@chitragupta/tantra";
 import type { ToolHandler } from "@chitragupta/core";
-import { McpServer, chitraguptaToolToMcp } from "@chitragupta/tantra";
+import { McpServer, ToolRegistry, chitraguptaToolToMcp } from "@chitragupta/tantra";
 
 import fs from "fs";
 import path from "path";
@@ -60,12 +60,18 @@ import {
 	createSkillsLearnTool, createSkillsScanTool, createSkillsEcosystemTool,
 	createSkillsRecommendTool,
 } from "./mcp-tools-skills.js";
+import { createCompletionTool } from "./mcp-tools-completion.js";
+import { createUIExtensionsTool, createWidgetDataTool } from "./mcp-tools-plugins.js";
 import {
 	createMemoryResource, createSavePrompt, createLastSessionPrompt,
 	createRecallPrompt, createStatusPrompt, createHandoverPrompt,
 	createReviewPrompt, createDebugPrompt, createResearchPrompt,
 	createRefactorPrompt, createMemorySearchPrompt, createSessionPrompt,
 } from "./mcp-prompts.js";
+import {
+	createSystemMetricsResource, createPluginEcosystemResource,
+	createSystemConfigResource, createRecentToolCallsResource,
+} from "./mcp-resources.js";
 import { McpSessionRecorder } from "./mcp-session.js";
 
 // ─── Re-exports (backward compatibility) ─────────────────────────────────────
@@ -105,7 +111,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		enableAgent = false,
 	} = options;
 
-	// ─── 1. Collect all tools ────────────────────────────────────────
+	const t0 = performance.now();
+
+	// ─── 1. Collect all tools (fast: object construction only) ───────
 
 	const mcpTools: McpToolHandler[] = [];
 
@@ -176,12 +184,23 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	mcpTools.push(createSkillsEcosystemTool());
 	mcpTools.push(createSkillsRecommendTool());
 
+	// Completion Router (provider-agnostic LLM calls)
+	mcpTools.push(createCompletionTool());
+
+	// UI Extension Registry (TUI consumer queries)
+	mcpTools.push(createUIExtensionsTool());
+	mcpTools.push(createWidgetDataTool());
+
 	// ─── 2. Session recording ───────────────────────────────────────
 
 	const recorder = new McpSessionRecorder(projectPath);
 	mcpTools.push(recorder.createRecordConversationTool());
 
-	// ─── 3. Create MCP server ────────────────────────────────────────
+	// ─── 3. Create + START server IMMEDIATELY ────────────────────────
+	//
+	// The transport MUST be ready before any file I/O or dynamic imports.
+	// MCP clients send `initialize` immediately on spawn — if the stdin
+	// listener isn't set up yet, the client times out waiting for a response.
 
 	const server = new McpServer({
 		name,
@@ -206,7 +225,42 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		onToolCall: (info) => recorder.recordToolCall(info),
 	});
 
-	// ─── 3b. EventBridge + MCP notification sink ────────────────────
+	await server.start();
+
+	const startupMs = performance.now() - t0;
+	process.stderr.write(
+		`Chitragupta MCP server ready (${transport}` +
+		`${transport === "sse" ? ` on port ${port}` : ""}) in ${startupMs.toFixed(0)}ms\n` +
+		`  Tools: ${mcpTools.length}\n` +
+		`  Project: ${projectPath}\n` +
+		`  Agent: ${enableAgent ? "enabled" : "disabled"}\n`,
+	);
+
+	// ─── 4. Post-start initialization ────────────────────────────────
+	//
+	// Everything below runs AFTER the transport is ready. The initialize
+	// handshake can proceed while these non-critical subsystems spin up.
+
+	// 4a. Register OS integration surface resources (need server reference)
+	server.registerResource(createSystemMetricsResource(() => ({
+		toolCount: mcpTools.length,
+	})));
+	server.registerResource(createPluginEcosystemResource());
+	server.registerResource(createSystemConfigResource(projectPath));
+	server.registerResource(createRecentToolCallsResource(() => server.getRecentCalls()));
+
+	// 4b. State file (best-effort, deferred to not block event loop)
+	resetMcpStartedAt();
+	setImmediate(() => {
+		writeChitraguptaState({ active: true, project: projectPath, lastTool: "(startup)" });
+	});
+
+	// 4c. Dynamic ToolRegistry (runtime tool registration via plugins)
+	const registry = new ToolRegistry({ strictNamespaces: true, validateSchemas: true });
+	server.attachRegistry(registry);
+	(server as unknown as Record<string, unknown>)._toolRegistry = registry;
+
+	// 4d. EventBridge + MCP notification sink (fire-and-forget)
 	//
 	// Wire realtime events so agent subsystems can push notifications
 	// to MCP clients via JSON-RPC notifications.
@@ -215,38 +269,21 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		const eventBridge = new EventBridge();
 		const mcpSink = new McpNotificationSink((n) => server.sendNotification(n));
 		eventBridge.addSink(mcpSink);
-		// Store bridge on server for external access (e.g. agent wiring)
 		(server as unknown as Record<string, unknown>)._eventBridge = eventBridge;
 	} catch {
 		// EventBridge is optional — MCP server works without it
 	}
 
-	// ─── 4. State file + graceful shutdown ───────────────────────────
-
-	resetMcpStartedAt();
-	writeChitraguptaState({ active: true, project: projectPath, lastTool: "(startup)" });
-
+	// 4e. Graceful shutdown
 	const shutdown = async () => {
 		clearChitraguptaState();
 		await server.stop();
 		process.exit(0);
 	};
-
 	process.on("SIGINT", shutdown);
 	process.on("SIGTERM", shutdown);
 
-	// ─── 5. Start server ─────────────────────────────────────────────
-
-	process.stderr.write(
-		`Chitragupta MCP server starting (${transport}${transport === "sse" ? ` on port ${port}` : ""})...\n` +
-		`  Tools: ${mcpTools.length}\n` +
-		`  Project: ${projectPath}\n` +
-		`  Agent: ${enableAgent ? "enabled" : "disabled"}\n`,
-	);
-
-	await server.start();
-
-	// ─── 6. Auto-start daemon (self-healing, skill sync) ─────────────
+	// ─── 5. Auto-start daemon (self-healing, skill sync) ─────────────
 
 	try {
 		const { DaemonManager } = await import("@chitragupta/anina");

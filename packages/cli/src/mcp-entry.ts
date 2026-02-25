@@ -28,6 +28,13 @@ import { runMcpServerMode } from "./modes/mcp-server.js";
 import { loadCredentials } from "./bootstrap.js";
 import { configureLogging, ConsoleTransport } from "@chitragupta/core";
 
+// ─── Stdout Guard ───────────────────────────────────────────────────────────
+// In stdio mode, stdout is EXCLUSIVELY for MCP JSON-RPC framed messages.
+// Redirect console.log → stderr so stray logs from dependencies can't
+// corrupt the protocol stream and cause client-side timeouts.
+
+console.log = (...args: unknown[]) => { console.error(...args); };
+
 // ─── Crash Guards ───────────────────────────────────────────────────────────
 // Prevent silent crashes that kill the MCP server without any user feedback.
 
@@ -165,6 +172,7 @@ function parseArgs(argv: string[]): {
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+	const t0 = performance.now();
 	const args = parseArgs(process.argv.slice(2));
 
 	// Diagnostic mode — check environment and exit
@@ -172,9 +180,6 @@ async function main(): Promise<void> {
 		await runDiagnostics();
 		process.exit(0);
 	}
-
-	// Load credentials first so API keys are available
-	loadCredentials();
 
 	// In stdio mode, ALL log output must go to stderr to keep stdout
 	// clean for JSON-RPC messages. Without this, DEBUG/INFO logs from
@@ -184,6 +189,12 @@ async function main(): Promise<void> {
 			transports: [new ConsoleTransport({ forceStderr: true })],
 		});
 	}
+
+	// Load credentials (sets API key env vars). Fast (<10ms) but
+	// deferred after logging so any import-time logs go to stderr.
+	loadCredentials();
+
+	process.stderr.write(`[mcp] Bootstrap: ${(performance.now() - t0).toFixed(0)}ms\n`);
 
 	await runMcpServerMode({
 		transport: args.transport,

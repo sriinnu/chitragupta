@@ -45,29 +45,29 @@ function makeState(overrides?: Partial<AgentState>): AgentState {
 describe("context-compaction", () => {
 	describe("estimatePartTokens", () => {
 		it("returns 0 for empty array", () => { expect(estimatePartTokens([])).toBe(0); });
-		it("estimates text part tokens by chars/4", () => { expect(estimatePartTokens([textPart("hello world!")])).toBe(3); });
+		it("estimates text part tokens by chars/3.7", () => { expect(estimatePartTokens([textPart("hello world!")])).toBe(Math.ceil(12 / 3.7)); });
 		it("estimates thinking part tokens the same as text", () => {
 			const text = "a".repeat(17);
-			expect(estimatePartTokens([thinkingPart(text)])).toBe(Math.ceil(17 / 4));
+			expect(estimatePartTokens([thinkingPart(text)])).toBe(Math.ceil(17 / 3.7));
 		});
 		it("estimates tool_call tokens from name + arguments length", () => {
 			const part = toolCallPart("read_file", '{"path":"f"}');
-			expect(estimatePartTokens([part])).toBe(Math.ceil(21 / 4));
+			expect(estimatePartTokens([part])).toBe(Math.ceil(21 / 3.7));
 		});
 		it("estimates tool_result tokens from content length", () => {
-			expect(estimatePartTokens([toolResultPart("a".repeat(100))])).toBe(25);
+			expect(estimatePartTokens([toolResultPart("a".repeat(100))])).toBe(Math.ceil(100 / 3.7));
 		});
-		it("estimates image part at fixed 4000 chars => 1000 tokens", () => {
-			expect(estimatePartTokens([imagePart()])).toBe(1000);
+		it("estimates image part at fixed 4000 chars", () => {
+			expect(estimatePartTokens([imagePart()])).toBe(Math.ceil(4000 / 3.7));
 		});
 		it("sums multiple parts correctly", () => {
 			const parts: ContentPart[] = [textPart("a".repeat(8)), thinkingPart("b".repeat(4)), imagePart()];
-			expect(estimatePartTokens(parts)).toBe(1003);
+			expect(estimatePartTokens(parts)).toBe(Math.ceil((8 + 4 + 4000) / 3.7));
 		});
 		it("handles single char text part", () => { expect(estimatePartTokens([textPart("x")])).toBe(1); });
 		it("handles empty text part", () => { expect(estimatePartTokens([textPart("")])).toBe(0); });
 		it("handles tool_call with empty arguments", () => {
-			expect(estimatePartTokens([toolCallPart("test", "")])).toBe(Math.ceil(4 / 4));
+			expect(estimatePartTokens([toolCallPart("test", "")])).toBe(Math.ceil(4 / 3.7));
 		});
 		it("handles tool_result with empty content", () => { expect(estimatePartTokens([toolResultPart("")])).toBe(0); });
 	});
@@ -76,28 +76,28 @@ describe("context-compaction", () => {
 			expect(estimateTotalTokens(makeState())).toBe(100);
 		});
 		it("includes system prompt tokens", () => {
-			expect(estimateTotalTokens(makeState({ systemPrompt: "a".repeat(400) }))).toBe(200);
+			expect(estimateTotalTokens(makeState({ systemPrompt: "a".repeat(400) }))).toBe(Math.ceil(400 / 3.7) + 100);
 		});
 		it("includes per-message overhead of 4 tokens each", () => {
 			const msg = makeMsg("user", [textPart("hi")]);
-			expect(estimateTotalTokens(makeState({ messages: [msg] }))).toBe(1 + 4 + 100);
+			expect(estimateTotalTokens(makeState({ messages: [msg] }))).toBe(Math.ceil(2 / 3.7) + 4 + 100);
 		});
 		it("includes tools with 1.15 overhead factor", () => {
 			const tool = { definition: { name: "test", description: "desc", inputSchema: { type: "object" } }, execute: vi.fn() };
 			const schemaJson = JSON.stringify({ type: "object" });
 			const rawChars = 4 + 4 + schemaJson.length;
-			const toolTokens = Math.ceil((rawChars * 1.15) / 4);
+			const toolTokens = Math.ceil((rawChars * 1.15) / 3.7);
 			expect(estimateTotalTokens(makeState({ tools: [tool] }))).toBe(toolTokens + 100);
 		});
 		it("accumulates multiple messages and tools", () => {
 			const msgs = [makeMsg("user", [textPart("a".repeat(40))]), makeMsg("assistant", [textPart("b".repeat(80))])];
 			const tool = { definition: { name: "x", description: "y", inputSchema: {} }, execute: vi.fn() };
 			const state = makeState({ systemPrompt: "c".repeat(20), messages: msgs, tools: [tool] });
-			const sysT = Math.ceil(20 / 4);
-			const m1 = Math.ceil(40 / 4) + 4;
-			const m2 = Math.ceil(80 / 4) + 4;
+			const sysT = Math.ceil(20 / 3.7);
+			const m1 = Math.ceil(40 / 3.7) + 4;
+			const m2 = Math.ceil(80 / 3.7) + 4;
 			const schema = JSON.stringify({});
-			const tT = Math.ceil(((1 + 1 + schema.length) * 1.15) / 4);
+			const tT = Math.ceil(((1 + 1 + schema.length) * 1.15) / 3.7);
 			expect(estimateTotalTokens(state)).toBe(sysT + m1 + m2 + tT + 100);
 		});
 	});

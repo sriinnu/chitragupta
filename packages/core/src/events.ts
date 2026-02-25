@@ -19,17 +19,18 @@ import type { EventBus } from "./types.js";
  * ```
  */
 export function createEventBus(): EventBus {
-	const listeners = new Map<string, Set<(...args: any[]) => void>>();
+	const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
 
 	return {
 		on<T>(event: string, handler: (data: T) => void): void {
 			if (!listeners.has(event)) {
 				listeners.set(event, new Set());
 			}
-			listeners.get(event)!.add(handler);
+			// Safe cast: handlers are stored generically and invoked with the correct data type via emit<T>.
+			listeners.get(event)!.add(handler as (...args: unknown[]) => void);
 		},
 
-		off(event: string, handler: (...args: any[]) => void): void {
+		off(event: string, handler: (...args: unknown[]) => void): void {
 			listeners.get(event)?.delete(handler);
 		},
 
@@ -50,10 +51,11 @@ export function createEventBus(): EventBus {
 		},
 
 		once<T>(event: string, handler: (data: T) => void): void {
-			const wrapper = (data: T) => {
-				listeners.get(event)?.delete(wrapper);
+			// Safe cast: wrapper stored generically, invoked with correct data type via emit<T>.
+			const wrapper = ((data: T) => {
+				listeners.get(event)?.delete(wrapper as (...args: unknown[]) => void);
 				handler(data);
-			};
+			}) as (...args: unknown[]) => void;
 			if (!listeners.has(event)) {
 				listeners.set(event, new Set());
 			}

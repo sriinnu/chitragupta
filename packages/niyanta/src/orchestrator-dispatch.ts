@@ -75,7 +75,7 @@ export interface OrchestratorAgentConfig {
 /** Compute orchestrator statistics from task/agent state. */
 export function computeOrchestratorStats(
 	tasks: Map<string, OrchestratorTask>, agents: Map<string, AgentInstance>,
-	totalCost: number, totalTokens: number, completionTimes: number[],
+	totalCost: number, totalTokens: number, completionStats: CompletionStats,
 ): OrchestratorStats {
 	let pending = 0, running = 0, completed = 0, failed = 0;
 	for (const task of tasks.values()) {
@@ -87,10 +87,10 @@ export function computeOrchestratorStats(
 			default: pending++; break;
 		}
 	}
-	const avgLatency = completionTimes.length > 0
-		? completionTimes.reduce((a, b) => a + b, 0) / completionTimes.length : 0;
-	const elapsed = completionTimes.length > 1
-		? (Math.max(...completionTimes) - Math.min(...completionTimes)) / 60000 : 0;
+	const avgLatency = completionStats.count > 0
+		? completionStats.sum / completionStats.count : 0;
+	const elapsed = completionStats.count > 1
+		? (completionStats.max - completionStats.min) / 60000 : 0;
 	return {
 		totalTasks: tasks.size, pendingTasks: pending, runningTasks: running,
 		completedTasks: completed, failedTasks: failed, activeAgents: agents.size,
@@ -125,11 +125,36 @@ export interface CompletionCallbacks {
 	processQueue: () => void;
 }
 
+/**
+ * Running statistics for completion times — tracks count, sum, min, and max
+ * incrementally to avoid unbounded array growth and stack-overflow risk from
+ * `Math.max(...largeArray)`.
+ */
+export interface CompletionStats {
+	count: number;
+	sum: number;
+	min: number;
+	max: number;
+}
+
+/** Create a fresh zero-initialised CompletionStats. */
+export function createCompletionStats(): CompletionStats {
+	return { count: 0, sum: 0, min: Infinity, max: -Infinity };
+}
+
+/** Record a single completion time into the running statistics. */
+export function recordCompletionTime(stats: CompletionStats, time: number): void {
+	stats.count++;
+	stats.sum += time;
+	if (time < stats.min) stats.min = time;
+	if (time > stats.max) stats.max = time;
+}
+
 /** Mutable metrics bucket passed by reference. */
 export interface MetricsBucket {
 	totalCost: number;
 	totalTokens: number;
-	completionTimes: number[];
+	completionStats: CompletionStats;
 }
 
 /** Handle task completion: update state, propagate race/swarm, check plan. */
@@ -150,7 +175,7 @@ export function handleOrchestratorCompletion(
 	if (result.metrics) {
 		metrics.totalCost += result.metrics.cost;
 		metrics.totalTokens += result.metrics.tokenUsage;
-		metrics.completionTimes.push(result.metrics.endTime - result.metrics.startTime);
+		recordCompletionTime(metrics.completionStats, result.metrics.endTime - result.metrics.startTime);
 	}
 	cb.emit({ type: "task:completed", taskId, result });
 	cb.freeAgent(taskId);

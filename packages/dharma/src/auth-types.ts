@@ -65,6 +65,8 @@ export interface AuthResult {
 	authenticated: boolean;
 	/** Resolved tenant ID when authenticated. */
 	tenantId?: string;
+	/** UUID of the validated key (for per-key rate limiting). */
+	keyId?: string;
 	/** Scopes granted by the validated key. */
 	scopes?: AuthScope[];
 	/** Human-readable error when authentication fails. */

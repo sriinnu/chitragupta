@@ -132,21 +132,21 @@ describe("PRESERVATION_RATIOS", () => {
 // ─── estimateTokens ─────────────────────────────────────────────────────────
 
 describe("estimateTokens", () => {
-	it("returns Math.ceil(text.length / 4)", () => {
-		expect(estimateTokens("abcd")).toBe(1); // 4/4 = 1
-		expect(estimateTokens("abcde")).toBe(2); // ceil(5/4) = 2
-		expect(estimateTokens("a")).toBe(1); // ceil(1/4) = 1
-		expect(estimateTokens("")).toBe(0); // ceil(0/4) = 0
+	it("returns Math.ceil(text.length / 3.7)", () => {
+		expect(estimateTokens("abcd")).toBe(Math.ceil(4 / 3.7)); // ceil(4/3.7) = 2
+		expect(estimateTokens("abcde")).toBe(Math.ceil(5 / 3.7)); // ceil(5/3.7) = 2
+		expect(estimateTokens("a")).toBe(1); // ceil(1/3.7) = 1
+		expect(estimateTokens("")).toBe(0);
 	});
 
 	it("handles longer text", () => {
 		const text = "x".repeat(100);
-		expect(estimateTokens(text)).toBe(25); // 100/4 = 25
+		expect(estimateTokens(text)).toBe(Math.ceil(100 / 3.7)); // ceil(100/3.7) = 28
 	});
 
 	it("handles non-exact multiples", () => {
 		const text = "x".repeat(101);
-		expect(estimateTokens(text)).toBe(26); // ceil(101/4) = 26
+		expect(estimateTokens(text)).toBe(Math.ceil(101 / 3.7)); // ceil(101/3.7) = 28
 	});
 });
 
@@ -294,10 +294,10 @@ describe("StreamManager", () => {
 	describe("getTokenCount()", () => {
 		it("returns estimated tokens for stream content", () => {
 			const filePath = "/mock/.chitragupta/smriti/streams/identity.md";
-			mockFs.__store.set(filePath, "x".repeat(100)); // 100 chars = 25 tokens
+			mockFs.__store.set(filePath, "x".repeat(100)); // 100 chars => ceil(100/3.7) = 28
 
 			const count = manager.getTokenCount("identity");
-			expect(count).toBe(25);
+			expect(count).toBe(Math.ceil(100 / 3.7));
 		});
 
 		it("returns 0 for non-existent stream", () => {
@@ -330,8 +330,8 @@ describe("StreamManager", () => {
 			mockFs.__store.set("/mock/.chitragupta/smriti/streams/projects.md", "x".repeat(80));
 
 			const counts = manager.getAllTokenCounts();
-			expect(counts.identity).toBe(10);
-			expect(counts.projects).toBe(20);
+			expect(counts.identity).toBe(Math.ceil(40 / 3.7));
+			expect(counts.projects).toBe(Math.ceil(80 / 3.7));
 			expect(counts.tasks).toBe(0);
 			expect(counts.flow).toBe(0);
 		});

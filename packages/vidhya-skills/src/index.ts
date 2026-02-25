@@ -249,6 +249,13 @@ export type {
 	// Eval cases
 	EvalCase,
 	EvalResult,
+	// UI contribution points
+	SkillUIContributions,
+	SkillWidgetContribution,
+	SkillKeybindContribution,
+	SkillPanelContribution,
+	UIOutputFormat,
+	PanelType,
 } from "./types-v2.js";
 export {
 	KULA_WEIGHTS,

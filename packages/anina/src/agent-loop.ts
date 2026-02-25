@@ -216,7 +216,92 @@ export async function streamLLMResponse(
 
 // ─── Tool Execution ──────────────────────────────────────────────────────────
 
-/** Execute tool calls with policy, autonomy, learning, chetana, and lokapala hooks. */
+/**
+ * Tool names that perform mutations (write files, run commands, etc.).
+ * Tools NOT in this set are considered read-only and safe for parallel execution.
+ */
+const WRITE_TOOLS: ReadonlySet<string> = new Set([
+	"write", "edit", "bash", "notebook_edit",
+	"file_write", "file_edit", "file_delete",
+	"create_file", "delete_file", "move_file",
+]);
+
+/** Returns true when the tool is considered safe for parallel execution. */
+function isReadOnlyTool(name: string): boolean {
+	return !WRITE_TOOLS.has(name);
+}
+
+/**
+ * Execute a single tool call with all hooks (policy, autonomy, learning,
+ * chetana, lokapala). Returns the tool_result message part.
+ */
+async function executeSingleTool(
+	deps: AgentLoopDeps,
+	call: ToolCallContent,
+	context: ToolContext,
+): Promise<ContentPart> {
+	deps.emit("tool:start", { name: call.name, id: call.id });
+
+	let args: Record<string, unknown>;
+	try {
+		args = JSON.parse(call.arguments);
+	} catch {
+		deps.emit("stream:error", {
+			error: `Malformed JSON in tool call args for "${call.name}": ${call.arguments.slice(0, 100)}`,
+		});
+		return {
+			type: "tool_result", toolCallId: call.id,
+			content: `Error: Failed to parse tool arguments as JSON for "${call.name}"`,
+			isError: true,
+		};
+	}
+
+	if (shouldBlockByPolicy(deps, call, args)) {
+		return null as unknown as ContentPart; // sentinel — already handled
+	}
+	if (shouldBlockByAutonomy(deps, call)) {
+		return null as unknown as ContentPart; // sentinel — already handled
+	}
+
+	deps.learningLoop?.markToolStart(call.name);
+	deps.autonomousAgent?.onToolStart(call.name);
+	const toolStartTime = Date.now();
+
+	try {
+		const result = await deps.toolExecutor.execute(call.name, args, context);
+		deps.emit("tool:done", { name: call.name, id: call.id, result });
+		deps.learningLoop?.recordToolUsage(call.name, args, result);
+		deps.autonomousAgent?.onToolUsed(call.name, args, result);
+		deps.chetana?.afterToolExecution(call.name, true, Date.now() - toolStartTime, result.content);
+		scanLokapala(deps, call.name, args, result.content, toolStartTime);
+		return {
+			type: "tool_result", toolCallId: call.id,
+			content: result.content, isError: result.isError,
+		} as ToolResultContent;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		deps.emit("tool:error", { name: call.name, id: call.id, error: message });
+
+		const errorResult = { content: message, isError: true as const };
+		deps.learningLoop?.recordToolUsage(call.name, args, errorResult);
+		deps.autonomousAgent?.onToolUsed(call.name, args, errorResult);
+		deps.chetana?.afterToolExecution(
+			call.name, false, Date.now() - toolStartTime, message, false,
+		);
+		return {
+			type: "tool_result", toolCallId: call.id,
+			content: `Error: ${message}`, isError: true,
+		} as ToolResultContent;
+	}
+}
+
+/**
+ * Execute tool calls with policy, autonomy, learning, chetana, and lokapala hooks.
+ *
+ * Read-only tools (e.g. grep, read, glob) are executed in parallel via
+ * `Promise.allSettled`. Write/mutating tools (e.g. write, edit, bash) are
+ * executed sequentially to avoid conflicts.
+ */
 export async function executeToolCalls(
 	deps: AgentLoopDeps,
 	toolCalls: ToolCallContent[],
@@ -227,59 +312,55 @@ export async function executeToolCalls(
 		signal: deps.abortController?.signal,
 	};
 
+	// Partition into contiguous batches: consecutive read-only tools form a
+	// parallel batch; each write tool is its own sequential batch.
+	type Batch = { parallel: boolean; calls: ToolCallContent[] };
+	const batches: Batch[] = [];
+
 	for (const call of toolCalls) {
-		if (deps.abortController?.signal.aborted) throw new AbortError("Tool execution aborted");
-		deps.emit("tool:start", { name: call.name, id: call.id });
-
-		let args: Record<string, unknown>;
-		try {
-			args = JSON.parse(call.arguments);
-		} catch {
-			deps.emit("stream:error", {
-				error: `Malformed JSON in tool call args for "${call.name}": ${call.arguments.slice(0, 100)}`,
-			});
-			deps.state.messages.push(deps.createMessage("tool_result", [{
-				type: "tool_result", toolCallId: call.id,
-				content: `Error: Failed to parse tool arguments as JSON for "${call.name}"`,
-				isError: true,
-			}]));
-			continue;
+		const readOnly = isReadOnlyTool(call.name);
+		const last = batches[batches.length - 1];
+		if (readOnly && last?.parallel) {
+			last.calls.push(call);
+		} else {
+			batches.push({ parallel: readOnly, calls: [call] });
 		}
+	}
 
-		if (shouldBlockByPolicy(deps, call, args)) continue;
-		if (shouldBlockByAutonomy(deps, call)) continue;
+	for (const batch of batches) {
+		if (deps.abortController?.signal.aborted) throw new AbortError("Tool execution aborted");
 
-		deps.learningLoop?.markToolStart(call.name);
-		deps.autonomousAgent?.onToolStart(call.name);
-		const toolStartTime = Date.now();
-
-		try {
-			const result = await deps.toolExecutor.execute(call.name, args, context);
-			deps.emit("tool:done", { name: call.name, id: call.id, result });
-			deps.learningLoop?.recordToolUsage(call.name, args, result);
-			deps.autonomousAgent?.onToolUsed(call.name, args, result);
-			deps.chetana?.afterToolExecution(call.name, true, Date.now() - toolStartTime, result.content);
-			scanLokapala(deps, call.name, args, result.content, toolStartTime);
-
-			deps.state.messages.push(deps.createMessage("tool_result", [{
-				type: "tool_result", toolCallId: call.id,
-				content: result.content, isError: result.isError,
-			}]));
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			deps.emit("tool:error", { name: call.name, id: call.id, error: message });
-
-			const errorResult = { content: message, isError: true as const };
-			deps.learningLoop?.recordToolUsage(call.name, args, errorResult);
-			deps.autonomousAgent?.onToolUsed(call.name, args, errorResult);
-			deps.chetana?.afterToolExecution(
-				call.name, false, Date.now() - toolStartTime, message, false,
+		if (batch.parallel && batch.calls.length > 1) {
+			// Execute read-only tools concurrently
+			const results = await Promise.allSettled(
+				batch.calls.map((call) => executeSingleTool(deps, call, context)),
 			);
-
-			deps.state.messages.push(deps.createMessage("tool_result", [{
-				type: "tool_result", toolCallId: call.id,
-				content: `Error: ${message}`, isError: true,
-			}]));
+			for (let i = 0; i < results.length; i++) {
+				const outcome = results[i];
+				const call = batch.calls[i];
+				if (outcome.status === "fulfilled" && outcome.value) {
+					deps.state.messages.push(
+						deps.createMessage("tool_result", [outcome.value]),
+					);
+				} else if (outcome.status === "rejected") {
+					const msg = outcome.reason instanceof Error
+						? outcome.reason.message : String(outcome.reason);
+					deps.state.messages.push(deps.createMessage("tool_result", [{
+						type: "tool_result", toolCallId: call.id,
+						content: `Error: ${msg}`, isError: true,
+					}]));
+				}
+				// null sentinel (policy/autonomy blocked) — already pushed by helpers
+			}
+		} else {
+			// Sequential execution for write tools or single-tool batches
+			for (const call of batch.calls) {
+				if (deps.abortController?.signal.aborted) throw new AbortError("Tool execution aborted");
+				const result = await executeSingleTool(deps, call, context);
+				if (result) {
+					deps.state.messages.push(deps.createMessage("tool_result", [result]));
+				}
+			}
 		}
 	}
 }

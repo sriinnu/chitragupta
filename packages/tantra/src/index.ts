@@ -141,6 +141,27 @@ export type {
 	PluginConfigEntry,
 } from "./tool-registry-types.js";
 
+// ─── UI Extension Registry ──────────────────────────────────────────────────
+/** Centralized UI extension registry for skill-contributed widgets, keybinds, and panels. */
+export { UIExtensionRegistry } from "./ui-extension-registry.js";
+export type {
+	UIExtension,
+	UIExtensionEvent,
+	UIExtensionRegistryConfig,
+	UIWidget,
+	UIKeybind,
+	UIPanel,
+	WidgetSearchResult,
+	WidgetPosition,
+	WidgetFormat,
+	PanelType,
+	PanelFormat,
+} from "./ui-extension-registry.js";
+
+// ─── OS Integration Surface Types ───────────────────────────────────────────
+/** Trace + sandbox metadata attached to tool responses, and ring buffer records. */
+export type { ToolExecutionMeta, ToolCallRecord } from "./types.js";
+
 /** Realtime event types re-exported from sutra for consumer convenience. */
 export type {
 	ChitraguptaEvent,

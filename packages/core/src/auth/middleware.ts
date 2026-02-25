@@ -7,6 +7,7 @@
  * Designed as pure functions that return results — not tied to any HTTP framework.
  */
 
+import { timingSafeEqual } from "node:crypto";
 import http from "node:http";
 import type { JWTConfig, JWTPayload } from "./jwt.js";
 import { verifyJWT } from "./jwt.js";
@@ -70,6 +71,22 @@ const DEFAULT_PUBLIC_ROUTES = new Set([
 	"GET /api/health",
 	"OPTIONS *",
 ]);
+
+/**
+ * Constant-time string comparison to prevent timing side-channel attacks.
+ * Always takes the same amount of time regardless of how many characters match.
+ */
+function safeCompare(a: string, b: string): boolean {
+	const bufA = Buffer.from(a, "utf-8");
+	const bufB = Buffer.from(b, "utf-8");
+	if (bufA.length !== bufB.length) {
+		// Compare against itself to burn the same amount of time,
+		// then return false. This prevents length-based timing leaks.
+		timingSafeEqual(bufA, bufA);
+		return false;
+	}
+	return timingSafeEqual(bufA, bufB);
+}
 
 /**
  * Extract a bearer token from the Authorization header.
@@ -220,14 +237,14 @@ export async function authenticateRequest(
 
 	const candidate = bearerToken ?? apiKey;
 
-	// Check legacy auth token
-	if (config.legacyAuthToken && candidate === config.legacyAuthToken) {
+	// Check legacy auth token (constant-time comparison)
+	if (config.legacyAuthToken && candidate && safeCompare(candidate, config.legacyAuthToken)) {
 		return buildLegacyContext();
 	}
 
-	// Check legacy API keys
+	// Check legacy API keys (constant-time comparison)
 	if (config.legacyApiKeys?.length && candidate) {
-		if (config.legacyApiKeys.includes(candidate)) {
+		if (config.legacyApiKeys.some((key) => safeCompare(candidate, key))) {
 			return buildLegacyContext();
 		}
 	}
@@ -285,10 +302,10 @@ export async function authenticateWebSocket(
 	}
 
 	for (const candidate of candidates) {
-		if (config.legacyAuthToken && candidate === config.legacyAuthToken) {
+		if (config.legacyAuthToken && safeCompare(candidate, config.legacyAuthToken)) {
 			return buildLegacyContext();
 		}
-		if (config.legacyApiKeys?.includes(candidate)) {
+		if (config.legacyApiKeys?.some((key) => safeCompare(candidate, key))) {
 			return buildLegacyContext();
 		}
 	}
