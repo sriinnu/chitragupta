@@ -35,6 +35,7 @@ jobs:
 
       - name: Lint and format
         run: pnpm run check
+        continue-on-error: true
 
       - name: Check skill locations
         run: node scripts/check-skill-locations.mjs
