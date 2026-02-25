@@ -39,12 +39,22 @@ console.log = (...args: unknown[]) => { console.error(...args); };
 // ─── Crash Guards ───────────────────────────────────────────────────────────
 // Prevent silent crashes that kill the MCP server without any user feedback.
 
+let _fatalExitScheduled = false;
+
+function scheduleFatalExit(header: string, details: string): void {
+	process.stderr.write(`[chitragupta-mcp] ${header}: ${details}\n`);
+	if (_fatalExitScheduled) return;
+	_fatalExitScheduled = true;
+	setTimeout(() => process.exit(1), 25).unref();
+}
+
 process.on("uncaughtException", (err) => {
-	process.stderr.write(`[chitragupta-mcp] Uncaught exception: ${err.message}\n${err.stack ?? ""}\n`);
+	const details = `${err.message}\n${err.stack ?? ""}`;
+	scheduleFatalExit("Uncaught exception", details);
 });
 process.on("unhandledRejection", (reason) => {
-	const msg = reason instanceof Error ? reason.message : String(reason);
-	process.stderr.write(`[chitragupta-mcp] Unhandled rejection: ${msg}\n`);
+	const msg = reason instanceof Error ? `${reason.message}\n${reason.stack ?? ""}` : String(reason);
+	scheduleFatalExit("Unhandled rejection", msg);
 });
 
 // ─── Diagnostics ────────────────────────────────────────────────────────────
