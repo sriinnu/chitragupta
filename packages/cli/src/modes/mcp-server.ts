@@ -247,7 +247,7 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		toolCount: mcpTools.length,
 	})));
 	server.registerResource(createPluginEcosystemResource());
-	server.registerResource(createSystemConfigResource(projectPath));
+	server.registerResource(createSystemConfigResource(projectPath, transport));
 	server.registerResource(createRecentToolCallsResource(() => server.getRecentCalls()));
 
 	// 4b. State file (best-effort, deferred to not block event loop)
