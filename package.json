@@ -29,7 +29,10 @@
 		"url": "https://github.com/sriinnu/chitragupta/issues"
 	},
 	"scripts": {
+		"setup": "node scripts/env-setup.mjs && pnpm install",
+		"postinstall": "node scripts/verify-native.mjs",
 		"clean": "npm run clean --workspaces --if-present && rm -rf dist",
+		"clean:all": "find packages -name node_modules -type d -prune -exec rm -rf {} + && rm -rf node_modules && find packages -name dist -type d -prune -exec rm -rf {} + && rm -rf dist",
 		"build": "pnpm -r run build",
 		"build:bundle": "pnpm -r run build && node scripts/bundle.mjs && node scripts/build-types.mjs",
 		"dev": "concurrently --names \"core,swara,anina,smriti,ui,yantra,dharma,netra,vayu,sutra,cli\" \"cd packages/core && npm run dev\" \"cd packages/swara && npm run dev\" \"cd packages/anina && npm run dev\" \"cd packages/smriti && npm run dev\" \"cd packages/ui && npm run dev\" \"cd packages/yantra && npm run dev\" \"cd packages/dharma && npm run dev\" \"cd packages/netra && npm run dev\" \"cd packages/vayu && npm run dev\" \"cd packages/sutra && npm run dev\" \"cd packages/cli && npm run dev\"",

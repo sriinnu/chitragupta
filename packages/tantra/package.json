@@ -1,6 +1,7 @@
 {
 	"name": "@chitragupta/tantra",
-	"version": "0.1.1",
+	"private": true,
+	"version": "0.1.0",
 	"description": "MCP server manager with lifecycle state machine, circuit breaker, and capability aggregation",
 	"type": "module",
 	"license": "MIT",
@@ -43,8 +44,9 @@
 	},
 	"dependencies": {
 		"@chitragupta/core": "workspace:*",
-		"@chitragupta/sutra": "workspace:*",
-		"@chitragupta/ui": "workspace:*"
+		"@chitragupta/ui": "workspace:*",
+		"@chitragupta/swara": "workspace:*",
+		"@chitragupta/sutra": "workspace:*"
 	},
 	"files": [
 		"dist",
