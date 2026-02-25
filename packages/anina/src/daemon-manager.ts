@@ -27,6 +27,7 @@ import type {
 	SkillSyncEvent,
 	SamitiBroadcaster,
 } from "./daemon-manager-types.js";
+import { executeSkillScan, type SkillSyncContext } from "./daemon-manager-skill-sync.js";
 
 // Re-export types for backward compatibility
 export type {
@@ -37,6 +38,9 @@ export type {
 	SkillSyncEvent,
 	SamitiBroadcaster,
 } from "./daemon-manager-types.js";
+
+// Re-export skill sync types
+export type { SkillSyncContext } from "./daemon-manager-skill-sync.js";
 
 // ─── DaemonManager ──────────────────────────────────────────────────────────
 
@@ -385,117 +389,20 @@ export class DaemonManager extends EventEmitter {
 	}
 
 	private async runSkillScan(): Promise<void> {
-		if (!this.running || this.health === "crashed") return;
-
 		this.nextSkillScan = new Date(
 			Date.now() + this.config.skillScanIntervalMs,
 		).toISOString();
 
-		const timestamp = new Date().toISOString();
+		const ctx: SkillSyncContext = {
+			emitter: this,
+			isRunning: () => this.running,
+			getHealth: () => this.health,
+			config: this.config,
+			samiti: this.samiti,
+			setPendingApprovalCount: (count: number) => { this.pendingApprovalCount = count; },
+		};
 
-		this.emit("skill-sync", {
-			type: "scan-start",
-			detail: `Scanning ${this.config.skillScanPaths.length} path(s)`,
-			timestamp,
-		} as SkillSyncEvent);
-
-		try {
-			// Lazy-import vidhya-skills to avoid loading at startup (builds after anina)
-			const { SkillDiscovery } = await import("@chitragupta/vidhya-skills");
-			const { ApprovalQueue } = await import("@chitragupta/vidhya-skills");
-			const { validateSkill } = await import("@chitragupta/vidhya-skills");
-			const { getChitraguptaHome } = await import("@chitragupta/core");
-
-			const home = getChitraguptaHome();
-			const queue = new ApprovalQueue(`${home}/approval`);
-
-			const discovery = new SkillDiscovery();
-			let discoveredCount = 0;
-
-			for (const scanPath of this.config.skillScanPaths) {
-				try {
-					const manifests = await discovery.discoverFromDirectory(scanPath);
-
-					for (const manifest of manifests) {
-						// Validate
-						const validation = validateSkill(manifest);
-						const errors = validation.errors.map((e: { message: string }) => e.message);
-						const warnings = validation.warnings.map((w: { message: string }) => w.message);
-
-						// Submit to approval queue
-						const sourcePath = (manifest.source as any)?.filePath ?? scanPath;
-						const req = queue.submit(manifest, sourcePath, {
-							validationErrors: errors,
-							validationWarnings: warnings,
-						});
-
-						// Only count genuinely new discoveries
-						if (req.status === "pending") {
-							discoveredCount++;
-							this.emit("skill-sync", {
-								type: "skill-discovered",
-								detail: `${manifest.name}@${manifest.version} [${req.riskLevel}]`,
-								timestamp: new Date().toISOString(),
-							} as SkillSyncEvent);
-						}
-					}
-				} catch (err) {
-					this.emit("skill-sync", {
-						type: "scan-error",
-						detail: `${scanPath}: ${err instanceof Error ? err.message : String(err)}`,
-						timestamp: new Date().toISOString(),
-					} as SkillSyncEvent);
-				}
-			}
-
-			// Auto-approve safe skills
-			let autoApprovedCount = 0;
-			if (this.config.autoApproveSafe) {
-				const approved = queue.autoApproveSafe();
-				autoApprovedCount = approved.length;
-
-				for (const req of approved) {
-					this.emit("skill-sync", {
-						type: "skill-auto-approved",
-						detail: `${req.manifest.name}@${req.manifest.version}`,
-						timestamp: new Date().toISOString(),
-					} as SkillSyncEvent);
-				}
-			}
-
-			this.pendingApprovalCount = queue.pendingCount;
-
-			this.emit("skill-sync", {
-				type: "scan-complete",
-				detail: `Discovered ${discoveredCount} new, auto-approved ${autoApprovedCount}, ${queue.pendingCount} pending`,
-				timestamp: new Date().toISOString(),
-			} as SkillSyncEvent);
-
-			// Notify Santhi if there are pending approvals
-			if (queue.pendingCount > 0 && this.samiti) {
-				try {
-					this.samiti.broadcast("#alerts", {
-						sender: "daemon-manager",
-						severity: "info",
-						category: "skill-pending",
-						content: `${queue.pendingCount} skill(s) awaiting manual approval`,
-						data: {
-							pendingCount: queue.pendingCount,
-							newDiscovered: discoveredCount,
-							autoApproved: autoApprovedCount,
-						},
-					});
-				} catch {
-					// Best-effort
-				}
-			}
-		} catch (err) {
-			this.emit("skill-sync", {
-				type: "scan-error",
-				detail: err instanceof Error ? err.message : String(err),
-				timestamp: new Date().toISOString(),
-			} as SkillSyncEvent);
-		}
+		await executeSkillScan(ctx);
 	}
 
 	/**

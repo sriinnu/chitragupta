@@ -27,148 +27,19 @@ import {
 	cyan,
 	dim,
 	red,
-	reset,
-	rgb,
 } from "@chitragupta/ui/ansi";
+import {
+	type ClientId,
+	type ClientDef,
+	CLIENTS,
+	printBanner,
+	CHITRAGUPTA_MARKER,
+	MEMORY_INSTRUCTIONS,
+} from "./init-templates.js";
 
-// ─── Supported Clients ──────────────────────────────────────────────────────
-
-type ClientId = "claude" | "codex" | "gemini" | "copilot" | "generic";
-
-interface ClientDef {
-	name: string;
-	mcpConfigPath: (root: string) => string;
-	instructionsPath: (root: string) => string | null;
-	detectMarkers: (root: string) => boolean;
-}
-
-const CLIENTS: Record<ClientId, ClientDef> = {
-	claude: {
-		name: "Claude Code",
-		mcpConfigPath: (root) => path.join(root, ".mcp.json"),
-		instructionsPath: (root) => path.join(root, "CLAUDE.md"),
-		detectMarkers: (root) =>
-			!!process.env.CLAUDE_CODE ||
-			fs.existsSync(path.join(root, "CLAUDE.md")) ||
-			fs.existsSync(path.join(root, ".claude")),
-	},
-	codex: {
-		name: "Codex CLI",
-		mcpConfigPath: (root) => path.join(root, ".codex", "config.json"),
-		instructionsPath: (root) => path.join(root, ".codex", "instructions.md"),
-		detectMarkers: (root) =>
-			!!process.env.CODEX_CLI ||
-			fs.existsSync(path.join(root, ".codex")),
-	},
-	gemini: {
-		name: "Gemini CLI",
-		mcpConfigPath: (root) => path.join(root, ".gemini", "settings.json"),
-		instructionsPath: (root) => path.join(root, "GEMINI.md"),
-		detectMarkers: (root) =>
-			!!process.env.GEMINI_CLI ||
-			fs.existsSync(path.join(root, ".gemini")) ||
-			fs.existsSync(path.join(root, "GEMINI.md")),
-	},
-	copilot: {
-		name: "GitHub Copilot",
-		mcpConfigPath: (root) => path.join(root, ".github", "copilot-mcp.json"),
-		instructionsPath: (root) => path.join(root, ".github", "copilot-instructions.md"),
-		detectMarkers: (root) =>
-			fs.existsSync(path.join(root, ".github", "copilot-mcp.json")) ||
-			fs.existsSync(path.join(root, ".github", "copilot-instructions.md")),
-	},
-	generic: {
-		name: "MCP Client",
-		mcpConfigPath: (root) => path.join(root, ".mcp.json"),
-		instructionsPath: () => null,
-		detectMarkers: () => false,
-	},
-};
-
-// ─── Banner ─────────────────────────────────────────────────────────────────
-
-/**
- * Saffron → Gold gradient applied per-line to the ASCII banner.
- * Uses true-color ANSI (24-bit RGB).
- */
-const BANNER_LINES = [
-	"     ██████╗██╗  ██╗██╗████████╗██████╗  █████╗  ██████╗ ██╗   ██╗██████╗ ████████╗ █████╗ ",
-	"    ██╔════╝██║  ██║██║╚══██╔══╝██╔══██╗██╔══██╗██╔════╝ ██║   ██║██╔══██╗╚══██╔══╝██╔══██╗",
-	"    ██║     ███████║██║   ██║   ██████╔╝███████║██║  ███╗██║   ██║██████╔╝   ██║   ███████║",
-	"    ██║     ██╔══██║██║   ██║   ██╔══██╗██╔══██║██║   ██║██║   ██║██╔═══╝    ██║   ██╔══██║",
-	"    ╚██████╗██║  ██║██║   ██║   ██║  ██║██║  ██║╚██████╔╝╚██████╔╝██║        ██║   ██║  ██║",
-	"     ╚═════╝╚═╝  ╚═╝╚═╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝        ╚═╝   ╚═╝  ╚═╝",
-];
-
-/** Saffron (#FF9933) → Gold (#FFD700) gradient, 6 steps. */
-const GRADIENT: Array<[number, number, number]> = [
-	[255, 153, 51],   // #FF9933  saffron
-	[255, 167, 38],   // blend
-	[255, 183, 28],   // blend
-	[255, 199, 18],   // blend
-	[255, 211, 8],    // blend
-	[255, 215, 0],    // #FFD700  gold
-];
-
-function printBanner(): void {
-	process.stdout.write("\n");
-	for (let i = 0; i < BANNER_LINES.length; i++) {
-		const [r, g, b] = GRADIENT[i % GRADIENT.length];
-		process.stdout.write(`${rgb(r, g, b)}${BANNER_LINES[i]}${reset}\n`);
-	}
-	process.stdout.write(dim("          चि  The Eternal Record Keeper — v0.5.0\n"));
-	process.stdout.write("\n");
-}
-
-// ─── Constants ──────────────────────────────────────────────────────────────
-
-const CHITRAGUPTA_MARKER = "# Chitragupta MCP";
-
-/**
- * The instructions snippet that teaches the host agent when and how
- * to use Chitragupta's MCP tools. Works for any AI client.
- */
-const MEMORY_INSTRUCTIONS = `${CHITRAGUPTA_MARKER}
-
-## Session Start
-- At the START of every session, call \`chitragupta_memory_search\` with the current task
-  to load relevant context from past sessions.
-- Call \`chitragupta_session_list\` to see recent sessions for this project.
-
-## During Work
-- When making architectural decisions, search past sessions first —
-  call \`chitragupta_memory_search\` to check what was decided before.
-- After completing significant work, call \`akasha_deposit\` with type "solution"
-  to record the approach for future sessions.
-- When you discover a recurring pattern, call \`akasha_deposit\` with type "pattern".
-
-## Coding Agent
-- For substantial coding tasks, use the \`coding_agent\` tool — it runs a full
-  autonomous pipeline: Plan → Branch → Execute → Validate → Review → Commit.
-- Call it with \`{ "task": "your task", "mode": "full" }\` for end-to-end execution.
-- Use \`"mode": "plan-only"\` to plan without executing.
-- The coding agent creates git branches, runs tests, and self-reviews its work.
-
-## Context Limits
-- When approaching context limits, call \`chitragupta_handover\` to preserve
-  work state (files modified, decisions made, errors encountered).
-- On session resume, call \`chitragupta_session_show\` with the last session ID
-  to restore context.
-
-## Key Tools
-- \`coding_agent\` — delegate coding tasks (Plan → Branch → Code → Test → Review → Commit)
-- \`chitragupta_memory_search\` — search project memory (GraphRAG-backed)
-- \`chitragupta_session_list\` — list recent sessions
-- \`chitragupta_session_show\` — show session by ID
-- \`chitragupta_handover\` — work-state handover for context continuity
-- \`chitragupta_prompt\` — delegate a task to Chitragupta's agent
-- \`akasha_traces\` — query collective knowledge traces
-- \`akasha_deposit\` — record solutions, patterns, warnings
-- \`sabha_deliberate\` — multi-agent deliberation on proposals
-- \`vasana_tendencies\` — learned behavioral patterns
-- \`health_status\` — system health (Triguna)
-- \`atman_report\` — full self-report
-`;
+// Re-export for backward compatibility
+export type { ClientId, ClientDef } from "./init-templates.js";
+export { CLIENTS, printBanner, CHITRAGUPTA_MARKER, MEMORY_INSTRUCTIONS } from "./init-templates.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -202,8 +73,6 @@ function detectClient(projectRoot: string): ClientId | "unknown" {
 
 /** Resolve the chitragupta MCP entry point path. */
 function resolveEntryPoint(projectRoot: string): string {
-	// Check if running from a local monorepo build (dev scenario).
-	// Skip paths outside the project root — they're likely npx cache dirs.
 	const monorepoEntry = path.resolve(
 		import.meta.dirname ?? __dirname,
 		"../../dist/mcp-entry.js",
@@ -212,7 +81,6 @@ function resolveEntryPoint(projectRoot: string): string {
 		return monorepoEntry;
 	}
 
-	// Check for a global npm install of @yugenlab/chitragupta
 	const globalEntry = path.join(
 		getChitraguptaHome(),
 		"node_modules",
@@ -252,8 +120,6 @@ function buildMcpServerEntry(entryPoint: string, projectRoot: string): Record<st
 
 function writeMcpConfig(projectRoot: string, clientDef: ClientDef, entryPoint: string): McpResult {
 	const mcpPath = clientDef.mcpConfigPath(projectRoot);
-
-	// Ensure parent directory
 	const dir = path.dirname(mcpPath);
 	if (!fs.existsSync(dir)) {
 		fs.mkdirSync(dir, { recursive: true });
@@ -261,11 +127,7 @@ function writeMcpConfig(projectRoot: string, clientDef: ClientDef, entryPoint: s
 
 	let config: Record<string, unknown> = {};
 	if (fs.existsSync(mcpPath)) {
-		try {
-			config = JSON.parse(fs.readFileSync(mcpPath, "utf-8"));
-		} catch {
-			// Corrupted — overwrite
-		}
+		try { config = JSON.parse(fs.readFileSync(mcpPath, "utf-8")); } catch { /* overwrite */ }
 	}
 
 	const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
@@ -325,7 +187,7 @@ async function askClient(detected: ClientId | "unknown"): Promise<ClientId> {
 		const c = choices[i];
 		const num = `  ${i + 1}.`;
 		const isDetected = c.id === detected;
-		const marker = isDetected ? green(" ← detected") : "";
+		const marker = isDetected ? green(" \u2190 detected") : "";
 		process.stdout.write(
 			cyan(num) + ` ${bold(c.name)}` + dim(` (${c.hint})`) + marker + "\n",
 		);
@@ -333,30 +195,21 @@ async function askClient(detected: ClientId | "unknown"): Promise<ClientId> {
 
 	process.stdout.write("\n");
 
-	// Default to detected or claude
 	const defaultIdx = detected !== "unknown"
 		? choices.findIndex((c) => c.id === detected)
 		: 0;
 	const defaultNum = defaultIdx + 1;
 
-	const rl = readline.createInterface({
-		input: process.stdin,
-		output: process.stdout,
-	});
+	const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
 	return new Promise<ClientId>((resolve) => {
 		rl.question(gray(`  Enter number [${defaultNum}]: `), (answer) => {
 			rl.close();
 			const trimmed = answer.trim();
-			if (!trimmed) {
-				resolve(choices[defaultIdx].id);
-				return;
-			}
+			if (!trimmed) { resolve(choices[defaultIdx].id); return; }
 			const num = parseInt(trimmed, 10);
-			if (num >= 1 && num <= choices.length) {
-				resolve(choices[num - 1].id);
-			} else {
-				// Try matching by name
+			if (num >= 1 && num <= choices.length) { resolve(choices[num - 1].id); }
+			else {
 				const match = choices.find(
 					(c) => c.id === trimmed.toLowerCase() || c.name.toLowerCase() === trimmed.toLowerCase(),
 				);
@@ -369,15 +222,11 @@ async function askClient(detected: ClientId | "unknown"): Promise<ClientId> {
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 export async function run(args: string[] = []): Promise<void> {
-	// Parse --client flag
 	let clientOverride: string | undefined;
 	for (let i = 0; i < args.length; i++) {
-		if (args[i] === "--client" && i + 1 < args.length) {
-			clientOverride = args[++i];
-		}
+		if (args[i] === "--client" && i + 1 < args.length) { clientOverride = args[++i]; }
 	}
 
-	// Validate client ID
 	if (clientOverride && !(clientOverride in CLIENTS)) {
 		process.stderr.write(
 			red(`\n  Error: Unknown client "${clientOverride}".\n`) +
@@ -389,37 +238,25 @@ export async function run(args: string[] = []): Promise<void> {
 	const projectRoot = findProjectRoot(process.cwd());
 	const detected = detectClient(projectRoot);
 
-	// ─── Banner ──────────────────────────────────────────────────────────
-
 	printBanner();
-
 	process.stdout.write(gray("  Project : ") + projectRoot + "\n\n");
 
-	// ─── Client Selection ────────────────────────────────────────────────
-
 	let targetId: ClientId;
-	if (clientOverride) {
-		targetId = clientOverride as ClientId;
-	} else {
-		targetId = await askClient(detected);
-	}
+	if (clientOverride) { targetId = clientOverride as ClientId; }
+	else { targetId = await askClient(detected); }
 
 	const clientDef = CLIENTS[targetId];
 	process.stdout.write("\n" + gray("  Client  : ") + bold(clientDef.name) + "\n\n");
-
-	// ─── Step 1: MCP Config ──────────────────────────────────────────────
 
 	const entryPoint = resolveEntryPoint(projectRoot);
 	const mcpResult = writeMcpConfig(projectRoot, clientDef, entryPoint);
 	const mcpRelative = path.relative(projectRoot, mcpResult.file);
 
 	if (mcpResult.created) {
-		process.stdout.write(green("  ✓ ") + green("Created ") + cyan(mcpRelative) + green(" — MCP server configured\n"));
+		process.stdout.write(green("  \u2713 ") + green("Created ") + cyan(mcpRelative) + green(" \u2014 MCP server configured\n"));
 	} else {
-		process.stdout.write(green("  ✓ ") + green("Updated ") + cyan(mcpRelative) + green(" — chitragupta server added\n"));
+		process.stdout.write(green("  \u2713 ") + green("Updated ") + cyan(mcpRelative) + green(" \u2014 chitragupta server added\n"));
 	}
-
-	// ─── Step 2: Instructions ────────────────────────────────────────────
 
 	const instrResult = writeInstructions(projectRoot, clientDef);
 
@@ -427,18 +264,16 @@ export async function run(args: string[] = []): Promise<void> {
 		const instrRelative = path.relative(projectRoot, instrResult.file);
 		switch (instrResult.action) {
 			case "created":
-				process.stdout.write(green("  ✓ ") + green("Created ") + cyan(instrRelative) + green(" — agent instructions added\n"));
+				process.stdout.write(green("  \u2713 ") + green("Created ") + cyan(instrRelative) + green(" \u2014 agent instructions added\n"));
 				break;
 			case "updated":
-				process.stdout.write(green("  ✓ ") + green("Updated ") + cyan(instrRelative) + green(" — Chitragupta section appended\n"));
+				process.stdout.write(green("  \u2713 ") + green("Updated ") + cyan(instrRelative) + green(" \u2014 Chitragupta section appended\n"));
 				break;
 			case "skipped":
-				process.stdout.write(dim("  · ") + dim(instrRelative) + dim(" — Chitragupta section already present\n"));
+				process.stdout.write(dim("  \u00B7 ") + dim(instrRelative) + dim(" \u2014 Chitragupta section already present\n"));
 				break;
 		}
 	}
-
-	// ─── Done ────────────────────────────────────────────────────────────
 
 	process.stdout.write("\n");
 	process.stdout.write(bold("  Ready!\n\n"));
@@ -449,15 +284,15 @@ export async function run(args: string[] = []): Promise<void> {
 	process.stdout.write("\n");
 
 	process.stdout.write(gray("  Coding agent:\n"));
-	process.stdout.write(`    ${cyan("chitragupta code")} ${dim('"fix the bug in login.ts"')}        ${dim("— CLI")}\n`);
-	process.stdout.write(`    ${cyan("chitragupta-code")} ${dim('"add input validation" --plan')}    ${dim("— standalone")}\n`);
+	process.stdout.write(`    ${cyan("chitragupta code")} ${dim('"fix the bug in login.ts"')}        ${dim("\u2014 CLI")}\n`);
+	process.stdout.write(`    ${cyan("chitragupta-code")} ${dim('"add input validation" --plan')}    ${dim("\u2014 standalone")}\n`);
 	process.stdout.write(`    ${dim("Or use the")} ${cyan("coding_agent")} ${dim("tool from")} ${bold(clientDef.name)}\n`);
 	process.stdout.write("\n");
 
 	process.stdout.write(gray("  Configuration:\n"));
-	process.stdout.write(`    ${cyan("chitragupta provider list")}                         ${dim("— see providers")}\n`);
-	process.stdout.write(`    ${cyan("chitragupta provider add anthropic")}                ${dim("— configure API key")}\n`);
-	process.stdout.write(`    ${cyan("chitragupta config set coding.mode plan-only")}      ${dim("— set defaults")}\n`);
+	process.stdout.write(`    ${cyan("chitragupta provider list")}                         ${dim("\u2014 see providers")}\n`);
+	process.stdout.write(`    ${cyan("chitragupta provider add anthropic")}                ${dim("\u2014 configure API key")}\n`);
+	process.stdout.write(`    ${cyan("chitragupta config set coding.mode plan-only")}      ${dim("\u2014 set defaults")}\n`);
 	process.stdout.write("\n");
 
 	if (entryPoint.startsWith("npx:")) {
@@ -466,7 +301,6 @@ export async function run(args: string[] = []): Promise<void> {
 		process.stdout.write("\n");
 	}
 
-	// Show other clients hint
 	const otherClients = Object.entries(CLIENTS)
 		.filter(([id]) => id !== targetId && id !== "generic")
 		.map(([id, def]) => `${id} (${def.name})`)

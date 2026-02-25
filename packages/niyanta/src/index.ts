@@ -80,3 +80,8 @@ export type {
 	KartavyaDispatcherConfig, DispatchResult, ToolExecutor, ToolExecResult,
 	DispatcherSamiti, DispatcherRta, DispatcherVidhiEngine,
 } from "./kartavya-dispatcher.js";
+
+// Job Scheduler (Background job scheduler with priority queuing)
+export * from "./scheduler-types.js";
+export { JobQueue } from "./job-queue.js";
+export { JobScheduler } from "./scheduler.js";

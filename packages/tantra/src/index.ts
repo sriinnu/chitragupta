@@ -123,6 +123,24 @@ export type {
 	VidhisResult,
 } from "./tool-result-types.js";
 
+// ─── Dynamic Tool Registry (Plugin System) ─────────────────────────────────
+/** Dynamic tool registry with plugin management, enable/disable, and change events. */
+export { ToolRegistry } from "./tool-registry.js";
+/** Plugin loader for config-file and directory-based plugin discovery. */
+export { PluginLoader } from "./plugin-loader.js";
+/** Types for the dynamic tool registry and plugin system. */
+export type {
+	ToolPlugin,
+	PluginInfo,
+	RegistryChangeEvent,
+	RegistryChangeListener,
+	RegistrySnapshot,
+	ToolSnapshotEntry,
+	ToolRegistryConfig,
+	PluginConfigFile,
+	PluginConfigEntry,
+} from "./tool-registry-types.js";
+
 /** Realtime event types re-exported from sutra for consumer convenience. */
 export type {
 	ChitraguptaEvent,

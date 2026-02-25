@@ -91,3 +91,23 @@ export type {
 	RtaVerdict,
 	RtaAuditEntry,
 } from "./rta.js";
+
+// Authentication & Multi-Tenant Isolation (Suraksha)
+export type {
+	AuthScope,
+	ApiKey,
+	Tenant,
+	AuthResult,
+	AuthMiddlewareConfig,
+} from "./auth-types.js";
+
+export { ApiKeyStore } from "./api-key-store.js";
+export type { AuthDatabase } from "./api-key-store.js";
+
+export { TenantStore } from "./tenant-store.js";
+
+export { createAuthMiddleware } from "./auth-middleware.js";
+export type {
+	AuthenticatedRequest,
+	MiddlewareNext,
+} from "./auth-middleware.js";
