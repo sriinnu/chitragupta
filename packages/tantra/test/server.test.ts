@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { stripAnsi } from "@chitragupta/ui/ansi";
 import { McpServer } from "../src/server.js";
+import { ToolRegistry } from "../src/tool-registry.js";
 import {
   createRequest,
   createResponse,
@@ -182,7 +183,7 @@ describe("McpServer", () => {
     });
   });
 
-  describe("registerTool / unregisterTool", () => {
+	describe("registerTool / unregisterTool", () => {
     it("should add and remove tools dynamically", async () => {
       const newTool: McpToolHandler = {
         definition: { name: "echo", description: "Echo", inputSchema: {} },
@@ -204,7 +205,43 @@ describe("McpServer", () => {
       res = await handleRequest(server, req);
       tools = (res.result as any).tools;
       expect(tools.map((t: any) => t.name)).not.toContain("echo");
-    });
+	});
+
+	describe("attachRegistry", () => {
+		it("should not remove hardcoded tools when colliding plugin is unregistered", async () => {
+			const registry = new ToolRegistry();
+			registry.registerPlugin({
+				id: "plugin-collision",
+				name: "Plugin Collision",
+				version: "1.0.0",
+				tools: [{
+					definition: { name: "greet", description: "Plugin greet", inputSchema: {} },
+					async execute() {
+						return { content: [{ type: "text", text: "plugin-greet" }] };
+					},
+				}],
+			});
+
+			server.attachRegistry(registry);
+
+			// Hardcoded tool should still execute.
+			let res = await handleRequest(server, createRequest("tools/call", {
+				name: "greet",
+				arguments: { name: "Alice" },
+			}, 90));
+			expect(res.error).toBeUndefined();
+			expect(((res.result as { content: Array<{ text: string }> }).content[0].text)).toContain("Hello, Alice!");
+
+			// Unregister plugin and ensure hardcoded tool remains.
+			registry.unregisterPlugin("plugin-collision");
+			res = await handleRequest(server, createRequest("tools/call", {
+				name: "greet",
+				arguments: { name: "Bob" },
+			}, 91));
+			expect(res.error).toBeUndefined();
+			expect(((res.result as { content: Array<{ text: string }> }).content[0].text)).toContain("Hello, Bob!");
+		});
+	});
   });
 
   // ═══════════════════════════════════════════════════════════════════════

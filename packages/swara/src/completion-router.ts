@@ -102,6 +102,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 		}
 		const onAbort = () => {
 			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
 			reject(new Error("Aborted"));
 		};
 		const timer = setTimeout(() => {
@@ -132,6 +133,7 @@ function withTimeout<T>(
 	return new Promise<T>((resolve, reject) => {
 		const onAbort = () => {
 			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
 			reject(new Error("Aborted"));
 		};
 		const timer = setTimeout(() => {
@@ -199,8 +201,18 @@ export class CompletionRouter {
 
 	/** Register a new provider at runtime. Populates model registry asynchronously. */
 	addProvider(provider: LLMProvider): void {
+		this._removeProviderModels(provider.id);
 		this.providers.set(provider.id, provider);
 		this._populateModels(provider);
+	}
+
+	/** Remove all model entries currently tied to a provider ID. */
+	private _removeProviderModels(providerId: string): void {
+		for (let i = this.modelRegistry.length - 1; i >= 0; i--) {
+			if (this.modelRegistry[i].providerId === providerId) {
+				this.modelRegistry.splice(i, 1);
+			}
+		}
 	}
 
 	/** Query a provider's available models and add them to the registry. */
@@ -208,6 +220,10 @@ export class CompletionRouter {
 		if (!provider.listModels) return;
 		provider.listModels().then(
 			(models) => {
+				// Ignore stale async responses from providers that were replaced/removed.
+				if (this.providers.get(provider.id) !== provider) {
+					return;
+				}
 				for (const model of models) {
 					if (!this.modelRegistry.some((e) => e.model === model)) {
 						this.modelRegistry.push({ model, providerId: provider.id });
@@ -221,12 +237,7 @@ export class CompletionRouter {
 	/** Remove a provider by ID. */
 	removeProvider(providerId: string): void {
 		this.providers.delete(providerId);
-		// Remove model entries that reference this provider.
-		for (let i = this.modelRegistry.length - 1; i >= 0; i--) {
-			if (this.modelRegistry[i].providerId === providerId) {
-				this.modelRegistry.splice(i, 1);
-			}
-		}
+		this._removeProviderModels(providerId);
 	}
 
 	/** List all available model IDs across registered providers. */
@@ -235,7 +246,10 @@ export class CompletionRouter {
 		for (const entry of this.modelRegistry) {
 			models.push(entry.model);
 		}
-		// Also include provider-reported models if cached.
+		if (this.defaultModel) {
+			models.push(this.defaultModel);
+		}
+		models.push(...this.fallbackChain);
 		return [...new Set(models)];
 	}
 
