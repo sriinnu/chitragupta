@@ -1,7 +1,7 @@
 {
 	"name": "@chitragupta/swara",
 	"private": true,
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "AI provider abstraction layer with pluggable LLM backends for the Chitragupta platform",
 	"type": "module",
 	"license": "MIT",
