@@ -12,6 +12,58 @@
 import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
 import type { LLMProvider } from "@chitragupta/swara";
 
+const SUPPORTED_COMPLETION_PROVIDERS = ["anthropic", "openai"] as const;
+type SupportedCompletionProvider = (typeof SUPPORTED_COMPLETION_PROVIDERS)[number];
+
+const DEFAULT_MODEL_BY_PROVIDER: Record<SupportedCompletionProvider, string> = {
+	anthropic: "claude-sonnet-4-5-20250929",
+	openai: "gpt-4o",
+};
+
+const PROVIDER_ENV_KEYS: Record<SupportedCompletionProvider, string> = {
+	anthropic: "ANTHROPIC_API_KEY",
+	openai: "OPENAI_API_KEY",
+};
+
+function isSupportedCompletionProvider(
+	value: string | undefined,
+): value is SupportedCompletionProvider {
+	if (!value) return false;
+	return SUPPORTED_COMPLETION_PROVIDERS.includes(value as SupportedCompletionProvider);
+}
+
+function buildNoAdaptersError(
+	pinnedProvider: SupportedCompletionProvider | undefined,
+): string {
+	if (pinnedProvider) {
+		return `Provider "${pinnedProvider}" is unavailable. Set ${PROVIDER_ENV_KEYS[pinnedProvider]} and retry.`;
+	}
+	return "No completion providers available. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.";
+}
+
+function resolveModel(
+	requestedModel: string | undefined,
+	pinnedProvider: SupportedCompletionProvider | undefined,
+	adapters: LLMProvider[],
+): string {
+	if (requestedModel) {
+		return requestedModel;
+	}
+
+	if (pinnedProvider) {
+		return DEFAULT_MODEL_BY_PROVIDER[pinnedProvider];
+	}
+
+	if (adapters.some((adapter) => adapter.id === "anthropic")) {
+		return DEFAULT_MODEL_BY_PROVIDER.anthropic;
+	}
+	if (adapters.some((adapter) => adapter.id === "openai")) {
+		return DEFAULT_MODEL_BY_PROVIDER.openai;
+	}
+
+	return DEFAULT_MODEL_BY_PROVIDER.anthropic;
+}
+
 /**
  * Create the `chitragupta_completion` tool.
  *
@@ -30,9 +82,8 @@ export function createCompletionTool(): McpToolHandler {
 			name: "chitragupta_completion",
 			description:
 				"Send a prompt to an LLM via Chitragupta's multi-provider completion router. " +
-				"Supports model selection (claude-*, gpt-*, gemini-*, llama*, mistral*), " +
-				"provider pinning, and token limits. Falls back through configured " +
-				"provider chain on transient errors.",
+				"Supports model selection, provider pinning (anthropic/openai), and token limits. " +
+				"Falls back through configured provider chain on transient errors.",
 			inputSchema: {
 				type: "object",
 				properties: {
@@ -44,13 +95,13 @@ export function createCompletionTool(): McpToolHandler {
 						type: "string",
 						description:
 							"Model identifier (e.g. 'claude-sonnet-4-5-20250929', 'gpt-4o'). " +
-							"If omitted, uses the router's default model.",
+							"If omitted, uses a provider-aware default model.",
 					},
 					provider: {
 						type: "string",
 						description:
-							"Provider ID to pin the request to (e.g. 'anthropic', 'openai', 'ollama'). " +
-							"If omitted, the router resolves the provider from the model prefix.",
+							"Provider ID to pin the request to ('anthropic' or 'openai'). " +
+							"If omitted, the router resolves provider from model/default routing.",
 					},
 					maxTokens: {
 						type: "number",
@@ -70,32 +121,44 @@ export function createCompletionTool(): McpToolHandler {
 				};
 			}
 
-			const model = args.model ? String(args.model) : undefined;
-			const provider = args.provider ? String(args.provider) : undefined;
+			const model = args.model ? String(args.model).trim() : undefined;
+			const providerArg = args.provider ? String(args.provider).trim().toLowerCase() : undefined;
+			if (providerArg && !isSupportedCompletionProvider(providerArg)) {
+				return {
+					content: [{
+						type: "text",
+						text: `Error: unsupported provider "${providerArg}". Supported providers: ${SUPPORTED_COMPLETION_PROVIDERS.join(", ")}.`,
+					}],
+					isError: true,
+				};
+			}
+
+			const pinnedProvider = providerArg as SupportedCompletionProvider | undefined;
 			const maxTokens = args.maxTokens
 				? Math.max(1, Math.min(100_000, Number(args.maxTokens) || 4096))
 				: 4096;
 
 			try {
 				const { CompletionRouter } = await import("@chitragupta/swara");
-				const adapters = await loadProviderAdapters(provider);
+				const adapters = await loadProviderAdapters(pinnedProvider);
 
 				if (adapters.length === 0) {
 					return {
-						content: [{ type: "text", text: "No LLM providers available. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or configure Ollama." }],
+						content: [{ type: "text", text: buildNoAdaptersError(pinnedProvider) }],
 						isError: true,
 					};
 				}
 
+				const selectedModel = resolveModel(model, pinnedProvider, adapters);
 				const router = new CompletionRouter({
 					providers: adapters,
-					defaultModel: model ?? "claude-sonnet-4-5-20250929",
+					defaultModel: selectedModel,
 					retryAttempts: 2,
 					timeout: 120_000,
 				});
 
 				const response = await router.complete({
-					model: model ?? router.listModels()[0] ?? "claude-sonnet-4-5-20250929",
+					model: selectedModel,
 					messages: [{ role: "user", content: prompt }],
 					maxTokens,
 				});
@@ -112,7 +175,7 @@ export function createCompletionTool(): McpToolHandler {
 							model: response.model,
 							stopReason: response.stopReason,
 							usage: response.usage,
-							provider: provider ?? "auto",
+							provider: pinnedProvider ?? "auto",
 						},
 					},
 				};
@@ -143,7 +206,7 @@ let _cachedAdapters: LLMProvider[] | undefined;
  * @returns Array of available LLM provider adapters.
  */
 async function loadProviderAdapters(
-	pinnedProvider?: string,
+	pinnedProvider?: SupportedCompletionProvider,
 ): Promise<LLMProvider[]> {
 	if (_cachedAdapters && !pinnedProvider) {
 		return _cachedAdapters;
