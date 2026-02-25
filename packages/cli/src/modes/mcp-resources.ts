@@ -16,6 +16,7 @@
 
 import type { McpResourceHandler, McpContent, ToolCallRecord } from "@chitragupta/tantra";
 import { getSkillRegistry, type SkillRegistryLike } from "./mcp-subsystems.js";
+import { getUIExtensionRegistry } from "./mcp-tools-plugins.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -80,6 +81,18 @@ interface PluginSkillInfo {
 	description: string;
 	tags: string[];
 	capabilities: string[];
+	uiContributions?: PluginUiSummary;
+}
+
+/** UI contribution summary shape for plugin ecosystem output. */
+interface PluginUiSummary {
+	source: "ui-extension-registry" | "skill-manifest";
+	widgets: string[];
+	keybinds: string[];
+	panels: string[];
+	widgetCount: number;
+	keybindCount: number;
+	panelCount: number;
 }
 
 /**
@@ -101,12 +114,44 @@ export function createPluginEcosystemResource(): McpResourceHandler {
 		},
 		async read(): Promise<McpContent[]> {
 			const plugins: PluginSkillInfo[] = [];
+			const uiBySkill = new Map<string, PluginUiSummary>();
+
+			try {
+				const registry = getUIExtensionRegistry();
+				const uiExtensions = registry.getAvailableUIExtensions() as Array<Record<string, unknown>>;
+				for (const ext of uiExtensions) {
+					const skillName = String(ext.skillName ?? "").trim();
+					if (!skillName) continue;
+
+					const widgets = Array.isArray(ext.widgets)
+						? (ext.widgets as Array<Record<string, unknown>>).map((w) => String(w.id ?? "")).filter((v) => v.length > 0)
+						: [];
+					const keybinds = Array.isArray(ext.keybinds)
+						? (ext.keybinds as Array<Record<string, unknown>>).map((k) => String(k.key ?? "")).filter((v) => v.length > 0)
+						: [];
+					const panels = Array.isArray(ext.panels)
+						? (ext.panels as Array<Record<string, unknown>>).map((p) => String(p.id ?? "")).filter((v) => v.length > 0)
+						: [];
+
+					uiBySkill.set(skillName, {
+						source: "ui-extension-registry",
+						widgets,
+						keybinds,
+						panels,
+						widgetCount: widgets.length,
+						keybindCount: keybinds.length,
+						panelCount: panels.length,
+					});
+				}
+			} catch {
+				// UI extension subsystem is optional.
+			}
 
 			try {
 				const registry = await getSkillRegistry();
 				const skills = registry.getAll();
 				for (const skill of skills) {
-					plugins.push(buildPluginInfo(skill, registry));
+					plugins.push(buildPluginInfo(skill, registry, uiBySkill));
 				}
 			} catch {
 				// Skills subsystem not available — return empty list
@@ -114,6 +159,7 @@ export function createPluginEcosystemResource(): McpResourceHandler {
 
 			const result = {
 				count: plugins.length,
+				uiExtensionCount: uiBySkill.size,
 				plugins,
 			};
 			return [{ type: "text", text: JSON.stringify(result, null, 2) }];
@@ -130,6 +176,7 @@ export function createPluginEcosystemResource(): McpResourceHandler {
 function buildPluginInfo(
 	skill: Record<string, unknown>,
 	_registry: SkillRegistryLike,
+	uiBySkill: Map<string, PluginUiSummary>,
 ): PluginSkillInfo {
 	const caps: string[] = [];
 	const rawCaps = skill.capabilities as Array<{ name?: string } | string> | undefined;
@@ -139,11 +186,43 @@ function buildPluginInfo(
 			else if (typeof cap === "object" && cap.name) caps.push(cap.name);
 		}
 	}
+
+	const skillName = String(skill.name ?? "unnamed");
+	let uiContributions = uiBySkill.get(skillName);
+
+	if (!uiContributions) {
+		const rawUi = skill.ui;
+		if (typeof rawUi === "object" && rawUi !== null) {
+			const ui = rawUi as Record<string, unknown>;
+			const widgets = Array.isArray(ui.widgets)
+				? (ui.widgets as Array<Record<string, unknown>>).map((w) => String(w.id ?? "")).filter((v) => v.length > 0)
+				: [];
+			const keybinds = Array.isArray(ui.keybinds)
+				? (ui.keybinds as Array<Record<string, unknown>>).map((k) => String(k.key ?? "")).filter((v) => v.length > 0)
+				: [];
+			const panels = Array.isArray(ui.panels)
+				? (ui.panels as Array<Record<string, unknown>>).map((p) => String(p.id ?? "")).filter((v) => v.length > 0)
+				: [];
+			if (widgets.length > 0 || keybinds.length > 0 || panels.length > 0) {
+				uiContributions = {
+					source: "skill-manifest",
+					widgets,
+					keybinds,
+					panels,
+					widgetCount: widgets.length,
+					keybindCount: keybinds.length,
+					panelCount: panels.length,
+				};
+			}
+		}
+	}
+
 	return {
-		name: String(skill.name ?? "unnamed"),
+		name: skillName,
 		description: String(skill.description ?? ""),
 		tags: Array.isArray(skill.tags) ? (skill.tags as string[]).map(String) : [],
 		capabilities: caps,
+		...(uiContributions ? { uiContributions } : {}),
 	};
 }
 
