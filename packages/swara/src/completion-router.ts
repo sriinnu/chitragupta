@@ -14,12 +14,7 @@ import type {
 	LLMProvider,
 } from "./completion-types.js";
 
-// ─── Model Prefix → Provider Mapping ────────────────────────────────────────
-
-/**
- * Default model prefix rules for routing.
- * Order matters: first match wins.
- */
+/** Default model prefix rules for routing. Order matters: first match wins. */
 const DEFAULT_PREFIX_MAP: ReadonlyArray<{ prefix: string; providerId: string }> = [
 	{ prefix: "claude-", providerId: "anthropic" },
 	{ prefix: "gpt-", providerId: "openai" },
@@ -242,26 +237,17 @@ export class CompletionRouter {
 
 	/** List all available model IDs across registered providers. */
 	listModels(): string[] {
-		const models: string[] = [];
-		for (const entry of this.modelRegistry) {
-			models.push(entry.model);
-		}
-		if (this.defaultModel) {
-			models.push(this.defaultModel);
-		}
+		const models = this.modelRegistry.map((e) => e.model);
+		if (this.defaultModel) models.push(this.defaultModel);
 		models.push(...this.fallbackChain);
 		return [...new Set(models)];
 	}
 
 	/** Get a registered provider by ID. */
-	getProvider(providerId: string): LLMProvider | undefined {
-		return this.providers.get(providerId);
-	}
+	getProvider(providerId: string): LLMProvider | undefined { return this.providers.get(providerId); }
 
 	/** Get all registered provider IDs. */
-	getProviderIds(): string[] {
-		return [...this.providers.keys()];
-	}
+	getProviderIds(): string[] { return [...this.providers.keys()]; }
 
 	// ─── Routing ──────────────────────────────────────────────────────────
 

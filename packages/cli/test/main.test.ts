@@ -36,6 +36,13 @@ const {
 	// @chitragupta/swara/providers
 	mockRegisterSwaraProviders,
 	mockCreateOpenAICompatProvider,
+	// bootstrap helpers
+	mockLoadCredentials,
+	mockLoadCustomProfiles,
+	mockRegisterBuiltinProviders,
+	mockRegisterCLIProviders,
+	mockFormatProviderSummary,
+	mockResolvePreferredProvider,
 	// @chitragupta/swara (dynamic import)
 	mockMargaPipeline,
 	MockMargaPipeline,
@@ -145,6 +152,53 @@ const {
 	// ─── MargaPipeline mock ────────────────────────────────────────────
 	const mockMargaPipeline = { route: vi.fn() };
 	const MockMargaPipeline = vi.fn(function () { return mockMargaPipeline; });
+
+	const defaultProviderPriority = [
+		"claude-code",
+		"codex-cli",
+		"gemini-cli",
+		"aider-cli",
+		"ollama",
+		"anthropic",
+		"openai",
+		"google",
+	];
+
+	const mockLoadCredentials = vi.fn();
+	const mockLoadCustomProfiles = vi.fn().mockReturnValue({});
+	const mockRegisterBuiltinProviders = vi.fn().mockImplementation((registry: { register: (provider: unknown) => void }) => {
+		mockRegisterSwaraProviders(registry);
+	});
+	const mockRegisterCLIProviders = vi.fn().mockResolvedValue([]);
+	const mockFormatProviderSummary = vi.fn().mockReturnValue("  Detected providers:\n    ✓ anthropic API");
+	const mockResolvePreferredProvider = vi.fn().mockImplementation((
+		explicitProvider: string | undefined,
+		settings: { providerPriority?: string[] },
+		registry: { get: (id: string) => unknown; getAll: () => Array<{ id: string }> },
+	) => {
+		if (explicitProvider) {
+			const explicit = registry.get(explicitProvider);
+			if (explicit) {
+				return { providerId: explicitProvider, provider: explicit };
+			}
+			return null;
+		}
+
+		const priority = settings.providerPriority ?? defaultProviderPriority;
+		for (const id of priority) {
+			const candidate = registry.get(id);
+			if (candidate) {
+				return { providerId: id, provider: candidate };
+			}
+		}
+
+		const all = registry.getAll();
+		if (all.length > 0) {
+			return { providerId: all[0].id, provider: all[0] };
+		}
+
+		return null;
+	});
 
 	// ─── CommHub mock ──────────────────────────────────────────────────
 	const mockCommHub = { destroy: vi.fn() };
@@ -264,6 +318,13 @@ const {
 		// @chitragupta/swara/providers
 		mockRegisterSwaraProviders: vi.fn(),
 		mockCreateOpenAICompatProvider: vi.fn(),
+		// bootstrap helpers
+		mockLoadCredentials,
+		mockLoadCustomProfiles,
+		mockRegisterBuiltinProviders,
+		mockRegisterCLIProviders,
+		mockFormatProviderSummary,
+		mockResolvePreferredProvider,
 		// @chitragupta/swara
 		mockMargaPipeline,
 		MockMargaPipeline,
@@ -386,6 +447,19 @@ vi.mock("@chitragupta/swara/providers", () => ({
 	codexProvider: { id: "codex-cli", name: "Codex CLI" },
 	aiderProvider: { id: "aider-cli", name: "Aider CLI" },
 }));
+
+vi.mock("../src/bootstrap.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../src/bootstrap.js")>();
+	return {
+		...actual,
+		loadCredentials: mockLoadCredentials,
+		loadCustomProfiles: mockLoadCustomProfiles,
+		registerBuiltinProviders: mockRegisterBuiltinProviders,
+		registerCLIProviders: mockRegisterCLIProviders,
+		formatProviderSummary: mockFormatProviderSummary,
+		resolvePreferredProvider: mockResolvePreferredProvider,
+	};
+});
 
 vi.mock("@chitragupta/swara", () => ({
 	MargaPipeline: MockMargaPipeline,
