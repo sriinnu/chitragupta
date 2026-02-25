@@ -6,6 +6,7 @@
  * and NPM packages with the "chitragupta-mcp-server" keyword.
  *
  * Supports file watching for live reloading of server configs.
+ * Types live in ./server-discovery-types.ts.
  */
 
 import { readFile, readdir, stat } from "node:fs/promises";
@@ -13,46 +14,10 @@ import { watch, type FSWatcher } from "node:fs";
 import { join, extname, basename } from "node:path";
 
 import type { McpRemoteServerConfig } from "./registry-types.js";
+import type { McpConfigSource, DiscoverAllOptions, DiscoveryEvent, DiscoveryCallback } from "./server-discovery-types.js";
 
-// ─── Types ─────────────────────────────────────────────────────────────────
-
-/**
- * A configuration object that contains an `mcpServers` array,
- * typically loaded from a project or workspace config file.
- */
-export interface McpConfigSource {
-	/** Array of MCP server configurations. */
-	mcpServers?: McpRemoteServerConfig[];
-}
-
-/**
- * Options for the combined discovery scan.
- */
-export interface DiscoverAllOptions {
-	/** Explicit config objects to scan. */
-	configs?: McpConfigSource[];
-	/** Directories to scan for *.json server config files. */
-	directories?: string[];
-	/** Root paths to scan for node_modules with MCP server packages. */
-	nodeModulesRoots?: string[];
-}
-
-/**
- * Event emitted when a config file changes in a watched directory.
- */
-export interface DiscoveryEvent {
-	/** The type of file change. */
-	type: "added" | "changed" | "removed";
-	/** The file path that changed. */
-	filePath: string;
-	/** The parsed config, if available (not present for "removed"). */
-	config?: McpRemoteServerConfig;
-}
-
-/**
- * Callback for directory watch events.
- */
-export type DiscoveryCallback = (event: DiscoveryEvent) => void;
+// Re-export types for backward compatibility
+export type { McpConfigSource, DiscoverAllOptions, DiscoveryEvent, DiscoveryCallback } from "./server-discovery-types.js";
 
 // ─── Discovery ─────────────────────────────────────────────────────────────
 

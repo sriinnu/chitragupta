@@ -25,6 +25,21 @@ import type { SurakshaScanner } from "./suraksha.js";
 import type { KulaType, EnhancedSkillManifest } from "./types-v2.js";
 import type { KulaRegistry } from "./kula.js";
 import { checkPranamaya } from "./pancha-kosha.js";
+import {
+	isSkillManifest,
+	findSkillFiles,
+	tryParsePackageSkill,
+	existsSync,
+} from "./discovery-helpers.js";
+
+// Re-export helpers for backward compatibility
+export {
+	isSkillManifest,
+	findSkillMdInDir,
+	findSkillFiles,
+	tryParsePackageSkill,
+	existsSync,
+} from "./discovery-helpers.js";
 
 /**
  * Event emitted when a skill.md file changes on disk.
@@ -309,7 +324,7 @@ export class SkillDiscovery {
 	/**
 	 * Discover skills from multiple directories with Kula priority merging.
 	 *
-	 * Sources are loaded in priority order: shiksha (lowest) → bahya → antara (highest).
+	 * Sources are loaded in priority order: shiksha (lowest) -> bahya -> antara (highest).
 	 * Higher-priority tiers shadow lower ones when skills share the same name.
 	 *
 	 * Pranamaya pre-validation optionally filters out skills whose runtime
@@ -360,109 +375,5 @@ export class SkillDiscovery {
 		}
 
 		return [...seen.values()];
-	}
-}
-
-// ─── Internal Helpers ───────────────────────────────────────────────────────
-
-/**
- * Check if a filename is a skill manifest (case-insensitive match for `skill.md`).
- * Accepts both `skill.md` and `SKILL.md` (and any mixed-case variant).
- */
-function isSkillManifest(filename: string): boolean {
-	return filename.toLowerCase() === "skill.md";
-}
-
-/**
- * Find a skill.md file (case-insensitive) in the given directory's immediate children.
- * Returns the absolute path if found, null otherwise.
- */
-async function findSkillMdInDir(dirPath: string): Promise<string | null> {
-	try {
-		const entries = await fs.promises.readdir(dirPath);
-		for (const name of entries) {
-			if (isSkillManifest(name)) {
-				return path.join(dirPath, name);
-			}
-		}
-	} catch {
-		// Directory may not exist or be readable
-	}
-	return null;
-}
-
-/**
- * Recursively find all files named `skill.md` (case-insensitive) in a directory tree.
- */
-async function findSkillFiles(dirPath: string): Promise<string[]> {
-	const results: string[] = [];
-
-	if (!existsSync(dirPath)) return results;
-
-	async function walk(currentDir: string): Promise<void> {
-		let entries: fs.Dirent[];
-		try {
-			entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
-		} catch {
-			return;
-		}
-
-		for (const entry of entries) {
-			const fullPath = path.join(currentDir, entry.name);
-
-			if (entry.isDirectory()) {
-				// Skip node_modules and hidden directories
-				if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
-				await walk(fullPath);
-			} else if (entry.isFile() && isSkillManifest(entry.name)) {
-				results.push(fullPath);
-			}
-		}
-	}
-
-	await walk(dirPath);
-	return results;
-}
-
-/**
- * Try to parse a skill.md from an npm package directory.
- * Returns null if the package doesn't have the "chitragupta-skill" keyword
- * or doesn't contain a skill.md.
- */
-async function tryParsePackageSkill(
-	pkgPath: string,
-): Promise<SkillManifest | null> {
-	try {
-		const pkgJsonPath = path.join(pkgPath, "package.json");
-		if (!existsSync(pkgJsonPath)) return null;
-
-		const pkgJson = JSON.parse(
-			await fs.promises.readFile(pkgJsonPath, "utf-8"),
-		);
-
-		// Check for "chitragupta-skill" keyword
-		const keywords: string[] = pkgJson.keywords ?? [];
-		if (!keywords.includes("chitragupta-skill")) return null;
-
-		// Look for skill.md (case-insensitive) in package root
-		const skillMdPath = await findSkillMdInDir(pkgPath);
-		if (!skillMdPath) return null;
-
-		const content = await fs.promises.readFile(skillMdPath, "utf-8");
-		return parseSkillMarkdown(content);
-	} catch {
-		return null;
-	}
-}
-
-/**
- * Synchronous existence check (used for quick guards before async reads).
- */
-function existsSync(filePath: string): boolean {
-	try {
-		fs.accessSync(filePath);
-		return true;
-	} catch {
-		return false;
 	}
 }

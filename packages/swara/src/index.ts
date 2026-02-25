@@ -203,6 +203,28 @@ export {
 	preferenceBlendedScore,
 } from "./turiya-math.js";
 
+// ─── Completion Router (Provider-Agnostic LLM Adapter) ──────────────────────
+/** Provider-agnostic completion router for calling any LLM without Vaayu. */
+export { CompletionRouter, NoProviderError, CompletionTimeoutError, FallbackExhaustedError } from "./completion-router.js";
+export type {
+	CompletionRequest,
+	CompletionResponse,
+	CompletionStreamChunk,
+	CompletionMessage,
+	CompletionContentPart,
+	CompletionToolCall,
+	CompletionToolDefinition,
+	CompletionStopReason,
+	CompletionUsage,
+	CompletionRouterConfig,
+	LLMProvider,
+} from "./completion-types.js";
+
+// ─── Completion Adapters ────────────────────────────────────────────────────
+/** Provider-agnostic adapters for direct LLM completion. */
+export { createAnthropicAdapter } from "./providers/anthropic-adapter.js";
+export { createOpenAIAdapter } from "./providers/openai-adapter.js";
+
 // ─── Providers ──────────────────────────────────────────────────────────────
 export {
 	openaiProvider,
