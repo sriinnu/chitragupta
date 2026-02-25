@@ -29,6 +29,7 @@ import {
 	moveCursorDown,
 	moveCursorUp,
 } from "./editor-navigation.js";
+import { buildLinePrefix as buildLinePrefixHelper, wrapLine as wrapLineHelper } from "./editor-render.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -431,31 +432,11 @@ export class Editor {
 		lineIdx: number, rowIdx: number, isMultiline: boolean,
 		gutterWidth: number, promptColor: string, lineNumColor: string,
 	): string {
-		if (lineIdx === 0 && rowIdx === 0) {
-			if (isMultiline) {
-				const num = String(lineIdx + 1).padStart(gutterWidth);
-				return `${promptColor}${this.theme.symbols.prompt}${reset} ${lineNumColor}${num}${reset} `;
-			}
-			return `${promptColor}${this.theme.symbols.prompt}${reset} `;
-		}
-		if (rowIdx === 0) {
-			const num = String(lineIdx + 1).padStart(gutterWidth);
-			return `  ${lineNumColor}${num}${reset} `;
-		}
-		const wrapIndicator = dim("\u2937 ");
-		if (isMultiline) return `  ${" ".repeat(gutterWidth)} ${wrapIndicator}`;
-		return `  ${wrapIndicator}`;
+		return buildLinePrefixHelper(lineIdx, rowIdx, isMultiline, gutterWidth, promptColor, lineNumColor, this.theme.symbols.prompt);
 	}
 
 	private wrapLine(line: string, maxWidth: number): string[] {
-		if (maxWidth <= 0 || line.length <= maxWidth) return [line];
-		const rows: string[] = [];
-		let pos = 0;
-		while (pos < line.length) {
-			rows.push(line.slice(pos, pos + maxWidth));
-			pos += maxWidth;
-		}
-		return rows;
+		return wrapLineHelper(line, maxWidth);
 	}
 
 	private emitChange(): void {
