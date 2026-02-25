@@ -308,6 +308,7 @@ describe("WidgetDataStream", () => {
 				sender: "test-agent",
 				severity: "info",
 				category: "test",
+				channel: "#widget-alerts",
 				content: "Alert content here",
 			});
 
@@ -327,6 +328,7 @@ describe("WidgetDataStream", () => {
 				sender: "test-agent",
 				severity: "info",
 				category: "test",
+				channel: "#widget-alerts",
 				content: "fallback",
 				data: "structured-data-string",
 			});
@@ -372,6 +374,7 @@ describe("WidgetDataStream", () => {
 				sender: "test-agent",
 				severity: "info",
 				category: "test",
+				channel: "#widget-alerts",
 				content: "should not arrive",
 			});
 
