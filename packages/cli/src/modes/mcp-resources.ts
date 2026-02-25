@@ -14,7 +14,11 @@
  * @module
  */
 
-import type { McpResourceHandler, McpContent, ToolCallRecord } from "@chitragupta/tantra";
+import type {
+	McpResourceHandler,
+	McpContent,
+	ToolCallRecord,
+} from "@chitragupta/tantra";
 import { getSkillRegistry, type SkillRegistryLike } from "./mcp-subsystems.js";
 import { getUIExtensionRegistry } from "./mcp-tools-plugins.js";
 
@@ -116,22 +120,22 @@ export function createPluginEcosystemResource(): McpResourceHandler {
 			const plugins: PluginSkillInfo[] = [];
 			const uiBySkill = new Map<string, PluginUiSummary>();
 
-			try {
-				const registry = getUIExtensionRegistry();
-				const uiExtensions = registry.getAvailableUIExtensions() as Array<Record<string, unknown>>;
-				for (const ext of uiExtensions) {
-					const skillName = String(ext.skillName ?? "").trim();
-					if (!skillName) continue;
+				try {
+					const registry = getUIExtensionRegistry();
+					const uiExtensions = registry.getAvailableUIExtensions();
+					for (const ext of uiExtensions) {
+						const skillName = ext.skillName.trim();
+						if (!skillName) continue;
 
-					const widgets = Array.isArray(ext.widgets)
-						? (ext.widgets as Array<Record<string, unknown>>).map((w) => String(w.id ?? "")).filter((v) => v.length > 0)
-						: [];
-					const keybinds = Array.isArray(ext.keybinds)
-						? (ext.keybinds as Array<Record<string, unknown>>).map((k) => String(k.key ?? "")).filter((v) => v.length > 0)
-						: [];
-					const panels = Array.isArray(ext.panels)
-						? (ext.panels as Array<Record<string, unknown>>).map((p) => String(p.id ?? "")).filter((v) => v.length > 0)
-						: [];
+						const widgets = ext.widgets
+							.map((w) => w.id)
+							.filter((v) => v.length > 0);
+						const keybinds = ext.keybinds
+							.map((k) => k.key)
+							.filter((v) => v.length > 0);
+						const panels = ext.panels
+							.map((p) => p.id)
+							.filter((v) => v.length > 0);
 
 					uiBySkill.set(skillName, {
 						source: "ui-extension-registry",
@@ -239,6 +243,7 @@ function buildPluginInfo(
  */
 export function createSystemConfigResource(
 	projectPath: string,
+	transport: "stdio" | "sse" = "stdio",
 ): McpResourceHandler {
 	return {
 		definition: {
@@ -259,11 +264,11 @@ export function createSystemConfigResource(
 				"introspection",
 			];
 
-			const config = {
-				transport: "stdio",
-				projectPath,
-				features,
-				traceEnabled: true,
+				const config = {
+					transport,
+					projectPath,
+					features,
+					traceEnabled: true,
 				nodeVersion: process.version,
 				platform: process.platform,
 			};

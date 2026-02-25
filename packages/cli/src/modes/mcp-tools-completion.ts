@@ -11,6 +11,7 @@
 
 import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
 import type { LLMProvider } from "@chitragupta/swara";
+import type { CompletionRouter as SwaraCompletionRouter } from "@chitragupta/swara";
 
 const SUPPORTED_COMPLETION_PROVIDERS = ["anthropic", "openai"] as const;
 type SupportedCompletionProvider = (typeof SUPPORTED_COMPLETION_PROVIDERS)[number];
@@ -62,6 +63,15 @@ function resolveModel(
 	}
 
 	return DEFAULT_MODEL_BY_PROVIDER.anthropic;
+}
+
+function buildRouterCacheKey(
+	pinnedProvider: SupportedCompletionProvider | undefined,
+	adapters: LLMProvider[],
+): string {
+	const providerBucket = pinnedProvider ?? "auto";
+	const adapterIds = adapters.map((adapter) => adapter.id).sort().join(",");
+	return `${providerBucket}|${adapterIds}`;
 }
 
 /**
@@ -138,9 +148,8 @@ export function createCompletionTool(): McpToolHandler {
 				? Math.max(1, Math.min(100_000, Number(args.maxTokens) || 4096))
 				: 4096;
 
-			try {
-				const { CompletionRouter } = await import("@chitragupta/swara");
-				const adapters = await loadProviderAdapters(pinnedProvider);
+				try {
+					const adapters = await loadProviderAdapters(pinnedProvider);
 
 				if (adapters.length === 0) {
 					return {
@@ -149,13 +158,8 @@ export function createCompletionTool(): McpToolHandler {
 					};
 				}
 
-				const selectedModel = resolveModel(model, pinnedProvider, adapters);
-				const router = new CompletionRouter({
-					providers: adapters,
-					defaultModel: selectedModel,
-					retryAttempts: 2,
-					timeout: 120_000,
-				});
+					const selectedModel = resolveModel(model, pinnedProvider, adapters);
+					const router = await getCompletionRouter(adapters, pinnedProvider);
 
 				const response = await router.complete({
 					model: selectedModel,
@@ -194,6 +198,12 @@ export function createCompletionTool(): McpToolHandler {
 
 /** Cached adapters to avoid re-creating on every call. */
 let _cachedAdapters: LLMProvider[] | undefined;
+let _cachedRouter:
+	| {
+		key: string;
+		router: SwaraCompletionRouter;
+	}
+	| undefined;
 
 /**
  * Lazily load available LLM provider adapters based on environment.
@@ -236,4 +246,26 @@ async function loadProviderAdapters(
 	}
 
 	return adapters;
+}
+
+async function getCompletionRouter(
+	adapters: LLMProvider[],
+	pinnedProvider: SupportedCompletionProvider | undefined,
+): Promise<SwaraCompletionRouter> {
+	const cacheKey = buildRouterCacheKey(pinnedProvider, adapters);
+	if (_cachedRouter && _cachedRouter.key === cacheKey) {
+		return _cachedRouter.router;
+	}
+
+	const { CompletionRouter } = await import("@chitragupta/swara");
+	const defaultModel = resolveModel(undefined, pinnedProvider, adapters);
+	const router = new CompletionRouter({
+		providers: adapters,
+		defaultModel,
+		retryAttempts: 2,
+		timeout: 120_000,
+	});
+
+	_cachedRouter = { key: cacheKey, router };
+	return router;
 }
