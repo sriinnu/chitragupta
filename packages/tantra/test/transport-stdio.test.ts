@@ -154,6 +154,63 @@ describe("StdioServerTransport", () => {
 		expect(written).toContain("\r\n\r\n");
 	});
 
+	it("should not fall back to NDJSON for chunked Content-Length header/body", () => {
+		const handler = vi.fn();
+		transport.onMessage(handler);
+		transport.start();
+
+		const rpcReq: JsonRpcRequest = {
+			jsonrpc: "2.0",
+			id: 7,
+			method: "initialize",
+		};
+		const body = JSON.stringify(rpcReq);
+		const frame = `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
+		const headerLineEnd = frame.indexOf("\r\n") + 2;
+		const bodyStart = frame.indexOf("\r\n\r\n") + 4;
+		const bodyMid = bodyStart + Math.floor((frame.length - bodyStart) / 2);
+
+		// Header line only (incomplete frame) must not be treated as NDJSON.
+		mockStdin.emit("data", Buffer.from(frame.slice(0, headerLineEnd)));
+		expect(handler).not.toHaveBeenCalled();
+
+		// Header delimiter + partial body still must wait for full frame.
+		mockStdin.emit("data", Buffer.from(frame.slice(headerLineEnd, bodyMid)));
+		expect(handler).not.toHaveBeenCalled();
+
+		mockStdin.emit("data", Buffer.from(frame.slice(bodyMid)));
+		expect(handler).toHaveBeenCalledOnce();
+		expect(handler.mock.calls[0][0].method).toBe("initialize");
+
+		// Framing detection must remain Content-Length (not NDJSON fallback).
+		mockStdoutWrite.mockClear();
+		transport.send({ jsonrpc: "2.0", id: 7, result: {} });
+		const written = mockStdoutWrite.mock.calls[0][0] as string;
+		expect(written).toContain("Content-Length:");
+	});
+
+	it("should parse mixed NDJSON and chunked Content-Length messages in order", () => {
+		const handler = vi.fn();
+		transport.onMessage(handler);
+		transport.start();
+
+		const ndjsonMsg: JsonRpcRequest = { jsonrpc: "2.0", id: 1, method: "ndjson-first" };
+		mockStdin.emit("data", Buffer.from(JSON.stringify(ndjsonMsg) + "\n"));
+		expect(handler).toHaveBeenCalledTimes(1);
+		expect(handler.mock.calls[0][0].method).toBe("ndjson-first");
+
+		const framedMsg: JsonRpcRequest = { jsonrpc: "2.0", id: 2, method: "framed-second" };
+		const framedBody = JSON.stringify(framedMsg);
+		const framedHeader = `Content-Length: ${Buffer.byteLength(framedBody)}\r\n\r\n`;
+		const headerLineEnd = framedHeader.indexOf("\r\n") + 2;
+		mockStdin.emit("data", Buffer.from(framedHeader.slice(0, headerLineEnd)));
+		expect(handler).toHaveBeenCalledTimes(1);
+
+		mockStdin.emit("data", Buffer.from(framedHeader.slice(headerLineEnd) + framedBody));
+		expect(handler).toHaveBeenCalledTimes(2);
+		expect(handler.mock.calls[1][0].method).toBe("framed-second");
+	});
+
 	it("should ignore empty lines", () => {
 		const handler = vi.fn();
 		transport.onMessage(handler);
@@ -243,5 +300,64 @@ describe("StdioClientTransport", () => {
 		expect(secondChild).not.toBeNull();
 		// Should be a different child process
 		expect(secondChild).not.toBe(firstChild);
+	});
+
+	it("should not fall back to NDJSON for chunked framed output", () => {
+		const handler = vi.fn();
+		transport.onMessage(handler);
+
+		const client = transport as any;
+		const rpcReq: JsonRpcRequest = { jsonrpc: "2.0", id: 9, method: "chunked-framed" };
+		const body = JSON.stringify(rpcReq);
+		const frame = `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
+		const headerLineEnd = frame.indexOf("\r\n") + 2;
+		const bodyStart = frame.indexOf("\r\n\r\n") + 4;
+
+		client._buffer = Buffer.from(frame.slice(0, headerLineEnd));
+		client._drain();
+		expect(handler).not.toHaveBeenCalled();
+
+		client._buffer = Buffer.concat([
+			client._buffer,
+			Buffer.from(frame.slice(headerLineEnd, bodyStart + 2)),
+		]);
+		client._drain();
+		expect(handler).not.toHaveBeenCalled();
+
+		client._buffer = Buffer.concat([client._buffer, Buffer.from(frame.slice(bodyStart + 2))]);
+		client._drain();
+
+		expect(handler).toHaveBeenCalledOnce();
+		expect(handler.mock.calls[0][0].method).toBe("chunked-framed");
+	});
+
+	it("should parse mixed NDJSON and chunked framed output in order", () => {
+		const handler = vi.fn();
+		transport.onMessage(handler);
+		const client = transport as any;
+
+		const ndjsonReq: JsonRpcRequest = { jsonrpc: "2.0", id: 1, method: "ndjson-first" };
+		client._buffer = Buffer.from(JSON.stringify(ndjsonReq) + "\n");
+		client._drain();
+		expect(handler).toHaveBeenCalledTimes(1);
+		expect(handler.mock.calls[0][0].method).toBe("ndjson-first");
+
+		const framedReq: JsonRpcRequest = { jsonrpc: "2.0", id: 2, method: "framed-second" };
+		const framedBody = JSON.stringify(framedReq);
+		const framedHeader = `Content-Length: ${Buffer.byteLength(framedBody)}\r\n\r\n`;
+		const headerLineEnd = framedHeader.indexOf("\r\n") + 2;
+
+		client._buffer = Buffer.from(framedHeader.slice(0, headerLineEnd));
+		client._drain();
+		expect(handler).toHaveBeenCalledTimes(1);
+
+		client._buffer = Buffer.concat([
+			client._buffer,
+			Buffer.from(framedHeader.slice(headerLineEnd) + framedBody),
+		]);
+		client._drain();
+
+		expect(handler).toHaveBeenCalledTimes(2);
+		expect(handler.mock.calls[1][0].method).toBe("framed-second");
 	});
 });

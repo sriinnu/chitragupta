@@ -19,6 +19,7 @@ type MessageHandler = (msg: AnyMessage) => void;
 
 const HEADER_DELIMITER = "\r\n\r\n";
 const NEWLINE = "\n";
+const CONTENT_LENGTH_HEADER_PREFIX = "content-length:";
 
 /** Create a zero-length Buffer. */
 function emptyBuffer(): Buffer {
@@ -100,6 +101,59 @@ function tryConsumeLineMessage(buffer: Buffer): ConsumeResult | null {
 		consumed: newlineIndex + 1,
 		raw,
 	};
+}
+
+/** Return true if byte is an ASCII alphabetic character. */
+function isAsciiLetter(byte: number): boolean {
+	return (byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a);
+}
+
+/**
+ * Return true if buffer begins with a full or partial Content-Length header line.
+ *
+ * This is used to avoid falling back to NDJSON while a framed header is still
+ * arriving across chunks.
+ */
+function startsWithContentLengthHeaderPrefix(buffer: Buffer): boolean {
+	const newlineIndex = buffer.indexOf(NEWLINE);
+	const firstLineBuf = newlineIndex === -1 ? buffer : buffer.slice(0, newlineIndex);
+	const firstLine = firstLineBuf.toString("utf8").replace(/\r$/, "").trimStart();
+	if (!firstLine) return false;
+
+	const lowered = firstLine.toLowerCase();
+	const isHeaderPrefix =
+		CONTENT_LENGTH_HEADER_PREFIX.startsWith(lowered) ||
+		lowered.startsWith(CONTENT_LENGTH_HEADER_PREFIX);
+	if (!isHeaderPrefix) return false;
+
+	// No complete line yet (or line ends the current buffer): could still be
+	// a chunk boundary in framed transport.
+	if (newlineIndex === -1 || newlineIndex === buffer.length - 1) return true;
+
+	// After header newline, framed payload must either continue headers
+	// (alpha), or header/body delimiter (\r or \n).
+	const nextByte = buffer[newlineIndex + 1];
+	return nextByte === 0x0d || nextByte === 0x0a || isAsciiLetter(nextByte);
+}
+
+/**
+ * Return true when bytes in buffer look like an incomplete Content-Length frame.
+ */
+function hasPendingFramedMessage(buffer: Buffer): boolean {
+	const delim = findHeaderDelimiter(buffer);
+	if (!delim) return startsWithContentLengthHeaderPrefix(buffer);
+
+	const [headerEnd, delimLen] = delim;
+	const header = buffer.slice(0, headerEnd).toString("utf8");
+	const match = header.match(/Content-Length:\s*(\d+)/i);
+	if (!match) return false;
+
+	const bodyLength = Number.parseInt(match[1], 10);
+	if (!Number.isFinite(bodyLength) || bodyLength < 0) return false;
+
+	const start = headerEnd + delimLen;
+	const end = start + bodyLength;
+	return buffer.length < end;
 }
 
 /** Skip leading \n and \r bytes from the buffer. */
@@ -231,6 +285,10 @@ export class StdioServerTransport {
 				continue;
 			}
 
+			// Buffer looks like a partial Content-Length frame; wait for more bytes
+			// instead of treating header/body chunks as NDJSON lines.
+			if (hasPendingFramedMessage(this._buffer)) return;
+
 			// Not enough data for a frame — try line fallback
 			const line = tryConsumeLineMessage(this._buffer);
 			if (!line) return;
@@ -340,6 +398,9 @@ export class StdioClientTransport {
 				deliverRawMessage(framed.raw, this._handler);
 				continue;
 			}
+
+			// Keep waiting while a Content-Length frame is still incomplete.
+			if (hasPendingFramedMessage(this._buffer)) return;
 
 			const line = tryConsumeLineMessage(this._buffer);
 			if (!line) return;
