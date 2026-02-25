@@ -287,6 +287,50 @@ describe("McpServer", () => {
     });
   });
 
+	describe("registerResource notifications", () => {
+		it("should notify clients when a new resource is registered after initialize", async () => {
+			const sendSpy = vi.spyOn(server, "sendNotification").mockImplementation(() => {});
+
+			await handleRequest(server, createRequest("initialize", {}, 24));
+
+			server.registerResource({
+				definition: {
+					uri: "file:///dynamic.md",
+					name: "Dynamic",
+					description: "runtime-added resource",
+					mimeType: "text/plain",
+				},
+				async read() {
+					return [{ type: "text", text: "dynamic" }];
+				},
+			});
+
+			expect(sendSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					method: "notifications/resources/list_changed",
+				}),
+			);
+		});
+
+		it("should not notify before initialize", () => {
+			const sendSpy = vi.spyOn(server, "sendNotification").mockImplementation(() => {});
+
+			server.registerResource({
+				definition: {
+					uri: "file:///pre-init.md",
+					name: "PreInit",
+					description: "resource added before initialize",
+					mimeType: "text/plain",
+				},
+				async read() {
+					return [{ type: "text", text: "pre-init" }];
+				},
+			});
+
+			expect(sendSpy).not.toHaveBeenCalled();
+		});
+	});
+
   // ═══════════════════════════════════════════════════════════════════════
   // Prompts
   // ═══════════════════════════════════════════════════════════════════════
