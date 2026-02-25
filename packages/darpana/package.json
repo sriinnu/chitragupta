@@ -1,6 +1,5 @@
 {
 	"name": "@chitragupta/darpana",
-	"private": true,
 	"version": "0.1.1",
 	"description": "High-performance LLM API proxy — mirrors Anthropic API to any provider",
 	"type": "module",
