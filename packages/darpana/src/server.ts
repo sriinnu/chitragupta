@@ -9,7 +9,7 @@
 import http from "node:http";
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { DarpanaConfig, AnthropicRequest, AnthropicResponse } from "./types.js";
+import type { DarpanaConfig, AnthropicRequest, AnthropicResponse, OpenAIResponse, GeminiResponse } from "./types.js";
 import { resolveRoute } from "./router.js";
 import { toOpenAI, fromOpenAI } from "./converters/openai.js";
 import { toGemini, fromGemini, buildGeminiUrl } from "./converters/google.js";
@@ -273,7 +273,7 @@ async function handleMessages(
 			return;
 		}
 
-		let parsed: any;
+		let parsed: unknown;
 		try {
 			parsed = JSON.parse(resBody.toString());
 		} catch {
@@ -284,13 +284,13 @@ async function handleMessages(
 		let anthropicRes: AnthropicResponse;
 		switch (provider.type) {
 			case "openai-compat":
-				anthropicRes = fromOpenAI(parsed, anthropicReq.model);
+				anthropicRes = fromOpenAI(parsed as OpenAIResponse, anthropicReq.model);
 				break;
 			case "google":
-				anthropicRes = fromGemini(parsed, anthropicReq.model);
+				anthropicRes = fromGemini(parsed as GeminiResponse, anthropicReq.model);
 				break;
 			case "passthrough":
-				anthropicRes = fromPassthrough(parsed);
+				anthropicRes = fromPassthrough(parsed as AnthropicResponse);
 				break;
 			default:
 				sendError(res, 500, "config_error", "Unknown provider type");

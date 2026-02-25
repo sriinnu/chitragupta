@@ -14,12 +14,49 @@ import { searchMemory } from "@chitragupta/smriti/search";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
+/**
+ * Default CORS origins allowed in development.
+ * Production deployments must supply an explicit allowlist via `corsOrigins`.
+ */
+const DEFAULT_CORS_ORIGINS: readonly string[] = [
+	"http://localhost:3000",
+	"http://localhost:5173",
+];
+
+/** Resolved CORS origin allowlist. Set via {@link configureCorsOrigins}. */
+let allowedCorsOrigins: readonly string[] = DEFAULT_CORS_ORIGINS;
+
+/**
+ * Configure the CORS origin allowlist used by route helpers.
+ *
+ * Call this once at startup before any requests are handled.
+ * Passing `undefined` resets to the dev defaults.
+ */
+export function configureCorsOrigins(origins?: readonly string[]): void {
+	allowedCorsOrigins = origins ?? DEFAULT_CORS_ORIGINS;
+}
+
+/**
+ * Resolve the CORS origin header value for the given request origin.
+ * Returns the origin if it appears in the allowlist, or an empty string
+ * (meaning "do not set the header") if it is not allowed.
+ */
+function resolveCorsOrigin(requestOrigin: string | undefined): string {
+	if (!requestOrigin) return "";
+	if (allowedCorsOrigins.some((allowed) => requestOrigin.startsWith(allowed))) {
+		return requestOrigin;
+	}
+	return "";
+}
+
 export interface ServerModeOptions {
 	agent: Agent;
 	port?: number;
 	host?: string;
 	/** Project path for session/memory scoping */
 	projectPath?: string;
+	/** Explicit CORS origin allowlist. Defaults to localhost dev origins. */
+	corsOrigins?: string[];
 }
 
 interface JsonBody {
@@ -62,16 +99,26 @@ export function parseBody(req: IncomingMessage): Promise<JsonBody> {
 	});
 }
 
-/** Write a JSON response. */
-export function jsonResponse(res: ServerResponse, statusCode: number, data: unknown): void {
+/** Write a JSON response with origin-validated CORS headers. */
+export function jsonResponse(
+	res: ServerResponse,
+	statusCode: number,
+	data: unknown,
+	requestOrigin?: string,
+): void {
 	const body = JSON.stringify(data);
-	res.writeHead(statusCode, {
+	const corsOrigin = resolveCorsOrigin(requestOrigin);
+	const headers: Record<string, string | number> = {
 		"Content-Type": "application/json",
 		"Content-Length": Buffer.byteLength(body),
-		"Access-Control-Allow-Origin": "*",
 		"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 		"Access-Control-Allow-Headers": "Content-Type, Authorization",
-	});
+	};
+	if (corsOrigin) {
+		headers["Access-Control-Allow-Origin"] = corsOrigin;
+		headers["Vary"] = "Origin";
+	}
+	res.writeHead(statusCode, headers);
 	res.end(body);
 }
 
@@ -80,14 +127,19 @@ export function errorResponse(res: ServerResponse, statusCode: number, message: 
 	jsonResponse(res, statusCode, { error: message, code: statusCode });
 }
 
-/** Set CORS headers for preflight requests. */
-export function handleCors(res: ServerResponse): void {
-	res.writeHead(204, {
-		"Access-Control-Allow-Origin": "*",
+/** Set CORS headers for preflight requests with origin validation. */
+export function handleCors(res: ServerResponse, requestOrigin?: string): void {
+	const corsOrigin = resolveCorsOrigin(requestOrigin);
+	const headers: Record<string, string> = {
 		"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 		"Access-Control-Allow-Headers": "Content-Type, Authorization",
 		"Access-Control-Max-Age": "86400",
-	});
+	};
+	if (corsOrigin) {
+		headers["Access-Control-Allow-Origin"] = corsOrigin;
+		headers["Vary"] = "Origin";
+	}
+	res.writeHead(204, headers);
 	res.end();
 }
 
@@ -161,14 +213,19 @@ export async function handleChatStream(
 		return;
 	}
 
-	res.writeHead(200, {
+	const corsOrigin = resolveCorsOrigin(req.headers.origin);
+	const sseHeaders: Record<string, string> = {
 		"Content-Type": "text/event-stream",
 		"Cache-Control": "no-cache",
 		"Connection": "keep-alive",
-		"Access-Control-Allow-Origin": "*",
 		"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 		"Access-Control-Allow-Headers": "Content-Type, Authorization",
-	});
+	};
+	if (corsOrigin) {
+		sseHeaders["Access-Control-Allow-Origin"] = corsOrigin;
+		sseHeaders["Vary"] = "Origin";
+	}
+	res.writeHead(200, sseHeaders);
 
 	const sendEvent = (eventType: string, data: unknown) => {
 		if (res.destroyed) return;

@@ -100,11 +100,14 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 			reject(new Error("Aborted"));
 			return;
 		}
-		const timer = setTimeout(resolve, ms);
 		const onAbort = () => {
 			clearTimeout(timer);
 			reject(new Error("Aborted"));
 		};
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
 		signal?.addEventListener("abort", onAbort, { once: true });
 	});
 }
@@ -127,23 +130,25 @@ function withTimeout<T>(
 	signal?: AbortSignal,
 ): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
-		const timer = setTimeout(() => {
-			reject(new CompletionTimeoutError(timeoutMs));
-		}, timeoutMs);
-
 		const onAbort = () => {
 			clearTimeout(timer);
 			reject(new Error("Aborted"));
 		};
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			reject(new CompletionTimeoutError(timeoutMs));
+		}, timeoutMs);
 		signal?.addEventListener("abort", onAbort, { once: true });
 
 		promise.then(
 			(value) => {
 				clearTimeout(timer);
+				signal?.removeEventListener("abort", onAbort);
 				resolve(value);
 			},
 			(error) => {
 				clearTimeout(timer);
+				signal?.removeEventListener("abort", onAbort);
 				reject(error);
 			},
 		);
@@ -192,9 +197,25 @@ export class CompletionRouter {
 
 	// ─── Provider Management ──────────────────────────────────────────────
 
-	/** Register a new provider at runtime. */
+	/** Register a new provider at runtime. Populates model registry asynchronously. */
 	addProvider(provider: LLMProvider): void {
 		this.providers.set(provider.id, provider);
+		this._populateModels(provider);
+	}
+
+	/** Query a provider's available models and add them to the registry. */
+	private _populateModels(provider: LLMProvider): void {
+		if (!provider.listModels) return;
+		provider.listModels().then(
+			(models) => {
+				for (const model of models) {
+					if (!this.modelRegistry.some((e) => e.model === model)) {
+						this.modelRegistry.push({ model, providerId: provider.id });
+					}
+				}
+			},
+			() => { /* best-effort — prefix matching still works as fallback */ },
+		);
 	}
 
 	/** Remove a provider by ID. */

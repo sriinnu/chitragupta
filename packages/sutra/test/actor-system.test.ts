@@ -11,6 +11,11 @@ async function flush(): Promise<void> {
 	await new Promise<void>((r) => setTimeout(r, 30));
 }
 
+/** Create a typed vi.fn() mock that satisfies the ActorBehavior signature. */
+function mockBehavior(): ActorBehavior {
+	return vi.fn() as unknown as ActorBehavior;
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe("ActorSystem", () => {
@@ -64,7 +69,7 @@ describe("ActorSystem", () => {
 
 		it("should kill all actors on shutdown", async () => {
 			system.start();
-			const ref = system.spawn("worker", { behavior: vi.fn() });
+			const ref = system.spawn("worker", { behavior: mockBehavior() });
 			expect(system.actorCount).toBe(1);
 			system.shutdown();
 			expect(system.actorCount).toBe(0);
@@ -77,29 +82,29 @@ describe("ActorSystem", () => {
 
 	describe("spawn", () => {
 		it("should spawn an actor and return an ActorRef", () => {
-			const ref = system.spawn("actor-1", { behavior: vi.fn() });
+			const ref = system.spawn("actor-1", { behavior: mockBehavior() });
 			expect(ref).toBeInstanceOf(ActorRef);
 			expect(ref.actorId).toBe("actor-1");
 		});
 
 		it("should increase actorCount on spawn", () => {
 			expect(system.actorCount).toBe(0);
-			system.spawn("a", { behavior: vi.fn() });
+			system.spawn("a", { behavior: mockBehavior() });
 			expect(system.actorCount).toBe(1);
-			system.spawn("b", { behavior: vi.fn() });
+			system.spawn("b", { behavior: mockBehavior() });
 			expect(system.actorCount).toBe(2);
 		});
 
 		it("should throw when spawning a duplicate actor ID", () => {
-			system.spawn("dup", { behavior: vi.fn() });
-			expect(() => system.spawn("dup", { behavior: vi.fn() }))
+			system.spawn("dup", { behavior: mockBehavior() });
+			expect(() => system.spawn("dup", { behavior: mockBehavior() }))
 				.toThrow('Actor "dup" already exists');
 		});
 
 		it("should emit actor:spawned event", () => {
 			const events: unknown[] = [];
 			system.on((e) => events.push(e));
-			system.spawn("observed", { behavior: vi.fn() });
+			system.spawn("observed", { behavior: mockBehavior() });
 			// Spawn emits actor:spawned + peer:discovered (from gossip)
 			const spawnedEvents = events.filter((e) => (e as { type: string }).type === "actor:spawned");
 			expect(spawnedEvents).toHaveLength(1);
@@ -113,7 +118,7 @@ describe("ActorSystem", () => {
 
 	describe("stop", () => {
 		it("should stop an existing actor and return true", () => {
-			system.spawn("to-stop", { behavior: vi.fn() });
+			system.spawn("to-stop", { behavior: mockBehavior() });
 			expect(system.stop("to-stop")).toBe(true);
 			expect(system.actorCount).toBe(0);
 		});
@@ -123,7 +128,7 @@ describe("ActorSystem", () => {
 		});
 
 		it("should emit actor:stopped event", () => {
-			system.spawn("to-stop", { behavior: vi.fn() });
+			system.spawn("to-stop", { behavior: mockBehavior() });
 			const events: unknown[] = [];
 			system.on((e) => events.push(e));
 			system.stop("to-stop");
@@ -132,7 +137,7 @@ describe("ActorSystem", () => {
 		});
 
 		it("should make ref() return undefined for stopped actors", () => {
-			system.spawn("ephemeral", { behavior: vi.fn() });
+			system.spawn("ephemeral", { behavior: mockBehavior() });
 			expect(system.ref("ephemeral")).toBeDefined();
 			system.stop("ephemeral");
 			expect(system.ref("ephemeral")).toBeUndefined();
@@ -145,7 +150,7 @@ describe("ActorSystem", () => {
 
 	describe("ref", () => {
 		it("should return an ActorRef for an existing actor", () => {
-			system.spawn("lookup", { behavior: vi.fn() });
+			system.spawn("lookup", { behavior: mockBehavior() });
 			const ref = system.ref("lookup");
 			expect(ref).toBeDefined();
 			expect(ref!.actorId).toBe("lookup");
@@ -221,7 +226,7 @@ describe("ActorSystem", () => {
 	describe("broadcast", () => {
 		it("should deliver to all actors except the sender", async () => {
 			const received: string[] = [];
-			system.spawn("sender-actor", { behavior: vi.fn() });
+			system.spawn("sender-actor", { behavior: mockBehavior() });
 			system.spawn("recv-1", {
 				behavior: (env) => { received.push("recv-1:" + env.payload); },
 			});
@@ -244,7 +249,7 @@ describe("ActorSystem", () => {
 
 	describe("subscribe / unsubscribe", () => {
 		it("should allow subscribing and unsubscribing without errors", () => {
-			system.spawn("sub-actor", { behavior: vi.fn() });
+			system.spawn("sub-actor", { behavior: mockBehavior() });
 			expect(() => system.subscribe("sub-actor", "news")).not.toThrow();
 			expect(() => system.unsubscribe("sub-actor", "news")).not.toThrow();
 		});
@@ -258,18 +263,18 @@ describe("ActorSystem", () => {
 		it("should allow unsubscribing from events", () => {
 			const events: unknown[] = [];
 			const unsub = system.on((e) => events.push(e));
-			system.spawn("ev-1", { behavior: vi.fn() });
+			system.spawn("ev-1", { behavior: mockBehavior() });
 			const countAfterFirst = events.length;
 			expect(countAfterFirst).toBeGreaterThanOrEqual(1);
 
 			unsub();
-			system.spawn("ev-2", { behavior: vi.fn() });
+			system.spawn("ev-2", { behavior: mockBehavior() });
 			expect(events).toHaveLength(countAfterFirst); // no new events after unsub
 		});
 
 		it("should not crash if an event handler throws", () => {
 			system.on(() => { throw new Error("bad handler"); });
-			expect(() => system.spawn("safe", { behavior: vi.fn() })).not.toThrow();
+			expect(() => system.spawn("safe", { behavior: mockBehavior() })).not.toThrow();
 		});
 	});
 
@@ -300,13 +305,13 @@ describe("ActorSystem", () => {
 		});
 
 		it("should support equals() comparison", () => {
-			const ref1 = system.spawn("eq-actor", { behavior: vi.fn() });
+			const ref1 = system.spawn("eq-actor", { behavior: mockBehavior() });
 			const ref2 = system.ref("eq-actor")!;
 			expect(ref1.equals(ref2)).toBe(true);
 		});
 
 		it("should provide a toString() representation", () => {
-			const ref = system.spawn("str-actor", { behavior: vi.fn() });
+			const ref = system.spawn("str-actor", { behavior: mockBehavior() });
 			expect(ref.toString()).toBe("ActorRef(str-actor)");
 		});
 	});
@@ -318,7 +323,7 @@ describe("ActorSystem", () => {
 	describe("peer discovery", () => {
 		it("should find actors by expertise", () => {
 			system.spawn("expert", {
-				behavior: vi.fn(),
+				behavior: mockBehavior(),
 				expertise: ["typescript", "rust"],
 			});
 			const found = system.findByExpertise("typescript");
@@ -327,20 +332,20 @@ describe("ActorSystem", () => {
 		});
 
 		it("should return empty when no actors match expertise", () => {
-			system.spawn("no-match", { behavior: vi.fn(), expertise: ["python"] });
+			system.spawn("no-match", { behavior: mockBehavior(), expertise: ["python"] });
 			expect(system.findByExpertise("go")).toEqual([]);
 		});
 
 		it("should find all alive peers", () => {
-			system.spawn("a1", { behavior: vi.fn() });
-			system.spawn("a2", { behavior: vi.fn() });
+			system.spawn("a1", { behavior: mockBehavior() });
+			system.spawn("a2", { behavior: mockBehavior() });
 			const alive = system.findAlive();
 			expect(alive).toHaveLength(2);
 		});
 
 		it("should find peers by capability", () => {
-			system.spawn("reviewer", { behavior: vi.fn(), capabilities: ["code-review"] });
-			system.spawn("coder", { behavior: vi.fn(), capabilities: ["coding"] });
+			system.spawn("reviewer", { behavior: mockBehavior(), capabilities: ["code-review"] });
+			system.spawn("coder", { behavior: mockBehavior(), capabilities: ["coding"] });
 			const reviewers = system.findByCapability("code-review");
 			expect(reviewers).toHaveLength(1);
 			expect(reviewers[0].actorId).toBe("reviewer");
@@ -356,7 +361,7 @@ describe("ActorSystem", () => {
 			system.spawn("auto-cap", {
 				behavior: {
 					capabilities: ["code-review", "typescript"],
-					handle: vi.fn(),
+					handle: mockBehavior(),
 				},
 			});
 			const caps = system.findByCapability("code-review");
@@ -370,7 +375,7 @@ describe("ActorSystem", () => {
 				behavior: {
 					capabilities: ["review"],
 					expertise: ["security"],
-					handle: vi.fn(),
+					handle: mockBehavior(),
 				},
 				capabilities: ["typescript"],
 				expertise: ["coding"],
@@ -387,7 +392,7 @@ describe("ActorSystem", () => {
 		});
 
 		it("plain ActorBehavior still works (no capabilities)", () => {
-			system.spawn("plain", { behavior: vi.fn() });
+			system.spawn("plain", { behavior: mockBehavior() });
 			const alive = system.findAlive();
 			expect(alive.some((p) => p.actorId === "plain")).toBe(true);
 		});

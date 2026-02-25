@@ -15,8 +15,8 @@ import type {
 	AuthScope,
 	AuthResult,
 	AuthMiddlewareConfig,
-	AuthenticatedRequest,
 } from "../src/auth-types.js";
+import type { AuthenticatedRequest } from "../src/auth-middleware.js";
 import type { AuthDatabase } from "../src/api-key-store.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

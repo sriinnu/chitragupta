@@ -1,15 +1,20 @@
 /**
  * Simple token estimation utilities.
  *
- * Uses the widely-accepted ~4 characters per token heuristic as a fast
- * approximation. For precise counts, integrate a real tokenizer such as
- * tiktoken for OpenAI or the Anthropic tokenizer.
+ * Uses a weighted average of ~3.7 characters per token as a fast
+ * approximation across mixed content (English prose ~4, code ~3.5,
+ * JSON/structured data ~3). For precise counts, integrate a real
+ * tokenizer such as tiktoken for OpenAI or the Anthropic tokenizer.
  */
 
 import type { Message, ModelDefinition } from "./types.js";
 
-/** Approximate characters per token. */
-const CHARS_PER_TOKEN = 4;
+/**
+ * Approximate characters per token — weighted average across typical
+ * LLM workloads (prose, code, JSON). More accurate than the older
+ * value of 4 which under-counts tokens for symbol-heavy content.
+ */
+const CHARS_PER_TOKEN = 3.7;
 
 /**
  * Estimate the number of tokens for a given text string.

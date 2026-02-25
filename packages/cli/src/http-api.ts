@@ -23,6 +23,10 @@ import { mountAutonomyRoutes } from "./routes/autonomy.js";
 import { mountWorkflowRoutes } from "./routes/workflow.js";
 import { mountWebhookRoutes } from "./http-routes-webhooks.js";
 import type { CollaborationDeps } from "./routes/collaboration-types.js";
+import { createAuthMiddleware } from "@chitragupta/dharma";
+import { createLogger } from "@chitragupta/core";
+
+const apiLog = createLogger("http-api");
 
 /**
  * Create a pre-configured server with all Chitragupta API routes.
@@ -32,6 +36,26 @@ import type { CollaborationDeps } from "./routes/collaboration-types.js";
  */
 export function createChitraguptaAPI(deps: ApiDeps, config?: ServerConfig): ChitraguptaServer {
 	const server = new ChitraguptaServer(config);
+
+	// Wire Dharma API-key auth middleware when configured
+	if (config?.dharmaAuth) {
+		const dharma = config.dharmaAuth;
+		const enabled = dharma.config?.enabled ?? false;
+
+		if (!enabled) {
+			apiLog.warn(
+				"Dharma API-key auth is configured but DISABLED. " +
+				"Set dharmaAuth.config.enabled = true to enforce authentication.",
+			);
+		}
+
+		const mw = createAuthMiddleware(dharma.keyStore, {
+			...dharma.config,
+			enabled,
+			bypassPaths: dharma.config?.bypassPaths ?? ["/api/health", "/health"],
+		});
+		server.use(mw);
+	}
 
 	// Mount route groups in order (registration order matters for :param routes)
 	mountCoreRoutes(server, deps, config);

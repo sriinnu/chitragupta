@@ -22,6 +22,7 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 
 import {
+	configureCorsOrigins,
 	errorResponse,
 	handleAbort,
 	handleChat,
@@ -58,10 +59,13 @@ export function startServer(options: ServerModeOptions): {
 } {
 	const { agent, port = 3000, host = "127.0.0.1", projectPath } = options;
 
+	// Configure CORS allowlist (uses dev defaults if not specified)
+	configureCorsOrigins(options.corsOrigins);
+
 	const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
 		// Handle CORS preflight
 		if (req.method === "OPTIONS") {
-			handleCors(res);
+			handleCors(res, req.headers.origin);
 			return;
 		}
 

@@ -39,7 +39,7 @@ export interface PluginRegistry {
 /** A typed, synchronous event bus for decoupled inter-system communication. */
 export interface EventBus {
 	on<T = unknown>(event: string, handler: (data: T) => void): void;
-	off(event: string, handler: (...args: any[]) => void): void;
+	off(event: string, handler: (...args: unknown[]) => void): void;
 	emit<T = unknown>(event: string, data: T): void;
 	once<T = unknown>(event: string, handler: (data: T) => void): void;
 	removeAll(event?: string): void;

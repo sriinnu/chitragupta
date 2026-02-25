@@ -21,8 +21,8 @@ import {
 	processCompetitive, processHierarchical, processSwarm,
 } from "./orchestrator-scaling.js";
 import {
-	compareTasks, computeOrchestratorStats, getActiveAgentInfos,
-	handleOrchestratorCompletion, handleOrchestratorFailure,
+	compareTasks, computeOrchestratorStats, createCompletionStats,
+	getActiveAgentInfos, handleOrchestratorCompletion, handleOrchestratorFailure,
 	OrchestratorError,
 } from "./orchestrator-dispatch.js";
 import type {
@@ -70,7 +70,7 @@ export class Orchestrator {
 	private paused = false;
 	private submissionCounter = 0;
 	private processingTimer: ReturnType<typeof setTimeout> | null = null;
-	private readonly metrics: MetricsBucket = { totalCost: 0, totalTokens: 0, completionTimes: [] };
+	private readonly metrics: MetricsBucket = { totalCost: 0, totalTokens: 0, completionStats: createCompletionStats() };
 
 	/** Create a new orchestrator for the given plan. */
 	constructor(
@@ -208,7 +208,7 @@ export class Orchestrator {
 	getStats(): OrchestratorStats {
 		return computeOrchestratorStats(
 			this.tasks, this.agents,
-			this.metrics.totalCost, this.metrics.totalTokens, this.metrics.completionTimes,
+			this.metrics.totalCost, this.metrics.totalTokens, this.metrics.completionStats,
 		);
 	}
 

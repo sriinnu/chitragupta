@@ -14,8 +14,11 @@ import type { AgentState, AgentMessage } from "./types.js";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-/** Rough estimate: 1 token ~ 4 chars. */
-const CHARS_PER_TOKEN = 4;
+/**
+ * Weighted average: ~3.7 chars per token across typical LLM workloads
+ * (English prose ~4, code ~3.5, JSON ~3).
+ */
+const CHARS_PER_TOKEN = 3.7;
 
 /** Per-message overhead: role tag, delimiters, whitespace (~4 tokens). */
 const PER_MESSAGE_OVERHEAD = 4;

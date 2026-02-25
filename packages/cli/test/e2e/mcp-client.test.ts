@@ -269,7 +269,7 @@ class McpTestClient {
 			}, SERVER_STARTUP_MS);
 
 			const check = (chunk: string) => {
-				if (chunk.includes("MCP server starting") || chunk.includes("Tools:")) {
+				if (chunk.includes("MCP server ready") || chunk.includes("Tools:")) {
 					clearTimeout(timer);
 					resolve();
 				}
@@ -1006,7 +1006,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 			await startAndInitialize();
 
 			const stderr = client.getStderr();
-			expect(stderr).toContain("MCP server starting");
+			expect(stderr).toContain("MCP server ready");
 			expect(stderr).toContain("Tools:");
 			expect(stderr).toContain("stdio");
 		}, 15_000);
