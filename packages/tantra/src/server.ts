@@ -27,7 +27,6 @@ import {
 } from "./jsonrpc.js";
 import { StdioServerTransport } from "./transport/stdio.js";
 import { SSEServerTransport } from "./transport/sse.js";
-import { formatToolFooter } from "@chitragupta/ui/tool-formatter";
 import type { ToolRegistry } from "./tool-registry.js";
 import {
 	handleResourcesList,
@@ -39,6 +38,7 @@ import {
 	ToolCallRingBuffer,
 	resolveTraceContext,
 	buildResponseMeta,
+	appendToolFooter,
 } from "./server-telemetry.js";
 
 type AnyMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
@@ -200,25 +200,14 @@ export class McpServer {
 		return true;
 	}
 
-	/**
-	 * Send a `notifications/tools/list_changed` notification to connected clients.
-	 */
+	/** Notify clients that the tools list changed. */
 	private _notifyToolsChanged(): void {
-		if (this._initialized) {
-			this.sendNotification({
-				jsonrpc: "2.0",
-				method: "notifications/tools/list_changed",
-			});
-		}
+		if (this._initialized) this.sendNotification({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
 	}
 
 	// ─── Resource Management ──────────────────────────────────────────────
 
-	/**
-	 * Register a new resource handler.
-	 *
-	 * @param handler - The resource handler with definition and read function.
-	 */
+	/** Register a new resource handler. */
 	registerResource(handler: McpResourceHandler): void {
 		const key = "uri" in handler.definition
 			? handler.definition.uri
@@ -232,16 +221,9 @@ export class McpServer {
 		}
 	}
 
-	/**
-	 * Send a `notifications/resources/list_changed` notification to connected clients.
-	 */
+	/** Notify clients that the resources list changed. */
 	private _notifyResourcesChanged(): void {
-		if (this._initialized) {
-			this.sendNotification({
-				jsonrpc: "2.0",
-				method: "notifications/resources/list_changed",
-			});
-		}
+		if (this._initialized) this.sendNotification({ jsonrpc: "2.0", method: "notifications/resources/list_changed" });
 	}
 
 	// ─── Telemetry ───────────────────────────────────────────────────────
@@ -253,11 +235,7 @@ export class McpServer {
 
 	// ─── Prompt Management ────────────────────────────────────────────────
 
-	/**
-	 * Register a new prompt handler.
-	 *
-	 * @param handler - The prompt handler with definition and get function.
-	 */
+	/** Register a new prompt handler. */
 	registerPrompt(handler: McpPromptHandler): void {
 		this._prompts.set(handler.definition.name, handler);
 	}
@@ -422,7 +400,7 @@ export class McpServer {
 			const result = await handler.execute(args);
 			const elapsed = performance.now() - t0;
 
-			this._appendFooter(result.content, toolName, elapsed, result._metadata, result.isError);
+			appendToolFooter(result.content, toolName, elapsed, result._metadata, result.isError);
 			delete result._metadata;
 
 			this._ringBuffer.record({ toolName, traceId, spanId, durationMs: elapsed, isError: !!result.isError, timestamp: Date.now() });
@@ -445,23 +423,6 @@ export class McpServer {
 				isError: true,
 				_meta: buildResponseMeta(traceId, spanId, elapsed),
 			});
-		}
-	}
-
-	/** Append a rich formatted footer to the last text content block. */
-	private _appendFooter(
-		content: Array<{ type: string; text?: string }> | undefined,
-		toolName: string,
-		elapsedMs: number,
-		metadata?: Record<string, unknown>,
-		isError?: boolean,
-	): void {
-		if (!content?.length) return;
-		const last = content[content.length - 1];
-		if (last?.type === "text" && typeof last.text === "string") {
-			const outputBytes = new TextEncoder().encode(last.text).length;
-			const footer = formatToolFooter({ toolName, elapsedMs, outputBytes, metadata, isError });
-			last.text += `\n\n${footer}`;
 		}
 	}
 

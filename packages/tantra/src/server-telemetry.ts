@@ -10,6 +10,7 @@
 
 import type { ToolCallRecord } from "./types.js";
 import { generateTraceId, generateSpanId } from "@chitragupta/core";
+import { formatToolFooter } from "@chitragupta/ui/tool-formatter";
 
 /** Maximum number of recent calls retained in the ring buffer. */
 const MAX_RECENT_CALLS = 50;
@@ -79,4 +80,24 @@ export function buildResponseMeta(
 		execution_ms: Math.round(executionMs * 100) / 100,
 		sandbox: { isolated: false, method: "process" },
 	};
+}
+
+/**
+ * Append a rich formatted footer to the last text content block.
+ * Includes tool name, execution time, output size, and optional metadata.
+ */
+export function appendToolFooter(
+	content: Array<{ type: string; text?: string }> | undefined,
+	toolName: string,
+	elapsedMs: number,
+	metadata?: Record<string, unknown>,
+	isError?: boolean,
+): void {
+	if (!content?.length) return;
+	const last = content[content.length - 1];
+	if (last?.type === "text" && typeof last.text === "string") {
+		const outputBytes = new TextEncoder().encode(last.text).length;
+		const footer = formatToolFooter({ toolName, elapsedMs, outputBytes, metadata, isError });
+		last.text += `\n\n${footer}`;
+	}
 }
