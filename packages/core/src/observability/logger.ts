@@ -125,19 +125,34 @@ function resolveLevel(configLevel?: LogLevel): LogLevel {
 export class Logger {
 	private readonly name: string;
 	private level: LogLevel;
-	private readonly transports: LogTransport[];
+	/**
+	 * Explicitly provided transports (from constructor config).
+	 * When null, the logger lazily resolves transports from globalConfig
+	 * on each emit — allowing configureLogging() to take effect even
+	 * for loggers created at module-import time (before configureLogging runs).
+	 */
+	private readonly _explicitTransports: LogTransport[] | null;
+	private _fallbackTransports: LogTransport[] | null = null;
 	private readonly context: Record<string, unknown>;
 
 	constructor(name: string, config?: LoggerConfig) {
 		this.name = name;
 		this.level = resolveLevel(config?.level);
-		this.transports = config?.transports
-			?? globalConfig.transports
-			?? [new ConsoleTransport()];
+		this._explicitTransports = config?.transports ?? null;
 		this.context = {
 			...(globalConfig.defaultContext ?? {}),
 			...(config?.defaultContext ?? {}),
 		};
+	}
+
+	/** Resolve active transports: explicit > global > default. */
+	private get _transports(): LogTransport[] {
+		if (this._explicitTransports) return this._explicitTransports;
+		if (globalConfig.transports) return globalConfig.transports;
+		if (!this._fallbackTransports) {
+			this._fallbackTransports = [new ConsoleTransport()];
+		}
+		return this._fallbackTransports;
 	}
 
 	/** Log a DEBUG message. */
@@ -170,11 +185,15 @@ export class Logger {
 	 * The child shares transports and context with the parent.
 	 */
 	child(childName: string): Logger {
-		return new Logger(`${this.name}:${childName}`, {
+		const childConfig: LoggerConfig = {
 			level: this.level,
-			transports: this.transports,
 			defaultContext: { ...this.context },
-		});
+		};
+		// Propagate explicit transports to child; otherwise child inherits lazy resolution
+		if (this._explicitTransports) {
+			childConfig.transports = this._explicitTransports;
+		}
+		return new Logger(`${this.name}:${childName}`, childConfig);
 	}
 
 	/**
@@ -182,11 +201,14 @@ export class Logger {
 	 * Does not mutate the original logger.
 	 */
 	withContext(ctx: Record<string, unknown>): Logger {
-		return new Logger(this.name, {
+		const ctxConfig: LoggerConfig = {
 			level: this.level,
-			transports: this.transports,
 			defaultContext: { ...this.context, ...ctx },
-		});
+		};
+		if (this._explicitTransports) {
+			ctxConfig.transports = this._explicitTransports;
+		}
+		return new Logger(this.name, ctxConfig);
 	}
 
 	/** Dynamically change the minimum log level. */
@@ -242,7 +264,7 @@ export class Logger {
 			}
 		}
 
-		for (const transport of this.transports) {
+		for (const transport of this._transports) {
 			try { transport.write(entry); }
 			catch { /* Transport failure must never crash the application */ }
 		}

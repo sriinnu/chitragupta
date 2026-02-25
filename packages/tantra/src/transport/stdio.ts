@@ -38,14 +38,38 @@ interface ConsumeResult {
 }
 
 /**
+ * Find the header/body delimiter in the buffer.
+ *
+ * MCP spec uses `\r\n\r\n` but some clients (e.g. Claude Code) may send
+ * `\n\n`. We accept both for maximum compatibility.
+ *
+ * @returns Tuple of [delimiter start index, delimiter byte length] or null.
+ */
+function findHeaderDelimiter(buffer: Buffer): [number, number] | null {
+	const crlfIdx = buffer.indexOf(HEADER_DELIMITER);
+	const lfIdx = buffer.indexOf("\n\n");
+
+	if (crlfIdx === -1 && lfIdx === -1) return null;
+
+	// Use whichever appears first (and exists)
+	if (crlfIdx !== -1 && (lfIdx === -1 || crlfIdx <= lfIdx)) {
+		return [crlfIdx, Buffer.byteLength(HEADER_DELIMITER, "utf8")];
+	}
+	return [lfIdx, 2]; // "\n\n" = 2 bytes
+}
+
+/**
  * Try to consume a Content-Length framed message from the buffer.
  * Returns null if not enough data, "invalid" if header is malformed,
  * or a ConsumeResult with consumed byte count and raw JSON string.
+ *
+ * Accepts both `\r\n\r\n` and `\n\n` as header delimiters.
  */
 function tryConsumeFramedMessage(buffer: Buffer): ConsumeResult | "invalid" | null {
-	const headerEnd = buffer.indexOf(HEADER_DELIMITER);
-	if (headerEnd === -1) return null;
+	const delim = findHeaderDelimiter(buffer);
+	if (!delim) return null;
 
+	const [headerEnd, delimLen] = delim;
 	const header = buffer.slice(0, headerEnd).toString("utf8");
 	const match = header.match(/Content-Length:\s*(\d+)/i);
 	if (!match) return "invalid";
@@ -53,7 +77,7 @@ function tryConsumeFramedMessage(buffer: Buffer): ConsumeResult | "invalid" | nu
 	const bodyLength = Number.parseInt(match[1], 10);
 	if (!Number.isFinite(bodyLength) || bodyLength < 0) return "invalid";
 
-	const start = headerEnd + Buffer.byteLength(HEADER_DELIMITER, "utf8");
+	const start = headerEnd + delimLen;
 	const end = start + bodyLength;
 	if (buffer.length < end) return null;
 
@@ -111,6 +135,16 @@ export class StdioServerTransport {
 	private _buffer: Buffer = emptyBuffer();
 	private _running = false;
 	private _onData: ((chunk: Buffer | string) => void) | null = null;
+	/**
+	 * Detected framing of the first incoming message.
+	 * Used to respond in the same format as the client sends.
+	 * - "content-length": Client uses `Content-Length: N\r\n\r\n{json}` (older MCP)
+	 * - "ndjson": Client uses `{json}\n` (MCP spec 2025-03-26+)
+	 * - null: Not yet detected — defaults to ndjson per latest spec.
+	 */
+	private _detectedFraming: "content-length" | "ndjson" | null = null;
+	/** Saved reference to real stdout, captured at construction to survive later redirects. */
+	private readonly _stdout: NodeJS.WritableStream = process.stdout;
 
 	/**
 	 * Register a handler for incoming messages.
@@ -124,12 +158,18 @@ export class StdioServerTransport {
 	/**
 	 * Send a JSON-RPC message to stdout.
 	 *
-	 * Uses framed MCP transport to interoperate with standards-compliant hosts.
+	 * Auto-detects the client's framing format from the first incoming message
+	 * and responds in the same format. Defaults to NDJSON per MCP spec 2025-03-26+.
 	 *
 	 * @param message - The JSON-RPC message to send.
 	 */
 	send(message: AnyMessage): void {
-		process.stdout.write(encodeFramedMessage(message));
+		if (this._detectedFraming === "content-length") {
+			this._stdout.write(encodeFramedMessage(message));
+		} else {
+			// NDJSON: one JSON object per line (MCP spec 2025-03-26+)
+			this._stdout.write(JSON.stringify(message) + NEWLINE);
+		}
 	}
 
 	/**
@@ -166,6 +206,7 @@ export class StdioServerTransport {
 	 * Drain buffered bytes into parsed JSON-RPC messages.
 	 *
 	 * Tries Content-Length framing first; falls back to line-delimited JSON.
+	 * Records the detected framing so responses use the same format.
 	 */
 	private _drain(): void {
 		while (this._buffer.length > 0) {
@@ -179,11 +220,13 @@ export class StdioServerTransport {
 				const line = tryConsumeLineMessage(this._buffer);
 				if (!line) return;
 				this._buffer = this._buffer.slice(line.consumed);
+				if (!this._detectedFraming) this._detectedFraming = "ndjson";
 				deliverRawMessage(line.raw, this._handler);
 				continue;
 			}
 			if (framed) {
 				this._buffer = this._buffer.slice(framed.consumed);
+				if (!this._detectedFraming) this._detectedFraming = "content-length";
 				deliverRawMessage(framed.raw, this._handler);
 				continue;
 			}
@@ -192,6 +235,7 @@ export class StdioServerTransport {
 			const line = tryConsumeLineMessage(this._buffer);
 			if (!line) return;
 			this._buffer = this._buffer.slice(line.consumed);
+			if (!this._detectedFraming) this._detectedFraming = "ndjson";
 			deliverRawMessage(line.raw, this._handler);
 		}
 	}

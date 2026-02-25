@@ -115,7 +115,7 @@ describe("StdioServerTransport", () => {
 		expect(handler).not.toHaveBeenCalled();
 	});
 
-	it("should send JSON-RPC messages to stdout using Content-Length framing", () => {
+	it("should send JSON-RPC messages to stdout using NDJSON by default", () => {
 		const rpcResp: JsonRpcResponse = {
 			jsonrpc: "2.0",
 			id: 1,
@@ -125,10 +125,33 @@ describe("StdioServerTransport", () => {
 
 		expect(mockStdoutWrite).toHaveBeenCalledOnce();
 		const written = mockStdoutWrite.mock.calls[0][0] as string;
-		expect(written).toContain("Content-Length:");
-		expect(written).toContain("\r\n\r\n");
 		expect(written).toContain('"jsonrpc":"2.0"');
 		expect(written).toContain('"id":1');
+		expect(written.endsWith("\n")).toBe(true);
+		// Default (no input detected) uses NDJSON — no Content-Length header
+		expect(written).not.toContain("Content-Length:");
+	});
+
+	it("should respond with Content-Length framing when client sends Content-Length", () => {
+		const handler = vi.fn();
+		transport.onMessage(handler);
+		transport.start();
+
+		// Client sends Content-Length framed message
+		const body = '{"jsonrpc":"2.0","method":"initialize","id":0}';
+		const frame = `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
+		mockStdin.emit("data", Buffer.from(frame));
+
+		expect(handler).toHaveBeenCalledOnce();
+
+		// Now send a response — should use Content-Length framing
+		mockStdoutWrite.mockClear();
+		const rpcResp: JsonRpcResponse = { jsonrpc: "2.0", id: 0, result: {} };
+		transport.send(rpcResp);
+
+		const written = mockStdoutWrite.mock.calls[0][0] as string;
+		expect(written).toContain("Content-Length:");
+		expect(written).toContain("\r\n\r\n");
 	});
 
 	it("should ignore empty lines", () => {

@@ -1,6 +1,7 @@
 {
 	"name": "@chitragupta/anina",
-	"version": "0.1.1",
+	"private": true,
+	"version": "0.1.0",
 	"description": "Autonomous agent framework with self-healing, learning loops, and agent tree lifecycle",
 	"type": "module",
 	"license": "MIT",
@@ -45,7 +46,8 @@
 	"dependencies": {
 		"@chitragupta/core": "workspace:*",
 		"@chitragupta/smriti": "workspace:*",
-		"@chitragupta/swara": "workspace:*"
+		"@chitragupta/swara": "workspace:*",
+		"@chitragupta/vidhya-skills": "workspace:*"
 	},
 	"files": [
 		"dist",
