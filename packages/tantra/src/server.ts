@@ -56,6 +56,8 @@ export class McpServer {
 	private _registry: ToolRegistry | null = null;
 	/** Unsubscribe function for registry change events. */
 	private _registryUnsub: (() => void) | null = null;
+	/** Tool names currently sourced from the attached registry. */
+	private _registryOwnedTools: Set<string> = new Set();
 	/** In-memory ring buffer of recent tool calls for the OS integration surface. */
 	private _ringBuffer = new ToolCallRingBuffer();
 
@@ -112,14 +114,15 @@ export class McpServer {
 		if (this._registryUnsub) {
 			this._registryUnsub();
 		}
+		for (const toolName of this._registryOwnedTools) {
+			this._tools.delete(toolName);
+		}
+		this._registryOwnedTools.clear();
 		this._registry = registry;
 
 		// Sync current registry tools into the server (skip collisions)
 		for (const handler of registry.listTools()) {
-			const name = handler.definition.name;
-			if (!this._tools.has(name)) {
-				this._tools.set(name, handler);
-			}
+			this._addRegistryTool(handler);
 		}
 
 		// Subscribe to live changes
@@ -127,45 +130,74 @@ export class McpServer {
 			switch (event.type) {
 				case "tool:registered": {
 					const handler = registry.getTool(event.toolName);
-					if (handler && !this._tools.has(event.toolName)) {
-						this._tools.set(event.toolName, handler);
+					if (handler && this._addRegistryTool(handler)) {
 						this._notifyToolsChanged();
 					}
 					break;
 				}
 				case "tool:unregistered":
-					this._tools.delete(event.toolName);
-					this._notifyToolsChanged();
+					if (this._removeRegistryTool(event.toolName)) {
+						this._notifyToolsChanged();
+					}
 					break;
 				case "tool:enabled": {
 					const handler = registry.getTool(event.toolName);
-					if (handler) {
-						this._tools.set(event.toolName, handler);
+					if (handler && this._addRegistryTool(handler)) {
 						this._notifyToolsChanged();
 					}
 					break;
 				}
 				case "tool:disabled":
-					this._tools.delete(event.toolName);
-					this._notifyToolsChanged();
+					if (this._removeRegistryTool(event.toolName)) {
+						this._notifyToolsChanged();
+					}
 					break;
 				case "plugin:registered":
 					for (const toolName of event.toolNames) {
 						const handler = registry.getTool(toolName);
-						if (handler && !this._tools.has(toolName)) {
-							this._tools.set(toolName, handler);
+						if (handler) {
+							this._addRegistryTool(handler);
 						}
 					}
 					this._notifyToolsChanged();
 					break;
 				case "plugin:unregistered":
 					for (const toolName of event.toolNames) {
-						this._tools.delete(toolName);
+						this._removeRegistryTool(toolName);
 					}
 					this._notifyToolsChanged();
 					break;
 			}
 		});
+	}
+
+	/**
+	 * Attempt to add/update a tool from the attached registry.
+	 * Returns true when server tool map changed.
+	 *
+	 * Hardcoded tools are never overwritten by registry tools.
+	 */
+	private _addRegistryTool(handler: McpToolHandler): boolean {
+		const name = handler.definition.name;
+		if (this._tools.has(name) && !this._registryOwnedTools.has(name)) {
+			return false;
+		}
+		this._tools.set(name, handler);
+		this._registryOwnedTools.add(name);
+		return true;
+	}
+
+	/**
+	 * Remove a tool only if it is currently owned by the attached registry.
+	 * Returns true when server tool map changed.
+	 */
+	private _removeRegistryTool(name: string): boolean {
+		if (!this._registryOwnedTools.has(name)) {
+			return false;
+		}
+		this._registryOwnedTools.delete(name);
+		this._tools.delete(name);
+		return true;
 	}
 
 	/**

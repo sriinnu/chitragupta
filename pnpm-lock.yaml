@@ -176,6 +176,9 @@ importers:
       '@chitragupta/core':
         specifier: workspace:*
         version: link:../core
+      '@chitragupta/sutra':
+        specifier: workspace:*
+        version: link:../sutra
       '@chitragupta/ui':
         specifier: workspace:*
         version: link:../ui
