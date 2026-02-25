@@ -1,6 +1,5 @@
 {
 	"name": "@chitragupta/core",
-	"private": true,
 	"version": "0.1.1",
 	"description": "Core primitives, configuration, and error hierarchy for the Chitragupta platform",
 	"type": "module",
