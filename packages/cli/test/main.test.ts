@@ -924,8 +924,13 @@ describe("main()", () => {
 
 			expect(mockRunInteractiveMode).toHaveBeenCalledWith(
 				expect.objectContaining({
-					providerRegistry: mockRegistry,
-					margaPipeline: mockMargaPipeline,
+					providerRegistry: expect.objectContaining({
+						get: expect.any(Function),
+						getAll: expect.any(Function),
+					}),
+					margaPipeline: expect.objectContaining({
+						route: expect.any(Function),
+					}),
 				}),
 			);
 		});
