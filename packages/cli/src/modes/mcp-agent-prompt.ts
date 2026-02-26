@@ -20,6 +20,8 @@ type AgentPromptFallbackDeps = {
 
 /** Default timeout for a single prompt attempt (2 minutes). */
 const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
+/** Heartbeat cadence while waiting on a provider response. */
+const PROMPT_HEARTBEAT_INTERVAL_MS = 10_000;
 
 /**
  * Execute an agent prompt with provider fallback.
@@ -73,6 +75,7 @@ export async function runAgentPromptWithFallback(
 		const providerId = attempt.provider ?? "auto";
 		const attemptNum = index + 1;
 		let runner: PromptRunner | null = null;
+		let heartbeatTimer: NodeJS.Timeout | null = null;
 		try {
 			hb?.({ activity: `connecting to ${providerId}`, attempt: attemptNum, provider: providerId });
 			runner = await createChitragupta({
@@ -80,12 +83,23 @@ export async function runAgentPromptWithFallback(
 				...(attempt.model ? { model: attempt.model } : {}),
 			});
 			hb?.({ activity: `prompting ${providerId}`, attempt: attemptNum, provider: providerId });
-			const response = await Promise.race([
-				runner.prompt(params.message),
-				new Promise<never>((_, reject) => {
-					setTimeout(() => reject(new Error(`Prompt timed out after ${timeoutMs}ms`)), timeoutMs);
-				}),
-			]);
+			if (hb) {
+				heartbeatTimer = setInterval(() => {
+					hb({ activity: `prompting ${providerId}`, attempt: attemptNum, provider: providerId });
+				}, PROMPT_HEARTBEAT_INTERVAL_MS);
+			}
+			let timeoutHandle: NodeJS.Timeout | null = null;
+			let response: string;
+			try {
+				response = await Promise.race([
+					runner.prompt(params.message),
+					new Promise<never>((_, reject) => {
+						timeoutHandle = setTimeout(() => reject(new Error(`Prompt timed out after ${timeoutMs}ms`)), timeoutMs);
+					}),
+				]);
+			} finally {
+				if (timeoutHandle) clearTimeout(timeoutHandle);
+			}
 			hb?.({ activity: "completed", attempt: attemptNum, provider: providerId });
 			return { response, providerId, attempts: attemptNum };
 		} catch (error) {
@@ -93,6 +107,9 @@ export async function runAgentPromptWithFallback(
 			failures.push(`${providerId}: ${detail}`);
 			hb?.({ activity: `failed ${providerId}, retrying`, attempt: attemptNum, provider: providerId });
 		} finally {
+			if (heartbeatTimer) {
+				clearInterval(heartbeatTimer);
+			}
 			if (runner) {
 				try {
 					await runner.destroy();

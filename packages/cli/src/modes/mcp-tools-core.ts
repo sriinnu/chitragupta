@@ -292,6 +292,7 @@ export function createAgentPromptTool(): McpToolHandler {
 					message: { type: "string", description: "The prompt/task to send to Chitragupta's agent." },
 					provider: { type: "string", description: "AI provider to use. Default: from config (usually 'anthropic')" },
 					model: { type: "string", description: "Model to use. Default: from config" },
+					timeout: { type: "number", description: "Timeout in milliseconds per attempt. Default: 120000 (2 min)" },
 				},
 				required: ["message"],
 			},
@@ -312,6 +313,7 @@ export function createAgentPromptTool(): McpToolHandler {
 						message,
 						...(args.provider ? { provider: String(args.provider) } : {}),
 						...(args.model ? { model: String(args.model) } : {}),
+						...(args.timeout ? { timeoutMs: Number(args.timeout) } : {}),
 						onHeartbeat: heartbeat,
 					});
 					completeJob(jobId, result.response);
@@ -420,4 +422,3 @@ export function createPromptStatusTool(): McpToolHandler {
 		},
 	};
 }
-

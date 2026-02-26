@@ -23,6 +23,8 @@
 - **WebSocket server (Sandhana)** -- Real-time bidirectional communication for Vaayu and other clients
 - **OpenAPI 3.0 specification** -- Programmatically generated spec covering all registered endpoints
 - **MCP server mode** -- Expose Chitragupta tools to Claude Code and other MCP clients via stdio or SSE transport
+- **Self-independent agent runtime** -- Chitragupta runs as a self-independent agent with self-healing provider fallback
+- **Prompt liveness heartbeats** -- Long-running `chitragupta_prompt` jobs emit periodic heartbeat updates so polling clients can detect real progress
 - **Job queue (Karya)** -- Async task execution with priority, status tracking, and result retrieval
 - **12 subcommands** -- session, memory, config, provider, agent, mcp, skills, skill-porter, orchestrate, vidya, workflow, stats
 - **13+ slash commands** -- /code, /review, /debug, /research, /refactor, /docs, /skills, /learn, /chetana, /vidya, /stats, /samiti, /sabha, /lokapala, /akasha, /kartavya, /kala, /atman
@@ -332,6 +334,13 @@ CHITRAGUPTA_MCP_TRANSPORT=sse CHITRAGUPTA_MCP_PORT=3001 chitragupta mcp-server
 - `CHITRAGUPTA_MCP_PORT` -- SSE port (default 3001)
 - `CHITRAGUPTA_MCP_PROJECT` -- project path override
 - `CHITRAGUPTA_MCP_AGENT` -- agent profile override
+
+### MCP Prompt Liveness + Self-Healing
+
+- `chitragupta_prompt` supports long-running async execution with heartbeat-backed status polling.
+- While waiting on provider responses, the prompt runner emits periodic heartbeat updates (during `prompting ...`) to reduce false stale alerts.
+- The agent runtime is self-independent and self-healing: if one provider attempt fails or times out, fallback providers are tried in priority order.
+- `chitragupta_prompt` accepts `timeout` (milliseconds) to control per-attempt timeout behavior in MCP mode.
 
 ## Slash Commands
 
