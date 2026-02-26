@@ -148,6 +148,12 @@ export class Agent implements TreeAgent {
 			);
 			const memCtx = await this.memoryBridge.loadMemoryContext(project, this.id);
 			if (memCtx) this.state.systemPrompt += `\n\n${memCtx}`;
+			// Wire 5: Inject persisted soul identity into system prompt
+			try {
+				const { SoulManager: S } = await import("./agent-soul.js");
+				const mgr = new S({ persist: true }), souls = mgr.getAll();
+				if (souls[0]) { const sp = mgr.buildSoulPrompt(souls[0].id); if (sp) this.state.systemPrompt += `\n\n${sp}`; }
+			} catch { /* soul is best-effort */ }
 		}
 
 		this.state.messages.push(this.createMessage("user", [{ type: "text", text: message }]));
@@ -173,8 +179,8 @@ export class Agent implements TreeAgent {
 			if (this.kaala) { try { this.kaala.markError(this.id); } catch { /* best-effort */ } }
 			throw err;
 		} finally {
-			this.state.isStreaming = false;
-			this.abortController = null;
+			this.state.isStreaming = false; this.abortController = null;
+			try { this.learningLoop?.flushSession(); } catch { /* best-effort */ }
 		}
 	}
 
@@ -215,8 +221,7 @@ export class Agent implements TreeAgent {
 		this.toolExecutor.unregister(name); this.state.tools = this.state.tools.filter((t) => t.definition.name !== name);
 	}
 	async processFollowUps(): Promise<AgentMessage | null> {
-		let last: AgentMessage | null = null;
-		let fu = this.steeringManager.getNextFollowUp();
+		let last: AgentMessage | null = null, fu = this.steeringManager.getNextFollowUp();
 		while (fu !== null) { last = await this.prompt(fu); fu = this.steeringManager.getNextFollowUp(); }
 		return last;
 	}
@@ -256,15 +261,8 @@ export class Agent implements TreeAgent {
 	async askAgent(targetAgentId: string, message: unknown, timeoutMs?: number): Promise<unknown> {
 		return askMeshAgent(this.actorRef, this.actorSystem, this.id, targetAgentId, message, timeoutMs);
 	}
-	broadcastToChannel(
-		channel: string, content: string,
-		severity: "info" | "warning" | "critical" = "info",
-		category: string = "agent-event",
-	): void {
-		broadcastToSamitiChannel(
-			this.samiti, this.id, this.purpose, this.depth,
-			channel, content, severity, category,
-		);
+	broadcastToChannel(channel: string, content: string, severity: "info" | "warning" | "critical" = "info", category = "agent-event"): void {
+		broadcastToSamitiChannel(this.samiti, this.id, this.purpose, this.depth, channel, content, severity, category);
 	}
 
 	spawn(spawnConfig: SpawnConfig): Agent {
@@ -376,8 +374,7 @@ export class Agent implements TreeAgent {
 		this.kaala = null; this.lokapala = null;
 		this.memoryBridge = null; this.learningLoop = null;
 		this.autonomousAgent = null; this.chetana = null; this.provider = null;
-		this.state.messages = []; this.state.tools = [];
-		this.agentStatus = "aborted";
+		this.state.messages = []; this.state.tools = []; this.agentStatus = "aborted";
 	}
 
 	// ── Tree Traversal ───────────────────────────────────────────
@@ -445,6 +442,7 @@ export class Agent implements TreeAgent {
 			kaala: this.kaala, samiti: this.samiti,
 			emit: (ev, d) => this.emit(ev, d),
 			createMessage: (role, content, extra) => this.createMessage(role, content, extra),
+			memoryRecall: this.memoryBridge ? (q: string) => Promise.resolve(this.memoryBridge!.recallForQuery(q) || undefined) : undefined,
 		};
 	}
 }
