@@ -387,7 +387,7 @@ export class McpServer {
 		}
 
 		const toolName = params.name as string;
-		const handler = this._tools.get(toolName);
+		const handler = this._tools.get(toolName) ?? this._registry?.getTool(toolName) ?? null;
 		if (!handler) {
 			return createErrorResponse(id, INVALID_PARAMS, `Unknown tool: ${toolName}`);
 		}

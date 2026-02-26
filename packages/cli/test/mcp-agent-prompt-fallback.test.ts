@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runAgentPromptWithFallback } from "../src/modes/mcp-agent-prompt.js";
 
 type FakeRunner = {
@@ -107,5 +107,45 @@ describe("runAgentPromptWithFallback", () => {
 		await expect(
 			runAgentPromptWithFallback({ message: "test" }, deps),
 		).rejects.toThrow(/All provider attempts failed/i);
+	});
+
+	it("emits periodic heartbeats while waiting on a provider response", async () => {
+		vi.useFakeTimers();
+		try {
+			const heartbeatEvents: string[] = [];
+			let resolvePrompt: ((value: string) => void) | null = null;
+			const pendingPrompt = new Promise<string>((resolve) => {
+				resolvePrompt = resolve;
+			});
+			const deps = {
+				createChitragupta: async (): Promise<FakeRunner> => ({
+					prompt: async () => pendingPrompt,
+					destroy: async () => {},
+				}),
+				loadSettings: () => ({ providerPriority: ["anthropic"] }),
+				defaultProviderPriority: ["anthropic"],
+			};
+
+			const resultPromise = runAgentPromptWithFallback(
+				{
+					message: "heartbeat-check",
+					timeoutMs: 30_000,
+					onHeartbeat: (info) => heartbeatEvents.push(info.activity),
+				},
+				deps,
+			);
+
+			await vi.advanceTimersByTimeAsync(21_000);
+			expect(heartbeatEvents.filter((a) => a === "prompting auto").length).toBeGreaterThanOrEqual(3);
+
+			resolvePrompt?.("ok");
+			await expect(resultPromise).resolves.toMatchObject({ response: "ok", providerId: "auto", attempts: 1 });
+
+			const countAfterCompletion = heartbeatEvents.length;
+			await vi.advanceTimersByTimeAsync(20_000);
+			expect(heartbeatEvents.length).toBe(countAfterCompletion);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
