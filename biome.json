@@ -1,5 +1,5 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.3.5/schema.json",
+	"$schema": "https://biomejs.dev/schemas/2.3.14/schema.json",
 	"linter": {
 		"enabled": true,
 		"rules": {
@@ -24,11 +24,6 @@
 		"lineWidth": 120
 	},
 	"files": {
-		"includes": [
-			"packages/*/src/**/*.ts",
-			"packages/*/test/**/*.ts",
-			"!**/node_modules/**/*",
-			"!**/dist/**/*"
-		]
+		"includes": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "!**/node_modules/**/*", "!**/dist/**/*"]
 	}
 }
