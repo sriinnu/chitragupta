@@ -15,6 +15,8 @@
   - `vaayu/packages/tools/src/skill-learner.ts`
 - [x] Added explicit debug telemetry when `ShikshaController` or crystallizer is unavailable.
   - `vaayu/apps/gateway/src/chitragupta-bridge/bridge.ts`
+- [x] Seeded three default mesh actors during lazy ActorSystem startup.
+  - `chitragupta/packages/cli/src/modes/mcp-subsystems.ts`
 
 ## Validation executed
 
@@ -22,6 +24,7 @@
 - [x] `pnpm -C /tmp/auriva-nervous-1772136204 exec vitest run chitragupta/packages/anina/test/agent.test.ts`
 - [x] `pnpm -C /tmp/auriva-nervous-1772136204/vaayu/apps/gateway exec node --import tsx --test src/__tests__/chitragupta-bridge-integration.test.ts`
 - [x] `pnpm -C /tmp/auriva-nervous-1772136204/vaayu/packages/tools exec vitest run test/skill-learner.test.ts --config vitest.config.ts`
+- [x] `pnpm -C /tmp/auriva-nervous-1772136204 exec vitest run chitragupta/packages/cli/test/mcp-subsystems.test.ts`
 
 ## Remaining blockers (next pass)
 
