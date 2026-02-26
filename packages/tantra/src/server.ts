@@ -413,13 +413,13 @@ export class McpServer {
 		} catch (err) {
 			const elapsed = performance.now() - t0;
 			const message = err instanceof Error ? err.message : String(err);
-			const outputBytes = new TextEncoder().encode(message).length;
-			const footer = formatToolFooter({ toolName, elapsedMs: elapsed, outputBytes, isError: true });
+			const content: Array<{ type: string; text?: string }> = [{ type: "text", text: message }];
+			appendToolFooter(content, toolName, elapsed, undefined, true);
 
 			this._ringBuffer.record({ toolName, traceId, spanId, durationMs: elapsed, isError: true, timestamp: Date.now() });
 
 			return createResponse(id, {
-				content: [{ type: "text", text: `${message}\n\n${footer}` }],
+				content,
 				isError: true,
 				_meta: buildResponseMeta(traceId, spanId, elapsed),
 			});
