@@ -147,7 +147,7 @@ export class Agent implements TreeAgent {
 				this.id, this.config.profile.id, this.config.model, project,
 			);
 			const memCtx = await this.memoryBridge.loadMemoryContext(project, this.id);
-			if (memCtx) this.state.systemPrompt += "\n\n" + memCtx;
+			if (memCtx) this.state.systemPrompt += `\n\n${memCtx}`;
 		}
 
 		this.state.messages.push(this.createMessage("user", [{ type: "text", text: message }]));

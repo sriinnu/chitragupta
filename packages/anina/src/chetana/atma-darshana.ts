@@ -11,7 +11,7 @@
  * @packageDocumentation
  */
 
-import type { ChetanaConfig, ChetanaState, SelfModel, ToolMastery } from "./types.js";
+import type { ChetanaConfig, ChetanaState, SelfModel } from "./types.js";
 import {
 	wilsonInterval, updateTrend, recordCalibration as recordCalibrationFn,
 	updateFailureStreak, updateRecoveryTracking, recomputeLearningVelocity,
@@ -140,7 +140,7 @@ export class AtmaDarshana {
 		if (topTools) report += ` Strong: ${topTools}.`;
 		if (weakTools.length > 0) report += ` Weak: ${weakTools[0]}.`;
 		if (limCount > 0) report += ` ${limCount} limitation${limCount > 1 ? "s" : ""} noted.`;
-		return report.length > 200 ? report.slice(0, 197) + "..." : report;
+		return report.length > 200 ? `${report.slice(0, 197)}...` : report;
 	}
 
 	// ─── Serialization ─────────────────────────────────────────────────────
