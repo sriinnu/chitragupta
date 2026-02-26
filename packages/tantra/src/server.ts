@@ -15,6 +15,7 @@ import type {
 	McpPromptHandler,
 	ServerInfo,
 	ServerCapabilities,
+	ToolCallRecord,
 } from "./types.js";
 import {
 	createResponse,
@@ -26,23 +27,23 @@ import {
 } from "./jsonrpc.js";
 import { StdioServerTransport } from "./transport/stdio.js";
 import { SSEServerTransport } from "./transport/sse.js";
-import { formatToolFooter } from "@chitragupta/ui/tool-formatter";
+import type { ToolRegistry } from "./tool-registry.js";
+import {
+	handleResourcesList,
+	handleResourcesRead,
+	handlePromptsList,
+	handlePromptsGet,
+} from "./server-handlers.js";
+import {
+	ToolCallRingBuffer,
+	resolveTraceContext,
+	buildResponseMeta,
+	appendToolFooter,
+} from "./server-telemetry.js";
 
 type AnyMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
 
-/**
- * MCP Server -- serves tools, resources, and prompts over JSON-RPC 2.0.
- *
- * Supports stdio and SSE transports. Registers tool, resource, and prompt
- * handlers that are invoked when the corresponding MCP methods are called.
- *
- * @example
- * ```ts
- * const server = new McpServer({ name: "my-server", version: "1.0.0", transport: "stdio" });
- * server.registerTool({ definition: { name: "greet", ... }, execute: async (args) => ... });
- * await server.start();
- * ```
- */
+/** MCP Server — tools, resources, and prompts over JSON-RPC 2.0 (stdio / SSE). */
 export class McpServer {
 	private _config: McpServerConfig;
 	private _tools: Map<string, McpToolHandler> = new Map();
@@ -51,6 +52,14 @@ export class McpServer {
 	private _stdioTransport: StdioServerTransport | null = null;
 	private _sseTransport: SSEServerTransport | null = null;
 	private _initialized = false;
+	/** Attached dynamic tool registry (optional). */
+	private _registry: ToolRegistry | null = null;
+	/** Unsubscribe function for registry change events. */
+	private _registryUnsub: (() => void) | null = null;
+	/** Tool names currently sourced from the attached registry. */
+	private _registryOwnedTools: Set<string> = new Set();
+	/** In-memory ring buffer of recent tool calls for the OS integration surface. */
+	private _ringBuffer = new ToolCallRingBuffer();
 
 	constructor(config: McpServerConfig) {
 		this._config = config;
@@ -78,45 +87,155 @@ export class McpServer {
 
 	// ─── Tool Management ──────────────────────────────────────────────────
 
+	/** Register a new tool handler. */
+	registerTool(handler: McpToolHandler): void { this._tools.set(handler.definition.name, handler); }
+
+	/** Unregister a tool by name. */
+	unregisterTool(name: string): void { this._tools.delete(name); }
+
+	// ─── Dynamic Registry ────────────────────────────────────────────────
+
 	/**
-	 * Register a new tool handler.
+	 * Attach a dynamic ToolRegistry to this server.
 	 *
-	 * @param handler - The tool handler with definition and execute function.
+	 * All currently-enabled tools in the registry are merged into the
+	 * server's tool map. The server subscribes to registry change events
+	 * so that tools registered/unregistered/enabled/disabled at runtime
+	 * are reflected in MCP `tools/list` responses automatically.
+	 *
+	 * Existing hardcoded tools (registered via config or `registerTool`)
+	 * are preserved. If a registry tool collides with a hardcoded tool,
+	 * the hardcoded tool wins and the registry tool is skipped.
+	 *
+	 * @param registry - The ToolRegistry instance to attach.
 	 */
-	registerTool(handler: McpToolHandler): void {
-		this._tools.set(handler.definition.name, handler);
+	attachRegistry(registry: ToolRegistry): void {
+		// Detach any previously attached registry
+		if (this._registryUnsub) {
+			this._registryUnsub();
+		}
+		for (const toolName of this._registryOwnedTools) {
+			this._tools.delete(toolName);
+		}
+		this._registryOwnedTools.clear();
+		this._registry = registry;
+
+		// Sync current registry tools into the server (skip collisions)
+		for (const handler of registry.listTools()) {
+			this._addRegistryTool(handler);
+		}
+
+		// Subscribe to live changes
+		this._registryUnsub = registry.onChange((event) => {
+			switch (event.type) {
+				case "tool:registered": {
+					const handler = registry.getTool(event.toolName);
+					if (handler && this._addRegistryTool(handler)) {
+						this._notifyToolsChanged();
+					}
+					break;
+				}
+				case "tool:unregistered":
+					if (this._removeRegistryTool(event.toolName)) {
+						this._notifyToolsChanged();
+					}
+					break;
+				case "tool:enabled": {
+					const handler = registry.getTool(event.toolName);
+					if (handler && this._addRegistryTool(handler)) {
+						this._notifyToolsChanged();
+					}
+					break;
+				}
+				case "tool:disabled":
+					if (this._removeRegistryTool(event.toolName)) {
+						this._notifyToolsChanged();
+					}
+					break;
+				case "plugin:registered":
+					for (const toolName of event.toolNames) {
+						const handler = registry.getTool(toolName);
+						if (handler) {
+							this._addRegistryTool(handler);
+						}
+					}
+					this._notifyToolsChanged();
+					break;
+				case "plugin:unregistered":
+					for (const toolName of event.toolNames) {
+						this._removeRegistryTool(toolName);
+					}
+					this._notifyToolsChanged();
+					break;
+			}
+		});
 	}
 
 	/**
-	 * Unregister a tool by name.
+	 * Attempt to add/update a tool from the attached registry.
+	 * Returns true when server tool map changed.
 	 *
-	 * @param name - The name of the tool to remove.
+	 * Hardcoded tools are never overwritten by registry tools.
 	 */
-	unregisterTool(name: string): void {
+	private _addRegistryTool(handler: McpToolHandler): boolean {
+		const name = handler.definition.name;
+		if (this._tools.has(name) && !this._registryOwnedTools.has(name)) {
+			return false;
+		}
+		this._tools.set(name, handler);
+		this._registryOwnedTools.add(name);
+		return true;
+	}
+
+	/**
+	 * Remove a tool only if it is currently owned by the attached registry.
+	 * Returns true when server tool map changed.
+	 */
+	private _removeRegistryTool(name: string): boolean {
+		if (!this._registryOwnedTools.has(name)) {
+			return false;
+		}
+		this._registryOwnedTools.delete(name);
 		this._tools.delete(name);
+		return true;
+	}
+
+	/** Notify clients that the tools list changed. */
+	private _notifyToolsChanged(): void {
+		if (this._initialized) this.sendNotification({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
 	}
 
 	// ─── Resource Management ──────────────────────────────────────────────
 
-	/**
-	 * Register a new resource handler.
-	 *
-	 * @param handler - The resource handler with definition and read function.
-	 */
+	/** Register a new resource handler. */
 	registerResource(handler: McpResourceHandler): void {
 		const key = "uri" in handler.definition
 			? handler.definition.uri
 			: handler.definition.uriTemplate;
+		const existing = this._resources.get(key);
 		this._resources.set(key, handler);
+
+		// Notify clients when the list shape changes at runtime.
+		if (!existing) {
+			this._notifyResourcesChanged();
+		}
+	}
+
+	/** Notify clients that the resources list changed. */
+	private _notifyResourcesChanged(): void {
+		if (this._initialized) this.sendNotification({ jsonrpc: "2.0", method: "notifications/resources/list_changed" });
+	}
+
+	// ─── Telemetry ───────────────────────────────────────────────────────
+
+	/** Return a snapshot of the recent tool call ring buffer. */
+	getRecentCalls(): ToolCallRecord[] {
+		return this._ringBuffer.getAll();
 	}
 
 	// ─── Prompt Management ────────────────────────────────────────────────
 
-	/**
-	 * Register a new prompt handler.
-	 *
-	 * @param handler - The prompt handler with definition and get function.
-	 */
+	/** Register a new prompt handler. */
 	registerPrompt(handler: McpPromptHandler): void {
 		this._prompts.set(handler.definition.name, handler);
 	}
@@ -190,13 +309,13 @@ export class McpServer {
 				case "tools/call":
 					return await this._handleToolsCall(request.id, request.params);
 				case "resources/list":
-					return this._handleResourcesList(request.id);
+					return handleResourcesList(request.id, this._resources);
 				case "resources/read":
-					return await this._handleResourcesRead(request.id, request.params);
+					return await handleResourcesRead(request.id, request.params, this._resources);
 				case "prompts/list":
-					return this._handlePromptsList(request.id);
+					return handlePromptsList(request.id, this._prompts);
 				case "prompts/get":
-					return await this._handlePromptsGet(request.id, request.params);
+					return await handlePromptsGet(request.id, request.params, this._prompts);
 				case "ping":
 					return createResponse(request.id, {});
 				default:
@@ -254,7 +373,10 @@ export class McpServer {
 	}
 
 	/**
-	 * Handle "tools/call" — execute a tool.
+	 * Handle "tools/call" — execute a tool with trace propagation.
+	 *
+	 * Extracts or generates trace/span IDs, records execution to the ring
+	 * buffer, and includes `_meta` with trace + sandbox info in the response.
 	 */
 	private async _handleToolsCall(
 		id: string | number,
@@ -266,160 +388,41 @@ export class McpServer {
 
 		const toolName = params.name as string;
 		const handler = this._tools.get(toolName);
-
 		if (!handler) {
-			return createErrorResponse(
-				id,
-				INVALID_PARAMS,
-				`Unknown tool: ${toolName}`,
-			);
+			return createErrorResponse(id, INVALID_PARAMS, `Unknown tool: ${toolName}`);
 		}
 
 		const args = (params.arguments as Record<string, unknown>) ?? {};
+		const [traceId, spanId] = resolveTraceContext(params);
 
 		const t0 = performance.now();
 		try {
 			const result = await handler.execute(args);
 			const elapsed = performance.now() - t0;
 
-			// Append rich formatted footer to the last text content block
-			if (result.content && Array.isArray(result.content) && result.content.length > 0) {
-				const last = result.content[result.content.length - 1];
-				if (last && last.type === "text") {
-					const outputBytes = new TextEncoder().encode(last.text).length;
-					const footer = formatToolFooter({
-						toolName,
-						elapsedMs: elapsed,
-						outputBytes,
-						metadata: result._metadata,
-						isError: result.isError,
-					});
-					last.text += `\n\n${footer}`;
-				}
-			}
-
-			// Strip internal metadata before sending over wire
+			appendToolFooter(result.content, toolName, elapsed, result._metadata, result.isError);
 			delete result._metadata;
 
-			// Fire onToolCall hook (session recording, analytics, etc.)
+			this._ringBuffer.record({ toolName, traceId, spanId, durationMs: elapsed, isError: !!result.isError, timestamp: Date.now() });
+
 			if (this._config.onToolCall) {
 				try { await this._config.onToolCall({ tool: toolName, args, result, elapsedMs: elapsed }); } catch { /* best-effort */ }
 			}
 
-			return createResponse(id, result);
+			return createResponse(id, { ...result, _meta: buildResponseMeta(traceId, spanId, elapsed) });
 		} catch (err) {
 			const elapsed = performance.now() - t0;
 			const message = err instanceof Error ? err.message : String(err);
-			const errorText = message;
-			const outputBytes = new TextEncoder().encode(errorText).length;
-			const footer = formatToolFooter({
-				toolName,
-				elapsedMs: elapsed,
-				outputBytes,
-				isError: true,
-			});
+			const content: Array<{ type: string; text?: string }> = [{ type: "text", text: message }];
+			appendToolFooter(content, toolName, elapsed, undefined, true);
+
+			this._ringBuffer.record({ toolName, traceId, spanId, durationMs: elapsed, isError: true, timestamp: Date.now() });
+
 			return createResponse(id, {
-				content: [{ type: "text", text: `${errorText}\n\n${footer}` }],
+				content,
 				isError: true,
+				_meta: buildResponseMeta(traceId, spanId, elapsed),
 			});
-		}
-	}
-
-	/**
-	 * Handle "resources/list" — return all resources.
-	 */
-	private _handleResourcesList(id: string | number): JsonRpcResponse {
-		const resources = Array.from(this._resources.values()).map((h) => h.definition);
-		return createResponse(id, { resources });
-	}
-
-	/**
-	 * Handle "resources/read" — read a resource by URI.
-	 */
-	private async _handleResourcesRead(
-		id: string | number,
-		params?: Record<string, unknown>,
-	): Promise<JsonRpcResponse> {
-		if (!params || typeof params.uri !== "string") {
-			return createErrorResponse(id, INVALID_PARAMS, "Missing required param: uri");
-		}
-
-		const uri = params.uri as string;
-
-		// Try exact match first
-		let handler = this._resources.get(uri);
-
-		// If no exact match, try matching templates
-		if (!handler) {
-			for (const [, h] of this._resources) {
-				if ("uriTemplate" in h.definition) {
-					// Simple template matching (just checks prefix)
-					const template = h.definition.uriTemplate;
-					const prefix = template.split("{")[0];
-					if (prefix && uri.startsWith(prefix)) {
-						handler = h;
-						break;
-					}
-				}
-			}
-		}
-
-		if (!handler) {
-			return createErrorResponse(id, INVALID_PARAMS, `Unknown resource: ${uri}`);
-		}
-
-		try {
-			const content = await handler.read(uri);
-			return createResponse(id, { contents: content });
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			return createErrorResponse(id, INTERNAL_ERROR, message);
-		}
-	}
-
-	/**
-	 * Handle "prompts/list" — return all prompts.
-	 */
-	private _handlePromptsList(id: string | number): JsonRpcResponse {
-		const prompts = Array.from(this._prompts.values()).map((h) => h.definition);
-		return createResponse(id, { prompts });
-	}
-
-	/**
-	 * Handle "prompts/get" — get a prompt by name.
-	 */
-	private async _handlePromptsGet(
-		id: string | number,
-		params?: Record<string, unknown>,
-	): Promise<JsonRpcResponse> {
-		if (!params || typeof params.name !== "string") {
-			return createErrorResponse(id, INVALID_PARAMS, "Missing required param: name");
-		}
-
-		const promptName = params.name as string;
-		const handler = this._prompts.get(promptName);
-
-		if (!handler) {
-			return createErrorResponse(id, INVALID_PARAMS, `Unknown prompt: ${promptName}`);
-		}
-
-		const args = (params.arguments as Record<string, string>) ?? {};
-
-		try {
-			const contentItems = await handler.get(args);
-			// MCP spec: each message.content is a single object, not an array.
-			// Map each content item to its own message.
-			const messages = contentItems.map((item) => ({
-				role: "user" as const,
-				content: item,
-			}));
-			return createResponse(id, {
-				description: handler.definition.description,
-				messages,
-			});
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			return createErrorResponse(id, INTERNAL_ERROR, message);
 		}
 	}
 

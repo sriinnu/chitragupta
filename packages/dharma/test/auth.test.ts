@@ -15,8 +15,8 @@ import type {
 	AuthScope,
 	AuthResult,
 	AuthMiddlewareConfig,
-	AuthenticatedRequest,
 } from "../src/auth-types.js";
+import type { AuthenticatedRequest } from "../src/auth-middleware.js";
 import type { AuthDatabase } from "../src/api-key-store.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -105,10 +105,11 @@ describe("ApiKeyStore", () => {
 	// ── Validation ───────────────────────────────────────────────────
 
 	it("should validate a correct key", () => {
-		const { key } = store.createKey("t1", "valid", ["read", "admin"]);
+		const { key, record } = store.createKey("t1", "valid", ["read", "admin"]);
 		const result = store.validateKey(key);
 		expect(result.authenticated).toBe(true);
 		expect(result.tenantId).toBe("t1");
+		expect(result.keyId).toBe(record.id);
 		expect(result.scopes).toEqual(["read", "admin"]);
 	});
 
@@ -364,7 +365,7 @@ describe("createAuthMiddleware", () => {
 	});
 
 	it("should call next and attach context for a valid key", () => {
-		const { key } = keyStore.createKey("t1", "valid-mw", ["read", "tools"]);
+		const { key, record } = keyStore.createKey("t1", "valid-mw", ["read", "tools"]);
 		const mw = createAuthMiddleware(keyStore, { enabled: true });
 		const req = mockReq({
 			headers: { authorization: `Bearer ${key}` },
@@ -377,6 +378,7 @@ describe("createAuthMiddleware", () => {
 		expect(req.authContext?.tenantId).toBe("t1");
 		expect(req.authContext?.scopes).toContain("read");
 		expect(req.authContext?.scopes).toContain("tools");
+		expect(req.authContext?.keyId).toBe(record.id);
 	});
 
 	it("should set X-Tenant-Id response header on success", () => {

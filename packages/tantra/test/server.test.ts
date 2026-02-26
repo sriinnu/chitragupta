@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { stripAnsi } from "@chitragupta/ui/ansi";
 import { McpServer } from "../src/server.js";
+import { ToolRegistry } from "../src/tool-registry.js";
 import {
   createRequest,
   createResponse,
@@ -182,7 +183,7 @@ describe("McpServer", () => {
     });
   });
 
-  describe("registerTool / unregisterTool", () => {
+	describe("registerTool / unregisterTool", () => {
     it("should add and remove tools dynamically", async () => {
       const newTool: McpToolHandler = {
         definition: { name: "echo", description: "Echo", inputSchema: {} },
@@ -204,7 +205,43 @@ describe("McpServer", () => {
       res = await handleRequest(server, req);
       tools = (res.result as any).tools;
       expect(tools.map((t: any) => t.name)).not.toContain("echo");
-    });
+	});
+
+	describe("attachRegistry", () => {
+		it("should not remove hardcoded tools when colliding plugin is unregistered", async () => {
+			const registry = new ToolRegistry();
+			registry.registerPlugin({
+				id: "plugin-collision",
+				name: "Plugin Collision",
+				version: "1.0.0",
+				tools: [{
+					definition: { name: "greet", description: "Plugin greet", inputSchema: {} },
+					async execute() {
+						return { content: [{ type: "text", text: "plugin-greet" }] };
+					},
+				}],
+			});
+
+			server.attachRegistry(registry);
+
+			// Hardcoded tool should still execute.
+			let res = await handleRequest(server, createRequest("tools/call", {
+				name: "greet",
+				arguments: { name: "Alice" },
+			}, 90));
+			expect(res.error).toBeUndefined();
+			expect(((res.result as { content: Array<{ text: string }> }).content[0].text)).toContain("Hello, Alice!");
+
+			// Unregister plugin and ensure hardcoded tool remains.
+			registry.unregisterPlugin("plugin-collision");
+			res = await handleRequest(server, createRequest("tools/call", {
+				name: "greet",
+				arguments: { name: "Bob" },
+			}, 91));
+			expect(res.error).toBeUndefined();
+			expect(((res.result as { content: Array<{ text: string }> }).content[0].text)).toContain("Hello, Bob!");
+		});
+	});
   });
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -249,6 +286,50 @@ describe("McpServer", () => {
       expect(res.error!.code).toBe(INVALID_PARAMS);
     });
   });
+
+	describe("registerResource notifications", () => {
+		it("should notify clients when a new resource is registered after initialize", async () => {
+			const sendSpy = vi.spyOn(server, "sendNotification").mockImplementation(() => {});
+
+			await handleRequest(server, createRequest("initialize", {}, 24));
+
+			server.registerResource({
+				definition: {
+					uri: "file:///dynamic.md",
+					name: "Dynamic",
+					description: "runtime-added resource",
+					mimeType: "text/plain",
+				},
+				async read() {
+					return [{ type: "text", text: "dynamic" }];
+				},
+			});
+
+			expect(sendSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					method: "notifications/resources/list_changed",
+				}),
+			);
+		});
+
+		it("should not notify before initialize", () => {
+			const sendSpy = vi.spyOn(server, "sendNotification").mockImplementation(() => {});
+
+			server.registerResource({
+				definition: {
+					uri: "file:///pre-init.md",
+					name: "PreInit",
+					description: "resource added before initialize",
+					mimeType: "text/plain",
+				},
+				async read() {
+					return [{ type: "text", text: "pre-init" }];
+				},
+			});
+
+			expect(sendSpy).not.toHaveBeenCalled();
+		});
+	});
 
   // ═══════════════════════════════════════════════════════════════════════
   // Prompts

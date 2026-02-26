@@ -188,7 +188,7 @@ describe("watchTool", () => {
 
 			const resultPromise = watchTool.execute({}, CTX);
 			await vi.advanceTimersByTimeAsync(6_000);
-			const result = await resultPromise;
+			await resultPromise;
 
 			// stat should be called with the working directory
 			expect(mockStat).toHaveBeenCalledWith("/work");

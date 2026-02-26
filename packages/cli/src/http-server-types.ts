@@ -4,6 +4,8 @@
  */
 
 import type { AuthContext, AuthMiddlewareConfig, TokenExchangeConfig } from "@chitragupta/core";
+import type { AuthMiddlewareConfig as DharmaAuthConfig } from "@chitragupta/dharma";
+import type { ApiKeyStore } from "@chitragupta/dharma";
 import type { JobQueueConfig } from "./job-queue.js";
 import type { WebSocketServerOptions } from "./ws-handler.js";
 import type { TlsCertificates } from "./tls/tls-types.js";
@@ -64,6 +66,23 @@ export interface ServerConfig {
 	 * WebSocket upgrades automatically use `wss://`.
 	 */
 	tls?: TlsCertificates;
+	/**
+	 * Dharma API-key auth middleware configuration.
+	 *
+	 * When set, wires the `@chitragupta/dharma` auth middleware into the
+	 * request pipeline. Provides per-key rate limiting, tenant isolation,
+	 * and scope-based authorization via the `ApiKeyStore`.
+	 *
+	 * Health/status endpoints (`/api/health`) are bypassed by default.
+	 * Set `dharmaAuth.config.enabled = false` to disable (default OFF).
+	 * A warning is logged when auth is disabled.
+	 */
+	dharmaAuth?: {
+		/** The API key store instance to validate tokens against. */
+		keyStore: ApiKeyStore;
+		/** Middleware configuration (enabled, bypass paths, etc.). */
+		config?: DharmaAuthConfig;
+	};
 }
 
 export interface RouteHandler {

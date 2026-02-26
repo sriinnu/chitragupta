@@ -21,20 +21,20 @@ describe("estimateTokens", () => {
     expect(estimateTokens("")).toBe(0);
   });
 
-  it("should estimate approximately 1 token per 4 characters", () => {
-    // 8 chars -> 2 tokens
-    expect(estimateTokens("abcdefgh")).toBe(2);
+  it("should estimate approximately 1 token per 3.7 characters", () => {
+    // 8 chars -> ceil(8/3.7) = 3
+    expect(estimateTokens("abcdefgh")).toBe(Math.ceil(8 / 3.7));
   });
 
   it("should ceil the result", () => {
-    // 5 chars -> ceil(5/4) = 2
-    expect(estimateTokens("abcde")).toBe(2);
+    // 5 chars -> ceil(5/3.7) = 2
+    expect(estimateTokens("abcde")).toBe(Math.ceil(5 / 3.7));
   });
 
   it("should handle longer text proportionally", () => {
     const text = "a".repeat(100);
-    // 100 / 4 = 25
-    expect(estimateTokens(text)).toBe(25);
+    // ceil(100/3.7) = 28
+    expect(estimateTokens(text)).toBe(Math.ceil(100 / 3.7));
   });
 
   it("should return 0 for falsy input", () => {
@@ -42,7 +42,7 @@ describe("estimateTokens", () => {
   });
 
   it("should handle single character", () => {
-    // 1 / 4 = 0.25, ceil = 1
+    // ceil(1/3.7) = 1
     expect(estimateTokens("a")).toBe(1);
   });
 });

@@ -494,6 +494,40 @@ describe("CompletionRouter", () => {
 		expect(Array.isArray(models)).toBe(true);
 	});
 
+	it("should hydrate model list from provider listModels", async () => {
+		const router = new CompletionRouter({
+			providers: [anthropicProvider],
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const models = router.listModels();
+		expect(models).toContain("anthropic-model-a");
+		expect(models).toContain("anthropic-model-b");
+	});
+
+	it("should discard stale model cache when provider with same ID is replaced", async () => {
+		const oldProvider = makeProvider("anthropic", "Anthropic old");
+		(oldProvider.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(["anthropic-old-model"]);
+
+		const newProvider = makeProvider("anthropic", "Anthropic new");
+		(newProvider.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(["anthropic-new-model"]);
+
+		const router = new CompletionRouter({
+			providers: [oldProvider],
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(router.listModels()).toContain("anthropic-old-model");
+
+		router.addProvider(newProvider);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const models = router.listModels();
+		expect(models).toContain("anthropic-new-model");
+		expect(models).not.toContain("anthropic-old-model");
+	});
+
 	// ── 17. CompletionRequest with tools ─────────────────────────────────
 
 	it("should forward tools in the request to provider", async () => {

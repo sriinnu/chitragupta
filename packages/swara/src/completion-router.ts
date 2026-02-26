@@ -14,12 +14,7 @@ import type {
 	LLMProvider,
 } from "./completion-types.js";
 
-// ─── Model Prefix → Provider Mapping ────────────────────────────────────────
-
-/**
- * Default model prefix rules for routing.
- * Order matters: first match wins.
- */
+/** Default model prefix rules for routing. Order matters: first match wins. */
 const DEFAULT_PREFIX_MAP: ReadonlyArray<{ prefix: string; providerId: string }> = [
 	{ prefix: "claude-", providerId: "anthropic" },
 	{ prefix: "gpt-", providerId: "openai" },
@@ -100,11 +95,15 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 			reject(new Error("Aborted"));
 			return;
 		}
-		const timer = setTimeout(resolve, ms);
 		const onAbort = () => {
 			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
 			reject(new Error("Aborted"));
 		};
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
 		signal?.addEventListener("abort", onAbort, { once: true });
 	});
 }
@@ -127,23 +126,26 @@ function withTimeout<T>(
 	signal?: AbortSignal,
 ): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
-		const timer = setTimeout(() => {
-			reject(new CompletionTimeoutError(timeoutMs));
-		}, timeoutMs);
-
 		const onAbort = () => {
 			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
 			reject(new Error("Aborted"));
 		};
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			reject(new CompletionTimeoutError(timeoutMs));
+		}, timeoutMs);
 		signal?.addEventListener("abort", onAbort, { once: true });
 
 		promise.then(
 			(value) => {
 				clearTimeout(timer);
+				signal?.removeEventListener("abort", onAbort);
 				resolve(value);
 			},
 			(error) => {
 				clearTimeout(timer);
+				signal?.removeEventListener("abort", onAbort);
 				reject(error);
 			},
 		);
@@ -192,15 +194,15 @@ export class CompletionRouter {
 
 	// ─── Provider Management ──────────────────────────────────────────────
 
-	/** Register a new provider at runtime. */
+	/** Register a new provider at runtime. Populates model registry asynchronously. */
 	addProvider(provider: LLMProvider): void {
+		this._removeProviderModels(provider.id);
 		this.providers.set(provider.id, provider);
+		this._populateModels(provider);
 	}
 
-	/** Remove a provider by ID. */
-	removeProvider(providerId: string): void {
-		this.providers.delete(providerId);
-		// Remove model entries that reference this provider.
+	/** Remove all model entries currently tied to a provider ID. */
+	private _removeProviderModels(providerId: string): void {
 		for (let i = this.modelRegistry.length - 1; i >= 0; i--) {
 			if (this.modelRegistry[i].providerId === providerId) {
 				this.modelRegistry.splice(i, 1);
@@ -208,25 +210,44 @@ export class CompletionRouter {
 		}
 	}
 
+	/** Query a provider's available models and add them to the registry. */
+	private _populateModels(provider: LLMProvider): void {
+		if (!provider.listModels) return;
+		provider.listModels().then(
+			(models) => {
+				// Ignore stale async responses from providers that were replaced/removed.
+				if (this.providers.get(provider.id) !== provider) {
+					return;
+				}
+				for (const model of models) {
+					if (!this.modelRegistry.some((e) => e.model === model)) {
+						this.modelRegistry.push({ model, providerId: provider.id });
+					}
+				}
+			},
+			() => { /* best-effort — prefix matching still works as fallback */ },
+		);
+	}
+
+	/** Remove a provider by ID. */
+	removeProvider(providerId: string): void {
+		this.providers.delete(providerId);
+		this._removeProviderModels(providerId);
+	}
+
 	/** List all available model IDs across registered providers. */
 	listModels(): string[] {
-		const models: string[] = [];
-		for (const entry of this.modelRegistry) {
-			models.push(entry.model);
-		}
-		// Also include provider-reported models if cached.
+		const models = this.modelRegistry.map((e) => e.model);
+		if (this.defaultModel) models.push(this.defaultModel);
+		models.push(...this.fallbackChain);
 		return [...new Set(models)];
 	}
 
 	/** Get a registered provider by ID. */
-	getProvider(providerId: string): LLMProvider | undefined {
-		return this.providers.get(providerId);
-	}
+	getProvider(providerId: string): LLMProvider | undefined { return this.providers.get(providerId); }
 
 	/** Get all registered provider IDs. */
-	getProviderIds(): string[] {
-		return [...this.providers.keys()];
-	}
+	getProviderIds(): string[] { return [...this.providers.keys()]; }
 
 	// ─── Routing ──────────────────────────────────────────────────────────
 

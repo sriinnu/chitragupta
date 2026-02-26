@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { CLI_PACKAGE_VERSION } from "../../src/version.js";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -269,7 +270,7 @@ class McpTestClient {
 			}, SERVER_STARTUP_MS);
 
 			const check = (chunk: string) => {
-				if (chunk.includes("MCP server starting") || chunk.includes("Tools:")) {
+				if (chunk.includes("MCP server ready") || chunk.includes("Tools:")) {
 					clearTimeout(timer);
 					resolve();
 				}
@@ -428,7 +429,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 
 			const serverInfo = result.serverInfo as Record<string, unknown>;
 			expect(serverInfo.name).toBe("chitragupta");
-			expect(serverInfo.version).toBe("0.1.0");
+			expect(serverInfo.version).toBe(CLI_PACKAGE_VERSION);
 		}, 15_000);
 
 		it("should advertise tools, resources, and prompts capabilities", async () => {
@@ -1006,7 +1007,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 			await startAndInitialize();
 
 			const stderr = client.getStderr();
-			expect(stderr).toContain("MCP server starting");
+			expect(stderr).toContain("MCP server ready");
 			expect(stderr).toContain("Tools:");
 			expect(stderr).toContain("stdio");
 		}, 15_000);

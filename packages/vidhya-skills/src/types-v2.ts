@@ -12,6 +12,17 @@
  */
 
 import type { SkillManifest, SkillMatch } from "./types.js";
+import type { SkillUIContributions } from "./ui-contribution-types.js";
+
+// Re-export UI contribution types for consumers importing from types-v2
+export type {
+	SkillUIContributions,
+	SkillWidgetContribution,
+	SkillKeybindContribution,
+	SkillPanelContribution,
+	UIOutputFormat,
+	PanelType,
+} from "./ui-contribution-types.js";
 
 // Re-export all domain subsystem types for backward compatibility.
 // Consumers importing from "./types-v2.js" continue to work unchanged.
@@ -366,6 +377,8 @@ export interface VidyaTantraExtension {
 	readonly integrity?: SkillIntegrity;
 	/** Cryptographic signature of the integrity root hash. */
 	readonly signature?: SkillSignature;
+	/** UI contribution points for TUI consumers (widgets, keybinds, panels). */
+	readonly ui?: SkillUIContributions;
 }
 
 // ─── Serializable State ───────────────────────────────────────────────────

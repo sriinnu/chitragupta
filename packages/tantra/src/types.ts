@@ -185,6 +185,41 @@ export interface MeshStatusResult {
 	nodeId: string | null;
 }
 
+// ─── OS Integration Surface Types ───────────────────────────────────────────
+
+/** Public execution metadata included in MCP tool responses via `_meta`. */
+export interface ToolExecutionMeta {
+	/** 32-char hex trace identifier. */
+	trace_id: string;
+	/** 16-char hex span identifier. */
+	span_id: string;
+	/** Wall-clock execution time in milliseconds. */
+	execution_ms: number;
+	/** Sandbox/isolation metadata for the execution environment. */
+	sandbox: {
+		isolated: boolean;
+		method: "worktree" | "docker" | "process" | "wasm";
+		container_id?: string;
+		policy?: "read-only" | "read-write" | "unrestricted";
+	};
+}
+
+/** Recent tool call record for the in-memory ring buffer. */
+export interface ToolCallRecord {
+	/** Tool name that was invoked. */
+	toolName: string;
+	/** 32-char hex trace identifier. */
+	traceId: string;
+	/** 16-char hex span identifier. */
+	spanId: string;
+	/** Wall-clock execution time in milliseconds. */
+	durationMs: number;
+	/** Whether the tool call resulted in an error. */
+	isError: boolean;
+	/** Unix epoch timestamp (ms) of the call. */
+	timestamp: number;
+}
+
 // ─── Realtime Event Re-exports ──────────────────────────────────────────────
 
 export type {

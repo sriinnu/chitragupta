@@ -34,23 +34,25 @@ import { Sandbox } from "@chitragupta/yantra";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+type ExecCallback = (error: Error | null, stdout: string, stderr: string) => void;
+
 function mockExecSuccess(stdout = "", stderr = "") {
-	mockExec.mockImplementation((_cmd: unknown, _opts: unknown, cb: unknown) => {
-		(cb as Function)(null, stdout, stderr);
+	mockExec.mockImplementation((_cmd: unknown, _opts: unknown, cb: ExecCallback) => {
+		cb(null, stdout, stderr);
 		return {} as any;
 	});
 }
 
 function mockExecSequence(results: Array<{ stdout?: string; stderr?: string; error?: Error }>) {
 	let callIndex = 0;
-	mockExec.mockImplementation((_cmd: unknown, _opts: unknown, cb: unknown) => {
+	mockExec.mockImplementation((_cmd: unknown, _opts: unknown, cb: ExecCallback) => {
 		const r = results[callIndex] ?? results[results.length - 1];
 		callIndex++;
 		if (r.error) {
 			const enriched = Object.assign(r.error, { stdout: r.stdout ?? "", stderr: r.stderr ?? "" });
-			(cb as Function)(enriched, r.stdout ?? "", r.stderr ?? "");
+			cb(enriched, r.stdout ?? "", r.stderr ?? "");
 		} else {
-			(cb as Function)(null, r.stdout ?? "", r.stderr ?? "");
+			cb(null, r.stdout ?? "", r.stderr ?? "");
 		}
 		return {} as any;
 	});

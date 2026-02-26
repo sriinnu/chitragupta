@@ -48,6 +48,9 @@ importers:
       '@chitragupta/swara':
         specifier: workspace:*
         version: link:../swara
+      '@chitragupta/vidhya-skills':
+        specifier: workspace:*
+        version: link:../vidhya-skills
 
   packages/cli:
     dependencies:
@@ -176,6 +179,12 @@ importers:
       '@chitragupta/core':
         specifier: workspace:*
         version: link:../core
+      '@chitragupta/sutra':
+        specifier: workspace:*
+        version: link:../sutra
+      '@chitragupta/swara':
+        specifier: workspace:*
+        version: link:../swara
       '@chitragupta/ui':
         specifier: workspace:*
         version: link:../ui

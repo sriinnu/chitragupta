@@ -27,16 +27,34 @@
 import { runMcpServerMode } from "./modes/mcp-server.js";
 import { loadCredentials } from "./bootstrap.js";
 import { configureLogging, ConsoleTransport } from "@chitragupta/core";
+import { CLI_PACKAGE_VERSION } from "./version.js";
+
+// ─── Stdout Guard ───────────────────────────────────────────────────────────
+// In stdio mode, stdout is EXCLUSIVELY for MCP JSON-RPC framed messages.
+// Redirect console.log → stderr so stray logs from dependencies can't
+// corrupt the protocol stream and cause client-side timeouts.
+
+console.log = (...args: unknown[]) => { console.error(...args); };
 
 // ─── Crash Guards ───────────────────────────────────────────────────────────
 // Prevent silent crashes that kill the MCP server without any user feedback.
 
+let _fatalExitScheduled = false;
+
+function scheduleFatalExit(header: string, details: string): void {
+	process.stderr.write(`[chitragupta-mcp] ${header}: ${details}\n`);
+	if (_fatalExitScheduled) return;
+	_fatalExitScheduled = true;
+	setTimeout(() => process.exit(1), 25).unref();
+}
+
 process.on("uncaughtException", (err) => {
-	process.stderr.write(`[chitragupta-mcp] Uncaught exception: ${err.message}\n${err.stack ?? ""}\n`);
+	const details = `${err.message}\n${err.stack ?? ""}`;
+	scheduleFatalExit("Uncaught exception", details);
 });
 process.on("unhandledRejection", (reason) => {
-	const msg = reason instanceof Error ? reason.message : String(reason);
-	process.stderr.write(`[chitragupta-mcp] Unhandled rejection: ${msg}\n`);
+	const msg = reason instanceof Error ? `${reason.message}\n${reason.stack ?? ""}` : String(reason);
+	scheduleFatalExit("Unhandled rejection", msg);
 });
 
 // ─── Diagnostics ────────────────────────────────────────────────────────────
@@ -154,7 +172,7 @@ function parseArgs(argv: string[]): {
 			);
 			process.exit(0);
 		} else if (arg === "-v" || arg === "--version") {
-			process.stderr.write("chitragupta-mcp v0.1.0\n");
+			process.stderr.write(`chitragupta-mcp v${CLI_PACKAGE_VERSION}\n`);
 			process.exit(0);
 		}
 	}
@@ -165,6 +183,7 @@ function parseArgs(argv: string[]): {
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+	const t0 = performance.now();
 	const args = parseArgs(process.argv.slice(2));
 
 	// Diagnostic mode — check environment and exit
@@ -172,9 +191,6 @@ async function main(): Promise<void> {
 		await runDiagnostics();
 		process.exit(0);
 	}
-
-	// Load credentials first so API keys are available
-	loadCredentials();
 
 	// In stdio mode, ALL log output must go to stderr to keep stdout
 	// clean for JSON-RPC messages. Without this, DEBUG/INFO logs from
@@ -184,6 +200,12 @@ async function main(): Promise<void> {
 			transports: [new ConsoleTransport({ forceStderr: true })],
 		});
 	}
+
+	// Load credentials (sets API key env vars). Fast (<10ms) but
+	// deferred after logging so any import-time logs go to stderr.
+	loadCredentials();
+
+	process.stderr.write(`[mcp] Bootstrap: ${(performance.now() - t0).toFixed(0)}ms\n`);
 
 	await runMcpServerMode({
 		transport: args.transport,

@@ -46,7 +46,8 @@
 	"dependencies": {
 		"@chitragupta/core": "workspace:*",
 		"@chitragupta/smriti": "workspace:*",
-		"@chitragupta/swara": "workspace:*"
+		"@chitragupta/swara": "workspace:*",
+		"@chitragupta/vidhya-skills": "workspace:*"
 	},
 	"files": [
 		"dist",

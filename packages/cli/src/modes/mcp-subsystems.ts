@@ -147,6 +147,23 @@ export interface SkillRegistryLike {
 	getAll(): Array<Record<string, unknown>>;
 }
 
+/** Duck-typed SkillDiscovery (vidhya-skills). */
+interface SkillDiscoveryLike {
+	discoverFromDirectory(path: string): Promise<Array<Record<string, unknown>>>;
+}
+
+/** Duck-typed UI extension registry used by MCP plugin tools. */
+interface UIExtensionRegistryLike {
+	register(extension: {
+		skillName: string;
+		version: string;
+		widgets: Array<Record<string, unknown>>;
+		keybinds: Array<Record<string, unknown>>;
+		panels: Array<Record<string, unknown>>;
+		registeredAt: number;
+	}): void;
+}
+
 // ─── Lazy Singletons ────────────────────────────────────────────────────────
 
 let _samiti: SamitiLike | undefined;
@@ -158,6 +175,7 @@ let _chetana: ChetanaControllerLike | undefined;
 let _soulManager: SoulManagerLike | undefined;
 let _actorSystem: ActorSystemLike | undefined;
 let _skillRegistry: SkillRegistryLike | undefined;
+let _skillRegistryBootstrap: Promise<void> | undefined;
 
 /** Lazily create or return the Samiti singleton. */
 export async function getSamiti(): Promise<SamitiLike> {
@@ -233,11 +251,197 @@ export async function getActorSystem(): Promise<ActorSystemLike> {
 	return _actorSystem;
 }
 
+function parseEnvSkillPaths(value: string | undefined, delimiter: string): string[] {
+	if (!value) return [];
+	return value
+		.split(delimiter)
+		.map((v) => v.trim())
+		.filter((v) => v.length > 0);
+}
+
+function buildSkillScanPaths(opts: {
+	projectPath: string;
+	chitraguptaHome: string;
+	homeDir: string;
+	delimiter: string;
+	join: (...parts: string[]) => string;
+}): string[] {
+	const { projectPath, chitraguptaHome, homeDir, delimiter, join } = opts;
+	const envPaths = parseEnvSkillPaths(
+		process.env.CHITRAGUPTA_SKILL_PATHS ?? process.env.VAAYU_SKILL_PATHS,
+		delimiter,
+	);
+
+	const candidates = [
+		...envPaths,
+		chitraguptaHome ? join(chitraguptaHome, "skills") : "",
+		join(projectPath, "skills"),
+		join(projectPath, "skills-core"),
+		homeDir ? join(homeDir, ".agents", "skills") : "",
+		homeDir ? join(homeDir, ".codex", "skills") : "",
+	];
+
+	return [...new Set(candidates.filter((v) => v.length > 0))];
+}
+
+async function getUIExtensionRegistryBestEffort(): Promise<UIExtensionRegistryLike | null> {
+	try {
+		const { getUIExtensionRegistry } = await import("./mcp-tools-plugins.js");
+		return getUIExtensionRegistry() as unknown as UIExtensionRegistryLike;
+	} catch {
+		return null;
+	}
+}
+
+function toStringOrUndefined(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function toRecordArray(value: unknown): Array<Record<string, unknown>> {
+	if (!Array.isArray(value)) return [];
+	return value.filter((v): v is Record<string, unknown> => typeof v === "object" && v !== null);
+}
+
+function registerUiContributionFromSkill(
+	registry: UIExtensionRegistryLike,
+	manifest: Record<string, unknown>,
+): void {
+	const rawUi = manifest.ui;
+	if (typeof rawUi !== "object" || rawUi === null) return;
+
+	const ui = rawUi as Record<string, unknown>;
+	const widgets = toRecordArray(ui.widgets).map((w) => {
+		const widget: Record<string, unknown> = {
+			id: toStringOrUndefined(w.id),
+			label: toStringOrUndefined(w.label),
+		};
+		const position = toStringOrUndefined(w.position);
+		if (position && (position === "left" || position === "center" || position === "right")) {
+			widget.position = position;
+		}
+		const refreshMs = Number(w.refreshMs);
+		if (Number.isFinite(refreshMs) && refreshMs > 0) widget.refreshMs = refreshMs;
+		const format = toStringOrUndefined(w.format);
+		if (format && (format === "plain" || format === "ansi" || format === "json")) {
+			widget.format = format;
+		}
+		return widget;
+	}).filter((w) => typeof w.id === "string" && typeof w.label === "string");
+
+	const keybinds = toRecordArray(ui.keybinds).map((k) => {
+		const keybind: Record<string, unknown> = {
+			key: toStringOrUndefined(k.key),
+			description: toStringOrUndefined(k.description),
+			command: toStringOrUndefined(k.command),
+		};
+		if (typeof k.args === "object" && k.args !== null) {
+			keybind.args = k.args as Record<string, unknown>;
+		}
+		return keybind;
+	}).filter((k) =>
+		typeof k.key === "string" &&
+		typeof k.description === "string" &&
+		typeof k.command === "string",
+	);
+
+	const panels = toRecordArray(ui.panels).map((p) => {
+		const panel: Record<string, unknown> = {
+			id: toStringOrUndefined(p.id),
+			title: toStringOrUndefined(p.title),
+			type: toStringOrUndefined(p.type),
+		};
+		const format = toStringOrUndefined(p.format);
+		if (format && (format === "plain" || format === "ansi" || format === "markdown" || format === "json")) {
+			panel.format = format;
+		}
+		return panel;
+	}).filter((p) =>
+		typeof p.id === "string" &&
+		typeof p.title === "string" &&
+		(typeof p.type === "string") &&
+		(p.type === "sidebar" || p.type === "modal" || p.type === "overlay" || p.type === "tab"),
+	);
+
+	if (widgets.length === 0 && keybinds.length === 0 && panels.length === 0) {
+		return;
+	}
+
+	const skillName = String(manifest.name ?? "").trim();
+	if (!skillName) return;
+
+	registry.register({
+		skillName,
+		version: String(manifest.version ?? "0.0.0"),
+		widgets,
+		keybinds,
+		panels,
+		registeredAt: Date.now(),
+	});
+}
+
+async function bootstrapSkillRegistry(registry: SkillRegistryLike): Promise<void> {
+	try {
+		const [
+			{ SkillDiscovery },
+			{ getChitraguptaHome },
+			fs,
+			path,
+		] = await Promise.all([
+			import("@chitragupta/vidhya-skills"),
+			import("@chitragupta/core"),
+			import("node:fs"),
+			import("node:path"),
+		]);
+
+		const discovery = new SkillDiscovery() as unknown as SkillDiscoveryLike;
+		const uiRegistry = await getUIExtensionRegistryBestEffort();
+		const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? "";
+		const scanPaths = buildSkillScanPaths({
+			projectPath: process.cwd(),
+			chitraguptaHome: String(getChitraguptaHome() ?? ""),
+			homeDir,
+			delimiter: path.delimiter,
+			join: path.join,
+		});
+
+		for (const scanPath of scanPaths) {
+			if (!fs.existsSync(scanPath)) continue;
+
+			let manifests: Array<Record<string, unknown>> = [];
+			try {
+				manifests = await discovery.discoverFromDirectory(scanPath);
+			} catch {
+				continue;
+			}
+
+			for (const manifest of manifests) {
+				try {
+					registry.register(manifest);
+					if (uiRegistry) {
+						registerUiContributionFromSkill(uiRegistry, manifest);
+					}
+				} catch {
+					// Best-effort: malformed skill should not break registry bootstrap.
+				}
+			}
+		}
+	} catch {
+		// Best-effort bootstrap: keep registry available even if discovery fails.
+	}
+}
+
 /** Lazily create or return the SkillRegistry singleton. */
 export async function getSkillRegistry(): Promise<SkillRegistryLike> {
 	if (!_skillRegistry) {
 		const { SkillRegistry } = await import("@chitragupta/vidhya-skills");
 		_skillRegistry = new SkillRegistry() as unknown as SkillRegistryLike;
+		_skillRegistryBootstrap = bootstrapSkillRegistry(_skillRegistry)
+			.finally(() => {
+				_skillRegistryBootstrap = undefined;
+			});
+	}
+	if (_skillRegistryBootstrap) {
+		await _skillRegistryBootstrap;
 	}
 	return _skillRegistry;
 }
