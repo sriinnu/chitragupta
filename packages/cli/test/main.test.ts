@@ -49,6 +49,7 @@ const {
 	// @chitragupta/anina
 	mockAgent,
 	MockAgent,
+	mockAgentConstructor,
 	mockKaalaBrahma,
 	MockKaalaBrahma,
 	mockSoulManager,
@@ -120,8 +121,22 @@ const {
 		registerTool: vi.fn(),
 	};
 
-	// Constructor mocks — use function() so `new` works
-	const MockAgent = vi.fn(function () { return mockAgent; });
+	// Constructor-safe class mock + explicit constructor spy for assertions.
+	const mockAgentConstructor = vi.fn();
+	class MockAgent {
+		id = mockAgent.id;
+		setProvider = mockAgent.setProvider;
+		prompt = mockAgent.prompt;
+		getMessages = mockAgent.getMessages;
+		pushMessage = mockAgent.pushMessage;
+		abort = mockAgent.abort;
+		setOnEvent = mockAgent.setOnEvent;
+		getConfig = mockAgent.getConfig;
+		registerTool = mockAgent.registerTool;
+		constructor(config: unknown) {
+			mockAgentConstructor(config);
+		}
+	}
 
 	// ─── Provider registry mock ────────────────────────────────────────
 	const mockProvider = { id: "anthropic", name: "Anthropic" };
@@ -331,6 +346,7 @@ const {
 		// @chitragupta/anina
 		mockAgent,
 		MockAgent,
+		mockAgentConstructor,
 		mockKaalaBrahma,
 		MockKaalaBrahma,
 		mockSoulManager,
@@ -647,7 +663,7 @@ function restoreDefaults() {
 	knownProviders.set("anthropic", { id: "anthropic", name: "Anthropic" });
 	mockRegistry.get.mockReset().mockImplementation((id: string) => knownProviders.get(id));
 	mockRegistry.getAll.mockReset().mockReturnValue([{ id: "anthropic", name: "Anthropic" }]);
-	MockAgent.mockReset().mockImplementation(function () { return mockAgent; });
+	mockAgentConstructor.mockReset();
 	mockAgent.id = "agent-1";
 	mockAgent.prompt.mockReset();
 	mockAgent.getMessages.mockReset().mockReturnValue([]);
@@ -1241,7 +1257,7 @@ describe("main()", () => {
 		it("should create an Agent with correct config", async () => {
 			await runMain(makeArgs());
 
-			expect(MockAgent).toHaveBeenCalledWith(
+			expect(mockAgentConstructor).toHaveBeenCalledWith(
 				expect.objectContaining({
 					providerId: "anthropic",
 					systemPrompt: "You are Chitragupta.",
@@ -1262,7 +1278,7 @@ describe("main()", () => {
 		it("should use model from args when specified", async () => {
 			await runMain(makeArgs({ model: "gpt-4o" }));
 
-			expect(MockAgent).toHaveBeenCalledWith(
+			expect(mockAgentConstructor).toHaveBeenCalledWith(
 				expect.objectContaining({
 					model: "gpt-4o",
 				}),
@@ -1281,7 +1297,7 @@ describe("main()", () => {
 
 			await runMain(makeArgs());
 
-			expect(MockAgent).toHaveBeenCalledWith(
+			expect(mockAgentConstructor).toHaveBeenCalledWith(
 				expect.objectContaining({
 					model: "claude-opus-4-0-20250514",
 				}),
@@ -1379,7 +1395,7 @@ describe("main()", () => {
 			await runMain(makeArgs());
 
 			expect(MockPolicyEngine).toHaveBeenCalled();
-			expect(MockAgent).toHaveBeenCalledWith(
+			expect(mockAgentConstructor).toHaveBeenCalledWith(
 				expect.objectContaining({
 					policyEngine: expect.objectContaining({
 						check: expect.any(Function),
