@@ -102,6 +102,7 @@ export class Agent implements TreeAgent {
 		if (config.tools) {
 			for (const tool of config.tools) this.toolExecutor.register(tool);
 		}
+		if (config.onToolNotFound) this.toolExecutor.setOnToolNotFound(config.onToolNotFound);
 
 		this.state = {
 			messages: [], model: config.model, providerId: config.providerId,
@@ -180,7 +181,7 @@ export class Agent implements TreeAgent {
 			throw err;
 		} finally {
 			this.state.isStreaming = false; this.abortController = null;
-			try { this.learningLoop?.flushSession(); } catch { /* best-effort */ }
+			try { this.learningLoop?.flushSession(this.config.learningPersistPath); } catch { /* best-effort */ }
 		}
 	}
 
@@ -443,6 +444,7 @@ export class Agent implements TreeAgent {
 			emit: (ev, d) => this.emit(ev, d),
 			createMessage: (role, content, extra) => this.createMessage(role, content, extra),
 			memoryRecall: this.memoryBridge ? (q: string) => Promise.resolve(this.memoryBridge!.recallForQuery(q) || undefined) : undefined,
+			skillGapRecorder: this.config.onSkillGap,
 		};
 	}
 }

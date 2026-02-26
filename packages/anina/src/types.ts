@@ -234,6 +234,12 @@ export interface AgentConfig {
 	eventBridge?: {
 		emitTyped(agentId: string, type: string, payload: Record<string, unknown>, sessionId?: string): void;
 	};
+	/** Dynamic tool discovery callback when the requested tool is not registered. */
+	onToolNotFound?: (toolName: string) => Promise<ToolHandler | undefined>;
+	/** Skill-gap callback invoked when a tool call fails. */
+	onSkillGap?: (toolName: string) => void;
+	/** Optional persistence path for learning-loop snapshots. */
+	learningPersistPath?: string;
 }
 
 // ─── Sub-Agent Spawning ─────────────────────────────────────────────────────
