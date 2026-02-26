@@ -364,4 +364,13 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		// Daemon auto-start is best-effort — MCP server works without it
 		process.stderr.write(`[daemon] Auto-start skipped: ${err instanceof Error ? err.message : String(err)}\n`);
 	}
+
+	// ─── 6. Wire 5: Bootstrap mesh actors + default soul ─────────────
+	try {
+		const { bootstrapMeshAndSoul } = await import("./mesh-bootstrap.js");
+		await bootstrapMeshAndSoul(server);
+		process.stderr.write("[mesh] Actors and soul bootstrapped\n");
+	} catch (err) {
+		process.stderr.write(`[mesh] Bootstrap skipped: ${err instanceof Error ? err.message : String(err)}\n`);
+	}
 }

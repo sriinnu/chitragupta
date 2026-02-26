@@ -11,6 +11,8 @@ import type { ToolDefinition, ToolHandler, ToolContext, ToolResult } from "./typ
 
 export class ToolExecutor {
 	private handlers: Map<string, ToolHandler> = new Map();
+	/** Wire 2: Callback invoked when a tool is not found — enables dynamic skill discovery. */
+	private _onToolNotFound: ((name: string) => Promise<ToolHandler | undefined>) | null = null;
 
 	/**
 	 * Register a tool handler. Throws if a handler with the same name
@@ -41,6 +43,11 @@ export class ToolExecutor {
 		return this.handlers.has(name);
 	}
 
+	/** Set a callback for dynamic tool discovery when a tool is not found. */
+	setOnToolNotFound(cb: (name: string) => Promise<ToolHandler | undefined>): void {
+		this._onToolNotFound = cb;
+	}
+
 	/**
 	 * Execute a tool call by name with the given arguments and context.
 	 * Returns a ToolResult. If the tool is not found or throws, an error
@@ -51,7 +58,15 @@ export class ToolExecutor {
 		args: Record<string, unknown>,
 		context: ToolContext,
 	): Promise<ToolResult> {
-		const handler = this.handlers.get(name);
+		let handler = this.handlers.get(name);
+
+		// Wire 2: Try dynamic discovery before giving up
+		if (!handler && this._onToolNotFound) {
+			try {
+				const discovered = await this._onToolNotFound(name);
+				if (discovered) { this.register(discovered); handler = discovered; }
+			} catch { /* discovery is best-effort */ }
+		}
 
 		if (!handler) {
 			return {

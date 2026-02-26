@@ -62,6 +62,10 @@ export interface AgentLoopDeps {
 		content: ContentPart[],
 		extra?: { model?: string; cost?: CostBreakdown },
 	) => AgentMessage;
+	/** Wire 1: Mid-turn memory recall — searches memory based on tool context. */
+	memoryRecall?: (query: string) => Promise<string | undefined>;
+	/** Wire 2: Record skill gaps when tools fail for SkillLearner persistence. */
+	skillGapRecorder?: (toolName: string) => void;
 }
 
 // ─── Stream Options ──────────────────────────────────────────────────────────
@@ -142,6 +146,13 @@ export async function runAgentLoop(deps: AgentLoopDeps): Promise<AgentMessage> {
 		}
 
 		await executeToolCalls(deps, toolCalls);
+
+		// Wire 1: Mid-turn memory recall — enrich context for next LLM turn
+		if (deps.memoryRecall && toolCalls.length > 0) {
+			const recalled = await deps.memoryRecall(toolCalls.map(tc => tc.name).join(" ")).catch(() => undefined);
+			if (recalled) deps.state.messages.push(deps.createMessage("system", [{ type: "text", text: `[Recalled context]: ${recalled}` }]));
+		}
+
 		deps.emit("turn:done", { turn, reason: "tool_use" });
 		deps.chetana?.afterTurn();
 
@@ -270,6 +281,8 @@ async function executeSingleTool(
 	try {
 		const result = await deps.toolExecutor.execute(call.name, args, context);
 		deps.emit("tool:done", { name: call.name, id: call.id, result });
+		// Wire 2: Record skill gap on tool execution failure
+		if (result.isError) deps.skillGapRecorder?.(call.name);
 		deps.learningLoop?.recordToolUsage(call.name, args, result);
 		deps.autonomousAgent?.onToolUsed(call.name, args, result);
 		deps.chetana?.afterToolExecution(call.name, true, Date.now() - toolStartTime, result.content);
