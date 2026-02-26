@@ -145,13 +145,22 @@ export class LearningLoop {
 		this.turnTools.set(turnId, toolNames);
 	}
 
-	/** Flush the current session sequence and start a new one. */
-	flushSession(): void {
+	/** Flush the current session sequence and start a new one. Optionally persist to disk. */
+	flushSession(persistPath?: string): void {
 		if (this.currentSequence.length >= MIN_PATTERN_LENGTH) {
 			this.toolSequences.push([...this.currentSequence]);
 			if (this.toolSequences.length > MAX_SEQUENCES) this.toolSequences.shift();
 		}
 		this.currentSequence = [];
+		// Wire 4: Persist tool sequences to disk if path provided
+		if (persistPath) {
+			import("node:fs/promises").then(({ writeFile, mkdir }) =>
+				import("node:path").then(({ dirname }) =>
+					mkdir(dirname(persistPath), { recursive: true })
+						.then(() => writeFile(persistPath, JSON.stringify(this.serialize()), "utf-8")),
+				),
+			).catch(() => { /* persistence is best-effort */ });
+		}
 	}
 
 	// ─── Recommendations ──────────────────────────────────────────────
