@@ -573,10 +573,20 @@ function makeArgs(overrides: Partial<ParsedArgs> = {}): ParsedArgs {
 	};
 }
 
+class ProcessExitError extends Error {
+	readonly code?: string | number | null | undefined;
+
+	constructor(code?: string | number | null | undefined) {
+		super("process.exit");
+		this.name = "ProcessExitError";
+		this.code = code;
+	}
+}
+
 /** Spy on process.exit to prevent actual exits and capture calls. */
 function spyOnExit() {
-	return vi.spyOn(process, "exit").mockImplementation((() => {
-		throw new Error("process.exit");
+	return vi.spyOn(process, "exit").mockImplementation(((code?: string | number | null | undefined) => {
+		throw new ProcessExitError(code);
 	}) as unknown as (code?: string | number | null | undefined) => never);
 }
 
@@ -601,8 +611,12 @@ function spyOnStdout() {
 async function runMain(args: ParsedArgs): Promise<void> {
 	try {
 		await main(args);
-	} catch {
-		// process.exit mock throws — expected for interactive & print paths
+	} catch (error) {
+		if (error instanceof ProcessExitError) {
+			// process.exit mock throws — expected for interactive & print paths
+			return;
+		}
+		throw error;
 	}
 }
 
@@ -631,54 +645,60 @@ function restoreDefaults() {
 	mockCreateProviderRegistry.mockReturnValue(mockRegistry);
 	knownProviders.clear();
 	knownProviders.set("anthropic", { id: "anthropic", name: "Anthropic" });
-	mockRegistry.get.mockImplementation((id: string) => knownProviders.get(id));
-	mockRegistry.getAll.mockReturnValue([{ id: "anthropic", name: "Anthropic" }]);
-	MockAgent.mockImplementation(function () { return mockAgent; });
-	mockAgent.getMessages.mockReturnValue([]);
-	mockAgent.setProvider.mockReturnValue(undefined);
-	mockAgent.registerTool.mockReturnValue(undefined);
-	mockAgent.pushMessage.mockReturnValue(undefined);
+	mockRegistry.get.mockReset().mockImplementation((id: string) => knownProviders.get(id));
+	mockRegistry.getAll.mockReset().mockReturnValue([{ id: "anthropic", name: "Anthropic" }]);
+	MockAgent.mockReset().mockImplementation(function () { return mockAgent; });
+	mockAgent.id = "agent-1";
+	mockAgent.prompt.mockReset();
+	mockAgent.getMessages.mockReset().mockReturnValue([]);
+	mockAgent.pushMessage.mockReset().mockReturnValue(undefined);
+	mockAgent.abort.mockReset().mockReturnValue(undefined);
+	mockAgent.setOnEvent.mockReset().mockReturnValue(undefined);
+	mockAgent.getConfig.mockReset().mockReturnValue({});
+	mockAgent.setProvider.mockReset().mockReturnValue(undefined);
+	mockAgent.registerTool.mockReset().mockReturnValue(undefined);
 	mockCreateSession.mockReturnValue({
 		meta: { id: "session-001", project: "/test/project" },
 		turns: [],
 	});
 	mockListSessions.mockReturnValue([]);
-	mockRunPrintMode.mockResolvedValue(0);
-	mockRunInteractiveMode.mockResolvedValue(undefined);
-	mockRunOnboarding.mockResolvedValue({ provider: "anthropic", model: "claude-sonnet-4-5-20250929", completed: true });
-	mockLoadPlugins.mockResolvedValue({ plugins: [], tools: [], commands: [] });
-	mockDetectProject.mockReturnValue({ type: "typescript", name: "test-app", path: "/test/project" });
-	mockLoadContextFiles.mockReturnValue({});
-	mockBuildSystemPrompt.mockReturnValue("You are Chitragupta.");
-	mockGetAllTools.mockReturnValue([]);
-	mockExistsSync.mockReturnValue(false);
-	mockReadFileSync.mockReturnValue("");
-	mockReaddirSync.mockReturnValue([]);
-	mockCreateHash.mockReturnValue({
+	mockRunPrintMode.mockReset().mockResolvedValue(0);
+	mockRunInteractiveMode.mockReset().mockResolvedValue(undefined);
+	mockRunOnboarding.mockReset().mockResolvedValue({ provider: "anthropic", model: "claude-sonnet-4-5-20250929", completed: true });
+	mockLoadPlugins.mockReset().mockResolvedValue({ plugins: [], tools: [], commands: [] });
+	mockDetectProject.mockReset().mockReturnValue({ type: "typescript", name: "test-app", path: "/test/project" });
+	mockLoadContextFiles.mockReset().mockReturnValue({});
+	mockBuildSystemPrompt.mockReset().mockReturnValue("You are Chitragupta.");
+	mockGetAllTools.mockReset().mockReturnValue([]);
+	mockExistsSync.mockReset().mockReturnValue(false);
+	mockReadFileSync.mockReset().mockReturnValue("");
+	mockReaddirSync.mockReset().mockReturnValue([]);
+	mockCreateHash.mockReset().mockReturnValue({
 		update: vi.fn().mockReturnValue({
 			digest: vi.fn().mockReturnValue("abcdef123456abcdef"),
 		}),
 	});
-	MockMargaPipeline.mockImplementation(function () { return mockMargaPipeline; });
-	MockKaalaBrahma.mockImplementation(function () { return mockKaalaBrahma; });
-	mockKaalaBrahma.registerAgent.mockReturnValue(undefined);
-	mockKaalaBrahma.recordHeartbeat.mockReturnValue(undefined);
-	MockCommHub.mockImplementation(function () { return mockCommHub; });
-	MockSandeshaRouter.mockImplementation(function () { return mockSandeshaRouter; });
-	MockMessageBus.mockImplementation(function () { return mockMessageBus; });
-	MockCheckpointManager.mockImplementation(function () { return mockCheckpointManager; });
-	MockPolicyEngine.mockImplementation(function () { return mockPolicyEngine; });
-	MockApprovalGate.mockImplementation(function () { return mockApprovalGate; });
-	MockKarmaTracker.mockImplementation(function () { return mockKarmaTracker; });
-	MockSoulManager.mockImplementation(function () { return mockSoulManager; });
-	MockAgentReflector.mockImplementation(function () { return mockAgentReflector; });
-	mockCreateChitraguptaAPI.mockReturnValue(mockServerInstance);
-	mockServerInstance.start.mockResolvedValue(3141);
-	mockServerInstance.stop.mockResolvedValue(undefined);
-	mockLoadMCPConfig.mockReturnValue([]);
-	mockStartMCPServers.mockResolvedValue({});
-	mockImportMCPTools.mockReturnValue([]);
-	mockShutdownMCPServers.mockResolvedValue(undefined);
+	MockMargaPipeline.mockReset().mockImplementation(function () { return mockMargaPipeline; });
+	MockKaalaBrahma.mockReset().mockImplementation(function () { return mockKaalaBrahma; });
+	mockKaalaBrahma.registerAgent.mockReset().mockReturnValue(undefined);
+	mockKaalaBrahma.recordHeartbeat.mockReset().mockReturnValue(undefined);
+	mockKaalaBrahma.dispose.mockReset().mockReturnValue(undefined);
+	MockCommHub.mockReset().mockImplementation(function () { return mockCommHub; });
+	MockSandeshaRouter.mockReset().mockImplementation(function () { return mockSandeshaRouter; });
+	MockMessageBus.mockReset().mockImplementation(function () { return mockMessageBus; });
+	MockCheckpointManager.mockReset().mockImplementation(function () { return mockCheckpointManager; });
+	MockPolicyEngine.mockReset().mockImplementation(function () { return mockPolicyEngine; });
+	MockApprovalGate.mockReset().mockImplementation(function () { return mockApprovalGate; });
+	MockKarmaTracker.mockReset().mockImplementation(function () { return mockKarmaTracker; });
+	MockSoulManager.mockReset().mockImplementation(function () { return mockSoulManager; });
+	MockAgentReflector.mockReset().mockImplementation(function () { return mockAgentReflector; });
+	mockCreateChitraguptaAPI.mockReset().mockReturnValue(mockServerInstance);
+	mockServerInstance.start.mockReset().mockResolvedValue(3141);
+	mockServerInstance.stop.mockReset().mockResolvedValue(undefined);
+	mockLoadMCPConfig.mockReset().mockReturnValue([]);
+	mockStartMCPServers.mockReset().mockResolvedValue({});
+	mockImportMCPTools.mockReset().mockReturnValue([]);
+	mockShutdownMCPServers.mockReset().mockResolvedValue(undefined);
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
