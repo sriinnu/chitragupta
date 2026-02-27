@@ -276,6 +276,8 @@ function buildSkillScanPaths(opts: {
 		chitraguptaHome ? join(chitraguptaHome, "skills") : "",
 		join(projectPath, "skills"),
 		join(projectPath, "skills-core"),
+		join(projectPath, "chitragupta", "skills-core"),
+		join(projectPath, "chitragupta", "skills"),
 		homeDir ? join(homeDir, ".agents", "skills") : "",
 		homeDir ? join(homeDir, ".codex", "skills") : "",
 	];
