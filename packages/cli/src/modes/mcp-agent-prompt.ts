@@ -37,6 +37,8 @@ const AUTH_HINTS: Record<string, string> = {
 	copilot: "Run: copilot auth login (or: gh auth login)",
 	codex: "Run: codex auth login",
 	aider: "Check aider API key configuration",
+	zai: "Run: zai auth login (or set ZAI_API_KEY)",
+	minimax: "Set MINIMAX_API_KEY environment variable",
 };
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -132,6 +134,14 @@ async function tryCliProviders(
 		aider: () => {
 			const prompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
 			return ["--message", prompt, "--no-auto-commits", "--yes"];
+		},
+		zai: () => {
+			const prompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
+			return ["-p", prompt];
+		},
+		minimax: () => {
+			const prompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
+			return ["-p", prompt];
 		},
 	};
 

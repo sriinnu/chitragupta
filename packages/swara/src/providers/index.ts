@@ -25,6 +25,8 @@ export {
 	geminiCLIProvider,
 	copilotProvider,
 	aiderProvider,
+	zaiProvider,
+	minimaxProvider,
 	contextToPrompt,
 } from "./cli-providers.js";
 export { detectAvailableCLIs, getBestCLIProvider } from "./cli-detection.js";
