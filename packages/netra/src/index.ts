@@ -27,3 +27,11 @@ export {
 	UnionFind,
 	findChangedRegions,
 } from "./union-find.js";
+export {
+	generateRepoMap,
+} from "./repo-map.js";
+export type {
+	RepoMapEntry,
+	RepoMapResult,
+	RepoMapOptions,
+} from "./repo-map.js";
