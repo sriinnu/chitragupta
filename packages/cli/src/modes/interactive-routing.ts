@@ -7,12 +7,15 @@
  */
 
 import type { Agent } from "@chitragupta/anina";
+import { createLogger } from "@chitragupta/core";
 import { dim } from "@chitragupta/ui/ansi";
 import type {
 	InteractiveModeOptions,
 	TuriyaRouterInstance,
 } from "./interactive-types.js";
 import { buildNoLlmTemplateResponse } from "./no-llm-template.js";
+
+const log = createLogger("cli:interactive-routing");
 
 /** Mutable routing state shared across turns. */
 export interface RoutingState {
@@ -214,16 +217,18 @@ export async function tryShikshaIntercept(
 		const result = await options.shiksha.learn(message);
 		if (result.success && result.executed && result.executionOutput) {
 			stdout.write(dim(`  [shiksha: learned "${result.skill?.manifest.name}" in ${result.durationMs.toFixed(0)}ms]\n`));
-			stdout.write("\n" + result.executionOutput + "\n");
+			stdout.write(`\n${result.executionOutput}\n`);
 			return { handled: true, output: result.executionOutput };
 		}
 		if (result.success && result.cloudRecipeDisplay) {
 			stdout.write(dim(`  [shiksha: cloud recipe found in ${result.durationMs.toFixed(0)}ms]\n`));
-			stdout.write("\n" + result.cloudRecipeDisplay + "\n");
+			stdout.write(`\n${result.cloudRecipeDisplay}\n`);
 			return { handled: true, output: result.cloudRecipeDisplay };
 		}
-	} catch {
-		// Shiksha failed — fall through to agent silently
+	} catch (err) {
+		log.warn("Shiksha intercept failed; falling back to agent", {
+			error: err instanceof Error ? err.message : String(err),
+		});
 	}
 	return { handled: false };
 }

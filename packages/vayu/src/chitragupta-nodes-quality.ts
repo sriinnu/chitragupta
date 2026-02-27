@@ -198,21 +198,21 @@ export async function healthReport(ctx: NodeContext): Promise<NodeResult> {
 /** Check for pending learning opportunities (Shiksha). */
 export async function learningCheck(ctx: NodeContext): Promise<NodeResult> {
 	try {
-		const { result: data, durationMs } = await timed(async () => {
-			const orch = ctx.extra.vidyaOrchestrator as
-				| { evaluateLifecycles(): Record<string, unknown> }
-				| undefined;
-			if (!orch) {
-				return { available: false, pending: 0 };
-			}
-			const evaluation = orch.evaluateLifecycles();
-			return { available: true, evaluation };
-		});
-		return {
-			ok: true,
-			summary: (data as Record<string, unknown>).available
-				? "Learning check complete"
-				: "VidyaOrchestrator not available",
+			const { result: data, durationMs } = await timed(async () => {
+				const orch = ctx.extra.vidyaOrchestrator as
+					| { evaluateLifecycles(): Record<string, unknown> }
+					| undefined;
+				if (!orch) {
+					return { available: false, pending: 0, reason: "VidyaOrchestrator not available" };
+				}
+				const evaluation = orch.evaluateLifecycles();
+				return { available: true, evaluation };
+			});
+			return {
+				ok: (data as Record<string, unknown>).available === true,
+				summary: (data as Record<string, unknown>).available
+					? "Learning check complete"
+					: "VidyaOrchestrator not available",
 			data,
 			durationMs,
 		};
@@ -220,4 +220,3 @@ export async function learningCheck(ctx: NodeContext): Promise<NodeResult> {
 		return fail("Learning check failed", 0, err);
 	}
 }
-
