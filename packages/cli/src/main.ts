@@ -57,6 +57,7 @@ import {
 	formatProviderSummary,
 	resolvePreferredProvider,
 } from "./bootstrap.js";
+import { guideProviderSetup } from "./provider-setup.js";
 
 import { handleDaemonCommand, handleSwapnaCommand } from "./main-subcommands.js";
 import { handleServeCommand } from "./main-serve-mode.js";
@@ -152,7 +153,17 @@ export async function main(args: ParsedArgs): Promise<void> {
 
 	const totalProviders = detectedCLIs.length + (hasOllama ? 1 : 0) + activeApiKeys.length;
 	if (totalProviders === 0) {
-		process.stderr.write("\n" + formatProviderSummary(cliResults, hasOllama, activeApiKeys) + "\n\n");
+		// No providers found — guide the user through setup
+		const setupResult = await guideProviderSetup(registry, cliResults, hasOllama);
+		if (!setupResult.configured) {
+			process.stderr.write(
+				`\nError: No provider available.\n` +
+				`Install a CLI (claude, codex, gemini), start Ollama, or set an API key.\n` +
+				`Run: chitragupta provider add anthropic\n\n`,
+			);
+			process.exit(1);
+		}
+		log.info("Provider configured via setup guide", { providerId: setupResult.providerId });
 	} else if (detectedCLIs.length > 0) {
 		log.info("CLI providers detected", {
 			clis: detectedCLIs.map((c) => `${c.command}${c.version ? ` (${c.version})` : ""}`).join(", "),
