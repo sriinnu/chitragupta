@@ -212,10 +212,12 @@ const CLI_PROVIDER_MAP: Record<string, () => Promise<import("@chitragupta/swara"
 	copilot: async () => (await import("@chitragupta/swara/providers")).copilotProvider,
 	codex: async () => (await import("@chitragupta/swara/providers")).codexProvider,
 	aider: async () => (await import("@chitragupta/swara/providers")).aiderProvider,
+	zai: async () => (await import("@chitragupta/swara/providers")).zaiProvider,
+	minimax: async () => (await import("@chitragupta/swara/providers")).minimaxProvider,
 };
 
 /**
- * Detect installed CLI tools (claude, gemini, copilot, codex, aider) and register
+ * Detect installed CLI tools (claude, gemini, copilot, codex, aider, zai, minimax) and register
  * them as providers. CLI providers have zero cost — they use their own
  * auth/billing. Returns the detection results for display.
  */
