@@ -139,18 +139,18 @@ export const claudeCodeProvider: ProviderDefinition = createCLIProvider({
 	name: "Claude Code CLI",
 	command: "claude",
 	models: CLAUDE_CODE_MODELS,
-	buildArgs: (_model, context, _options) => {
-		const userText = contextToPrompt(context);
-		const args = ["--print", userText, "--output-format", "text"];
+	buildArgs: (_model, context, _options, viaStdin) => {
+		// When viaStdin is true, prompt is piped through stdin — omit from args
+		const args = viaStdin
+			? ["--print", "-", "--output-format", "text"]
+			: ["--print", contextToPrompt(context), "--output-format", "text"];
 
-		// Pass system prompt separately — avoids shell arg length limits
-		// and lets Claude Code handle it natively.
 		if (context.systemPrompt) {
 			args.push("--system-prompt", context.systemPrompt);
 		}
-
 		return args;
 	},
+	getStdinPrompt: (context) => contextToPrompt(context),
 	parseOutput: (stdout) => stdout.trim(),
 });
 
@@ -167,12 +167,12 @@ export const codexProvider: ProviderDefinition = createCLIProvider({
 	name: "Codex CLI",
 	command: "codex",
 	models: CODEX_MODELS,
-	buildArgs: (_model, context, _options) => {
-		// Codex doesn't have --system-prompt — combine into prompt
+	buildArgs: (_model, context, _options, viaStdin) => {
+		if (viaStdin) return ["exec", "--full-auto"];
 		const prompt = buildFullPrompt(context);
-		// Use `codex exec` for non-interactive mode with full-auto
 		return ["exec", "--full-auto", prompt];
 	},
+	getStdinPrompt: (context) => buildFullPrompt(context),
 	parseOutput: (stdout) => stdout.trim(),
 });
 
@@ -188,10 +188,12 @@ export const geminiCLIProvider: ProviderDefinition = createCLIProvider({
 	name: "Gemini CLI",
 	command: "gemini",
 	models: GEMINI_CLI_MODELS,
-	buildArgs: (_model, context, _options) => {
+	buildArgs: (_model, context, _options, viaStdin) => {
+		if (viaStdin) return [];
 		const prompt = buildFullPrompt(context);
 		return ["--prompt", prompt];
 	},
+	getStdinPrompt: (context) => buildFullPrompt(context),
 	parseOutput: (stdout) => stdout.trim(),
 });
 
@@ -218,10 +220,12 @@ export const copilotProvider: ProviderDefinition = createCLIProvider({
 	name: "GitHub Copilot CLI",
 	command: "copilot",
 	models: COPILOT_MODELS,
-	buildArgs: (_model, context, _options) => {
+	buildArgs: (_model, context, _options, viaStdin) => {
+		if (viaStdin) return [];
 		const prompt = buildFullPrompt(context);
 		return ["-p", prompt];
 	},
+	getStdinPrompt: (context) => buildFullPrompt(context),
 	parseOutput: (stdout) => stdout.trim(),
 });
 
@@ -239,10 +243,12 @@ export const aiderProvider: ProviderDefinition = createCLIProvider({
 	name: "Aider CLI",
 	command: "aider",
 	models: AIDER_MODELS,
-	buildArgs: (_model, context, _options) => {
+	buildArgs: (_model, context, _options, viaStdin) => {
+		if (viaStdin) return ["--message", "/stdin", "--no-auto-commits", "--yes"];
 		const prompt = buildFullPrompt(context);
 		return ["--message", prompt, "--no-auto-commits", "--yes"];
 	},
+	getStdinPrompt: (context) => buildFullPrompt(context),
 	parseOutput: (stdout) => stdout.trim(),
 });
 
@@ -270,10 +276,12 @@ export const zaiProvider: ProviderDefinition = createCLIProvider({
 	name: "Z.AI CLI",
 	command: "zai",
 	models: ZAI_MODELS,
-	buildArgs: (_model, context, _options) => {
+	buildArgs: (_model, context, _options, viaStdin) => {
+		if (viaStdin) return [];
 		const prompt = buildFullPrompt(context);
 		return ["-p", prompt];
 	},
+	getStdinPrompt: (context) => buildFullPrompt(context),
 	parseOutput: (stdout) => stdout.trim(),
 });
 
@@ -301,9 +309,11 @@ export const minimaxProvider: ProviderDefinition = createCLIProvider({
 	name: "MiniMax CLI",
 	command: "minimax",
 	models: MINIMAX_MODELS,
-	buildArgs: (_model, context, _options) => {
+	buildArgs: (_model, context, _options, viaStdin) => {
+		if (viaStdin) return [];
 		const prompt = buildFullPrompt(context);
 		return ["-p", prompt];
 	},
+	getStdinPrompt: (context) => buildFullPrompt(context),
 	parseOutput: (stdout) => stdout.trim(),
 });

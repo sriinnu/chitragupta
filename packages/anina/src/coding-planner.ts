@@ -135,12 +135,21 @@ async function llmPlan(
 		? `\n\nProject context:\n${config.additionalContext}`
 		: "";
 
+	// Generate repo-map if provider is available
+	let repoMapNote = "";
+	if (config.repoMapProvider) {
+		try {
+			const map = config.repoMapProvider(config.workingDirectory);
+			if (map) repoMapNote = `\n\n--- Repo Map ---\n${map.text}`;
+		} catch { /* best-effort: skip if repo-map fails */ }
+	}
+
 	const planPrompt = `You are a coding task planner. Analyze the following coding task and the project structure, then produce a detailed plan.
 
 Task: ${task}
 
 Working directory: ${config.workingDirectory}
-${contextNote}
+${contextNote}${repoMapNote}
 
 Instructions:
 1. Use the available tools (read, ls, find, grep) to explore the project structure and understand the codebase.

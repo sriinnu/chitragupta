@@ -153,6 +153,21 @@ export async function setupCodingEnvironment(
 	};
 }
 
+// ─── Repo Map Provider ────────────────────────────────────────────────────
+
+type RepoMapFn = (d: string, o?: { maxFiles?: number }) => { text: string };
+let _generateRepoMap: RepoMapFn | null | undefined;
+
+/** Load netra's generateRepoMap, caching the result. Returns null if unavailable. */
+async function loadRepoMapFn(): Promise<RepoMapFn | null> {
+	if (_generateRepoMap !== undefined) return _generateRepoMap;
+	try {
+		const netra = await import("@chitragupta/netra");
+		_generateRepoMap = netra.generateRepoMap as RepoMapFn;
+	} catch { _generateRepoMap = null; }
+	return _generateRepoMap;
+}
+
 // ─── Orchestrator Factory ───────────────────────────────────────────────────
 
 /**
@@ -163,6 +178,7 @@ export async function createCodingOrchestrator(
 	options: CreateOrchestratorOptions,
 ): Promise<import("@chitragupta/anina").CodingOrchestrator> {
 	const { CodingOrchestrator } = await import("@chitragupta/anina");
+	const repoMapFn = await loadRepoMapFn();
 
 	// Merge: explicit options → settings.coding → hardcoded defaults
 	const cd = options.setup.codingDefaults ?? {};
@@ -187,6 +203,7 @@ export async function createCodingOrchestrator(
 		autoCommit: options.autoCommit ?? cd.autoCommit,
 		selfReview: options.selfReview ?? cd.selfReview,
 		branchPrefix: cd.branchPrefix,
+		repoMapProvider: repoMapFn ? (dir: string) => repoMapFn(dir, { maxFiles: 50 }) : undefined,
 	});
 
 	return orchestrator;
