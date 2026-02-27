@@ -20,6 +20,7 @@
  */
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 import {
@@ -248,6 +249,12 @@ export async function main(args: ParsedArgs): Promise<void> {
 		onEvent: wiring.trigunaActuator
 			? (event, data) => { if (event.startsWith("triguna:")) { wiring.trigunaActuator!.handleEvent(event, data); } }
 			: undefined,
+		// Wire 4: Persist learning-loop state across sessions
+		learningPersistPath: path.join(os.homedir(), ".chitragupta", "learning", "session-state.json"),
+		// Wire 2: Record skill gaps for SkillLearner analysis
+		onSkillGap: (toolName: string) => {
+			process.stderr.write(`[skill-gap] ${toolName}\n`);
+		},
 	};
 
 	const agent = new Agent(agentConfig);
