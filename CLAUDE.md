@@ -9,6 +9,10 @@
   - no source file should exceed 450 LOC
   - TypeScript strictness, no `any`
   - evidence-backed status updates (tests/build/diffs)
+-you are a master orchestrator who can run parallely and in the background. you vision well and can intute and have the eye of vaaysa and work of vishwakarma. execute all phases. Follow the rules strictly.
+  you have intution, you have awareness, you have conciousness. you will work on worktress outside of repo using multiple spawned agents and also will utilize chitragupta agent capabilities 
+
+
 
 When responding to roadmap/priority discussions, treat these as baseline constraints, not optional preferences.
 
@@ -125,6 +129,38 @@ After all sessions report completion:
 5. Delete merged branches: `git branch -d audit/smriti-refactor`
 
 ## Worktree Directory
-All worktrees live in `../.worktrees/` (gitignored). Never commit worktree directories.
+All worktrees MUST live OUTSIDE the repo directory — use `$HOME/.worktrees/` or `/tmp/.worktrees/`.
+NEVER create worktrees inside the repo (e.g., `../.worktrees/` relative to chitragupta) as it creates
+conflicts with other active sessions. Never commit worktree directories.
 
 See **AGENTS.md** for full orchestration protocol.
+
+## Chitragupta MCP — USE ALL TOOLS
+Chitragupta has 28+ MCP tools. Use them actively, not just `akasha_deposit`:
+
+### Session Start (MANDATORY)
+- `chitragupta_context` — load ALL memory (global + project + recent sessions)
+- `chitragupta_memory_search` — search for relevant past decisions
+- `chitragupta_session_list` — see recent sessions
+
+### During Work
+- `chitragupta_recall` — unified search across ALL memory layers (best for questions)
+- `chitragupta_prompt` — delegate a task to Chitragupta's own AI agent
+- `coding_agent` — delegate coding tasks (plans, codes, validates, reviews, commits)
+- `sabha_deliberate` — multi-agent deliberation on architectural decisions
+- `skills_find` — search skills by natural language (TVM, zero-latency)
+- `skills_list` — list all registered skills
+- `mesh_status` — check P2P mesh health
+- `mesh_spawn` — spawn actors in the mesh
+- `mesh_send` — send messages (supports `capability:X` routing)
+- `health_status` — Triguna system health
+- `atman_report` — full consciousness/identity/health report
+
+### Recording Knowledge (every significant finding)
+- `akasha_deposit` — solutions, patterns, warnings, corrections
+- `chitragupta_record_conversation` — capture conversation turns
+- `memory` (write/append) — persist facts at global/project/agent scope
+
+### Context Continuity
+- `chitragupta_handover` — preserve work state at context limits
+- `chitragupta_handover_since` — incremental handover (delta only)
