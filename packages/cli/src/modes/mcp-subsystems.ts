@@ -71,6 +71,8 @@ export interface TrigunaLike {
 		timestamp: number;
 		dominant: string;
 	}>;
+	/** Feed an observation to update the Kalman filter. */
+	update(obs: { errorRate: number; tokenVelocity: number; loopCount: number; latency: number; successRate: number; userSatisfaction: number }): { sattva: number; rajas: number; tamas: number };
 }
 
 /** Duck-typed ChetanaController (consciousness layer). */
@@ -207,8 +209,14 @@ export async function getAkasha(): Promise<AkashaFieldLike> {
 /** Lazily create or return the VasanaEngine singleton. */
 export async function getVasana(): Promise<VasanaEngineLike> {
 	if (!_vasana) {
-		const { VasanaEngine } = await import("@chitragupta/smriti");
-		_vasana = new VasanaEngine() as unknown as VasanaEngineLike;
+		try {
+			const { VasanaEngine } = await import("@chitragupta/smriti");
+			_vasana = new VasanaEngine() as unknown as VasanaEngineLike;
+		} catch (err) {
+			const m = err instanceof Error ? err.message : String(err);
+			const hint = /NODE_MODULE_VERSION|better-sqlite3/.test(m) ? "Run: npm rebuild better-sqlite3" : m;
+			throw new Error(`Vasana engine unavailable: ${hint}`);
+		}
 	}
 	return _vasana;
 }
@@ -252,10 +260,7 @@ export async function getActorSystem(): Promise<ActorSystemLike> {
 
 function parseEnvSkillPaths(value: string | undefined, delimiter: string): string[] {
 	if (!value) return [];
-	return value
-		.split(delimiter)
-		.map((v) => v.trim())
-		.filter((v) => v.length > 0);
+	return value.split(delimiter).map((v) => v.trim()).filter((v) => v.length > 0);
 }
 
 function buildSkillScanPaths(opts: {
@@ -266,10 +271,7 @@ function buildSkillScanPaths(opts: {
 	join: (...parts: string[]) => string;
 }): string[] {
 	const { projectPath, chitraguptaHome, homeDir, delimiter, join } = opts;
-	const envPaths = parseEnvSkillPaths(
-		process.env.CHITRAGUPTA_SKILL_PATHS ?? process.env.VAAYU_SKILL_PATHS,
-		delimiter,
-	);
+	const envPaths = parseEnvSkillPaths(process.env.CHITRAGUPTA_SKILL_PATHS ?? process.env.VAAYU_SKILL_PATHS, delimiter);
 
 	const candidates = [
 		...envPaths,

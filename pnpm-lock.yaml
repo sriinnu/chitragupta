@@ -63,6 +63,9 @@ importers:
       '@chitragupta/dharma':
         specifier: workspace:*
         version: link:../dharma
+      '@chitragupta/netra':
+        specifier: workspace:*
+        version: link:../netra
       '@chitragupta/niyanta':
         specifier: workspace:*
         version: link:../niyanta
