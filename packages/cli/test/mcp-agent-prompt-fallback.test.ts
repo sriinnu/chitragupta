@@ -1,154 +1,186 @@
 import { describe, expect, it, vi } from "vitest";
-import { runAgentPromptWithFallback } from "../src/modes/mcp-agent-prompt.js";
+import { runAgentPromptWithFallback, type SmartPromptDeps } from "../src/modes/mcp-agent-prompt.js";
 
-type FakeRunner = {
-	prompt: (message: string) => Promise<string>;
-	destroy: () => Promise<void>;
-};
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/** Build a deps object with sensible defaults that can be overridden. */
+function makeDeps(overrides: Partial<SmartPromptDeps> = {}): SmartPromptDeps {
+	return {
+		detectCLIs: async () => [],
+		executeCLI: async () => ({ stdout: "", stderr: "", exitCode: 1, killed: false }),
+		loadProjectMemory: () => undefined,
+		getCompletionRouter: async () => null,
+		margaDecide: () => null,
+		...overrides,
+	};
+}
 
 describe("runAgentPromptWithFallback", () => {
-	it("falls back to the next provider when auto selection fails", async () => {
-		const calls: Array<{ provider?: string; model?: string }> = [];
-		const deps = {
-			createChitragupta: async (options: { provider?: string; model?: string }): Promise<FakeRunner> => {
-				calls.push(options);
-				if (!options.provider) {
-					return {
-						prompt: async () => {
-							throw new Error('CLI "claude" exited with code 1');
-						},
-						destroy: async () => {},
-					};
+	it("returns CLI response when a CLI succeeds", async () => {
+		const deps = makeDeps({
+			detectCLIs: async () => [
+				{ command: "claude", available: true },
+				{ command: "gemini", available: false },
+			],
+			executeCLI: async (cmd) => {
+				if (cmd === "claude") {
+					return { stdout: "hello from claude", stderr: "", exitCode: 0, killed: false };
 				}
-				if (options.provider === "openai") {
-					return {
-						prompt: async () => "fallback-ok",
-						destroy: async () => {},
-					};
-				}
-				return {
-					prompt: async () => {
-						throw new Error(`provider ${options.provider} unavailable`);
-					},
-					destroy: async () => {},
-				};
+				return { stdout: "", stderr: "not found", exitCode: 1, killed: false };
 			},
-			loadSettings: () => ({ providerPriority: ["anthropic", "openai", "ollama"] }),
-			defaultProviderPriority: ["anthropic", "openai", "ollama"],
-		};
+		});
 
-		const result = await runAgentPromptWithFallback(
-			{ message: "hello" },
-			deps,
-		);
+		const result = await runAgentPromptWithFallback({ message: "test" }, deps);
 
-		expect(result.response).toBe("fallback-ok");
-		expect(result.providerId).toBe("openai");
-		expect(result.attempts).toBe(2);
-		expect(calls).toEqual([
-			{ skipCLIDetection: true },
-			{ provider: "openai", skipCLIDetection: true },
-		]);
+		expect(result.response).toBe("hello from claude");
+		expect(result.providerId).toBe("claude");
+		expect(result.attempts).toBe(1);
 	});
 
-	it("keeps explicit provider first and clears model for fallback providers", async () => {
-		const calls: Array<{ provider?: string; model?: string }> = [];
-		const deps = {
-			createChitragupta: async (options: { provider?: string; model?: string }): Promise<FakeRunner> => {
-				calls.push(options);
-				if (options.provider === "anthropic") {
-					return {
-						prompt: async () => {
-							throw new Error('CLI "claude" exited with code 1');
-						},
-						destroy: async () => {},
-					};
+	it("falls back to next CLI when first CLI fails", async () => {
+		const deps = makeDeps({
+			detectCLIs: async () => [
+				{ command: "claude", available: true },
+				{ command: "gemini", available: true },
+			],
+			executeCLI: async (cmd) => {
+				if (cmd === "claude") {
+					return { stdout: "", stderr: "connection error", exitCode: 1, killed: false };
 				}
-				if (options.provider === "openai") {
-					return {
-						prompt: async () => "openai-ok",
-						destroy: async () => {},
-					};
+				if (cmd === "gemini") {
+					return { stdout: "gemini response", stderr: "", exitCode: 0, killed: false };
 				}
-				return {
-					prompt: async () => "other-ok",
-					destroy: async () => {},
-				};
+				return { stdout: "", stderr: "", exitCode: 1, killed: false };
 			},
-			loadSettings: () => ({ providerPriority: ["anthropic", "openai"] }),
-			defaultProviderPriority: ["anthropic", "openai"],
-		};
+		});
 
-		const result = await runAgentPromptWithFallback(
-			{
-				message: "explain this",
-				provider: "anthropic",
-				model: "claude-sonnet-4-5-20250929",
-			},
-			deps,
-		);
+		const result = await runAgentPromptWithFallback({ message: "test" }, deps);
 
-		expect(result.response).toBe("openai-ok");
-		expect(calls).toEqual([
-			{ provider: "anthropic", model: "claude-sonnet-4-5-20250929", skipCLIDetection: true },
-			{ provider: "openai", skipCLIDetection: true },
-		]);
+		expect(result.response).toBe("gemini response");
+		expect(result.providerId).toBe("gemini");
 	});
 
-	it("returns consolidated failure details when all providers fail", async () => {
-		const deps = {
-			createChitragupta: async (): Promise<FakeRunner> => ({
-				prompt: async () => {
-					throw new Error("transient failure");
-				},
-				destroy: async () => {},
+	it("falls back to API when all CLIs fail", async () => {
+		const deps = makeDeps({
+			detectCLIs: async () => [
+				{ command: "claude", available: true },
+			],
+			executeCLI: async () => ({
+				stdout: "", stderr: "crash", exitCode: 1, killed: false,
 			}),
-			loadSettings: () => ({ providerPriority: ["anthropic", "openai"] }),
-			defaultProviderPriority: ["anthropic", "openai"],
-		};
+			getCompletionRouter: async () => ({
+				complete: async () => ({
+					content: [{ type: "text", text: "api response" }],
+				}),
+			}),
+			margaDecide: () => ({ providerId: "anthropic", modelId: "claude-sonnet-4-5-20250929" }),
+		});
+
+		const result = await runAgentPromptWithFallback({ message: "test" }, deps);
+
+		expect(result.response).toBe("api response");
+		expect(result.providerId).toContain("api:");
+		expect(result.attempts).toBeGreaterThanOrEqual(2);
+	});
+
+	it("throws when all providers fail (CLI + API)", async () => {
+		const deps = makeDeps({
+			detectCLIs: async () => [{ command: "claude", available: true }],
+			executeCLI: async () => ({
+				stdout: "", stderr: "fail", exitCode: 1, killed: false,
+			}),
+			getCompletionRouter: async () => null,
+		});
 
 		await expect(
 			runAgentPromptWithFallback({ message: "test" }, deps),
-		).rejects.toThrow(/All provider attempts failed/i);
+		).rejects.toThrow(/All attempts failed/i);
 	});
 
-	it("emits periodic heartbeats while waiting on a provider response", async () => {
-		vi.useFakeTimers();
-		try {
-			const heartbeatEvents: string[] = [];
-			let resolvePrompt: ((value: string) => void) | null = null;
-			const pendingPrompt = new Promise<string>((resolve) => {
-				resolvePrompt = resolve;
-			});
-			const deps = {
-				createChitragupta: async (): Promise<FakeRunner> => ({
-					prompt: async () => pendingPrompt,
-					destroy: async () => {},
-				}),
-				loadSettings: () => ({ providerPriority: ["anthropic"] }),
-				defaultProviderPriority: ["anthropic"],
-			};
+	it("detects auth errors and reports re-auth hints", async () => {
+		const deps = makeDeps({
+			detectCLIs: async () => [
+				{ command: "claude", available: true },
+			],
+			executeCLI: async () => ({
+				stdout: "", stderr: "Error: not logged in. Please authenticate.", exitCode: 1, killed: false,
+			}),
+			getCompletionRouter: async () => null,
+		});
 
-			const resultPromise = runAgentPromptWithFallback(
-				{
-					message: "heartbeat-check",
-					timeoutMs: 30_000,
-					onHeartbeat: (info) => heartbeatEvents.push(info.activity),
-				},
-				deps,
-			);
+		await expect(
+			runAgentPromptWithFallback({ message: "test" }, deps),
+		).rejects.toThrow(/auth/i);
+	});
 
-			await vi.advanceTimersByTimeAsync(21_000);
-			expect(heartbeatEvents.filter((a) => a === "prompting auto").length).toBeGreaterThanOrEqual(3);
+	it("skips timed-out CLIs and continues", async () => {
+		const deps = makeDeps({
+			detectCLIs: async () => [
+				{ command: "claude", available: true },
+				{ command: "gemini", available: true },
+			],
+			executeCLI: async (cmd) => {
+				if (cmd === "claude") {
+					return { stdout: "", stderr: "", exitCode: 0, killed: true };
+				}
+				return { stdout: "gemini ok", stderr: "", exitCode: 0, killed: false };
+			},
+		});
 
-			resolvePrompt?.("ok");
-			await expect(resultPromise).resolves.toMatchObject({ response: "ok", providerId: "auto", attempts: 1 });
+		const result = await runAgentPromptWithFallback({ message: "test" }, deps);
 
-			const countAfterCompletion = heartbeatEvents.length;
-			await vi.advanceTimersByTimeAsync(20_000);
-			expect(heartbeatEvents.length).toBe(countAfterCompletion);
-		} finally {
-			vi.useRealTimers();
-		}
+		expect(result.response).toBe("gemini ok");
+		expect(result.providerId).toBe("gemini");
+	});
+
+	it("emits heartbeats during CLI execution", async () => {
+		const heartbeats: string[] = [];
+		const deps = makeDeps({
+			detectCLIs: async () => [{ command: "gemini", available: true }],
+			executeCLI: async () => ({
+				stdout: "ok", stderr: "", exitCode: 0, killed: false,
+			}),
+		});
+
+		await runAgentPromptWithFallback({
+			message: "hb-test",
+			onHeartbeat: (info) => heartbeats.push(info.activity),
+		}, deps);
+
+		expect(heartbeats.length).toBeGreaterThanOrEqual(1);
+		expect(heartbeats).toContain("trying gemini");
+	});
+
+	it("loads project memory as system prompt context", async () => {
+		let capturedArgs: string[] = [];
+		const deps = makeDeps({
+			detectCLIs: async () => [{ command: "claude", available: true }],
+			executeCLI: async (_cmd, args) => {
+				capturedArgs = args;
+				return { stdout: "with-context", stderr: "", exitCode: 0, killed: false };
+			},
+			loadProjectMemory: () => "User prefers TypeScript. Project uses Vitest.",
+		});
+
+		const result = await runAgentPromptWithFallback({ message: "test" }, deps);
+
+		expect(result.response).toBe("with-context");
+		// Claude CLI gets --system-prompt arg with project memory
+		expect(capturedArgs).toContain("--system-prompt");
+		const sysIdx = capturedArgs.indexOf("--system-prompt");
+		expect(capturedArgs[sysIdx + 1]).toContain("Project context");
+	});
+
+	it("skips CLIs without an arg builder", async () => {
+		const deps = makeDeps({
+			detectCLIs: async () => [
+				{ command: "unknown-cli", available: true },
+			],
+			getCompletionRouter: async () => null,
+		});
+
+		await expect(
+			runAgentPromptWithFallback({ message: "test" }, deps),
+		).rejects.toThrow(/All attempts failed/i);
 	});
 });

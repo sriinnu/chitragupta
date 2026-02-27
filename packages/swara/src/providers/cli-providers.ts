@@ -9,6 +9,7 @@
  *   - Claude Code (claude --print)
  *   - Codex (codex --quiet)
  *   - Gemini CLI (gemini --prompt)
+ *   - GitHub Copilot (copilot -p)
  *   - Aider (aider --message)
  *
  * All pricing is zero — CLI tools use their own auth/billing.
@@ -188,6 +189,36 @@ export const geminiCLIProvider: ProviderDefinition = createCLIProvider({
 	buildArgs: (_model, context, _options) => {
 		const prompt = buildFullPrompt(context);
 		return ["--prompt", prompt];
+	},
+	parseOutput: (stdout) => stdout.trim(),
+});
+
+// ─── Copilot Provider ───────────────────────────────────────────────────
+
+const COPILOT_MODELS: ModelDefinition[] = [
+	{
+		id: "copilot-cli",
+		name: "GitHub Copilot CLI",
+		contextWindow: 128_000,
+		maxOutputTokens: 16_384,
+		pricing: { input: 0, output: 0 },
+		capabilities: { vision: false, thinking: true, toolUse: true, streaming: false },
+	},
+];
+
+/**
+ * GitHub Copilot CLI provider.
+ *
+ * Uses `copilot -p <prompt>` for non-interactive single-shot queries.
+ */
+export const copilotProvider: ProviderDefinition = createCLIProvider({
+	id: "copilot-cli",
+	name: "GitHub Copilot CLI",
+	command: "copilot",
+	models: COPILOT_MODELS,
+	buildArgs: (_model, context, _options) => {
+		const prompt = buildFullPrompt(context);
+		return ["-p", prompt];
 	},
 	parseOutput: (stdout) => stdout.trim(),
 });

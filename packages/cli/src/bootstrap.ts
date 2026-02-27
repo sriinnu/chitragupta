@@ -209,12 +209,13 @@ export function registerBuiltinProviders(registry: ProviderRegistry, settings: C
 const CLI_PROVIDER_MAP: Record<string, () => Promise<import("@chitragupta/swara").ProviderDefinition>> = {
 	claude: async () => (await import("@chitragupta/swara/providers")).claudeCodeProvider,
 	gemini: async () => (await import("@chitragupta/swara/providers")).geminiCLIProvider,
+	copilot: async () => (await import("@chitragupta/swara/providers")).copilotProvider,
 	codex: async () => (await import("@chitragupta/swara/providers")).codexProvider,
 	aider: async () => (await import("@chitragupta/swara/providers")).aiderProvider,
 };
 
 /**
- * Detect installed CLI tools (claude, gemini, codex, aider) and register
+ * Detect installed CLI tools (claude, gemini, copilot, codex, aider) and register
  * them as providers. CLI providers have zero cost — they use their own
  * auth/billing. Returns the detection results for display.
  */
