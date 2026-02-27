@@ -107,6 +107,7 @@ import {
 	createRecentToolCallsResource,
 } from "./mcp-resources.js";
 import { McpSessionRecorder } from "./mcp-session.js";
+import { triggerSvapnaConsolidation } from "../main-session.js";
 
 // ─── Re-exports (backward compatibility) ─────────────────────────────────────
 
@@ -317,8 +318,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		// EventBridge is optional — MCP server works without it
 	}
 
-	// 4e. Graceful shutdown
+	// 4e. Graceful shutdown — trigger Svapna dream-cycle before exit
 	const shutdown = async () => {
+		triggerSvapnaConsolidation(projectPath);
 		clearChitraguptaState();
 		await server.stop();
 		process.exit(0);
@@ -391,8 +393,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		// Wire daemon touch into session recording
 		recorder.daemonManager = daemonManager;
 
-		// Add daemon to shutdown sequence
+		// Add daemon to shutdown sequence — trigger Svapna before exit
 		const shutdownWithDaemon = async () => {
+			triggerSvapnaConsolidation(projectPath);
 			try {
 				await daemonManager.stop();
 			} catch {
