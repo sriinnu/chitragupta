@@ -29,49 +29,82 @@ import { CLI_PACKAGE_VERSION } from "../version.js";
 
 import { resetMcpStartedAt, writeChitraguptaState, clearChitraguptaState } from "./mcp-state.js";
 import {
-	createMemorySearchTool, createSessionListTool, createSessionShowTool,
-	createMargaDecideTool, createAgentPromptTool, createPromptStatusTool,
+	createMemorySearchTool,
+	createSessionListTool,
+	createSessionShowTool,
+	createMargaDecideTool,
+	createAgentPromptTool,
+	createPromptStatusTool,
 } from "./mcp-tools-core.js";
 import {
-	createSamitiChannelsTool, createSamitiBroadcastTool,
-	createSabhaDeliberateTool, createAkashaTracesTool, createAkashaDepositTool,
+	createSamitiChannelsTool,
+	createSamitiBroadcastTool,
+	createSabhaDeliberateTool,
+	createAkashaTracesTool,
+	createAkashaDepositTool,
 } from "./mcp-tools-collective.js";
 import {
-	createVasanaTendenciesTool, createHealthStatusTool, createAtmanReportTool,
+	createVasanaTendenciesTool,
+	createHealthStatusTool,
+	createAtmanReportTool,
 } from "./mcp-tools-introspection.js";
 import { createCodingAgentTool } from "./mcp-tools-coding.js";
 import {
-	createHandoverTool, createDayShowTool, createDayListTool,
-	createDaySearchTool, createContextTool,
+	createHandoverTool,
+	createDayShowTool,
+	createDayListTool,
+	createDaySearchTool,
+	createContextTool,
 } from "./mcp-tools-memory.js";
+import { createHandoverSinceTool, createMemoryChangesSinceTool } from "./mcp-tools-delta.js";
 import {
-	createHandoverSinceTool, createMemoryChangesSinceTool,
-} from "./mcp-tools-delta.js";
-import {
-	createSyncStatusTool, createSyncExportTool, createSyncImportTool,
-	createRecallTool, createVidhisTool, createConsolidateTool,
+	createSyncStatusTool,
+	createSyncExportTool,
+	createSyncImportTool,
+	createRecallTool,
+	createVidhisTool,
+	createConsolidateTool,
 } from "./mcp-tools-sync.js";
 import {
-	createMeshStatusTool, createMeshSpawnTool, createMeshSendTool,
-	createMeshAskTool, createMeshFindCapabilityTool, createMeshPeersTool,
-	createMeshGossipTool, createMeshTopologyTool,
+	createMeshStatusTool,
+	createMeshSpawnTool,
+	createMeshSendTool,
+	createMeshAskTool,
+	createMeshFindCapabilityTool,
+	createMeshPeersTool,
+	createMeshGossipTool,
+	createMeshTopologyTool,
 } from "./mcp-tools-mesh.js";
 import {
-	createSkillsFindTool, createSkillsListTool, createSkillsHealthTool,
-	createSkillsLearnTool, createSkillsScanTool, createSkillsEcosystemTool,
+	createSkillsFindTool,
+	createSkillsListTool,
+	createSkillsHealthTool,
+	createSkillsLearnTool,
+	createSkillsScanTool,
+	createSkillsEcosystemTool,
 	createSkillsRecommendTool,
 } from "./mcp-tools-skills.js";
 import { createCompletionTool } from "./mcp-tools-completion.js";
 import { createUIExtensionsTool, createWidgetDataTool } from "./mcp-tools-plugins.js";
 import {
-	createMemoryResource, createSavePrompt, createLastSessionPrompt,
-	createRecallPrompt, createStatusPrompt, createHandoverPrompt,
-	createReviewPrompt, createDebugPrompt, createResearchPrompt,
-	createRefactorPrompt, createMemorySearchPrompt, createSessionPrompt,
+	createMemoryResource,
+	createSavePrompt,
+	createLastSessionPrompt,
+	createRecallPrompt,
+	createStatusPrompt,
+	createHandoverPrompt,
+	createReviewPrompt,
+	createDebugPrompt,
+	createResearchPrompt,
+	createRefactorPrompt,
+	createMemorySearchPrompt,
+	createSessionPrompt,
 } from "./mcp-prompts.js";
 import {
-	createSystemMetricsResource, createPluginEcosystemResource,
-	createSystemConfigResource, createRecentToolCallsResource,
+	createSystemMetricsResource,
+	createPluginEcosystemResource,
+	createSystemConfigResource,
+	createRecentToolCallsResource,
 } from "./mcp-resources.js";
 import { McpSessionRecorder } from "./mcp-session.js";
 
@@ -231,10 +264,10 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	const startupMs = performance.now() - t0;
 	process.stderr.write(
 		`Chitragupta MCP server ready (${transport}` +
-		`${transport === "sse" ? ` on port ${port}` : ""}) in ${startupMs.toFixed(0)}ms\n` +
-		`  Tools: ${mcpTools.length}\n` +
-		`  Project: ${projectPath}\n` +
-		`  Agent: ${enableAgent ? "enabled" : "disabled"}\n`,
+			`${transport === "sse" ? ` on port ${port}` : ""}) in ${startupMs.toFixed(0)}ms\n` +
+			`  Tools: ${mcpTools.length}\n` +
+			`  Project: ${projectPath}\n` +
+			`  Agent: ${enableAgent ? "enabled" : "disabled"}\n`,
 	);
 
 	// ─── 4. Post-start initialization ────────────────────────────────
@@ -243,9 +276,11 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	// handshake can proceed while these non-critical subsystems spin up.
 
 	// 4a. Register OS integration surface resources (need server reference)
-	server.registerResource(createSystemMetricsResource(() => ({
-		toolCount: mcpTools.length,
-	})));
+	server.registerResource(
+		createSystemMetricsResource(() => ({
+			toolCount: mcpTools.length,
+		})),
+	);
 	server.registerResource(createPluginEcosystemResource());
 	server.registerResource(createSystemConfigResource(projectPath, transport));
 	server.registerResource(createRecentToolCallsResource(() => server.getRecentCalls()));
@@ -253,7 +288,14 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	// 4b. State file (best-effort, deferred to not block event loop)
 	resetMcpStartedAt();
 	setImmediate(() => {
-		writeChitraguptaState({ active: true, project: projectPath, lastTool: "(startup)" });
+		writeChitraguptaState({
+			active: true,
+			project: projectPath,
+			lastTool: "(startup)",
+			sessionId: null,
+			turnCount: null,
+			filesModified: null,
+		});
 	});
 
 	// 4c. Dynamic ToolRegistry (runtime tool registration via plugins)
@@ -305,7 +347,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		for (const dir of potentialSkillDirs) {
 			try {
 				if (fs.existsSync(dir)) skillPaths.push(dir);
-			} catch { /* skip */ }
+			} catch {
+				/* skip */
+			}
 		}
 
 		const daemonManager = new DaemonManager({
@@ -349,7 +393,11 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 
 		// Add daemon to shutdown sequence
 		const shutdownWithDaemon = async () => {
-			try { await daemonManager.stop(); } catch { /* best-effort */ }
+			try {
+				await daemonManager.stop();
+			} catch {
+				/* best-effort */
+			}
 			clearChitraguptaState();
 			await server.stop();
 			process.exit(0);
