@@ -52,7 +52,7 @@ describe("CLI Availability Detection", () => {
 		const { detectAvailableCLIs } = await import("../src/providers/cli-detection.js");
 		const results = await detectAvailableCLIs();
 
-		expect(results.length).toBe(5);
+		expect(results.length).toBe(7);
 		const claudeResult = results.find((r) => r.command === "claude");
 		expect(claudeResult).toBeDefined();
 		expect(claudeResult!.available).toBe(true);
@@ -74,6 +74,14 @@ describe("CLI Availability Detection", () => {
 		const aiderResult = results.find((r) => r.command === "aider");
 		expect(aiderResult).toBeDefined();
 		expect(aiderResult!.available).toBe(false);
+
+		const zaiResult = results.find((r) => r.command === "zai");
+		expect(zaiResult).toBeDefined();
+		expect(zaiResult!.available).toBe(false);
+
+		const minimaxResult = results.find((r) => r.command === "minimax");
+		expect(minimaxResult).toBeDefined();
+		expect(minimaxResult!.available).toBe(false);
 	});
 
 	it("should return best CLI provider (claude has highest priority)", async () => {
@@ -145,7 +153,7 @@ describe("CLI Availability Detection", () => {
 		expect(claudeResult!.version).toBeUndefined();
 	});
 
-	it("should detect all 5 CLI tools", async () => {
+	it("should detect all 7 CLI tools", async () => {
 		const mockExecFile = vi.mocked(childProcess.execFile);
 		mockExecFile.mockImplementation((cmd: any, args: any, _opts: any) => {
 			if (cmd === "which") {
@@ -156,7 +164,7 @@ describe("CLI Availability Detection", () => {
 
 		const { detectAvailableCLIs } = await import("../src/providers/cli-detection.js");
 		const results = await detectAvailableCLIs();
-		expect(results.length).toBe(5);
+		expect(results.length).toBe(7);
 		for (const r of results) {
 			expect(r.available).toBe(true);
 		}
@@ -188,7 +196,7 @@ describe("CLI Availability Detection", () => {
 
 		const { detectAvailableCLIs } = await import("../src/providers/cli-detection.js");
 		await detectAvailableCLIs();
-		// Should make at least 5 which calls (one per CLI)
-		expect(callCount).toBeGreaterThanOrEqual(5);
+		// Should make at least 7 which calls (one per CLI)
+		expect(callCount).toBeGreaterThanOrEqual(7);
 	});
 });
