@@ -205,25 +205,33 @@ async function wireVidhyaSkills(result: TuiWiringResult, projectPath: string): P
 			result.mcpSkillWatcherCleanups.push(...tierResult.watcherCleanups);
 		} catch { /* best-effort */ }
 
-		let scanner: InstanceType<typeof SurakshaScanner> | undefined;
-		try {
-			scanner = new SurakshaScanner();
-			const sandbox = new SkillSandbox();
-			const staging = new PratikshaManager();
-			const pipeline = new SkillPipeline({ scanner, sandbox, staging, registry: skillRegistry });
-			result.shikshaController = new ShikshaController({ registry: skillRegistry, pipeline, scanner });
-		} catch { /* best-effort */ }
+			let scanner: InstanceType<typeof SurakshaScanner> | undefined;
+			try {
+				scanner = new SurakshaScanner();
+				const sandbox = new SkillSandbox();
+				const staging = new PratikshaManager();
+				const pipeline = new SkillPipeline({ scanner, sandbox, staging, registry: skillRegistry });
+				result.shikshaController = new ShikshaController({ registry: skillRegistry, pipeline, scanner });
+			} catch (err) {
+				log.warn("Shiksha pipeline wiring failed; autonomous learning is disabled", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
 
 		const stateDir = projectPath ? (await import("node:path")).join(projectPath, ".chitragupta") : undefined;
-		result.vidyaOrchestrator = new VidyaOrchestrator(
-			{
-				registry: skillRegistry,
-				bridge,
-				scanner: scanner as ConstructorParameters<typeof VidyaOrchestrator>[0]["scanner"],
-				shiksha: result.shikshaController as ConstructorParameters<typeof VidyaOrchestrator>[0]["shiksha"],
-			},
-			{ persistPath: stateDir ? stateDir + "/vidya-state.json" : undefined, enableAutoComposition: true },
-		);
+			result.vidyaOrchestrator = new VidyaOrchestrator(
+				{
+					registry: skillRegistry,
+					bridge,
+					scanner: scanner as ConstructorParameters<typeof VidyaOrchestrator>[0]["scanner"],
+					shiksha: result.shikshaController as ConstructorParameters<typeof VidyaOrchestrator>[0]["shiksha"],
+				},
+				{
+					persistPath: stateDir ? `${stateDir}/vidya-state.json` : undefined,
+					enableAutoLearn: Boolean(result.shikshaController),
+					enableAutoComposition: true,
+				},
+			);
 		await result.vidyaOrchestrator.initialize();
 
 		if (skillRegistry.size > 0) {
