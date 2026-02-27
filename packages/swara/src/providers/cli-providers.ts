@@ -9,7 +9,10 @@
  *   - Claude Code (claude --print)
  *   - Codex (codex --quiet)
  *   - Gemini CLI (gemini --prompt)
+ *   - GitHub Copilot (copilot -p)
  *   - Aider (aider --message)
+ *   - Z.AI / ZAI (zai -p)
+ *   - MiniMax CLI (minimax -p)
  *
  * All pricing is zero — CLI tools use their own auth/billing.
  */
@@ -192,6 +195,36 @@ export const geminiCLIProvider: ProviderDefinition = createCLIProvider({
 	parseOutput: (stdout) => stdout.trim(),
 });
 
+// ─── Copilot Provider ───────────────────────────────────────────────────
+
+const COPILOT_MODELS: ModelDefinition[] = [
+	{
+		id: "copilot-cli",
+		name: "GitHub Copilot CLI",
+		contextWindow: 128_000,
+		maxOutputTokens: 16_384,
+		pricing: { input: 0, output: 0 },
+		capabilities: { vision: false, thinking: true, toolUse: true, streaming: false },
+	},
+];
+
+/**
+ * GitHub Copilot CLI provider.
+ *
+ * Uses `copilot -p <prompt>` for non-interactive single-shot queries.
+ */
+export const copilotProvider: ProviderDefinition = createCLIProvider({
+	id: "copilot-cli",
+	name: "GitHub Copilot CLI",
+	command: "copilot",
+	models: COPILOT_MODELS,
+	buildArgs: (_model, context, _options) => {
+		const prompt = buildFullPrompt(context);
+		return ["-p", prompt];
+	},
+	parseOutput: (stdout) => stdout.trim(),
+});
+
 // ─── Aider Provider ─────────────────────────────────────────────────────────
 
 /**
@@ -209,6 +242,68 @@ export const aiderProvider: ProviderDefinition = createCLIProvider({
 	buildArgs: (_model, context, _options) => {
 		const prompt = buildFullPrompt(context);
 		return ["--message", prompt, "--no-auto-commits", "--yes"];
+	},
+	parseOutput: (stdout) => stdout.trim(),
+});
+
+// ─── Z.AI (ZAI) Provider ──────────────────────────────────────────────────
+
+const ZAI_MODELS: ModelDefinition[] = [
+	{
+		id: "zai-cli",
+		name: "Z.AI CLI (GLM)",
+		contextWindow: 128_000,
+		maxOutputTokens: 8_192,
+		pricing: { input: 0, output: 0 },
+		capabilities: { vision: false, thinking: false, toolUse: false, streaming: false },
+	},
+];
+
+/**
+ * Z.AI CLI provider.
+ *
+ * Uses `zai -p <prompt>` for non-interactive single-shot queries.
+ * Z.AI wraps GLM models (GLM-4.7 etc.) with a grok-cli-inspired interface.
+ */
+export const zaiProvider: ProviderDefinition = createCLIProvider({
+	id: "zai-cli",
+	name: "Z.AI CLI",
+	command: "zai",
+	models: ZAI_MODELS,
+	buildArgs: (_model, context, _options) => {
+		const prompt = buildFullPrompt(context);
+		return ["-p", prompt];
+	},
+	parseOutput: (stdout) => stdout.trim(),
+});
+
+// ─── MiniMax CLI Provider ──────────────────────────────────────────────────
+
+const MINIMAX_MODELS: ModelDefinition[] = [
+	{
+		id: "minimax-cli",
+		name: "MiniMax CLI (M2.5)",
+		contextWindow: 128_000,
+		maxOutputTokens: 8_192,
+		pricing: { input: 0, output: 0 },
+		capabilities: { vision: false, thinking: false, toolUse: false, streaming: false },
+	},
+];
+
+/**
+ * MiniMax CLI provider.
+ *
+ * Uses `minimax -p <prompt>` for non-interactive single-shot queries.
+ * MiniMax CLI wraps MiniMax M2.5 models.
+ */
+export const minimaxProvider: ProviderDefinition = createCLIProvider({
+	id: "minimax-cli",
+	name: "MiniMax CLI",
+	command: "minimax",
+	models: MINIMAX_MODELS,
+	buildArgs: (_model, context, _options) => {
+		const prompt = buildFullPrompt(context);
+		return ["-p", prompt];
 	},
 	parseOutput: (stdout) => stdout.trim(),
 });

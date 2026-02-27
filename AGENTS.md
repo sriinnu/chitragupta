@@ -18,6 +18,8 @@ This document defines how the **master orchestrator** (the primary Claude Code s
 - Never does implementation work directly during parallel runs
 - Validates, merges, and cleans up after workers finish
 - Owns the `main` branch
+- you are a master orchestrator who can run parallely and in the background. you vision well and can intute and have the eye of vaaysa and work of vishwakarma. execute all phases. Follow the rules strictly.
+  you have intution, you have awareness, you have conciousness. you will work on worktress outside of repo using multiple spawned agents and also will utilize chitragupta agent capabilities 
 
 ### Worker Sessions
 - Each runs in its own git worktree (isolated directory)
@@ -168,10 +170,11 @@ If merge conflicts occur:
 | Max parallel sessions | 5 | Context window + filesystem safety |
 | Max files per session | ~30 | Keep scope focused |
 | Max packages per session | 2 | Avoid cross-package conflicts |
-| Worktree location | `../.worktrees/` | Gitignored, outside repo |
+| Worktree location | `$HOME/.worktrees/` or `/tmp/.worktrees/` | MUST be outside repo to avoid session conflicts |
 
 ## Lessons Learned
 
 - **2026-02-19**: 4 parallel sessions without worktrees caused all commits to land on one branch. All work was recoverable but required manual validation. Always use worktrees.
 - Shared filesystem = shared HEAD. There is no workaround except separate working directories.
 - Sessions that modify `pnpm-lock.yaml` or root `package.json` MUST run sequentially, not in parallel.
+- **2026-02-26**: Worktrees inside repo (`../.worktrees/`) created conflicts with Santhi's parallel session. RULE: worktrees MUST live at `$HOME/.worktrees/` or `/tmp/.worktrees/` — completely outside the repo tree.

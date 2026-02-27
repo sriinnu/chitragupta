@@ -18,6 +18,7 @@
  */
 
 import crypto from "crypto";
+import path from "node:path";
 
 import {
 	loadGlobalSettings,
@@ -27,6 +28,7 @@ import {
 	resolveProfile,
 	BUILT_IN_PROFILES,
 	DEFAULT_FALLBACK_MODEL,
+	getChitraguptaHome,
 } from "@chitragupta/core";
 import type { AgentProfile, ThinkingLevel } from "@chitragupta/core";
 
@@ -87,6 +89,8 @@ export interface ChitraguptaOptions {
 	thinkingLevel?: ThinkingLevel;
 	/** Disable memory loading entirely */
 	noMemory?: boolean;
+	/** Skip CLI detection (claude, gemini, codex, aider) — avoids 10-20s probing in MCP subprocess mode. */
+	skipCLIDetection?: boolean;
 }
 
 // ─── Factory ────────────────────────────────────────────────────────────────
@@ -152,7 +156,9 @@ export async function createChitragupta(
 
 	// ─── 5. Initialize provider registry ──────────────────────────────
 	const registry = createProviderRegistry();
-	await registerCLIProviders(registry);
+	if (!options.skipCLIDetection) {
+		await registerCLIProviders(registry);
+	}
 	registerBuiltinProviders(registry, settings);
 
 	const resolved = resolvePreferredProvider(options.provider, settings, registry);
@@ -201,6 +207,7 @@ export async function createChitragupta(
 	});
 
 	// ─── 11. Create the agent ─────────────────────────────────────────
+	const home = getChitraguptaHome();
 	const agentConfig: AgentConfig = {
 		profile, providerId, model: modelId, tools, systemPrompt, thinkingLevel,
 		workingDirectory: projectPath, policyEngine: wiring.policyAdapter,
@@ -208,6 +215,12 @@ export async function createChitragupta(
 		enableMemory: !options.noMemory, project: projectPath,
 		commHub: wiring.commHub, samiti: wiring.samiti,
 		lokapala: wiring.lokapala, kaala: wiring.kaala,
+		// Wire 4: Persist learning-loop state across sessions
+		learningPersistPath: path.join(home, "learning", "session-state.json"),
+		// Wire 2: Record skill gaps for SkillLearner analysis
+		onSkillGap: (toolName: string) => {
+			process.stderr.write(`[skill-gap] ${toolName}\n`);
+		},
 	};
 
 	const agent = new Agent(agentConfig);

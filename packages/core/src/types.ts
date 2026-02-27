@@ -144,9 +144,12 @@ export interface ChitraguptaSettings {
  */
 export const DEFAULT_PROVIDER_PRIORITY = [
 	"claude-code",    // Claude Code CLI — zero cost
-	"codex-cli",      // Codex CLI — zero cost
 	"gemini-cli",     // Gemini CLI — zero cost
+	"copilot-cli",    // GitHub Copilot CLI — zero cost
+	"codex-cli",      // Codex CLI — zero cost
 	"aider-cli",      // Aider CLI — zero cost
+	"zai-cli",        // Z.AI CLI (GLM) — zero cost
+	"minimax-cli",    // MiniMax CLI (M2.5) — zero cost
 	"ollama",         // Local Ollama — zero cost
 	"anthropic",      // Anthropic API — paid
 	"openai",         // OpenAI API — paid

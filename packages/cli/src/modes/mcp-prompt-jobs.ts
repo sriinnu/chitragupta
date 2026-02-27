@@ -59,9 +59,26 @@ export type HeartbeatCallback = (info: HeartbeatInfo) => void;
 /** Module-level store for pending/completed prompt jobs. */
 const promptJobs = new Map<string, PromptJob>();
 
-/** Generate a short, unique job ID. */
+/**
+ * Indian names used as human-readable job identifiers.
+ * Rotated round-robin to avoid ugly hash-based IDs.
+ */
+const AGENT_NAMES = [
+	"amritha", "kavya", "arjun", "priya", "veda",
+	"dhruv", "meera", "rishi", "ananya", "kiran",
+	"tara", "surya", "leela", "arun", "nila",
+	"rohan", "saira", "vikram", "devi", "hari",
+] as const;
+
+/** Tracks the next name index for round-robin assignment. */
+let nameCounter = 0;
+
+/** Generate a human-readable job ID using Indian names. */
 export function generateJobId(): string {
-	return `pj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+	const name = AGENT_NAMES[nameCounter % AGENT_NAMES.length];
+	nameCounter++;
+	const suffix = Math.random().toString(36).slice(2, 5);
+	return `${name}-${suffix}`;
 }
 
 /** Create a new running job and return its ID. */

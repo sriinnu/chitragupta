@@ -303,19 +303,23 @@ async function wireServePhaseModules(
 			inputSchema: ((t as unknown as Record<string, Record<string, unknown>>).definition?.inputSchema ?? {}) as Record<string, unknown>,
 		})));
 		try { const { loadSkillTiers } = await import("./shared-factories.js"); const r = await loadSkillTiers({ projectPath, skillRegistry: reg }); c.skillWatcherCleanups.push(...r.watcherCleanups); } catch (e) { log.debug("Agent skill loading failed", { error: String(e) }); }
-		let scanner: InstanceType<typeof SurakshaScanner> | undefined;
-		let shiksha: InstanceType<typeof ShikshaController> | undefined;
-		try { scanner = new SurakshaScanner(); const sandbox = new SkillSandbox(); const staging = new PratikshaManager(); const pipeline = new SkillPipeline({ scanner, sandbox, staging, registry: reg }); shiksha = new ShikshaController({ registry: reg, pipeline, scanner }); } catch (e) { log.debug("Suraksha/Shiksha pipeline unavailable", { error: String(e) }); }
-		const stateDir = path.join(projectPath, ".chitragupta");
-		m.servVidyaOrchestrator = new VidyaOrchestrator(
-			{
-				registry: reg,
-				bridge,
-				scanner: scanner as ConstructorParameters<typeof VidyaOrchestrator>[0]["scanner"],
-				shiksha: shiksha as ConstructorParameters<typeof VidyaOrchestrator>[0]["shiksha"],
-			},
-			{ persistPath: stateDir + "/vidya-state.json", enableAutoComposition: true },
-		);
+			let scanner: InstanceType<typeof SurakshaScanner> | undefined;
+			let shiksha: InstanceType<typeof ShikshaController> | undefined;
+			try { scanner = new SurakshaScanner(); const sandbox = new SkillSandbox(); const staging = new PratikshaManager(); const pipeline = new SkillPipeline({ scanner, sandbox, staging, registry: reg }); shiksha = new ShikshaController({ registry: reg, pipeline, scanner }); } catch (e) { log.warn("Suraksha/Shiksha pipeline unavailable; autonomous learning disabled", { error: String(e) }); }
+			const stateDir = path.join(projectPath, ".chitragupta");
+			m.servVidyaOrchestrator = new VidyaOrchestrator(
+				{
+					registry: reg,
+					bridge,
+					scanner: scanner as ConstructorParameters<typeof VidyaOrchestrator>[0]["scanner"],
+					shiksha: shiksha as ConstructorParameters<typeof VidyaOrchestrator>[0]["shiksha"],
+				},
+				{
+					persistPath: `${stateDir}/vidya-state.json`,
+					enableAutoLearn: Boolean(shiksha),
+					enableAutoComposition: true,
+				},
+			);
 		await (m.servVidyaOrchestrator as { initialize: () => Promise<void> }).initialize();
 	} catch (e) { log.debug("VidyaOrchestrator unavailable", { error: String(e) }); }
 
@@ -440,8 +444,7 @@ function buildServerHandlers(opts: {
 		getTuriyaRouter: () => turiyaRouter, getTriguna: () => m.servTriguna, getRtaEngine: () => m.servRtaEngine,
 		getBuddhi: () => m.servBuddhi, getDatabase: () => m.servDatabase, getSamiti: () => m.servSamiti,
 		getSabhaEngine: () => m.servSabhaEngine, getLokapala: () => m.servLokapala, getAkasha: () => m.servAkasha,
-		getKartavyaEngine: () => m.servKartavyaEngine, getKalaChakra: () => m.servKalaChakra,
-		getVidyaOrchestrator: () => m.servVidyaOrchestrator, getProjectPath: () => projectPath, getPairingEngine: () => pairingEngine, getBudgetTracker: () => budgetTracker,
+		getKartavyaEngine: () => m.servKartavyaEngine, getKalaChakra: () => m.servKalaChakra, getVidyaOrchestrator: () => m.servVidyaOrchestrator, getProjectPath: () => projectPath, getPairingEngine: () => pairingEngine, getBudgetTracker: () => budgetTracker,
 		...buildMeshApiHandlers(opts.meshActorSystem, opts.getMeshBootstrapResult ?? (() => undefined)),
 	};
 }

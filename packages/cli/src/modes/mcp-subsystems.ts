@@ -244,8 +244,7 @@ export async function getSoulManager(): Promise<SoulManagerLike> {
 export async function getActorSystem(): Promise<ActorSystemLike> {
 	if (!_actorSystem) {
 		const { ActorSystem } = await import("@chitragupta/sutra");
-		const sys = new ActorSystem();
-		sys.start();
+		const sys = new ActorSystem(); sys.start();
 		_actorSystem = sys as unknown as ActorSystemLike;
 	}
 	return _actorSystem;
@@ -277,6 +276,8 @@ function buildSkillScanPaths(opts: {
 		chitraguptaHome ? join(chitraguptaHome, "skills") : "",
 		join(projectPath, "skills"),
 		join(projectPath, "skills-core"),
+		join(projectPath, "chitragupta", "skills-core"),
+		join(projectPath, "chitragupta", "skills"),
 		homeDir ? join(homeDir, ".agents", "skills") : "",
 		homeDir ? join(homeDir, ".codex", "skills") : "",
 	];
