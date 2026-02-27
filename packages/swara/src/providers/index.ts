@@ -23,6 +23,7 @@ export {
 	claudeCodeProvider,
 	codexProvider,
 	geminiCLIProvider,
+	copilotProvider,
 	aiderProvider,
 	contextToPrompt,
 } from "./cli-providers.js";

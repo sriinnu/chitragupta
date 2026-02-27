@@ -52,7 +52,7 @@ describe("CLI Availability Detection", () => {
 		const { detectAvailableCLIs } = await import("../src/providers/cli-detection.js");
 		const results = await detectAvailableCLIs();
 
-		expect(results.length).toBe(4);
+		expect(results.length).toBe(5);
 		const claudeResult = results.find((r) => r.command === "claude");
 		expect(claudeResult).toBeDefined();
 		expect(claudeResult!.available).toBe(true);
@@ -62,6 +62,10 @@ describe("CLI Availability Detection", () => {
 		const geminiResult = results.find((r) => r.command === "gemini");
 		expect(geminiResult).toBeDefined();
 		expect(geminiResult!.available).toBe(true);
+
+		const copilotResult = results.find((r) => r.command === "copilot");
+		expect(copilotResult).toBeDefined();
+		expect(copilotResult!.available).toBe(false);
 
 		const codexResult = results.find((r) => r.command === "codex");
 		expect(codexResult).toBeDefined();
@@ -141,7 +145,7 @@ describe("CLI Availability Detection", () => {
 		expect(claudeResult!.version).toBeUndefined();
 	});
 
-	it("should detect all 4 CLI tools", async () => {
+	it("should detect all 5 CLI tools", async () => {
 		const mockExecFile = vi.mocked(childProcess.execFile);
 		mockExecFile.mockImplementation((cmd: any, args: any, _opts: any) => {
 			if (cmd === "which") {
@@ -152,7 +156,7 @@ describe("CLI Availability Detection", () => {
 
 		const { detectAvailableCLIs } = await import("../src/providers/cli-detection.js");
 		const results = await detectAvailableCLIs();
-		expect(results.length).toBe(4);
+		expect(results.length).toBe(5);
 		for (const r of results) {
 			expect(r.available).toBe(true);
 		}
@@ -184,7 +188,7 @@ describe("CLI Availability Detection", () => {
 
 		const { detectAvailableCLIs } = await import("../src/providers/cli-detection.js");
 		await detectAvailableCLIs();
-		// Should make at least 4 which calls (one per CLI)
-		expect(callCount).toBeGreaterThanOrEqual(4);
+		// Should make at least 5 which calls (one per CLI)
+		expect(callCount).toBeGreaterThanOrEqual(5);
 	});
 });
