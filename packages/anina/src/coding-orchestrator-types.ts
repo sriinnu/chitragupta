@@ -230,6 +230,11 @@ export interface CodingOrchestratorConfig {
 	onStream?: (chunk: string, source: "build" | "test" | "lint" | "review" | "agent") => void;
 	/** Git branch name template. Default: "{prefix}{slug}" */
 	branchTemplate?: string;
+	/**
+	 * Optional repo-map provider for smart context selection.
+	 * When set, the planner includes a file/symbol overview in the planning prompt.
+	 */
+	repoMapProvider?: (dir: string) => { text: string } | null;
 }
 
 /**
