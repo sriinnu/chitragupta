@@ -271,7 +271,8 @@ export async function launchPrintMode(params: LaunchPrintParams): Promise<void> 
 }
 
 /**
- * Run post-session hooks: Turiya state persistence and Samskaara consolidation.
+ * Run post-session hooks: Turiya state persistence, Samskaara consolidation,
+ * and Svapna dream-cycle consolidation (fire-and-forget).
  */
 export async function runPostSessionHooks(
 	turiyaRouter: TuriyaRouter | undefined,
@@ -289,7 +290,7 @@ export async function runPostSessionHooks(
 		} catch { /* best-effort */ }
 	}
 
-	// Samskaara consolidation
+	// Samskaara consolidation (synchronous, bounded by timeout)
 	const CONSOLIDATION_TIMEOUT_MS = 5_000;
 	try {
 		const consolidationWork = async () => {
@@ -311,6 +312,44 @@ export async function runPostSessionHooks(
 		};
 		await Promise.race([consolidationWork(), new Promise<void>((resolve) => setTimeout(resolve, CONSOLIDATION_TIMEOUT_MS))]);
 	} catch { /* best-effort */ }
+
+	// Svapna dream-cycle consolidation (fire-and-forget, non-blocking).
+	// Runs the 5-phase cycle (replay, recombine, crystallize, proceduralize, compress)
+	// in the background so session exit is never delayed.
+	triggerSvapnaConsolidation(projectPath);
+}
+
+/**
+ * Fire-and-forget Svapna (dream-cycle) consolidation.
+ *
+ * Spawns the 5-phase consolidation asynchronously via setImmediate so it
+ * does not block the caller. The returned timer is unref'd so Node can
+ * exit even if the cycle is still running.
+ *
+ * @param projectPath - The project directory to consolidate sessions for.
+ */
+export function triggerSvapnaConsolidation(projectPath: string): void {
+	const timer = setTimeout(() => {
+		(async () => {
+			try {
+				const { SvapnaConsolidation } = await import("@chitragupta/smriti");
+				const svapna = new SvapnaConsolidation({ project: projectPath });
+				const result = await svapna.run();
+				log.info("Svapna consolidation complete", {
+					cycleId: result.cycleId,
+					durationMs: Math.round(result.totalDurationMs),
+					vasanas: result.phases.crystallize.vasanasCreated,
+					vidhis: result.phases.proceduralize.vidhisCreated,
+				});
+			} catch (err) {
+				log.debug("Svapna consolidation failed (best-effort)", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+		})();
+	}, 0);
+	// unref so the timer does not keep the process alive
+	timer.unref();
 }
 
 /**
