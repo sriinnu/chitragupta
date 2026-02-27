@@ -14,6 +14,7 @@
  */
 
 import type { HeartbeatCallback } from "./mcp-prompt-jobs.js";
+import type { ProcessExecOptions } from "@chitragupta/swara/process-pool";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -23,6 +24,11 @@ const CLI_TIMEOUT_MS = 30_000;
 const API_TIMEOUT_MS = 60_000;
 /** Heartbeat interval. */
 const HEARTBEAT_INTERVAL_MS = 8_000;
+/**
+ * Threshold (bytes) above which prompt is piped via stdin
+ * instead of passed as a CLI argument. Prevents E2BIG on macOS.
+ */
+const STDIN_THRESHOLD_BYTES = 100_000;
 
 /** Auth-failure patterns in CLI stderr/stdout. */
 const AUTH_ERROR_PATTERNS = [
@@ -52,7 +58,7 @@ interface PromptAttemptResult {
 /** Injectable dependencies for testing. */
 export interface SmartPromptDeps {
 	detectCLIs?: () => Promise<Array<{ command: string; available: boolean }>>;
-	executeCLI?: (command: string, args: string[], timeoutMs: number) => Promise<{
+	executeCLI?: (command: string, args: string[], timeoutMs: number, stdinData?: string) => Promise<{
 		stdout: string; stderr: string; exitCode: number; killed: boolean;
 	}>;
 	loadProjectMemory?: (projectPath: string) => string | undefined;
@@ -112,43 +118,54 @@ async function tryCliProviders(
 		return { failures };
 	}
 
-	// Build CLI args per command
-	const cliArgBuilders: Record<string, () => string[]> = {
+	/** Combine system prompt + user message into a single string. */
+	const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
+	/** True when prompt is too large for CLI args (E2BIG risk). */
+	const useStdin = Buffer.byteLength(fullPrompt, "utf-8") >= STDIN_THRESHOLD_BYTES;
+
+	// Build CLI args per command.
+	// When useStdin is true, prompt text is omitted from args and piped via stdin.
+	const cliArgBuilders: Record<string, () => { args: string[]; stdin?: string }> = {
 		claude: () => {
-			const args = ["--print", message, "--output-format", "text"];
+			const args = useStdin
+				? ["--print", "-", "--output-format", "text"]
+				: ["--print", message, "--output-format", "text"];
 			if (systemPrompt) args.push("--system-prompt", systemPrompt);
-			return args;
+			return { args, stdin: useStdin ? message : undefined };
 		},
-		gemini: () => {
-			const prompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
-			return ["--prompt", prompt];
-		},
-		copilot: () => {
-			const prompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
-			return ["-p", prompt];
-		},
-		codex: () => {
-			const prompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
-			return ["exec", "--full-auto", prompt];
-		},
-		aider: () => {
-			const prompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
-			return ["--message", prompt, "--no-auto-commits", "--yes"];
-		},
-		zai: () => {
-			const prompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
-			return ["-p", prompt];
-		},
-		minimax: () => {
-			const prompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
-			return ["-p", prompt];
-		},
+		gemini: () => ({
+			args: useStdin ? [] : ["--prompt", fullPrompt],
+			stdin: useStdin ? fullPrompt : undefined,
+		}),
+		copilot: () => ({
+			args: useStdin ? [] : ["-p", fullPrompt],
+			stdin: useStdin ? fullPrompt : undefined,
+		}),
+		codex: () => ({
+			args: useStdin ? ["exec", "--full-auto"] : ["exec", "--full-auto", fullPrompt],
+			stdin: useStdin ? fullPrompt : undefined,
+		}),
+		aider: () => ({
+			args: useStdin
+				? ["--message", "/stdin", "--no-auto-commits", "--yes"]
+				: ["--message", fullPrompt, "--no-auto-commits", "--yes"],
+			stdin: useStdin ? fullPrompt : undefined,
+		}),
+		zai: () => ({
+			args: useStdin ? [] : ["-p", fullPrompt],
+			stdin: useStdin ? fullPrompt : undefined,
+		}),
+		minimax: () => ({
+			args: useStdin ? [] : ["-p", fullPrompt],
+			stdin: useStdin ? fullPrompt : undefined,
+		}),
 	};
 
-	const executeCLI = deps.executeCLI ?? (async (cmd: string, args: string[], timeout: number) => {
+	const executeCLI = deps.executeCLI ?? (async (cmd: string, args: string[], timeout: number, stdinData?: string) => {
 		const { ProcessPool } = await import("@chitragupta/swara/process-pool");
 		const pool = new ProcessPool({ maxConcurrency: 2 });
-		return pool.execute(cmd, args, { timeout });
+		const opts: ProcessExecOptions = { timeout, stdin: stdinData };
+		return pool.execute(cmd, args, opts);
 	});
 
 	for (let i = 0; i < availableCLIs.length; i++) {
@@ -170,7 +187,8 @@ async function tryCliProviders(
 				}, HEARTBEAT_INTERVAL_MS);
 			}
 
-			const result = await executeCLI(cli.command, buildArgs(), CLI_TIMEOUT_MS);
+			const built = buildArgs();
+			const result = await executeCLI(cli.command, built.args, CLI_TIMEOUT_MS, built.stdin);
 
 			if (result.killed) {
 				failures.push(`${cli.command}: timed out after ${CLI_TIMEOUT_MS / 1000}s`);
@@ -216,6 +234,14 @@ async function tryApiProviders(
 
 	try {
 		const getRouter = deps.getCompletionRouter ?? (async () => {
+			// Load credentials from ~/.chitragupta/config/credentials.json
+			// so API keys are available even in MCP mode where env vars
+			// may not be inherited from the parent shell.
+			try {
+				const { loadCredentials } = await import("../bootstrap.js");
+				loadCredentials();
+			} catch { /* best-effort: bootstrap may not be available */ }
+
 			const { createAnthropicAdapter, createOpenAIAdapter, CompletionRouter } = await import("@chitragupta/swara");
 			const adapters = [];
 			if (process.env.ANTHROPIC_API_KEY) adapters.push(createAnthropicAdapter());
