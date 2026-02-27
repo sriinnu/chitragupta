@@ -110,6 +110,86 @@ See [GETTING_STARTED.md](GETTING_STARTED.md) for the full setup guide — provid
 
 ---
 
+## Providers
+
+Chitragupta auto-detects AI providers and uses them in priority order. **CLI providers are tried first** (zero cost — they use their own auth/billing), then local (Ollama), then cloud APIs (paid).
+
+### Supported Providers
+
+| Provider | Type | Command | Cost |
+|----------|------|---------|------|
+| Claude Code | CLI | `claude --print` | Free |
+| Gemini CLI | CLI | `gemini --prompt` | Free |
+| GitHub Copilot | CLI | `copilot -p` | Free |
+| Codex | CLI | `codex exec --full-auto` | Free |
+| Aider | CLI | `aider --message` | Free |
+| Z.AI (GLM) | CLI | `zai -p` | Free |
+| MiniMax (M2.5) | CLI | `minimax -p` | Free |
+| Ollama | Local | API | Free |
+| Anthropic | Cloud API | API | Paid |
+| OpenAI | Cloud API | API | Paid |
+| Google | Cloud API | API | Paid |
+
+### Default Priority
+
+```
+claude > gemini > copilot > codex > aider > zai > minimax > ollama > anthropic > openai > google
+```
+
+This is **not strict** — you can reorder it however you want.
+
+### Customizing Priority
+
+Edit `~/.chitragupta/config/settings.json`:
+
+```json
+{
+  "providerPriority": ["minimax-cli", "zai-cli", "gemini-cli", "ollama", "anthropic"]
+}
+```
+
+This puts MiniMax first, Z.AI second, skips Claude/Copilot/Codex/Aider entirely, and falls back to Ollama then Anthropic API.
+
+### Forcing a Specific Provider
+
+Use the `--provider` flag to bypass priority and force a specific provider:
+
+```bash
+chitragupta --provider anthropic "explain this code"
+chitragupta --provider ollama "summarize this file"
+```
+
+### Adding Custom OpenAI-Compatible Providers
+
+Any OpenAI-compatible endpoint (vLLM, LM Studio, LocalAI, llama.cpp) can be added via settings:
+
+```json
+{
+  "customProviders": [
+    {
+      "id": "my-local",
+      "name": "My Local Server",
+      "baseUrl": "http://localhost:8080/v1",
+      "authEnvVar": "MY_API_KEY"
+    }
+  ]
+}
+```
+
+### How Detection Works
+
+On startup, Chitragupta probes the system PATH for each CLI tool concurrently (< 2s total). Available CLIs are registered as providers. Use `chitragupta provider list` to see what's detected:
+
+```
+  Detected providers:
+    ✓ claude CLI (1.0.23) — zero cost ← primary
+    ✓ gemini CLI (0.1.0) — zero cost
+    ✓ Ollama (local) — zero cost
+    ✓ ANTHROPIC API — paid
+```
+
+---
+
 ## Hub Dashboard
 
 Chitragupta includes a web-based dashboard served from the same port as the HTTP API. It provides a visual interface for monitoring sessions, costs, models, memory, skills, and managing paired devices.
