@@ -160,21 +160,18 @@ export async function formatOutput(ctx: NodeContext): Promise<NodeResult> {
 export async function vimarshAnalyze(ctx: NodeContext): Promise<NodeResult> {
 	try {
 		const { result: data, durationMs } = await timed(async () => {
-			const query = (ctx.extra.skillQuery as string) ?? "";
-			try {
-				const { Vimarsh } = await dynamicImport("@chitragupta/vidhya-skills");
-				const vimarsh = new Vimarsh();
-				const analysis = vimarsh.analyze(query);
-				return { available: true, query, analysis };
-			} catch {
-				return { available: false, query, reason: "Vimarsh module not available" };
+			const rawQuery = (ctx.extra.skillQuery as string | undefined) ?? "";
+			const query = rawQuery.trim();
+			if (!query) {
+				throw new Error("Missing workflow context key 'skillQuery'");
 			}
+			const { analyzeTask } = await dynamicImport("@chitragupta/vidhya-skills");
+			const analysis = analyzeTask(query);
+			return { query, analysis };
 		});
 		return {
-			ok: (data as Record<string, unknown>).available === true,
-			summary: (data as Record<string, unknown>).available
-				? "Vimarsh analysis complete"
-				: "Vimarsh not available",
+			ok: true,
+			summary: "Vimarsh analysis complete",
 			data,
 			durationMs,
 		};
@@ -189,16 +186,25 @@ export async function vimarshAnalyze(ctx: NodeContext): Promise<NodeResult> {
 export async function praptyaSource(ctx: NodeContext): Promise<NodeResult> {
 	try {
 		const { result: data, durationMs } = await timed(async () => {
-			const analysis = ctx.stepOutputs["vimarsh-analyze"] as Record<string, unknown> | undefined;
+			const vimarsh = ctx.stepOutputs["vimarsh-analyze"] as
+				| { analysis?: unknown; query?: string }
+				| undefined;
+			if (!vimarsh?.analysis) {
+				throw new Error("Missing Vimarsh analysis from step 'vimarsh-analyze'");
+			}
+
+			const { sourceSkill, DEFAULT_SHIKSHA_CONFIG } = await dynamicImport("@chitragupta/vidhya-skills");
+			const source = await sourceSkill(vimarsh.analysis, DEFAULT_SHIKSHA_CONFIG);
 			return {
 				sourced: true,
-				fromAnalysis: Boolean(analysis),
-				timestamp: Date.now(),
+				query: vimarsh.query ?? "",
+				tier: source.tier,
+				source,
 			};
 		});
 		return {
 			ok: true,
-			summary: "Praptya sourcing complete",
+			summary: `Praptya sourcing complete (${String((data as Record<string, unknown>).tier)})`,
 			data,
 			durationMs,
 		};
@@ -213,16 +219,30 @@ export async function praptyaSource(ctx: NodeContext): Promise<NodeResult> {
 export async function nirmanaBuild(ctx: NodeContext): Promise<NodeResult> {
 	try {
 		const { result: data, durationMs } = await timed(async () => {
-			const source = ctx.stepOutputs["praptya-source"] as Record<string, unknown> | undefined;
+			const vimarsh = ctx.stepOutputs["vimarsh-analyze"] as
+				| { analysis?: unknown }
+				| undefined;
+			const sourced = ctx.stepOutputs["praptya-source"] as
+				| { source?: unknown; tier?: string }
+				| undefined;
+			if (!vimarsh?.analysis) {
+				throw new Error("Missing Vimarsh analysis from step 'vimarsh-analyze'");
+			}
+			if (!sourced?.source) {
+				throw new Error("Missing Praptya source from step 'praptya-source'");
+			}
+
+			const { buildSkill } = await dynamicImport("@chitragupta/vidhya-skills");
+			const skill = buildSkill(vimarsh.analysis, sourced.source);
 			return {
 				built: true,
-				fromSource: Boolean(source),
-				timestamp: Date.now(),
+				tier: sourced.tier,
+				skill,
 			};
 		});
 		return {
 			ok: true,
-			summary: "Nirmana build complete",
+			summary: `Nirmana build complete (${((((data as Record<string, unknown>).skill as Record<string, unknown> | undefined)?.manifest as Record<string, unknown> | undefined)?.name as string | undefined) ?? "unnamed"})`,
 			data,
 			durationMs,
 		};
@@ -237,17 +257,30 @@ export async function nirmanaBuild(ctx: NodeContext): Promise<NodeResult> {
 export async function surakshaScan(ctx: NodeContext): Promise<NodeResult> {
 	try {
 		const { result: data, durationMs } = await timed(async () => {
-			const build = ctx.stepOutputs["nirmana-build"] as Record<string, unknown> | undefined;
+			const build = ctx.stepOutputs["nirmana-build"] as
+				| { skill?: { manifest?: { name?: string }; content?: string } }
+				| undefined;
+			const skill = build?.skill;
+			const skillName = skill?.manifest?.name;
+			if (!skill || !skillName || !skill.content) {
+				throw new Error("Missing built skill from step 'nirmana-build'");
+			}
+
+			const { SurakshaScanner } = await dynamicImport("@chitragupta/vidhya-skills");
+			const scanner = new SurakshaScanner();
+			const scanResult = scanner.scan(skillName, skill.content);
+			const clean = scanResult.verdict === "clean";
 			return {
 				scanned: true,
-				clean: true,
-				fromBuild: Boolean(build),
-				timestamp: Date.now(),
+				clean,
+				scanResult,
 			};
 		});
 		return {
-			ok: true,
-			summary: "Suraksha scan passed",
+			ok: (data as Record<string, unknown>).clean === true,
+			summary: (data as Record<string, unknown>).clean
+				? "Suraksha scan passed"
+				: "Suraksha scan found risks",
 			data,
 			durationMs,
 		};
@@ -262,11 +295,60 @@ export async function surakshaScan(ctx: NodeContext): Promise<NodeResult> {
 export async function registerSkill(ctx: NodeContext): Promise<NodeResult> {
 	try {
 		const { result: data, durationMs } = await timed(async () => {
-			const scan = ctx.stepOutputs["suraksha-scan"] as Record<string, unknown> | undefined;
-			const clean = (scan as Record<string, unknown>)?.clean === true;
+			const scan = ctx.stepOutputs["suraksha-scan"] as { clean?: boolean } | undefined;
+			if (scan?.clean !== true) {
+				throw new Error("Cannot register skill: Suraksha scan did not pass");
+			}
+
+			const build = ctx.stepOutputs["nirmana-build"] as
+				| { skill?: { manifest?: { name?: string; description?: string; inputSchema?: Record<string, unknown> } } }
+				| undefined;
+			const manifest = build?.skill?.manifest;
+			if (!manifest?.name || !manifest.description) {
+				throw new Error("Cannot register skill: built manifest missing from step 'nirmana-build'");
+			}
+
+			const registry = ctx.extra.skillRegistry as
+				| { register(manifest: unknown): void }
+				| undefined;
+			if (registry) {
+				registry.register(manifest);
+				return {
+					registered: true,
+					target: "skillRegistry",
+					name: manifest.name,
+					timestamp: Date.now(),
+				};
+			}
+
+			const orchestrator = ctx.extra.vidyaOrchestrator as
+				| {
+					onToolRegistered(
+						toolDef: { name: string; description: string; inputSchema?: Record<string, unknown> },
+						kula?: "shiksha",
+					): void;
+				}
+				| undefined;
+			if (orchestrator?.onToolRegistered) {
+				orchestrator.onToolRegistered(
+					{
+						name: manifest.name,
+						description: manifest.description,
+						inputSchema: manifest.inputSchema,
+					},
+					"shiksha",
+				);
+				return {
+					registered: true,
+					target: "vidyaOrchestrator",
+					name: manifest.name,
+					timestamp: Date.now(),
+				};
+			}
+
 			return {
-				registered: clean,
-				reason: clean ? "Scan passed" : "Scan failed, skill not registered",
+				registered: false,
+				reason: "No skillRegistry or vidyaOrchestrator provided in workflow context",
 				timestamp: Date.now(),
 			};
 		});
@@ -274,7 +356,7 @@ export async function registerSkill(ctx: NodeContext): Promise<NodeResult> {
 			ok: (data as Record<string, unknown>).registered === true,
 			summary: (data as Record<string, unknown>).registered
 				? "Skill registered"
-				: "Skill registration skipped (scan failed)",
+				: `Skill registration skipped (${String((data as Record<string, unknown>).reason ?? "unknown reason")})`,
 			data,
 			durationMs,
 		};
@@ -282,4 +364,3 @@ export async function registerSkill(ctx: NodeContext): Promise<NodeResult> {
 		return fail("Skill registration failed", 0, err);
 	}
 }
-

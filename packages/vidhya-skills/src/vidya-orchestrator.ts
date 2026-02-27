@@ -154,6 +154,9 @@ export class VidyaOrchestrator {
 			enableAutoLearn: config?.enableAutoLearn ?? false,
 			enableAutoComposition: config?.enableAutoComposition ?? true,
 		};
+		if (this.config.enableAutoLearn && !this.shiksha) {
+			log.warn("enableAutoLearn=true but Shiksha controller was not injected; auto-learning is disabled for this orchestrator instance");
+		}
 
 		// Create owned subsystems
 		this.kula = new KulaRegistry();
