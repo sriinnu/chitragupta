@@ -81,6 +81,7 @@ export async function runAgentPromptWithFallback(
 			runner = await createChitragupta({
 				...(attempt.provider ? { provider: attempt.provider } : {}),
 				...(attempt.model ? { model: attempt.model } : {}),
+				skipCLIDetection: true,
 			});
 			hb?.({ activity: `prompting ${providerId}`, attempt: attemptNum, provider: providerId });
 			if (hb) {

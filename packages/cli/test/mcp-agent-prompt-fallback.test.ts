@@ -45,7 +45,10 @@ describe("runAgentPromptWithFallback", () => {
 		expect(result.response).toBe("fallback-ok");
 		expect(result.providerId).toBe("openai");
 		expect(result.attempts).toBe(2);
-		expect(calls).toEqual([{},{ provider: "openai" }]);
+		expect(calls).toEqual([
+			{ skipCLIDetection: true },
+			{ provider: "openai", skipCLIDetection: true },
+		]);
 	});
 
 	it("keeps explicit provider first and clears model for fallback providers", async () => {
@@ -87,8 +90,8 @@ describe("runAgentPromptWithFallback", () => {
 
 		expect(result.response).toBe("openai-ok");
 		expect(calls).toEqual([
-			{ provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
-			{ provider: "openai" },
+			{ provider: "anthropic", model: "claude-sonnet-4-5-20250929", skipCLIDetection: true },
+			{ provider: "openai", skipCLIDetection: true },
 		]);
 	});
 
