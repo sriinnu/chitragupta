@@ -444,8 +444,7 @@ function buildServerHandlers(opts: {
 		getTuriyaRouter: () => turiyaRouter, getTriguna: () => m.servTriguna, getRtaEngine: () => m.servRtaEngine,
 		getBuddhi: () => m.servBuddhi, getDatabase: () => m.servDatabase, getSamiti: () => m.servSamiti,
 		getSabhaEngine: () => m.servSabhaEngine, getLokapala: () => m.servLokapala, getAkasha: () => m.servAkasha,
-		getKartavyaEngine: () => m.servKartavyaEngine, getKalaChakra: () => m.servKalaChakra,
-		getVidyaOrchestrator: () => m.servVidyaOrchestrator, getProjectPath: () => projectPath, getPairingEngine: () => pairingEngine, getBudgetTracker: () => budgetTracker,
+		getKartavyaEngine: () => m.servKartavyaEngine, getKalaChakra: () => m.servKalaChakra, getVidyaOrchestrator: () => m.servVidyaOrchestrator, getProjectPath: () => projectPath, getPairingEngine: () => pairingEngine, getBudgetTracker: () => budgetTracker,
 		...buildMeshApiHandlers(opts.meshActorSystem, opts.getMeshBootstrapResult ?? (() => undefined)),
 	};
 }

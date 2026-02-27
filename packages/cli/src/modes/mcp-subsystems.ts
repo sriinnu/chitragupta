@@ -245,9 +245,6 @@ export async function getActorSystem(): Promise<ActorSystemLike> {
 	if (!_actorSystem) {
 		const { ActorSystem } = await import("@chitragupta/sutra");
 		const sys = new ActorSystem(); sys.start();
-		for (const id of ["sys:memory", "sys:skills", "sys:session"]) {
-			try { sys.spawn(id, { behavior: async () => {}, capabilities: [id] }); } catch { /* idempotent */ }
-		}
 		_actorSystem = sys as unknown as ActorSystemLike;
 	}
 	return _actorSystem;
