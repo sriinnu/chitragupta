@@ -387,12 +387,30 @@ export class McpServer {
 		}
 
 		const toolName = params.name as string;
-		const handler = this._tools.get(toolName) ?? this._registry?.getTool(toolName) ?? null;
+		const args = (params.arguments as Record<string, unknown>) ?? {};
+		let handler = this._tools.get(toolName) ?? this._registry?.getTool(toolName) ?? null;
+
+		if (!handler && this._config.onToolNotFound) {
+			try {
+				const maybeHandler = await Promise.resolve(this._config.onToolNotFound(toolName, args));
+				const candidate = maybeHandler as Partial<McpToolHandler> | null;
+				if (
+					candidate &&
+					typeof maybeHandler === "object" &&
+					candidate.definition &&
+					typeof candidate.execute === "function" &&
+					candidate.definition.name === toolName
+				) {
+					handler = candidate as McpToolHandler;
+				}
+			} catch {
+				// Discovery callback failed; keep protocol behavior and return a standard not-found error.
+			}
+		}
 		if (!handler) {
 			return createErrorResponse(id, INVALID_PARAMS, `Unknown tool: ${toolName}`);
 		}
 
-		const args = (params.arguments as Record<string, unknown>) ?? {};
 		const [traceId, spanId] = resolveTraceContext(params);
 
 		const t0 = performance.now();
