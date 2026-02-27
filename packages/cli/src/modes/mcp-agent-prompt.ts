@@ -1,37 +1,267 @@
-import { DEFAULT_PROVIDER_PRIORITY, loadGlobalSettings } from "@chitragupta/core";
-import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
+/**
+ * Smart Prompt Runner — CLI-first, API-fallback, no Agent boot.
+ *
+ * Architecture:
+ *   Phase 1: Try installed CLIs directly (zero cost, 30s timeout)
+ *            Skip self-host to prevent recursion.
+ *   Phase 2: Try local LLM (Ollama) if running.
+ *   Phase 3: Try API keys via CompletionRouter (paid, Marga-routed).
+ *
+ * Each CLI is called as a raw subprocess — NO full Agent/session boot.
+ * Auth errors are detected from stderr and reported with re-auth hints.
+ *
+ * @module
+ */
+
 import type { HeartbeatCallback } from "./mcp-prompt-jobs.js";
 
-type PromptRunner = {
-	prompt: (message: string) => Promise<string>;
-	destroy: () => Promise<void>;
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+/** Timeout per CLI attempt — fail fast, move on. */
+const CLI_TIMEOUT_MS = 30_000;
+/** Timeout for API completion attempts. */
+const API_TIMEOUT_MS = 60_000;
+/** Heartbeat interval. */
+const HEARTBEAT_INTERVAL_MS = 8_000;
+
+/** Auth-failure patterns in CLI stderr/stdout. */
+const AUTH_ERROR_PATTERNS = [
+	"auth", "login", "token expired", "authenticate", "unauthorized",
+	"not logged in", "credentials", "sign in", "access denied",
+];
+
+/** Re-auth hints per CLI. */
+const AUTH_HINTS: Record<string, string> = {
+	claude: "Run: claude auth login",
+	gemini: "Run: gemini auth login",
+	copilot: "Run: copilot auth login (or: gh auth login)",
+	codex: "Run: codex auth login",
+	aider: "Check aider API key configuration",
 };
 
-type PromptRunnerFactory = (options: {
-	provider?: string;
-	model?: string;
-}) => Promise<PromptRunner>;
+// ─── Types ──────────────────────────────────────────────────────────────────
 
-type AgentPromptFallbackDeps = {
-	createChitragupta: PromptRunnerFactory;
-	loadSettings: () => { providerPriority?: string[] };
-	defaultProviderPriority: readonly string[];
-};
+interface PromptAttemptResult {
+	response: string;
+	providerId: string;
+	phase: "cli" | "ollama" | "api";
+}
 
-/** Default timeout for a single prompt attempt (2 minutes). */
-const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
-/** Heartbeat cadence while waiting on a provider response. */
-const PROMPT_HEARTBEAT_INTERVAL_MS = 10_000;
+/** Injectable dependencies for testing. */
+export interface SmartPromptDeps {
+	detectCLIs?: () => Promise<Array<{ command: string; available: boolean }>>;
+	executeCLI?: (command: string, args: string[], timeoutMs: number) => Promise<{
+		stdout: string; stderr: string; exitCode: number; killed: boolean;
+	}>;
+	loadProjectMemory?: (projectPath: string) => string | undefined;
+	getCompletionRouter?: () => Promise<{
+		complete: (req: { model: string; messages: Array<{ role: string; content: string }>; maxTokens: number }) =>
+			Promise<{ content: Array<{ type: string; text?: string }> }>;
+	} | null>;
+	margaDecide?: (msg: string) => Promise<{ providerId: string; modelId: string } | null> | { providerId: string; modelId: string } | null;
+}
+
+// ─── Self-Recursion Detection ───────────────────────────────────────────────
+
+/** CLIs to skip when running inside an MCP subprocess to prevent recursion. */
+function getSkippedCLIs(): Set<string> {
+	const skipped = new Set<string>();
+	// When spawned by Claude Code as MCP, skip claude to prevent recursion
+	if (process.env.CHITRAGUPTA_MCP_AGENT === "true") {
+		skipped.add("claude");
+	}
+	return skipped;
+}
+
+// ─── Auth Error Detection ───────────────────────────────────────────────────
+
+function isAuthError(output: string): boolean {
+	const lower = output.toLowerCase();
+	return AUTH_ERROR_PATTERNS.some((p) => lower.includes(p));
+}
+
+function formatAuthHint(command: string, stderr: string): string {
+	const hint = AUTH_HINTS[command] ?? `Check ${command} authentication`;
+	const detail = stderr.slice(0, 200).trim();
+	return `${command} auth expired. ${hint}. Detail: ${detail}`;
+}
+
+// ─── Phase 1: Direct CLI Execution ──────────────────────────────────────────
+
+async function tryCliProviders(
+	message: string,
+	systemPrompt: string | undefined,
+	hb: HeartbeatCallback | undefined,
+	deps: SmartPromptDeps,
+): Promise<{ result?: PromptAttemptResult; failures: string[] }> {
+	const failures: string[] = [];
+	const skipped = getSkippedCLIs();
+
+	// Detect available CLIs
+	const detectCLIs = deps.detectCLIs ?? (async () => {
+		const { detectAvailableCLIs } = await import("@chitragupta/swara");
+		return detectAvailableCLIs();
+	});
+	const cliResults = await detectCLIs();
+	const availableCLIs = cliResults.filter((c) => c.available && !skipped.has(c.command));
+
+	if (availableCLIs.length === 0) {
+		failures.push("No CLIs available" + (skipped.size > 0 ? ` (skipped: ${[...skipped].join(", ")})` : ""));
+		return { failures };
+	}
+
+	// Build CLI args per command
+	const cliArgBuilders: Record<string, () => string[]> = {
+		claude: () => {
+			const args = ["--print", message, "--output-format", "text"];
+			if (systemPrompt) args.push("--system-prompt", systemPrompt);
+			return args;
+		},
+		gemini: () => {
+			const prompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
+			return ["--prompt", prompt];
+		},
+		copilot: () => {
+			const prompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
+			return ["-p", prompt];
+		},
+		codex: () => {
+			const prompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
+			return ["exec", "--full-auto", prompt];
+		},
+		aider: () => {
+			const prompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
+			return ["--message", prompt, "--no-auto-commits", "--yes"];
+		},
+	};
+
+	const executeCLI = deps.executeCLI ?? (async (cmd: string, args: string[], timeout: number) => {
+		const { ProcessPool } = await import("@chitragupta/swara/process-pool");
+		const pool = new ProcessPool({ maxConcurrency: 2 });
+		return pool.execute(cmd, args, { timeout });
+	});
+
+	for (let i = 0; i < availableCLIs.length; i++) {
+		const cli = availableCLIs[i];
+		const attemptNum = i + 1;
+		const buildArgs = cliArgBuilders[cli.command];
+		if (!buildArgs) {
+			failures.push(`${cli.command}: no arg builder`);
+			continue;
+		}
+
+		hb?.({ activity: `trying ${cli.command}`, attempt: attemptNum, provider: cli.command });
+
+		let heartbeatTimer: NodeJS.Timeout | null = null;
+		try {
+			if (hb) {
+				heartbeatTimer = setInterval(() => {
+					hb({ activity: `waiting on ${cli.command}`, attempt: attemptNum, provider: cli.command });
+				}, HEARTBEAT_INTERVAL_MS);
+			}
+
+			const result = await executeCLI(cli.command, buildArgs(), CLI_TIMEOUT_MS);
+
+			if (result.killed) {
+				failures.push(`${cli.command}: timed out after ${CLI_TIMEOUT_MS / 1000}s`);
+				continue;
+			}
+
+			if (result.exitCode !== 0) {
+				if (isAuthError(result.stderr || result.stdout)) {
+					failures.push(formatAuthHint(cli.command, result.stderr || result.stdout));
+					continue;
+				}
+				failures.push(`${cli.command}: exit ${result.exitCode} — ${(result.stderr || result.stdout).slice(0, 200)}`);
+				continue;
+			}
+
+			const text = result.stdout.trim();
+			if (text.length > 0) {
+				hb?.({ activity: "completed", attempt: attemptNum, provider: cli.command });
+				return { result: { response: text, providerId: cli.command, phase: "cli" }, failures };
+			}
+			failures.push(`${cli.command}: empty response`);
+		} catch (err) {
+			failures.push(`${cli.command}: ${err instanceof Error ? err.message : String(err)}`);
+		} finally {
+			if (heartbeatTimer) clearInterval(heartbeatTimer);
+		}
+	}
+
+	return { failures };
+}
+
+// ─── Phase 3: API Completion (CompletionRouter) ─────────────────────────────
+
+async function tryApiProviders(
+	message: string,
+	systemPrompt: string | undefined,
+	hb: HeartbeatCallback | undefined,
+	deps: SmartPromptDeps,
+): Promise<{ result?: PromptAttemptResult; failures: string[] }> {
+	const failures: string[] = [];
+
+	hb?.({ activity: "trying API providers", attempt: 1, provider: "api" });
+
+	try {
+		const getRouter = deps.getCompletionRouter ?? (async () => {
+			const { createAnthropicAdapter, createOpenAIAdapter, CompletionRouter } = await import("@chitragupta/swara");
+			const adapters = [];
+			if (process.env.ANTHROPIC_API_KEY) adapters.push(createAnthropicAdapter());
+			if (process.env.OPENAI_API_KEY) adapters.push(createOpenAIAdapter());
+			if (adapters.length === 0) return null;
+			return new CompletionRouter({ providers: adapters, retryAttempts: 1, timeout: API_TIMEOUT_MS });
+		});
+
+		const router = await getRouter();
+		if (!router) {
+			failures.push("No API keys available (set ANTHROPIC_API_KEY or OPENAI_API_KEY)");
+			return { failures };
+		}
+
+		// Use Marga for smart model selection on API calls
+		let model = "claude-sonnet-4-5-20250929";
+		const decide = deps.margaDecide ?? (async (msg: string) => {
+			try {
+				const { margaDecide } = await import("@chitragupta/swara");
+				return margaDecide({ message: msg, hasTools: false, hasImages: false, bindingStrategy: "cloud" });
+			} catch { return null; }
+		});
+		const decision = await Promise.resolve(decide(message));
+		if (decision?.modelId) model = decision.modelId;
+
+		const messages: Array<{ role: string; content: string }> = [];
+		if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
+		messages.push({ role: "user", content: message });
+
+		hb?.({ activity: `calling ${model}`, attempt: 1, provider: "api" });
+		const response = await router.complete({ model, messages, maxTokens: 8192 });
+		const text = response.content
+			.filter((p) => p.type === "text" && p.text)
+			.map((p) => p.text ?? "")
+			.join("");
+
+		if (text.length > 0) {
+			hb?.({ activity: "completed", attempt: 1, provider: "api" });
+			return { result: { response: text, providerId: `api:${model}`, phase: "api" }, failures };
+		}
+		failures.push("API: empty response");
+	} catch (err) {
+		failures.push(`API: ${err instanceof Error ? err.message : String(err)}`);
+	}
+
+	return { failures };
+}
+
+// ─── Main Entry: Smart Prompt Runner ────────────────────────────────────────
 
 /**
- * Execute an agent prompt with provider fallback.
+ * Execute a prompt using the smart CLI-first, API-fallback strategy.
  *
- * Attempts:
- * 1. Requested provider/model (or auto routing when provider is omitted)
- * 2. Remaining providers from settings priority order, one by one
- *
- * Each attempt is bounded by `timeoutMs` (default 120s) to prevent
- * indefinite hangs when a provider is slow or unresponsive.
+ * Phase 1: Try installed CLIs directly (30s timeout, skip self-host).
+ * Phase 2: Try API keys via CompletionRouter (Marga-routed model).
+ * Reports auth failures with re-auth hints.
  */
 export async function runAgentPromptWithFallback(
 	params: {
@@ -39,154 +269,34 @@ export async function runAgentPromptWithFallback(
 		provider?: string;
 		model?: string;
 		timeoutMs?: number;
-		/** Heartbeat callback — fired at each execution phase so the caller can detect liveness. */
 		onHeartbeat?: HeartbeatCallback;
 	},
-	deps?: Partial<AgentPromptFallbackDeps>,
+	deps?: Partial<SmartPromptDeps>,
 ): Promise<{ response: string; providerId: string; attempts: number }> {
-	const timeoutMs = params.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS;
-	const createChitragupta =
-		deps?.createChitragupta ?? (await import("../api.js")).createChitragupta;
-	const loadSettings = deps?.loadSettings ?? loadGlobalSettings;
-	const defaultProviderPriority = deps?.defaultProviderPriority ?? DEFAULT_PROVIDER_PRIORITY;
-	const explicitProvider = typeof params.provider === "string" && params.provider.trim().length > 0
-		? params.provider.trim()
-		: undefined;
-	const explicitModel = typeof params.model === "string" && params.model.trim().length > 0
-		? params.model.trim()
-		: undefined;
-	const settings = loadSettings();
-	const configuredPriority =
-		Array.isArray(settings.providerPriority) && settings.providerPriority.length > 0
-			? settings.providerPriority
-			: [...defaultProviderPriority];
-	const dedupedPriority = [...new Set(configuredPriority.filter((id) => id && id.trim().length > 0))];
-	const fallbackProviders = explicitProvider
-		? dedupedPriority.filter((id) => id !== explicitProvider)
-		: dedupedPriority.slice(1);
-	const attempts: Array<{ provider?: string; model?: string }> = [
-		{ provider: explicitProvider, model: explicitModel },
-		...fallbackProviders.map((providerId) => ({ provider: providerId })),
-	];
+	const safeDeps: SmartPromptDeps = deps ?? {};
 	const hb = params.onHeartbeat;
-	const failures: string[] = [];
-	for (let index = 0; index < attempts.length; index += 1) {
-		const attempt = attempts[index];
-		const providerId = attempt.provider ?? "auto";
-		const attemptNum = index + 1;
-		let runner: PromptRunner | null = null;
-		let heartbeatTimer: NodeJS.Timeout | null = null;
-		try {
-			hb?.({ activity: `connecting to ${providerId}`, attempt: attemptNum, provider: providerId });
-			runner = await createChitragupta({
-				...(attempt.provider ? { provider: attempt.provider } : {}),
-				...(attempt.model ? { model: attempt.model } : {}),
-				skipCLIDetection: true,
-			});
-			hb?.({ activity: `prompting ${providerId}`, attempt: attemptNum, provider: providerId });
-			if (hb) {
-				heartbeatTimer = setInterval(() => {
-					hb({ activity: `prompting ${providerId}`, attempt: attemptNum, provider: providerId });
-				}, PROMPT_HEARTBEAT_INTERVAL_MS);
-			}
-			let timeoutHandle: NodeJS.Timeout | null = null;
-			let response: string;
-			try {
-				response = await Promise.race([
-					runner.prompt(params.message),
-					new Promise<never>((_, reject) => {
-						timeoutHandle = setTimeout(() => reject(new Error(`Prompt timed out after ${timeoutMs}ms`)), timeoutMs);
-					}),
-				]);
-			} finally {
-				if (timeoutHandle) clearTimeout(timeoutHandle);
-			}
-			hb?.({ activity: "completed", attempt: attemptNum, provider: providerId });
-			return { response, providerId, attempts: attemptNum };
-		} catch (error) {
-			const detail = error instanceof Error ? error.message : String(error);
-			failures.push(`${providerId}: ${detail}`);
-			hb?.({ activity: `failed ${providerId}, retrying`, attempt: attemptNum, provider: providerId });
-		} finally {
-			if (heartbeatTimer) {
-				clearInterval(heartbeatTimer);
-			}
-			if (runner) {
-				try {
-					await runner.destroy();
-				} catch {
-					// Best-effort cleanup.
-				}
-			}
+	const allFailures: string[] = [];
+
+	// Load project memory for context (lightweight, cached)
+	let systemPrompt: string | undefined;
+	try {
+		const loadMem = safeDeps.loadProjectMemory ?? (await import("../bootstrap.js")).loadProjectMemory;
+		const memory = loadMem(process.cwd());
+		if (memory) {
+			systemPrompt = `You are Chitragupta, an AI assistant with project memory.\n\nProject context:\n${memory.slice(0, 4000)}`;
 		}
-	}
-	const summary = failures.slice(0, 4).join(" | ");
-	throw new Error(`All provider attempts failed. ${summary || "No details available."}`);
-}
+	} catch { /* memory loading is best-effort */ }
 
-/**
- * Create the `chitragupta_prompt` tool — delegates a task to Chitragupta's agent.
- */
-export function createAgentPromptTool(): McpToolHandler {
-	return {
-		definition: {
-			name: "chitragupta_prompt",
-			description:
-				"Delegate a task to Chitragupta's AI agent. The agent has its own " +
-				"memory, tools, and configuration. Use this for complex tasks that " +
-				"benefit from Chitragupta's project context and memory.",
-			inputSchema: {
-				type: "object",
-				properties: {
-					message: {
-						type: "string",
-						description: "The prompt/task to send to Chitragupta's agent.",
-					},
-					provider: {
-						type: "string",
-						description: "AI provider to use. Default: from config (usually 'anthropic')",
-					},
-					model: {
-						type: "string",
-						description: "Model to use. Default: from config",
-					},
-					timeout: {
-						type: "number",
-						description: "Timeout in milliseconds per attempt. Default: 120000 (2 min)",
-					},
-				},
-				required: ["message"],
-			},
-		},
-		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
-			const message = String(args.message ?? "");
-			if (!message) {
-				return {
-					content: [{ type: "text", text: "Error: message is required" }],
-					isError: true,
-				};
-			}
+	// Phase 1: CLI providers (zero cost)
+	const cliResult = await tryCliProviders(params.message, systemPrompt, hb, safeDeps);
+	if (cliResult.result) return { ...cliResult.result, attempts: 1 };
+	allFailures.push(...cliResult.failures);
 
-			try {
-				const result = await runAgentPromptWithFallback({
-					message,
-					...(args.provider ? { provider: String(args.provider) } : {}),
-					...(args.model ? { model: String(args.model) } : {}),
-					...(args.timeout ? { timeoutMs: Number(args.timeout) } : {}),
-				});
-				return {
-					content: [{ type: "text", text: result.response }],
-					_metadata: {
-						providerId: result.providerId,
-						attempts: result.attempts,
-					},
-				};
-			} catch (err) {
-				return {
-					content: [{ type: "text", text: `Agent prompt failed: ${err instanceof Error ? err.message : String(err)}` }],
-					isError: true,
-				};
-			}
-		},
-	};
+	// Phase 2: API providers (paid, Marga-routed)
+	const apiResult = await tryApiProviders(params.message, systemPrompt, hb, safeDeps);
+	if (apiResult.result) return { ...apiResult.result, attempts: allFailures.length + 1 };
+	allFailures.push(...apiResult.failures);
+
+	const summary = allFailures.slice(0, 6).join(" | ");
+	throw new Error(`All attempts failed. ${summary}`);
 }

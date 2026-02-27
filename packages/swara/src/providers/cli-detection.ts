@@ -12,6 +12,7 @@ import type { ProviderDefinition } from "../types.js";
 import {
 	claudeCodeProvider,
 	geminiCLIProvider,
+	copilotProvider,
 	codexProvider,
 	aiderProvider,
 } from "./cli-providers.js";
@@ -38,6 +39,7 @@ export interface CLIAvailability {
 const CLI_ENTRIES: Array<{ command: string; provider: ProviderDefinition }> = [
 	{ command: "claude", provider: claudeCodeProvider },
 	{ command: "gemini", provider: geminiCLIProvider },
+	{ command: "copilot", provider: copilotProvider },
 	{ command: "codex", provider: codexProvider },
 	{ command: "aider", provider: aiderProvider },
 ];
@@ -80,7 +82,7 @@ async function probeCLI(command: string): Promise<CLIAvailability> {
 /**
  * Detect which AI CLI tools are available on the local system.
  *
- * Probes for: claude, gemini, codex, aider (in priority order).
+ * Probes for: claude, gemini, copilot, codex, aider (in priority order).
  * All probes run concurrently for fast detection.
  */
 export async function detectAvailableCLIs(): Promise<CLIAvailability[]> {
@@ -91,7 +93,7 @@ export async function detectAvailableCLIs(): Promise<CLIAvailability[]> {
 /**
  * Return the highest-priority CLI provider that is available locally.
  *
- * Priority: claude > gemini > codex > aider.
+ * Priority: claude > gemini > copilot > codex > aider.
  * Returns `null` if no supported CLI tool is installed.
  */
 export async function getBestCLIProvider(): Promise<ProviderDefinition | null> {
