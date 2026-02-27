@@ -2,12 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { stripAnsi } from "@chitragupta/ui/ansi";
 import { McpServer } from "../src/server.js";
 import { ToolRegistry } from "../src/tool-registry.js";
-import {
-  createRequest,
-  createResponse,
-  METHOD_NOT_FOUND,
-  INVALID_PARAMS,
-} from "../src/jsonrpc.js";
+import { createRequest, METHOD_NOT_FOUND, INVALID_PARAMS } from "../src/jsonrpc.js";
 import type {
   McpServerConfig,
   McpToolHandler,
@@ -30,6 +25,22 @@ async function handleRequest(
 
 describe("McpServer", () => {
   let server: McpServer;
+
+  function createServer(config: Partial<McpServerConfig> = {}): McpServer {
+    const defaultConfig: McpServerConfig = {
+      name: "test-server",
+      version: "1.0.0",
+      transport: "stdio",
+      tools: [testToolHandler],
+      resources: [testResourceHandler],
+      prompts: [testPromptHandler],
+    };
+
+    return new McpServer({
+      ...defaultConfig,
+      ...config,
+    });
+  }
 
   const testToolHandler: McpToolHandler = {
     definition: {
@@ -73,15 +84,7 @@ describe("McpServer", () => {
   };
 
   beforeEach(() => {
-    const config: McpServerConfig = {
-      name: "test-server",
-      version: "1.0.0",
-      transport: "stdio",
-      tools: [testToolHandler],
-      resources: [testResourceHandler],
-      prompts: [testPromptHandler],
-    };
-    server = new McpServer(config);
+    server = createServer();
   });
 
   afterEach(async () => {
@@ -145,6 +148,60 @@ describe("McpServer", () => {
 
     it("should return error for unknown tool", async () => {
       const req = createRequest("tools/call", { name: "nonexistent" }, 4);
+      const res = await handleRequest(server, req);
+
+      expect(res.error).toBeDefined();
+      expect(res.error!.code).toBe(INVALID_PARAMS);
+      expect(res.error!.message).toContain("Unknown tool");
+    });
+
+    it("should resolve unknown tool via onToolNotFound before returning error", async () => {
+      const fallbackHandler: McpToolHandler = {
+        definition: { name: "resolved", description: "resolved from hook", inputSchema: {} },
+        async execute(args: Record<string, unknown>) {
+          return {
+            content: [{ type: "text", text: `resolved:${String(args.token)}` }],
+          };
+        },
+      };
+
+      server = createServer({
+        onToolNotFound: async (name, args) => {
+          expect(name).toBe("resolved");
+          expect(args).toEqual({ token: "abc" });
+          return fallbackHandler;
+        },
+      });
+
+      const req = createRequest("tools/call", { name: "resolved", arguments: { token: "abc" } }, 7);
+      const res = await handleRequest(server, req);
+
+      expect(res.error).toBeUndefined();
+      const text = (res.result as { content: Array<{ type: string; text: string }>; _meta?: unknown }).content[0].text;
+      expect(text.startsWith("resolved:abc")).toBe(true);
+    });
+
+    it("should return unknown-tool error when onToolNotFound returns undefined", async () => {
+      server = createServer({
+        onToolNotFound: async () => undefined,
+      });
+
+      const req = createRequest("tools/call", { name: "resolved", arguments: { token: "abc" } }, 8);
+      const res = await handleRequest(server, req);
+
+      expect(res.error).toBeDefined();
+      expect(res.error!.code).toBe(INVALID_PARAMS);
+      expect(res.error!.message).toContain("Unknown tool");
+    });
+
+    it("should preserve unknown-tool error when onToolNotFound throws", async () => {
+      server = createServer({
+        onToolNotFound: async () => {
+          throw new Error("discovery failed");
+        },
+      });
+
+      const req = createRequest("tools/call", { name: "resolved", arguments: { token: "abc" } }, 9);
       const res = await handleRequest(server, req);
 
       expect(res.error).toBeDefined();
