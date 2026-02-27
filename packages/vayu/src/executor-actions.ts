@@ -54,6 +54,34 @@ export async function executeAction(
 
     case "tool": {
       if (!state.toolExecutor) {
+        if (action.name.startsWith("chitragupta:")) {
+          const { executeNodeAdapter } = await import("./chitragupta-nodes.js");
+          const stepId = action.name.slice("chitragupta:".length);
+
+          const stepOutputs: Record<string, unknown> = {};
+          for (const [id, exec] of state.execution.steps) {
+            if (exec.status === "completed") {
+              stepOutputs[id] = exec.output;
+            }
+          }
+
+          const context = state.execution.context;
+          const projectPath =
+            typeof context.projectPath === "string" && context.projectPath.length > 0
+              ? context.projectPath
+              : process.cwd();
+
+          const adapterResult = await executeNodeAdapter(stepId, {
+            projectPath,
+            stepOutputs,
+            extra: context,
+          });
+          if (!adapterResult.ok) {
+            throw new Error(adapterResult.summary);
+          }
+          return adapterResult.data;
+        }
+
         return {
           type: "tool_result",
           tool: action.name,
