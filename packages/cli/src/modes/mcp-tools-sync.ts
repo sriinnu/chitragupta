@@ -156,9 +156,10 @@ export function createRecallTool(): McpToolHandler {
 			name: "chitragupta_recall",
 			description:
 				"Unified recall — searches ALL of Chitragupta's memory layers " +
-				"(sessions, memory, knowledge graph, day files) to answer natural language " +
-				"questions. Use this to recall past conversations, decisions, facts, or " +
-				"anything that happened across any provider, project, or date.",
+				"(sessions, memory, knowledge graph, day files, akasha traces) to answer " +
+				"natural language questions. Use this to recall past conversations, " +
+				"decisions, facts, deposited solutions/patterns/warnings, or anything " +
+				"that happened across any provider, project, or date.",
 			inputSchema: {
 				type: "object" as const,
 				properties: {
