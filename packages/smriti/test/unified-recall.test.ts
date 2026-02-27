@@ -70,6 +70,19 @@ vi.mock("../src/graphrag.js", () => ({
 	GraphRAGEngine: class MockGraphRAGEngine {},
 }));
 
+// ─── Mock Akasha for stigmergic trace search ───────────────────────────────────
+let mockAkashaQueryResults: Array<{
+	id: string; agentId: string; traceType: string; topic: string;
+	content: string; strength: number; reinforcements: number;
+}> = [];
+
+vi.mock("../src/akasha.js", () => ({
+	AkashaField: class MockAkashaField {
+		restore() { /* no-op — traces are injected via mockAkashaQueryResults */ }
+		query() { return mockAkashaQueryResults; }
+	},
+}));
+
 // ─── Import real modules, then spy on their exports ──────────────────────────
 
 import * as searchModule from "../src/search.js";
@@ -141,6 +154,7 @@ let spySearchDayFiles: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
 	vi.restoreAllMocks();
 	mockHybridSearchResults = []; // Reset hybrid to empty → FTS5 fallback used
+	mockAkashaQueryResults = []; // Reset akasha to empty → no traces returned
 
 	spySearchSessions = vi.spyOn(searchModule, "searchSessions").mockReturnValue([]);
 	spySearchMemory = vi.spyOn(searchModule, "searchMemory").mockReturnValue([]);
@@ -1374,6 +1388,166 @@ describe("recall — unified recall engine", () => {
 			const results = await recall("auth");
 
 			expect(results[0].answer).toBe("Auth module refactor: Refactored the auth module to use JWT");
+		});
+	});
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// 10. Akasha Trace Integration
+	// ═══════════════════════════════════════════════════════════════════════════
+
+	describe("akasha trace integration", () => {
+		it("returns akasha traces in recall results", async () => {
+			mockAkashaQueryResults = [{
+				id: "aks-abc123",
+				agentId: "mcp-client",
+				traceType: "solution",
+				topic: "E2BIG showstopper fix",
+				content: "Fixed the E2BIG error by reducing context window size",
+				strength: 0.7,
+				reinforcements: 2,
+			}];
+
+			const results = await recall("E2BIG error");
+
+			expect(results.length).toBe(1);
+			expect(results[0].primarySource).toBe("akasha");
+			expect(results[0].answer).toContain("[Akasha SOLUTION]");
+			expect(results[0].answer).toContain("E2BIG showstopper fix");
+			expect(results[0].snippet).toContain("Fixed the E2BIG error");
+		});
+
+		it("scores akasha results using strength * 0.8 + 0.2", async () => {
+			mockAkashaQueryResults = [{
+				id: "aks-score1",
+				agentId: "test",
+				traceType: "pattern",
+				topic: "scoring test",
+				content: "Score validation",
+				strength: 0.5,
+				reinforcements: 0,
+			}];
+
+			const results = await recall("scoring");
+
+			// score = min(0.5 * 0.8 + 0.2, 1.0) = 0.6
+			expect(results[0].score).toBeCloseTo(0.6, 2);
+		});
+
+		it("clamps akasha score to 1.0 for max strength", async () => {
+			mockAkashaQueryResults = [{
+				id: "aks-maxstr",
+				agentId: "test",
+				traceType: "solution",
+				topic: "max strength",
+				content: "Full strength trace",
+				strength: 1.0,
+				reinforcements: 10,
+			}];
+
+			const results = await recall("max");
+
+			// score = min(1.0 * 0.8 + 0.2, 1.0) = 1.0
+			expect(results[0].score).toBe(1.0);
+		});
+
+		it("formats trace type label as uppercase in answer", async () => {
+			mockAkashaQueryResults = [{
+				id: "aks-warn",
+				agentId: "test",
+				traceType: "warning",
+				topic: "critical gaps",
+				content: "Memory stores return noise instead of signal",
+				strength: 0.6,
+				reinforcements: 1,
+			}];
+
+			const results = await recall("critical gaps");
+
+			expect(results[0].answer).toContain("[Akasha WARNING]");
+			expect(results[0].answer).toContain("critical gaps");
+		});
+
+		it("mixes akasha results with other layers, ranked by score", async () => {
+			spySearchMemory.mockReturnValue([
+				makeMemoryResult("Memory about auth system", 0.3),
+			]);
+			mockAkashaQueryResults = [{
+				id: "aks-mix",
+				agentId: "test",
+				traceType: "solution",
+				topic: "auth fix",
+				content: "Auth solution from akasha",
+				strength: 0.9,
+				reinforcements: 5,
+			}];
+
+			const results = await recall("auth", { limit: 10 });
+
+			expect(results.length).toBe(2);
+			// Akasha (0.9*0.8+0.2=0.92) should rank above memory (0.3+0.1=0.4)
+			expect(results[0].primarySource).toBe("akasha");
+			expect(results[1].primarySource).toBe("memory");
+		});
+
+		it("respects includeAkasha=false option", async () => {
+			mockAkashaQueryResults = [{
+				id: "aks-skip",
+				agentId: "test",
+				traceType: "solution",
+				topic: "should not appear",
+				content: "This trace should be excluded",
+				strength: 0.8,
+				reinforcements: 3,
+			}];
+
+			const results = await recall("test", { includeAkasha: false });
+
+			expect(results.length).toBe(0);
+		});
+
+		it("truncates akasha content snippet to 300 chars", async () => {
+			mockAkashaQueryResults = [{
+				id: "aks-long",
+				agentId: "test",
+				traceType: "pattern",
+				topic: "long content",
+				content: "x".repeat(500),
+				strength: 0.5,
+				reinforcements: 0,
+			}];
+
+			const results = await recall("long content");
+
+			expect(results[0].snippet.length).toBeLessThanOrEqual(300);
+		});
+
+		it("deduplicates akasha results by snippet prefix", async () => {
+			mockAkashaQueryResults = [
+				{
+					id: "aks-dup1",
+					agentId: "test",
+					traceType: "solution",
+					topic: "duplicate topic",
+					content: "Same content deposited twice for dedup test",
+					strength: 0.7,
+					reinforcements: 1,
+				},
+				{
+					id: "aks-dup2",
+					agentId: "test",
+					traceType: "solution",
+					topic: "duplicate topic",
+					content: "Same content deposited twice for dedup test",
+					strength: 0.6,
+					reinforcements: 0,
+				},
+			];
+
+			const results = await recall("duplicate", { limit: 10 });
+
+			// Both have same snippet prefix, so dedup should keep only one
+			const akashaResults = results.filter((r) => r.primarySource === "akasha");
+			expect(akashaResults.length).toBe(1);
 		});
 	});
 });

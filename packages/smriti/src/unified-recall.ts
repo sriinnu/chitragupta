@@ -6,6 +6,7 @@
  *   1. HybridSearch (RRF fusion: BM25 + Vectors + GraphRAG + Pramana + Thompson Sampling)
  *   2. Memory (BM25 fact search)
  *   3. Day files (consolidated diary search)
+ *   4. Akasha traces (stigmergic collective knowledge — solutions, patterns, warnings)
  *
  * Falls back gracefully: if HybridSearchEngine can't initialize (no SQLite,
  * no Ollama), degrades to simple FTS5 → still returns results, just less
@@ -25,7 +26,7 @@ export interface RecallAnswer {
 	/** Human-readable answer text. */
 	answer: string;
 	/** Source type that contributed most. */
-	primarySource: "turns" | "memory" | "graph" | "dayfile" | "hybrid";
+	primarySource: "turns" | "memory" | "graph" | "dayfile" | "hybrid" | "akasha";
 	/** Session ID if from a session. */
 	sessionId?: string;
 	/** Project path if known. */
@@ -50,6 +51,8 @@ export interface RecallOptions {
 	includeDayFiles?: boolean;
 	/** Include memory search. Default: true. */
 	includeMemory?: boolean;
+	/** Include akasha trace search. Default: true. */
+	includeAkasha?: boolean;
 }
 
 // ─── Unified Recall ─────────────────────────────────────────────────────────
@@ -59,7 +62,7 @@ export interface RecallOptions {
  *
  * Tries HybridSearchEngine first (RRF + Thompson Sampling + vectors + graph).
  * If it fails to initialize, falls back to simple FTS5.
- * Memory and day file layers always run as supplementary sources.
+ * Memory, day file, and akasha layers always run as supplementary sources.
  *
  * @param query - Natural language question.
  * @param options - Search options.
@@ -73,12 +76,13 @@ export async function recall(
 	const answers: RecallAnswer[] = [];
 
 	// Run ALL searches in parallel for speed
-	const [hybridResults, turnFallbackResults, memoryResults, dayFileResults] = await Promise.allSettled([
+	const [hybridResults, turnFallbackResults, memoryResults, dayFileResults, akashaResults] = await Promise.allSettled([
 		searchHybrid(query, options?.project, limit),
 		// FTS5 fallback runs in parallel — used only if hybrid fails
 		searchTurns(query, options?.project),
 		options?.includeMemory !== false ? searchMemoryLayer(query) : Promise.resolve([]),
 		options?.includeDayFiles !== false ? searchDayFileLayer(query, limit) : Promise.resolve([]),
+		options?.includeAkasha !== false ? searchAkashaLayer(query, limit) : Promise.resolve([]),
 	]);
 
 	// Prefer hybrid results (intelligent stack) over simple FTS5
@@ -116,6 +120,13 @@ export async function recall(
 	// Day file results (always supplementary)
 	if (dayFileResults.status === "fulfilled") {
 		for (const result of dayFileResults.value.slice(0, limit)) {
+			answers.push(result);
+		}
+	}
+
+	// Akasha trace results (always supplementary — highest-quality curated knowledge)
+	if (akashaResults.status === "fulfilled") {
+		for (const result of akashaResults.value.slice(0, limit)) {
 			answers.push(result);
 		}
 	}
@@ -320,6 +331,61 @@ async function searchDayFileLayer(query: string, limit: number): Promise<RecallA
 			date: r.date,
 			snippet: r.matches.map((m) => m.text).join("\n").slice(0, 300),
 		}));
+	} catch {
+		return [];
+	}
+}
+
+// ─── Layer: Akasha Traces (Stigmergic Knowledge) ────────────────────────────
+
+/**
+ * Search the Akasha shared knowledge field for matching stigmergic traces.
+ *
+ * Akasha contains manually-deposited, high-quality knowledge: solutions,
+ * patterns, warnings, corrections, and preferences. Traces are matched
+ * by Jaccard similarity on topic/content tokens, weighted by trace strength.
+ *
+ * Falls back gracefully: if no persisted traces exist or SQLite is unavailable,
+ * returns [].
+ *
+ * @param query - Natural language search query.
+ * @param limit - Maximum results to return.
+ * @returns Matching traces formatted as RecallAnswers.
+ */
+async function searchAkashaLayer(query: string, limit: number): Promise<RecallAnswer[]> {
+	try {
+		const { AkashaField } = await import("./akasha.js");
+		const akasha = new AkashaField();
+
+		// Try to restore persisted traces from SQLite
+		try {
+			const { DatabaseManager } = await import("./db/database.js");
+			const dbm = DatabaseManager.instance();
+			const db = dbm.get("agent");
+			if (db) {
+				akasha.restore(db);
+			}
+		} catch {
+			// No persisted traces available — field stays empty
+		}
+
+		const traces = akasha.query(query, { limit });
+		if (traces.length === 0) return [];
+
+		return traces.map((trace) => {
+			// Akasha traces are curated knowledge — boost score above raw search noise
+			const score = Math.min(trace.strength * 0.8 + 0.2, 1.0);
+			const typeLabel = trace.traceType.toUpperCase();
+			const snippet = trace.content.slice(0, 300);
+			const answer = `[Akasha ${typeLabel}] ${trace.topic}: ${snippet}`;
+
+			return {
+				score,
+				answer,
+				primarySource: "akasha" as const,
+				snippet,
+			};
+		});
 	} catch {
 		return [];
 	}
