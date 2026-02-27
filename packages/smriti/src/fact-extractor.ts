@@ -194,9 +194,12 @@ export class FactExtractor {
 		this.initialized = true;
 
 		// Cleanup dedup cache every 10 minutes
-		this.recentFactsCleanupTimer = setInterval(() => {
-			this.recentFacts.clear();
-		}, 10 * 60 * 1000);
+		this.recentFactsCleanupTimer = setInterval(
+			() => {
+				this.recentFacts.clear();
+			},
+			10 * 60 * 1000,
+		);
 		if (this.recentFactsCleanupTimer.unref) {
 			this.recentFactsCleanupTimer.unref();
 		}
@@ -207,6 +210,7 @@ export class FactExtractor {
 	 * Uses pattern matching first, then vector similarity for misses.
 	 */
 	async extract(text: string): Promise<ExtractedFact[]> {
+		if (!shouldAnalyzeForFacts(text)) return [];
 		await this.ensureInitialized();
 
 		const facts: ExtractedFact[] = [];
@@ -235,11 +239,11 @@ export class FactExtractor {
 		}
 
 		// Strategy 2: Vector similarity (catches typos, variations)
-		if (this.config.useVectors && facts.length === 0) {
+		if (this.config.useVectors && facts.length === 0 && shouldUseVectorFallback(text)) {
 			const inputEmbedding = fallbackEmbedding(text.toLowerCase().slice(0, 200));
 
 			let bestScore = 0;
-			let bestTemplate: typeof VECTOR_TEMPLATES[number] | null = null;
+			let bestTemplate: (typeof VECTOR_TEMPLATES)[number] | null = null;
 
 			for (const tmpl of VECTOR_TEMPLATES) {
 				const tmplEmbedding = this.templateEmbeddings.get(tmpl.template);
@@ -279,11 +283,7 @@ export class FactExtractor {
 	 * @param projectScope - Optional project scope for project-level preferences.
 	 * @returns Extracted and saved facts.
 	 */
-	async extractAndSave(
-		text: string,
-		scope?: MemoryScope,
-		projectScope?: MemoryScope,
-	): Promise<ExtractedFact[]> {
+	async extractAndSave(text: string, scope?: MemoryScope, projectScope?: MemoryScope): Promise<ExtractedFact[]> {
 		const facts = await this.extract(text);
 		if (facts.length === 0) return [];
 
@@ -292,22 +292,24 @@ export class FactExtractor {
 
 		// Check existing memory for dedup
 		const existingMemory = getMemory(globalScope).toLowerCase();
+		const projectMemory = projectScope && projectScope.type !== "session" ? getMemory(projectScope).toLowerCase() : "";
 
 		for (const fact of facts) {
 			// Dedup: skip if already saved recently or exists in memory
 			const dedupeKey = `${fact.category}:${fact.fact.toLowerCase().slice(0, 50)}`;
 			if (this.recentFacts.has(dedupeKey)) continue;
-			if (existingMemory.includes(fact.fact.toLowerCase().slice(0, 30))) continue;
+			const memoryNeedle = fact.fact.toLowerCase().slice(0, 40);
+			if (existingMemory.includes(memoryNeedle) || projectMemory.includes(memoryNeedle)) continue;
 
 			// Save to appropriate scope
 			const entry = `[${fact.category}] ${fact.fact}`;
 
 			if (fact.category === "preference" && projectScope) {
 				// Preferences can be project-scoped
-				await appendMemory(projectScope, entry);
+				await appendMemory(projectScope, entry, { dedupe: true });
 			} else {
 				// Everything else is global
-				await appendMemory(globalScope, entry);
+				await appendMemory(globalScope, entry, { dedupe: true });
 			}
 
 			this.recentFacts.add(dedupeKey);
@@ -358,6 +360,38 @@ function normalizeFact(category: ExtractedFact["category"], raw: string): string
 
 function capitalize(s: string): string {
 	return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Return false for short chatter, command lines, and generic questions. */
+function shouldAnalyzeForFacts(text: string): boolean {
+	const trimmed = text.trim();
+	if (trimmed.length < 8 || trimmed.length > 5000) return false;
+	const lower = trimmed.toLowerCase();
+	if (/^\/[a-z0-9_-]+/i.test(lower)) return false;
+	if (
+		/^(hi|hii|hello|hey|yo|thanks|thank you|ok|okay|cool|fine|namaste|namaskaram)\b/.test(lower) &&
+		trimmed.length < 64
+	) {
+		return false;
+	}
+	const hasMemorySignal =
+		/\b(remember|don't forget|note this|save this|from now on|always|call me|my name is|i am|i'm|i live|i work|i prefer|we use|our stack)\b/i.test(
+			lower,
+		);
+	const hasFirstPerson = /\b(i|i'm|i am|my|we|our)\b/i.test(lower);
+	const hasPatternCue =
+		/\b(based in|living in|located in|never use|don't use|avoid|keep in mind|note that|remember that)\b/i.test(lower);
+	const isQuestion = /\?\s*$/.test(lower);
+	if (isQuestion && !hasMemorySignal) return false;
+	return hasMemorySignal || hasFirstPerson || hasPatternCue;
+}
+
+/** Vector matching is only used when text already looks like a memory candidate. */
+function shouldUseVectorFallback(text: string): boolean {
+	const lower = text.toLowerCase();
+	if (!shouldAnalyzeForFacts(text)) return false;
+	if (/^\s*(which|what|when|where|why|how)\b/.test(lower) && /\?\s*$/.test(lower)) return false;
+	return true;
 }
 
 // ─── Singleton ──────────────────────────────────────────────────────────────

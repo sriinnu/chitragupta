@@ -27,6 +27,18 @@ export interface McpState {
 	lastUpdate: string;
 }
 
+/** Patch type for state writes. Use `null` to clear optional fields. */
+export type McpStatePatch = Omit<
+	Partial<McpState>,
+	"sessionId" | "project" | "turnCount" | "filesModified" | "lastTool"
+> & {
+	sessionId?: string | null;
+	project?: string | null;
+	turnCount?: number | null;
+	filesModified?: string[] | null;
+	lastTool?: string | null;
+};
+
 // ─── Internal State ─────────────────────────────────────────────────────────
 
 let _mcpStartedAt = new Date().toISOString();
@@ -50,7 +62,7 @@ export function getStatePath(): string {
  * Merge `partial` into the state file (atomic write via temp + rename).
  * Best-effort — never throws.
  */
-export function writeChitraguptaState(partial: Partial<McpState>): void {
+export function writeChitraguptaState(partial: McpStatePatch): void {
 	try {
 		const statePath = getStatePath();
 		const dir = path.dirname(statePath);
@@ -59,15 +71,28 @@ export function writeChitraguptaState(partial: Partial<McpState>): void {
 		let existing: Partial<McpState> = {};
 		try {
 			existing = JSON.parse(fs.readFileSync(statePath, "utf-8")) as McpState;
-		} catch { /* first write */ }
+		} catch {
+			/* first write */
+		}
 
+		const now = new Date().toISOString();
+		const normalized: Partial<McpState> = {};
+		for (const [key, value] of Object.entries(partial)) {
+			if (value === null) continue;
+			(normalized as Record<string, unknown>)[key] = value;
+		}
+
+		const mergedBase: Partial<McpState> = { ...existing, ...normalized };
 		const merged: McpState = {
-			active: true,
+			active: mergedBase.active ?? true,
 			pid: process.pid,
 			startedAt: _mcpStartedAt,
-			lastUpdate: new Date().toISOString(),
-			...existing,
-			...partial,
+			lastUpdate: now,
+			sessionId: mergedBase.sessionId,
+			project: mergedBase.project,
+			turnCount: mergedBase.turnCount,
+			filesModified: mergedBase.filesModified,
+			lastTool: mergedBase.lastTool,
 		};
 		const tmpPath = statePath + "." + Date.now().toString(36) + ".tmp";
 		fs.writeFileSync(tmpPath, JSON.stringify(merged, null, 2));
@@ -86,11 +111,16 @@ export function clearChitraguptaState(): void {
 		const statePath = getStatePath();
 		if (fs.existsSync(statePath)) {
 			const existing = JSON.parse(fs.readFileSync(statePath, "utf-8")) as McpState;
+			if (typeof existing.pid === "number" && existing.pid !== process.pid) {
+				return;
+			}
 			existing.active = false;
 			existing.lastUpdate = new Date().toISOString();
 			const tmpPath = statePath + "." + Date.now().toString(36) + ".tmp";
 			fs.writeFileSync(tmpPath, JSON.stringify(existing, null, 2));
 			fs.renameSync(tmpPath, statePath);
 		}
-	} catch { /* best-effort cleanup */ }
+	} catch {
+		/* best-effort cleanup */
+	}
 }

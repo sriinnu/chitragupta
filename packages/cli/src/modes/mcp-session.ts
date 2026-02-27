@@ -22,6 +22,7 @@ export class McpSessionRecorder {
 	private sessionId: string | null = null;
 	private turnCounter = 0;
 	private contextInjected = false;
+	private ensureSessionPromise: Promise<string | null> | null = null;
 	private _daemonManager: { touch(): void } | null = null;
 
 	constructor(private readonly projectPath: string) {}
@@ -38,43 +39,54 @@ export class McpSessionRecorder {
 
 	/** Lazily create a session and inject provider context on first call. */
 	async ensureSession(): Promise<string | null> {
-		if (!this.sessionId) {
-			try {
-				const { createSession } = await import("@chitragupta/smriti/session-store");
-				const session = createSession({
-					project: this.projectPath,
-					agent: "mcp",
-					model: "mcp-client",
-					title: `MCP session`,
-				});
-				this.sessionId = session.meta.id;
-			} catch (err) {
-				process.stderr.write(`[chitragupta] session init failed: ${err}\n`);
-			}
-		}
+		if (this.sessionId && this.contextInjected) return this.sessionId;
+		if (this.ensureSessionPromise) return this.ensureSessionPromise;
 
-		if (!this.contextInjected && this.sessionId) {
-			try {
-				const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
-				const ctx = await loadProviderContext(this.projectPath);
-				if (ctx.assembled.trim()) {
-					const { addTurn } = await import("@chitragupta/smriti/session-store");
-					await addTurn(this.sessionId, this.projectPath, {
-						turnNumber: 0,
-						role: "assistant",
-						content: `[system:context] ${ctx.assembled}`,
+		this.ensureSessionPromise = (async () => {
+			if (!this.sessionId) {
+				try {
+					const { createSession } = await import("@chitragupta/smriti/session-store");
+					const session = createSession({
+						project: this.projectPath,
 						agent: "mcp",
-						model: "mcp",
+						model: "mcp-client",
+						title: `MCP session`,
 					});
-					this.turnCounter++;
+					this.sessionId = session.meta.id;
+				} catch (err) {
+					process.stderr.write(`[chitragupta] session init failed: ${err}\n`);
 				}
-				this.contextInjected = true;
-			} catch {
-				// Best-effort — context injection is optional
 			}
-		}
 
-		return this.sessionId;
+			if (!this.contextInjected && this.sessionId) {
+				try {
+					const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
+					const ctx = await loadProviderContext(this.projectPath);
+					if (ctx.assembled.trim()) {
+						const { addTurn } = await import("@chitragupta/smriti/session-store");
+						await addTurn(this.sessionId, this.projectPath, {
+							turnNumber: 0,
+							role: "assistant",
+							content: `[system:context] ${ctx.assembled}`,
+							agent: "mcp",
+							model: "mcp",
+						});
+						this.turnCounter++;
+					}
+					this.contextInjected = true;
+				} catch {
+					// Best-effort — context injection is optional
+				}
+			}
+
+			return this.sessionId;
+		})();
+
+		try {
+			return await this.ensureSessionPromise;
+		} finally {
+			this.ensureSessionPromise = null;
+		}
 	}
 
 	/** Extract user-facing text from tool arguments for fact extraction. */
@@ -86,6 +98,30 @@ export class McpSessionRecorder {
 		return null;
 	}
 
+	/**
+	 * Decide if text is worth fact extraction.
+	 * Filters short chatter, commands, and generic questions to avoid noisy memory.
+	 */
+	private shouldExtractFact(tool: string, text: string): boolean {
+		const normalized = text.trim();
+		const lower = normalized.toLowerCase();
+		if (normalized.length < 8 || normalized.length > 5000) return false;
+		if (/^\/[a-z0-9_-]+/i.test(lower)) return false;
+		if (/^(hi|hii|hello|hey|yo|thanks|thank you|ok|okay|cool|fine)\b/.test(lower) && normalized.length < 48) {
+			return false;
+		}
+		const hasMemorySignal =
+			/\b(remember|don't forget|note this|save this|from now on|always|call me|my name is|i am|i'm|i live|i work|i prefer|we use|our stack)\b/i.test(
+				lower,
+			);
+		const hasFirstPerson = /\b(i|i'm|i am|my|we|our)\b/i.test(lower);
+		const isQuestion = /\?\s*$/.test(lower);
+		if (isQuestion && !hasMemorySignal) return false;
+		if (!hasMemorySignal && !hasFirstPerson) return false;
+		if (tool === "chitragupta_record_conversation") return true;
+		return hasMemorySignal;
+	}
+
 	/** Record a tool call (request + response) into the session. */
 	async recordToolCall(info: {
 		tool: string;
@@ -93,17 +129,39 @@ export class McpSessionRecorder {
 		result: McpToolResult;
 		elapsedMs: number;
 	}): Promise<void> {
-		try { this._daemonManager?.touch(); } catch { /* best-effort */ }
+		try {
+			this._daemonManager?.touch();
+		} catch {
+			/* best-effort */
+		}
 
 		const sid = await this.ensureSession();
 		if (!sid) return;
 
 		try {
 			const { addTurn } = await import("@chitragupta/smriti/session-store");
+			const isConversationBatch = info.tool === "chitragupta_record_conversation";
 
-			const argSummary = Object.keys(info.args).length > 0
-				? JSON.stringify(info.args, null, 2)
-				: "(no args)";
+			if (isConversationBatch) {
+				const turnCount = Array.isArray(info.args.turns) ? info.args.turns.length : 0;
+				await addTurn(sid, this.projectPath, {
+					turnNumber: 0,
+					role: "assistant",
+					content: `[tool:${info.tool}] recorded ${turnCount} conversation turn(s)`,
+					agent: "mcp",
+					model: "mcp",
+				});
+				this.turnCounter++;
+				writeChitraguptaState({
+					sessionId: sid,
+					project: this.projectPath,
+					turnCount: this.turnCounter,
+					lastTool: info.tool,
+				});
+				return;
+			}
+
+			const argSummary = Object.keys(info.args).length > 0 ? JSON.stringify(info.args, null, 2) : "(no args)";
 			await addTurn(sid, this.projectPath, {
 				turnNumber: 0,
 				role: "user",
@@ -111,11 +169,13 @@ export class McpSessionRecorder {
 				agent: "mcp-client",
 				model: "mcp",
 			});
+			this.turnCounter++;
 
-			const resultText = info.result.content
-				?.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join("\n") ?? "(no output)";
+			const resultText =
+				info.result.content
+					?.filter((c): c is { type: "text"; text: string } => c.type === "text")
+					.map((c) => c.text)
+					.join("\n") ?? "(no output)";
 			await addTurn(sid, this.projectPath, {
 				turnNumber: 0,
 				role: "assistant",
@@ -123,25 +183,24 @@ export class McpSessionRecorder {
 				agent: "mcp",
 				model: "mcp",
 			});
-
-			this.turnCounter += 2;
+			this.turnCounter++;
 
 			try {
 				const { getFactExtractor } = await import("@chitragupta/smriti/fact-extractor");
 				const extractor = getFactExtractor();
 				const userText = this.extractUserText(info.args);
-				if (userText) {
-					await extractor.extractAndSave(
-						userText,
-						{ type: "global" },
-						{ type: "project", path: this.projectPath },
-					);
+				if (userText && this.shouldExtractFact(info.tool, userText)) {
+					await extractor.extractAndSave(userText, { type: "global" }, { type: "project", path: this.projectPath });
 				}
-			} catch { /* best-effort */ }
+			} catch {
+				/* best-effort */
+			}
 
 			try {
 				await this.autoExtractEvents(info);
-			} catch { /* best-effort */ }
+			} catch {
+				/* best-effort */
+			}
 
 			writeChitraguptaState({
 				sessionId: sid,
@@ -164,10 +223,11 @@ export class McpSessionRecorder {
 		result: McpToolResult;
 		elapsedMs: number;
 	}): Promise<void> {
-		const resultText = info.result.content
-			?.filter((c): c is { type: "text"; text: string } => c.type === "text")
-			.map((c) => c.text)
-			.join("\n") ?? "";
+		const resultText =
+			info.result.content
+				?.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.map((c) => c.text)
+				.join("\n") ?? "";
 
 		const projectScope = { type: "project" as const, path: this.projectPath };
 
@@ -178,10 +238,15 @@ export class McpSessionRecorder {
 			const filesMatch = resultText.match(/(?:Modified|Created): (.+)/g);
 			const files = filesMatch ? filesMatch.join("; ") : "none";
 			const elapsed = (info.elapsedMs / 1000).toFixed(1);
-			await appendMemory(projectScope, [
-				`## Coding Agent: ${success ? "Success" : "Failed"}`,
-				`**Task**: ${task}`, `**Files**: ${files}`, `**Duration**: ${elapsed}s`,
-			].join("\n"));
+			await appendMemory(
+				projectScope,
+				[
+					`## Coding Agent: ${success ? "Success" : "Failed"}`,
+					`**Task**: ${task}`,
+					`**Files**: ${files}`,
+					`**Duration**: ${elapsed}s`,
+				].join("\n"),
+			);
 		}
 
 		if (info.tool === "sabha_deliberate") {
@@ -244,11 +309,11 @@ export class McpSessionRecorder {
 
 					const { addTurn } = await import("@chitragupta/smriti/session-store");
 					let recorded = 0;
-
 					for (const turn of capped) {
 						const role = (turn as Record<string, unknown>).role;
 						const content = (turn as Record<string, unknown>).content;
-						if ((role !== "user" && role !== "assistant") || typeof content !== "string" || content.length === 0) continue;
+						if ((role !== "user" && role !== "assistant") || typeof content !== "string" || content.length === 0)
+							continue;
 
 						const truncated = content.length > 100_000 ? content.slice(0, 100_000) + "\n...[truncated]" : content;
 						await addTurn(sid, this.projectPath, {
@@ -259,17 +324,21 @@ export class McpSessionRecorder {
 							model: "mcp",
 						});
 						recorded++;
+						this.turnCounter++;
 					}
-
-					this.turnCounter += recorded;
 
 					try {
 						const { getFactExtractor } = await import("@chitragupta/smriti/fact-extractor");
 						const extractor = getFactExtractor();
 						for (const turn of capped) {
 							const t = turn as Record<string, unknown>;
-							if (t.role === "user" && typeof t.content === "string" &&
-								t.content.length > 5 && t.content.length < 5000) {
+							if (
+								t.role === "user" &&
+								typeof t.content === "string" &&
+								t.content.length > 5 &&
+								t.content.length < 5000 &&
+								this.shouldExtractFact("chitragupta_record_conversation", t.content)
+							) {
 								await extractor.extractAndSave(
 									t.content,
 									{ type: "global" },
@@ -277,9 +346,21 @@ export class McpSessionRecorder {
 								);
 							}
 						}
-					} catch { /* best-effort */ }
+					} catch {
+						/* best-effort */
+					}
 
-					try { this._daemonManager?.touch(); } catch { /* best-effort */ }
+					try {
+						this._daemonManager?.touch();
+					} catch {
+						/* best-effort */
+					}
+					writeChitraguptaState({
+						sessionId: sid,
+						project: this.projectPath,
+						turnCount: this.turnCounter,
+						lastTool: "chitragupta_record_conversation",
+					});
 
 					return { content: [{ type: "text", text: `Recorded ${recorded} conversation turn(s).` }] };
 				} catch (err) {
