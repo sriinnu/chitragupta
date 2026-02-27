@@ -22,6 +22,13 @@ import type {
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
+/**
+ * Threshold (bytes) above which prompt is piped via stdin
+ * instead of passed as a CLI argument. macOS ARG_MAX is ~256KB;
+ * we trigger well below that to leave room for other args.
+ */
+export const STDIN_THRESHOLD_BYTES = 100_000;
+
 /** Configuration for creating a CLI-backed provider. */
 export interface CLIProviderConfig {
 	/** Unique provider ID (e.g. "claude-code", "gemini-cli"). */
@@ -32,10 +39,23 @@ export interface CLIProviderConfig {
 	command: string;
 	/** Model definitions exposed by this CLI provider. */
 	models: ModelDefinition[];
-	/** Build the argument list for the CLI invocation. */
-	buildArgs: (model: string, context: Context, options: StreamOptions) => string[];
+	/**
+	 * Build the argument list for the CLI invocation.
+	 *
+	 * When `viaStdin` is true the caller will pipe the prompt into
+	 * the child's stdin. The returned args should contain only flags
+	 * (no prompt text). When false, include the prompt in the args
+	 * as before.
+	 */
+	buildArgs: (model: string, context: Context, options: StreamOptions, viaStdin: boolean) => string[];
 	/** Extract the actual response text from CLI stdout. */
 	parseOutput: (stdout: string) => string;
+	/**
+	 * Return the prompt text to pipe via stdin.
+	 * Called only when the prompt exceeds {@link STDIN_THRESHOLD_BYTES}.
+	 * If omitted, `contextToPrompt(context)` is used as fallback.
+	 */
+	getStdinPrompt?: (context: Context) => string;
 	/** Whether the CLI supports streaming output. Default: false. */
 	isStreaming?: boolean;
 	/** Optional shared ProcessPool. If omitted, a private pool is created. */
@@ -53,11 +73,50 @@ export interface CLIProviderConfig {
 // ─── Factory ────────────────────────────────────────────────────────────────
 
 /**
+ * Extract the last user message text from a Context.
+ * Fallback for stdin piping when no `getStdinPrompt` is configured.
+ */
+function extractUserText(context: Context): string {
+	for (let i = context.messages.length - 1; i >= 0; i--) {
+		const msg = context.messages[i];
+		if (msg.role === "user") {
+			const parts: string[] = [];
+			for (const part of msg.content) {
+				if (part.type === "text") parts.push(part.text);
+			}
+			if (parts.length > 0) return parts.join("\n");
+		}
+	}
+	return "";
+}
+
+/**
+ * Estimate the total byte size of a Context's user message text.
+ * Used to decide whether to pipe the prompt via stdin.
+ */
+function estimatePromptBytes(context: Context): number {
+	let total = 0;
+	for (const msg of context.messages) {
+		if (msg.role === "user") {
+			for (const part of msg.content) {
+				if (part.type === "text") {
+					total += Buffer.byteLength(part.text, "utf-8");
+				}
+			}
+		}
+	}
+	return total;
+}
+
+/**
  * Create a CLI-backed provider definition.
  *
  * The returned provider spawns the configured CLI command via a ProcessPool,
  * collects its output, and yields the standard stream event sequence:
- * start → text → done.
+ * start -> text -> done.
+ *
+ * When the prompt exceeds {@link STDIN_THRESHOLD_BYTES}, it is piped via
+ * the child's stdin instead of passed as a CLI argument, preventing E2BIG.
  */
 export function createCLIProvider(config: CLIProviderConfig): ProviderDefinition {
 	const pool = config.pool ?? new ProcessPool(config.poolConfig);
@@ -68,10 +127,21 @@ export function createCLIProvider(config: CLIProviderConfig): ProviderDefinition
 		context: Context,
 		options: StreamOptions,
 	): AsyncGenerator<StreamEvent> {
-		const args = config.buildArgs(model, context, options);
+		// Detect large prompts and pipe via stdin to avoid E2BIG
+		const promptBytes = estimatePromptBytes(context);
+		const viaStdin = promptBytes >= STDIN_THRESHOLD_BYTES;
+		const args = config.buildArgs(model, context, options, viaStdin);
 		const messageId = `${config.id}-${Date.now()}`;
 
 		yield { type: "start", messageId };
+
+		// Build stdin payload when prompt is too large for CLI args
+		let stdinPayload: string | undefined;
+		if (viaStdin) {
+			stdinPayload = config.getStdinPrompt
+				? config.getStdinPrompt(context)
+				: extractUserText(context);
+		}
 
 		let result;
 		try {
@@ -79,6 +149,7 @@ export function createCLIProvider(config: CLIProviderConfig): ProviderDefinition
 				timeout: defaultTimeout,
 				cwd: config.cwd,
 				env: config.env,
+				stdin: stdinPayload,
 			});
 		} catch (err) {
 			const error = err instanceof Error
