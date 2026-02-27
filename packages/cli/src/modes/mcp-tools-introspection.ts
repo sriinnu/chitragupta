@@ -10,6 +10,7 @@
 
 import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
 import { getVasana, getTriguna, getChetana, getSoulManager } from "./mcp-subsystems.js";
+import { computeSessionMetrics } from "./mcp-health-metrics.js";
 
 // ─── Vasana Tendencies ──────────────────────────────────────────────────────
 
@@ -60,8 +61,21 @@ export function createVasanaTendenciesTool(projectPath: string): McpToolHandler 
 					},
 				};
 			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				const isNativeModuleError = msg.includes("NODE_MODULE_VERSION") ||
+					msg.includes("was compiled against") ||
+					msg.includes("better-sqlite3") ||
+					msg.includes("module did not self-register");
+
+				const text = isNativeModuleError
+					? "Vasana engine unavailable: native module rebuild required. " +
+					  "Run: npm rebuild better-sqlite3\n\n" +
+					  "If using nvm/fnm, ensure the correct Node version is active " +
+					  "and rebuild: npx --yes node-gyp rebuild"
+					: `vasana_tendencies failed: ${msg}`;
+
 				return {
-					content: [{ type: "text", text: `vasana_tendencies failed: ${err instanceof Error ? err.message : String(err)}` }],
+					content: [{ type: "text", text }],
 					isError: true,
 				};
 			}
@@ -93,6 +107,15 @@ export function createHealthStatusTool(): McpToolHandler {
 		async execute(_args: Record<string, unknown>): Promise<McpToolResult> {
 			try {
 				const triguna = await getTriguna();
+
+				// Feed real metrics from recent sessions before reading state
+				try {
+					const metrics = await computeSessionMetrics();
+					if (metrics) {
+						triguna.update(metrics);
+					}
+				} catch { /* best-effort: fall back to current state */ }
+
 				const state = triguna.getState();
 				const dominant = triguna.getDominant();
 				const trend = triguna.getTrend();
