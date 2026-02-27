@@ -331,12 +331,46 @@ export class FactExtractor {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+/** Minimum word count per category for a fact to be substantive. */
+const MIN_WORDS: Record<ExtractedFact["category"], number> = {
+	identity: 1, location: 1, work: 1, preference: 1,
+	relationship: 1, instruction: 3, personal: 1,
+};
+
+/** Minimum character length per category (after cleaning). */
+const MIN_LENGTH: Record<ExtractedFact["category"], number> = {
+	identity: 2, location: 2, work: 2, preference: 3,
+	relationship: 2, instruction: 10, personal: 2,
+};
+
+/** Low-value tokens that pollute memory when extracted from code conversations. */
+const NOISE_PATTERNS: RegExp[] = [
+	/^(?:this|that|it|the|a|an|some|any|all)$/i,
+	/^(?:circular deps?|deps?|fix|bug|error|issue|test|build|run|check)$/i,
+	/^(?:file|folder|dir|path|module|package|import|export)$/i,
+	/^[a-z]$/i,
+];
+
 /**
  * Normalize an extracted fact into a clean statement.
+ * Returns null for low-value extractions that would pollute memory.
  */
 function normalizeFact(category: ExtractedFact["category"], raw: string): string | null {
 	const cleaned = raw.replace(/[.!?,;:]+$/, "").trim();
-	if (cleaned.length < 2) return null;
+
+	// Gate 1: Minimum character length per category
+	if (cleaned.length < MIN_LENGTH[category]) return null;
+
+	// Gate 2: Minimum word count per category
+	const wordCount = cleaned.split(/\s+/).filter(w => w.length > 0).length;
+	if (wordCount < MIN_WORDS[category]) return null;
+
+	// Gate 3: Reject known noise tokens (only for short extractions)
+	if (wordCount <= 2) {
+		for (const noise of NOISE_PATTERNS) {
+			if (noise.test(cleaned)) return null;
+		}
+	}
 
 	switch (category) {
 		case "identity":

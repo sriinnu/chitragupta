@@ -20,6 +20,7 @@
  */
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 import {
@@ -56,6 +57,7 @@ import {
 	formatProviderSummary,
 	resolvePreferredProvider,
 } from "./bootstrap.js";
+import { guideProviderSetup } from "./provider-setup.js";
 
 import { handleDaemonCommand, handleSwapnaCommand } from "./main-subcommands.js";
 import { handleServeCommand } from "./main-serve-mode.js";
@@ -151,7 +153,17 @@ export async function main(args: ParsedArgs): Promise<void> {
 
 	const totalProviders = detectedCLIs.length + (hasOllama ? 1 : 0) + activeApiKeys.length;
 	if (totalProviders === 0) {
-		process.stderr.write("\n" + formatProviderSummary(cliResults, hasOllama, activeApiKeys) + "\n\n");
+		// No providers found — guide the user through setup
+		const setupResult = await guideProviderSetup(registry, cliResults, hasOllama);
+		if (!setupResult.configured) {
+			process.stderr.write(
+				`\nError: No provider available.\n` +
+				`Install a CLI (claude, codex, gemini), start Ollama, or set an API key.\n` +
+				`Run: chitragupta provider add anthropic\n\n`,
+			);
+			process.exit(1);
+		}
+		log.info("Provider configured via setup guide", { providerId: setupResult.providerId });
 	} else if (detectedCLIs.length > 0) {
 		log.info("CLI providers detected", {
 			clis: detectedCLIs.map((c) => `${c.command}${c.version ? ` (${c.version})` : ""}`).join(", "),
@@ -248,6 +260,12 @@ export async function main(args: ParsedArgs): Promise<void> {
 		onEvent: wiring.trigunaActuator
 			? (event, data) => { if (event.startsWith("triguna:")) { wiring.trigunaActuator!.handleEvent(event, data); } }
 			: undefined,
+		// Wire 4: Persist learning-loop state across sessions
+		learningPersistPath: path.join(os.homedir(), ".chitragupta", "learning", "session-state.json"),
+		// Wire 2: Record skill gaps for SkillLearner analysis
+		onSkillGap: (toolName: string) => {
+			process.stderr.write(`[skill-gap] ${toolName}\n`);
+		},
 	};
 
 	const agent = new Agent(agentConfig);

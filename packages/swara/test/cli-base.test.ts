@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Context, StreamEvent, ModelDefinition } from "../src/types.js";
-import { createCLIProvider, type CLIProviderConfig } from "../src/providers/cli-base.js";
+import { createCLIProvider, STDIN_THRESHOLD_BYTES, type CLIProviderConfig } from "../src/providers/cli-base.js";
 import { ProcessPool } from "../src/process-pool.js";
 
 function minimalContext(userText = "Hello"): Context {
@@ -264,5 +264,79 @@ describe("CLI Provider Base (createCLIProvider)", () => {
 		const events = await collectEvents(provider.stream("test-cli-model", minimalContext(), {}));
 		const textEvents = events.filter((e) => e.type === "text");
 		expect(textEvents.length).toBe(0);
+	});
+
+	it("should pipe prompt via stdin when prompt exceeds threshold", async () => {
+		(mockPool.execute as any).mockResolvedValue({
+			stdout: "large ok",
+			stderr: "",
+			exitCode: 0,
+			killed: false,
+			duration: 100,
+		});
+		const largeText = "x".repeat(STDIN_THRESHOLD_BYTES + 100);
+		const buildArgs = vi.fn().mockReturnValue(["--flag"]);
+		const config: CLIProviderConfig = {
+			id: "test-cli",
+			name: "Test CLI",
+			command: "cmd",
+			models: [testModel],
+			buildArgs,
+			parseOutput: (s) => s.trim(),
+			getStdinPrompt: () => largeText,
+			pool: mockPool,
+		};
+		const provider = createCLIProvider(config);
+		await collectEvents(provider.stream("test-cli-model", minimalContext(largeText), {}));
+
+		// buildArgs should be called with viaStdin=true
+		expect(buildArgs).toHaveBeenCalledWith(
+			"test-cli-model",
+			expect.any(Object),
+			expect.any(Object),
+			true,
+		);
+		// pool.execute should receive stdin in options
+		expect(mockPool.execute).toHaveBeenCalledWith(
+			"cmd",
+			["--flag"],
+			expect.objectContaining({ stdin: largeText }),
+		);
+	});
+
+	it("should NOT pipe via stdin when prompt is below threshold", async () => {
+		(mockPool.execute as any).mockResolvedValue({
+			stdout: "small ok",
+			stderr: "",
+			exitCode: 0,
+			killed: false,
+			duration: 50,
+		});
+		const buildArgs = vi.fn().mockReturnValue(["--print", "hello"]);
+		const config: CLIProviderConfig = {
+			id: "test-cli",
+			name: "Test CLI",
+			command: "cmd",
+			models: [testModel],
+			buildArgs,
+			parseOutput: (s) => s.trim(),
+			pool: mockPool,
+		};
+		const provider = createCLIProvider(config);
+		await collectEvents(provider.stream("test-cli-model", minimalContext("Hello"), {}));
+
+		// buildArgs should be called with viaStdin=false
+		expect(buildArgs).toHaveBeenCalledWith(
+			"test-cli-model",
+			expect.any(Object),
+			expect.any(Object),
+			false,
+		);
+		// pool.execute should NOT have stdin set
+		expect(mockPool.execute).toHaveBeenCalledWith(
+			"cmd",
+			["--print", "hello"],
+			expect.objectContaining({ stdin: undefined }),
+		);
 	});
 });
