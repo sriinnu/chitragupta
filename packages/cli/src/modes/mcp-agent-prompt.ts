@@ -241,7 +241,7 @@ async function tryApiProviders(
 		const decision = await Promise.resolve(decide(message));
 		if (decision?.modelId) model = decision.modelId;
 
-		const messages: Array<{ role: string; content: string }> = [];
+		const messages: Array<{ role: "user" | "assistant" | "system" | "tool"; content: string }> = [];
 		if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
 		messages.push({ role: "user", content: message });
 
