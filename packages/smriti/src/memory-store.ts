@@ -67,16 +67,44 @@ function ensureDir(filePath: string): void {
 /** Maximum memory file size per scope (bytes). */
 const MAX_MEMORY_SIZE = 500_000; // 500 KB
 
+/** Options for appendMemory writes. */
+export interface AppendMemoryOptions {
+	/** Skip write if a normalized duplicate already exists in the same scope file. */
+	dedupe?: boolean;
+}
+
 /** Per-scope write queue: chains write operations to prevent races. */
 const memoryWriteQueues = new Map<string, Promise<void>>();
 
 function scopeKey(scope: MemoryScope): string {
 	switch (scope.type) {
-		case "global": return "global";
-		case "project": return `project:${scope.path}`;
-		case "agent": return `agent:${scope.agentId}`;
-		case "session": return `session:${scope.sessionId}`;
+		case "global":
+			return "global";
+		case "project":
+			return `project:${scope.path}`;
+		case "agent":
+			return `agent:${scope.agentId}`;
+		case "session":
+			return `session:${scope.sessionId}`;
 	}
+}
+
+/** Normalize text for duplicate detection (case/spacing/punctuation-insensitive). */
+function normalizeForDedupe(value: string): string {
+	return value
+		.toLowerCase()
+		.replace(/\*[^*]+\*/g, " ")
+		.replace(/[^\p{L}\p{N}\s\[\]:._/-]/gu, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+/** True if the entry already exists in the current memory content. */
+function hasDuplicateEntry(existing: string, entry: string): boolean {
+	const needle = normalizeForDedupe(entry);
+	if (!needle || needle.length < 8) return false;
+	const haystack = normalizeForDedupe(existing.slice(-200_000));
+	return haystack.includes(needle);
 }
 
 /**
@@ -91,9 +119,7 @@ function scopeKey(scope: MemoryScope): string {
  */
 export function getMemory(scope: MemoryScope): string {
 	if (scope.type === "session") {
-		throw new MemoryError(
-			"Session memory is stored within the session file. Use loadSession() to access it."
-		);
+		throw new MemoryError("Session memory is stored within the session file. Use loadSession() to access it.");
 	}
 
 	const filePath = resolveMemoryPath(scope);
@@ -102,8 +128,8 @@ export function getMemory(scope: MemoryScope): string {
 	try {
 		return fs.readFileSync(filePath, "utf-8");
 	} catch (err) {
-		const isNotFound = (err as NodeJS.ErrnoException).code === "ENOENT"
-			|| (err instanceof Error && err.message.includes("ENOENT"));
+		const isNotFound =
+			(err as NodeJS.ErrnoException).code === "ENOENT" || (err instanceof Error && err.message.includes("ENOENT"));
 		if (isNotFound) return "";
 		throw new MemoryError(`Failed to read memory at ${filePath}: ${err}`);
 	}
@@ -124,9 +150,7 @@ export function getMemory(scope: MemoryScope): string {
  */
 export function updateMemory(scope: MemoryScope, content: string): Promise<void> {
 	if (scope.type === "session") {
-		throw new MemoryError(
-			"Session memory is stored within the session file. Use saveSession() to update it."
-		);
+		throw new MemoryError("Session memory is stored within the session file. Use saveSession() to update it.");
 	}
 
 	const filePath = resolveMemoryPath(scope);
@@ -134,18 +158,20 @@ export function updateMemory(scope: MemoryScope, content: string): Promise<void>
 
 	const key = scopeKey(scope);
 	const prev = memoryWriteQueues.get(key) ?? Promise.resolve();
-	const next = prev.then(() => {
-		try {
-			ensureDir(filePath);
-			fs.writeFileSync(filePath, content, "utf-8");
-		} catch (err) {
-			throw new MemoryError(`Failed to write memory at ${filePath}: ${err}`);
-		}
-	}).finally(() => {
-		if (memoryWriteQueues.get(key) === next) {
-			memoryWriteQueues.delete(key);
-		}
-	});
+	const next = prev
+		.then(() => {
+			try {
+				ensureDir(filePath);
+				fs.writeFileSync(filePath, content, "utf-8");
+			} catch (err) {
+				throw new MemoryError(`Failed to write memory at ${filePath}: ${err}`);
+			}
+		})
+		.finally(() => {
+			if (memoryWriteQueues.get(key) === next) {
+				memoryWriteQueues.delete(key);
+			}
+		});
 	memoryWriteQueues.set(key, next);
 	return next;
 }
@@ -165,11 +191,9 @@ export function updateMemory(scope: MemoryScope, content: string): Promise<void>
  * @returns A promise that resolves when the write completes.
  * @throws {MemoryError} If scope is `"session"`.
  */
-export function appendMemory(scope: MemoryScope, entry: string): Promise<void> {
+export function appendMemory(scope: MemoryScope, entry: string, options?: AppendMemoryOptions): Promise<void> {
 	if (scope.type === "session") {
-		throw new MemoryError(
-			"Session memory is stored within the session file. Use addTurn() to append."
-		);
+		throw new MemoryError("Session memory is stored within the session file. Use addTurn() to append.");
 	}
 
 	const filePath = resolveMemoryPath(scope);
@@ -177,47 +201,52 @@ export function appendMemory(scope: MemoryScope, entry: string): Promise<void> {
 
 	const key = scopeKey(scope);
 	const prev = memoryWriteQueues.get(key) ?? Promise.resolve();
-	const next = prev.then(() => {
-		try {
-			ensureDir(filePath);
-			const timestamp = new Date().toISOString();
-			const formatted = `\n---\n\n*${timestamp}*\n\n${entry}\n`;
-
-			// Read existing content atomically (no TOCTOU: single readFileSync + ENOENT catch)
-			let existing: string | null = null;
+	const next = prev
+		.then(() => {
 			try {
-				existing = fs.readFileSync(filePath, "utf-8");
-			} catch (readErr) {
-				const isNotFound = (readErr as NodeJS.ErrnoException).code === "ENOENT"
-					|| (readErr instanceof Error && readErr.message.includes("ENOENT"));
-				if (!isNotFound) throw readErr;
-			}
+				ensureDir(filePath);
+				const timestamp = new Date().toISOString();
+				const formatted = `\n---\n\n*${timestamp}*\n\n${entry}\n`;
 
-			if (existing !== null) {
-				const totalSize = Buffer.byteLength(existing, "utf-8")
-					+ Buffer.byteLength(formatted, "utf-8");
-
-				if (totalSize > MAX_MEMORY_SIZE) {
-					// Truncate oldest entries and write the full result
-					const result = truncateToFit(existing, formatted);
-					fs.writeFileSync(filePath, result, "utf-8");
-				} else {
-					fs.appendFileSync(filePath, formatted, "utf-8");
+				// Read existing content atomically (no TOCTOU: single readFileSync + ENOENT catch)
+				let existing: string | null = null;
+				try {
+					existing = fs.readFileSync(filePath, "utf-8");
+				} catch (readErr) {
+					const isNotFound =
+						(readErr as NodeJS.ErrnoException).code === "ENOENT" ||
+						(readErr instanceof Error && readErr.message.includes("ENOENT"));
+					if (!isNotFound) throw readErr;
 				}
-			} else {
-				// First entry: write with a header
-				const header = buildMemoryHeader(scope);
-				fs.writeFileSync(filePath, header + formatted, "utf-8");
+
+				if (existing !== null) {
+					if (options?.dedupe && hasDuplicateEntry(existing, entry)) {
+						return;
+					}
+					const totalSize = Buffer.byteLength(existing, "utf-8") + Buffer.byteLength(formatted, "utf-8");
+
+					if (totalSize > MAX_MEMORY_SIZE) {
+						// Truncate oldest entries and write the full result
+						const result = truncateToFit(existing, formatted);
+						fs.writeFileSync(filePath, result, "utf-8");
+					} else {
+						fs.appendFileSync(filePath, formatted, "utf-8");
+					}
+				} else {
+					// First entry: write with a header
+					const header = buildMemoryHeader(scope);
+					fs.writeFileSync(filePath, header + formatted, "utf-8");
+				}
+			} catch (err) {
+				if (err instanceof MemoryError) throw err;
+				throw new MemoryError(`Failed to append memory at ${filePath}: ${err}`);
 			}
-		} catch (err) {
-			if (err instanceof MemoryError) throw err;
-			throw new MemoryError(`Failed to append memory at ${filePath}: ${err}`);
-		}
-	}).finally(() => {
-		if (memoryWriteQueues.get(key) === next) {
-			memoryWriteQueues.delete(key);
-		}
-	});
+		})
+		.finally(() => {
+			if (memoryWriteQueues.get(key) === next) {
+				memoryWriteQueues.delete(key);
+			}
+		});
 	memoryWriteQueues.set(key, next);
 	return next;
 }
@@ -244,9 +273,7 @@ function truncateToFit(existing: string, incoming: string): string {
 		kept.unshift(segments[i]);
 	}
 
-	const truncated = kept.length > 0
-		? header + ENTRY_SEPARATOR + kept.join(ENTRY_SEPARATOR)
-		: header;
+	const truncated = kept.length > 0 ? header + ENTRY_SEPARATOR + kept.join(ENTRY_SEPARATOR) : header;
 
 	return truncated + incoming;
 }
@@ -260,9 +287,7 @@ function truncateToFit(existing: string, incoming: string): string {
  */
 export function deleteMemory(scope: MemoryScope): void {
 	if (scope.type === "session") {
-		throw new MemoryError(
-			"Session memory is stored within the session file. Use deleteSession() to remove."
-		);
+		throw new MemoryError("Session memory is stored within the session file. Use deleteSession() to remove.");
 	}
 
 	const filePath = resolveMemoryPath(scope);
@@ -272,8 +297,9 @@ export function deleteMemory(scope: MemoryScope): void {
 		try {
 			fs.unlinkSync(filePath);
 		} catch (unlinkErr) {
-			const isNotFound = (unlinkErr as NodeJS.ErrnoException).code === "ENOENT"
-				|| (unlinkErr instanceof Error && unlinkErr.message.includes("ENOENT"));
+			const isNotFound =
+				(unlinkErr as NodeJS.ErrnoException).code === "ENOENT" ||
+				(unlinkErr instanceof Error && unlinkErr.message.includes("ENOENT"));
 			if (!isNotFound) throw unlinkErr;
 		}
 
