@@ -277,15 +277,33 @@ async function searchMemoryLayer(query: string): Promise<RecallAnswer[]> {
 		const { searchMemory } = await import("./search.js");
 		const results = searchMemory(query);
 
-		return results.slice(0, 5).map((r) => ({
-			score: Math.min((r.relevance ?? 0.5) + 0.1, 1.0),
-			answer: `From memory: ${r.content.slice(0, 300)}`,
-			primarySource: "memory" as const,
-			snippet: r.content.slice(0, 300),
-		}));
+		return results.slice(0, 5)
+			.filter((r) => !isLowValueMemoryEntry(r.content))
+			.map((r) => ({
+				score: Math.min((r.relevance ?? 0.5) + 0.1, 1.0),
+				answer: `From memory: ${r.content.slice(0, 300)}`,
+				primarySource: "memory" as const,
+				snippet: r.content.slice(0, 300),
+			}));
 	} catch {
 		return [];
 	}
+}
+
+/**
+ * Filter out low-value memory entries that are noise rather than knowledge.
+ * Catches file path observations and tool action logs.
+ */
+function isLowValueMemoryEntry(content: string): boolean {
+	const trimmed = content.trim();
+	// File path entries with no context (e.g., "[action] Modified 2 file(s): src/foo.ts")
+	if (/^\[(?:action|tool)\].*file\(s\)/i.test(trimmed)) return true;
+	// Bare file path lines (e.g., "File created: /path/to/file.ts")
+	if (/^(?:File|Created|Modified|Edited|Deleted)[:\s]+\S+\.\w+$/i.test(trimmed)) return true;
+	// Bracketed entries with very short content (e.g., "[preference] deps")
+	const bracketMatch = trimmed.match(/^\[\w+\]\s*(.*)/);
+	if (bracketMatch && bracketMatch[1].length < 10) return true;
+	return false;
 }
 
 // ─── Layer: Day Files ───────────────────────────────────────────────────────
