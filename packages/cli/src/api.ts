@@ -87,6 +87,8 @@ export interface ChitraguptaOptions {
 	thinkingLevel?: ThinkingLevel;
 	/** Disable memory loading entirely */
 	noMemory?: boolean;
+	/** Skip CLI detection (claude, gemini, codex, aider) — avoids 10-20s probing in MCP subprocess mode. */
+	skipCLIDetection?: boolean;
 }
 
 // ─── Factory ────────────────────────────────────────────────────────────────
@@ -152,7 +154,9 @@ export async function createChitragupta(
 
 	// ─── 5. Initialize provider registry ──────────────────────────────
 	const registry = createProviderRegistry();
-	await registerCLIProviders(registry);
+	if (!options.skipCLIDetection) {
+		await registerCLIProviders(registry);
+	}
 	registerBuiltinProviders(registry, settings);
 
 	const resolved = resolvePreferredProvider(options.provider, settings, registry);
