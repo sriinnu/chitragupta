@@ -117,6 +117,16 @@ export interface McpServerConfig {
 	tools?: McpToolHandler[];
 	resources?: McpResourceHandler[];
 	prompts?: McpPromptHandler[];
+	/**
+	 * Optional fallback for missing tool names.
+	 *
+	 * Called when a `tools/call` request arrives for an unknown tool name.
+	 * If a handler is returned, it is executed as the resolved tool.
+	 */
+	onToolNotFound?: (
+		toolName: string,
+		args: Record<string, unknown>,
+	) => McpToolHandler | undefined | Promise<McpToolHandler | undefined>;
 	/** Hook called after every tool execution. Use for session recording, analytics, etc. */
 	onToolCall?: (info: { tool: string; args: Record<string, unknown>; result: McpToolResult; elapsedMs: number }) => void | Promise<void>;
 }
