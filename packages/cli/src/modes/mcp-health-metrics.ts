@@ -69,8 +69,10 @@ export async function computeSessionMetrics(): Promise<TrigunaObservationData | 
 					}
 					if (!turnHasError) errorFreeTurns++;
 				}
-				if (meta.createdAt < earliestTs) earliestTs = meta.createdAt;
-				if (meta.updatedAt > latestTs) latestTs = meta.updatedAt;
+				const createdMs = new Date(meta.created).getTime();
+				const updatedMs = new Date(meta.updated).getTime();
+				if (createdMs < earliestTs) earliestTs = createdMs;
+				if (updatedMs > latestTs) latestTs = updatedMs;
 			} catch {
 				// Skip corrupted/unreadable sessions
 			}
