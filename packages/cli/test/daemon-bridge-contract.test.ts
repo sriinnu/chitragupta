@@ -20,6 +20,11 @@ const bridgeSource = fs.readFileSync(
 	"utf-8",
 );
 
+const fallbackSource = fs.readFileSync(
+	new URL("../src/modes/daemon-bridge-fallback.ts", import.meta.url),
+	"utf-8",
+);
+
 describe("daemon-bridge fallback contract", () => {
 	// ─── Error Classification ────────────────────────────────────────────────
 
@@ -71,21 +76,21 @@ describe("daemon-bridge fallback contract", () => {
 	// ─── Fallback Method Coverage ────────────────────────────────────────────
 
 	describe("fallback method completeness", () => {
-		/** Extract the FALLBACK_METHODS set entries. */
+		/** Extract the FALLBACK_METHODS set entries from the fallback module. */
 		function extractFallbackMethods(): string[] {
-			const match = bridgeSource.match(/FALLBACK_METHODS\s*=\s*new Set\(\[([^\]]+)\]\)/s);
+			const match = fallbackSource.match(/FALLBACK_METHODS\s*=\s*new Set\(\[([^\]]+)\]\)/s);
 			if (!match) return [];
 			return [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
 		}
 
 		/** Extract case labels from the directFallback switch. */
 		function extractSwitchCases(): string[] {
-			const fnStart = bridgeSource.indexOf("async function directFallback");
+			const fnStart = fallbackSource.indexOf("async function directFallback");
 			if (fnStart === -1) return [];
-			const switchStart = bridgeSource.indexOf("switch (method)", fnStart);
+			const switchStart = fallbackSource.indexOf("switch (method)", fnStart);
 			if (switchStart === -1) return [];
-			const switchEnd = bridgeSource.indexOf("}", bridgeSource.indexOf("default:", switchStart));
-			const switchBody = bridgeSource.slice(switchStart, switchEnd);
+			const switchEnd = fallbackSource.indexOf("}", fallbackSource.indexOf("default:", switchStart));
+			const switchBody = fallbackSource.slice(switchStart, switchEnd);
 			return [...switchBody.matchAll(/case "([^"]+)":/g)].map((m) => m[1]);
 		}
 
@@ -144,7 +149,7 @@ describe("daemon-bridge fallback contract", () => {
 
 	describe("write rejection in fallback mode", () => {
 		it("write methods are NOT in FALLBACK_METHODS", () => {
-			const match = bridgeSource.match(/FALLBACK_METHODS\s*=\s*new Set\(\[([^\]]+)\]\)/s);
+			const match = fallbackSource.match(/FALLBACK_METHODS\s*=\s*new Set\(\[([^\]]+)\]\)/s);
 			expect(match).toBeTruthy();
 			const methods = match![1];
 			// These write methods must never appear in fallback
@@ -156,10 +161,10 @@ describe("daemon-bridge fallback contract", () => {
 		});
 
 		it("non-fallback methods throw DaemonUnavailableError", () => {
-			expect(bridgeSource).toContain(
+			expect(fallbackSource).toContain(
 				"throw new DaemonUnavailableError(",
 			);
-			expect(bridgeSource).toContain(
+			expect(fallbackSource).toContain(
 				`Operation '${"\u0024"}{method}' requires daemon`,
 			);
 		});
@@ -198,14 +203,26 @@ describe("daemon-bridge fallback contract", () => {
 
 	describe("default case safety", () => {
 		it("default case throws, does not return empty object", () => {
-			const fnStart = bridgeSource.indexOf("async function directFallback");
-			const fnBody = bridgeSource.slice(fnStart);
+			const fnStart = fallbackSource.indexOf("async function directFallback");
+			const fnBody = fallbackSource.slice(fnStart);
 			const defaultCase = fnBody.indexOf("default:");
 			expect(defaultCase).toBeGreaterThan(-1);
 
 			const afterDefault = fnBody.slice(defaultCase, defaultCase + 200);
 			expect(afterDefault).toContain("throw new DaemonUnavailableError");
 			expect(afterDefault).not.toContain("return {} as T");
+		});
+	});
+
+	// ─── Bridge imports fallback module ──────────────────────────────────────
+
+	describe("module wiring", () => {
+		it("daemon-bridge imports directFallback from fallback module", () => {
+			expect(bridgeSource).toContain('import { directFallback } from "./daemon-bridge-fallback.js"');
+		});
+
+		it("daemonCall uses directFallback", () => {
+			expect(bridgeSource).toContain("directFallback<T>(method, params)");
 		});
 	});
 });
