@@ -52,7 +52,9 @@ function atomicRename(tmpPath: string, targetPath: string): void {
 		nodeRenameSync(tmpPath, targetPath);
 	} catch (err: unknown) {
 		// Fallback: direct write (non-atomic but still correct)
-		process.stderr.write(`[smriti:session-store] atomic rename failed, using direct write: ${err instanceof Error ? err.message : String(err)}\n`);
+		if (!process.env.VITEST) {
+			process.stderr.write(`[smriti:session-store] atomic rename failed, using direct write: ${err instanceof Error ? err.message : String(err)}\n`);
+		}
 		fs.writeFileSync(targetPath, fs.readFileSync(tmpPath, "utf-8"), "utf-8");
 		try { fs.unlinkSync(tmpPath); } catch { /* intentional: orphan tmp cleanup is best-effort */ }
 	}
