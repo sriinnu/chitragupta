@@ -103,8 +103,17 @@ export async function daemonCall<T = unknown>(
 		const client = await getDaemonClient();
 		return client.call(method, params) as Promise<T>;
 	} catch (err) {
-		if (err instanceof DaemonUnavailableError) {
-			log.warn("Daemon unavailable, using direct fallback", { method });
+		// Fall back on any daemon connectivity error, not just DaemonUnavailableError.
+		// Raw ENOENT/ECONNREFUSED from connect() and circuit-open errors all land here.
+		if (
+			err instanceof DaemonUnavailableError ||
+			(err as NodeJS.ErrnoException).code === "ECONNREFUSED" ||
+			(err as NodeJS.ErrnoException).code === "ENOENT"
+		) {
+			log.warn("Daemon unavailable, using direct fallback", {
+				method,
+				error: err instanceof Error ? err.message : String(err),
+			});
 			currentMode = "direct";
 			return directFallback<T>(method, params);
 		}
@@ -166,6 +175,25 @@ export async function memoryRecall(
 	return result.results;
 }
 
+// ─── Write Methods (single-writer through daemon) ───────────────────────────
+
+/** Extract and save facts from text through daemon (single-writer). */
+export async function extractFacts(
+	text: string,
+	projectPath?: string,
+): Promise<{ extracted: number }> {
+	return daemonCall("fact.extract", { text, projectPath });
+}
+
+/** Append to memory through daemon (single-writer). */
+export async function appendMemoryViaDaemon(
+	scopeType: "global" | "project",
+	entry: string,
+	scopePath?: string,
+): Promise<void> {
+	await daemonCall("memory.append", { scopeType, entry, scopePath });
+}
+
 // ─── Daemon Health ──────────────────────────────────────────────────────────
 
 /** Ping the daemon. */
@@ -191,28 +219,30 @@ export async function health(): Promise<Record<string, unknown>> {
 
 // ─── Direct Smriti Fallback (Degraded Mode) ─────────────────────────────────
 
-/** Read-only methods that can safely fallback to direct smriti access. */
-const READ_METHODS = new Set([
+/**
+ * Methods that have a working direct smriti fallback.
+ * Only methods with an implemented switch case below are listed.
+ * Every entry MUST have a corresponding case — no silent `{}` returns.
+ */
+const FALLBACK_METHODS = new Set([
 	"session.list", "session.show", "session.dates", "session.projects",
-	"turn.list", "turn.since",
-	"memory.search", "memory.recall",
-	"daemon.ping", "daemon.health", "daemon.methods",
-	"nidra.status",
+	"turn.list",
+	"daemon.ping", "daemon.health",
 ]);
 
 /**
  * Direct smriti fallback for when daemon is unreachable.
  *
- * Only read operations are allowed — writes throw to prevent
- * data corruption from concurrent direct access.
+ * Only read operations with a concrete implementation are allowed.
+ * Writes and unimplemented reads throw to prevent silent data loss.
  */
 async function directFallback<T>(
 	method: string,
 	params?: Record<string, unknown>,
 ): Promise<T> {
-	if (!READ_METHODS.has(method)) {
+	if (!FALLBACK_METHODS.has(method)) {
 		throw new DaemonUnavailableError(
-			`Write operation '${method}' requires daemon — ` +
+			`Operation '${method}' requires daemon — ` +
 			"start daemon or reset circuit breaker",
 		);
 	}
@@ -222,28 +252,37 @@ async function directFallback<T>(
 
 	switch (method) {
 		case "session.list": {
-			const sessions = smriti.listSessions?.(
+			const sessions = smriti.listSessions(
 				params?.project as string | undefined,
-			) ?? [];
+			);
 			return { sessions } as T;
 		}
 		case "session.show": {
-			const session = smriti.getSession?.(
+			const session = smriti.loadSession(
 				params?.id as string, params?.project as string,
 			);
-			return (session ?? {}) as T;
+			return session as T;
 		}
-		case "memory.search": {
-			const results = smriti.searchTurns?.(
-				params?.query as string, params?.limit as number,
-			) ?? [];
-			return { results } as T;
+		case "session.dates": {
+			const dates = smriti.listSessionDates();
+			return { dates } as T;
+		}
+		case "session.projects": {
+			const projects = smriti.listSessionProjects();
+			return { projects } as T;
+		}
+		case "turn.list": {
+			const turns = smriti.listTurnsWithTimestamps(
+				params?.sessionId as string,
+			);
+			return { turns } as T;
 		}
 		case "daemon.ping":
 			return { pong: false, mode: "direct-fallback" } as T;
 		case "daemon.health":
 			return { status: "degraded", mode: "direct-fallback" } as T;
 		default:
-			return {} as T;
+			// Unreachable — FALLBACK_METHODS gate ensures only implemented methods reach here.
+			throw new DaemonUnavailableError(`No fallback for '${method}'`);
 	}
 }

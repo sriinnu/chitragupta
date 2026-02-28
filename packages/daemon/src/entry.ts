@@ -20,16 +20,25 @@ const log = createLogger("daemon:entry");
 
 // ─── Process-Level Resilience ────────────────────────────────────────────────
 
-/** Catch uncaught exceptions — log and continue, don't crash. */
+/**
+ * Uncaught exception policy: log and exit.
+ *
+ * For a single-writer DB process, continuing after unknown state corruption
+ * is worse than crashing cleanly. The client's self-healing (HealthMonitor)
+ * will detect the death and restart a fresh daemon process.
+ */
 process.on("uncaughtException", (err) => {
-	log.error("Uncaught exception (not crashing)", err);
+	log.fatal("Uncaught exception — exiting for clean restart", err);
+	process.exit(1);
 });
 
-/** Catch unhandled rejections — log, don't crash. */
+/** Unhandled rejections: log and exit (same rationale as uncaught exceptions). */
 process.on("unhandledRejection", (reason) => {
-	log.error("Unhandled rejection", reason instanceof Error ? reason : undefined, {
-		reason: reason instanceof Error ? undefined : String(reason),
-	});
+	log.fatal("Unhandled rejection — exiting for clean restart",
+		reason instanceof Error ? reason : undefined,
+		{ reason: reason instanceof Error ? undefined : String(reason) },
+	);
+	process.exit(1);
 });
 
 /** Periodic memory pressure check — warn at 80% of heap limit. */
@@ -76,6 +85,9 @@ async function main(): Promise<void> {
 		log.fatal("Failed to start server", err instanceof Error ? err : undefined);
 		process.exit(1);
 	}
+
+	// Wire connection count into health report
+	router.setConnectionCount(() => server.connectionCount());
 
 	// Start Nidra consolidation daemon (cron + backfill)
 	let nidraStop: (() => Promise<void>) | null = null;

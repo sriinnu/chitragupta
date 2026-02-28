@@ -25,6 +25,7 @@ export async function registerServices(router: RpcRouter): Promise<void> {
 	registerSessionMethods(router, sessionStore, sessionDb);
 	registerTurnMethods(router, sessionStore);
 	registerMemoryMethods(router, sessionDb);
+	registerWriteMethods(router);
 
 	log.info("Services registered", { methods: router.listMethods().length });
 }
@@ -141,6 +142,20 @@ function registerMemoryMethods(
 		return { results: rows };
 	}, "Full-text search across all turns");
 
+	router.register("memory.append", async (params) => {
+		const scopeType = String(params.scopeType ?? "project");
+		const scopePath = typeof params.scopePath === "string" ? params.scopePath : undefined;
+		const entry = String(params.entry ?? "");
+		if (!entry) throw new Error("Missing entry");
+
+		const memStore = await import("@chitragupta/smriti/memory-store");
+		const scope = scopeType === "global"
+			? { type: "global" as const }
+			: { type: "project" as const, path: scopePath ?? "" };
+		await memStore.appendMemory(scope, entry);
+		return { appended: true };
+	}, "Append entry to memory (project or global scope)");
+
 	router.register("memory.recall", async (params) => {
 		const query = String(params.query ?? "");
 		const project = typeof params.project === "string" ? params.project : undefined;
@@ -167,4 +182,22 @@ function registerMemoryMethods(
 
 		return { results: rows, query, project };
 	}, "Recall memories relevant to a query");
+}
+
+/** Write methods that enforce single-writer through daemon. */
+function registerWriteMethods(router: RpcRouter): void {
+	router.register("fact.extract", async (params) => {
+		const text = String(params.text ?? "");
+		const projectPath = typeof params.projectPath === "string" ? params.projectPath : undefined;
+		if (!text) throw new Error("Missing text");
+
+		const { getFactExtractor } = await import("@chitragupta/smriti/fact-extractor");
+		const extractor = getFactExtractor();
+		const facts = await extractor.extractAndSave(
+			text,
+			{ type: "global" },
+			projectPath ? { type: "project", path: projectPath } : undefined,
+		);
+		return { extracted: facts.length, facts };
+	}, "Extract and save facts from text (single-writer)");
 }

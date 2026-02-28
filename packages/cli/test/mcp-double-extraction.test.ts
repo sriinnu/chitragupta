@@ -25,12 +25,13 @@ describe("MCP double extraction fix", () => {
 		const fnEnd = source.indexOf("\tcreateRecordConversationTool(", fnStart);
 		const fnBody = source.slice(fnStart, fnEnd > -1 ? fnEnd : undefined);
 
-		// Should NOT contain getFactExtractor call (that's the duplication)
+		// Should NOT contain direct fact extraction (that's the duplication)
 		expect(fnBody).not.toContain("getFactExtractor");
 		expect(fnBody).not.toContain("extractAndSave");
+		expect(fnBody).not.toContain("extractFacts");
 	});
 
-	it("recordToolCall contains exactly one extractAndSave call", () => {
+	it("recordToolCall contains exactly one extractFacts call via daemon bridge", () => {
 		const source = fs.readFileSync(
 			new URL("../src/modes/mcp-session.ts", import.meta.url),
 			"utf-8",
@@ -42,9 +43,13 @@ describe("MCP double extraction fix", () => {
 		const fnEnd = source.indexOf("private async autoExtractEvents(", fnStart);
 		const fnBody = source.slice(fnStart, fnEnd);
 
-		// Should contain exactly one extractAndSave call
-		const matches = fnBody.match(/extractAndSave/g);
+		// Should route fact extraction through daemon bridge (single-writer)
+		const matches = fnBody.match(/bridge\.extractFacts/g);
 		expect(matches).toBeTruthy();
 		expect(matches!.length).toBe(1);
+
+		// Should NOT use direct smriti fact extraction
+		expect(fnBody).not.toContain("getFactExtractor");
+		expect(fnBody).not.toContain("extractAndSave");
 	});
 });

@@ -35,6 +35,7 @@ export class RpcRouter {
 	private readonly handlers = new Map<string, RpcHandler>();
 	private readonly meta = new Map<string, MethodMeta>();
 	private shutdownFn: (() => Promise<void>) | null = null;
+	private connectionCountFn: (() => number) | null = null;
 	private readonly startedAt = Date.now();
 
 	constructor() {
@@ -63,6 +64,11 @@ export class RpcRouter {
 	/** Set the shutdown callback (called by daemon.shutdown). */
 	setShutdown(fn: () => Promise<void>): void {
 		this.shutdownFn = fn;
+	}
+
+	/** Set the connection count provider (wired by server after startup). */
+	setConnectionCount(fn: () => number): void {
+		this.connectionCountFn = fn;
 	}
 
 	/**
@@ -98,7 +104,7 @@ export class RpcRouter {
 			pid: process.pid,
 			uptime: Math.floor((Date.now() - this.startedAt) / 1000),
 			memory: process.memoryUsage().heapUsed,
-			connections: 0, // filled by server
+			connections: this.connectionCountFn?.() ?? 0,
 			methods: this.handlers.size,
 		}), "Daemon health report");
 
