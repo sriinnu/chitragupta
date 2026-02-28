@@ -125,10 +125,20 @@ function acquireLock(lockPath: string): boolean {
 		return true;
 	} catch (err) {
 		if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-			// Check if lock is stale (older than 30s)
+			// Check if lock is stale: older than 30s AND holder PID is no longer alive
 			try {
 				const stat = fs.statSync(lockPath);
-				if (Date.now() - stat.mtimeMs > 30_000) {
+				const ageMs = Date.now() - stat.mtimeMs;
+				if (ageMs > 30_000) {
+					// Read PID from lock content (format: "PID\ntimestamp")
+					const holderPid = readLockPid(lockPath);
+					if (holderPid !== null && isProcessAlive(holderPid)) {
+						// Lock holder is still alive — do NOT break the lock
+						log.debug("Lock holder still alive, respecting lock", { holderPid, ageMs });
+						return false;
+					}
+					// PID dead or unreadable — safe to break stale lock
+					log.debug("Breaking stale lock", { holderPid, ageMs });
 					fs.unlinkSync(lockPath);
 					return acquireLock(lockPath); // Retry once after removing stale lock
 				}
@@ -142,6 +152,18 @@ function acquireLock(lockPath: string): boolean {
 /** Release the lock file. */
 function releaseLock(lockPath: string): void {
 	try { fs.unlinkSync(lockPath); } catch { /* best-effort */ }
+}
+
+/** Read the PID from a lock file. Returns null if unreadable or invalid. */
+function readLockPid(lockPath: string): number | null {
+	try {
+		const content = fs.readFileSync(lockPath, "utf-8");
+		const firstLine = content.split("\n")[0].trim();
+		const pid = parseInt(firstLine, 10);
+		return Number.isFinite(pid) && pid > 0 ? pid : null;
+	} catch {
+		return null;
+	}
 }
 
 /** Internal: actual daemon spawn after lock acquired. */

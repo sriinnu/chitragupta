@@ -24,12 +24,12 @@ function getEnsureSessionBody(): string {
 }
 
 describe("MCP auto-context injection", () => {
-	it("ensureSession calls loadProviderContext on first session creation", () => {
+	it("ensureSession loads context via daemon bridge on first session creation", () => {
 		const fnBody = getEnsureSessionBody();
 
-		// Should contain loadProviderContext call
-		expect(fnBody).toContain("loadProviderContext");
-		expect(fnBody).toContain("@chitragupta/smriti/provider-bridge");
+		// Should contain loadContextViaDaemon call through daemon bridge
+		expect(fnBody).toContain("loadContextViaDaemon");
+		expect(fnBody).toContain("daemon-bridge");
 	});
 
 	it("has contextInjected guard to prevent double-injection", () => {
@@ -58,8 +58,8 @@ describe("MCP auto-context injection", () => {
 	it("context injection is best-effort (wrapped in try/catch)", () => {
 		const fnBody = getEnsureSessionBody();
 
-		// The loadProviderContext block should be in a try/catch
-		const contextStart = fnBody.indexOf("loadProviderContext");
+		// The loadContextViaDaemon block should be in a try/catch
+		const contextStart = fnBody.indexOf("loadContextViaDaemon");
 		const beforeContext = fnBody.slice(0, contextStart);
 		expect(beforeContext).toContain("try");
 	});
@@ -67,7 +67,7 @@ describe("MCP auto-context injection", () => {
 	it("marks contextInjected only after context load path", () => {
 		const fnBody = getEnsureSessionBody();
 
-		const loadIdx = fnBody.indexOf("loadProviderContext");
+		const loadIdx = fnBody.indexOf("loadContextViaDaemon");
 		const markIdx = fnBody.indexOf("this.contextInjected = true");
 
 		expect(loadIdx).toBeGreaterThan(-1);

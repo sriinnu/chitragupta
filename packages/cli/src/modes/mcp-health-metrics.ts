@@ -39,9 +39,9 @@ const EXPECTED_VELOCITY = 2;
  */
 export async function computeSessionMetrics(): Promise<TrigunaObservationData | null> {
 	try {
-		const { listSessions, loadSession } = await import("@chitragupta/smriti");
+		const bridge = await import("./daemon-bridge.js");
 
-		const metas = listSessions();
+		const metas = await bridge.listSessions();
 		if (metas.length === 0) return null;
 
 		const recent = metas.slice(0, MAX_SESSIONS);
@@ -55,10 +55,13 @@ export async function computeSessionMetrics(): Promise<TrigunaObservationData | 
 
 		for (const meta of recent) {
 			try {
-				const session = loadSession(meta.id, meta.project);
+				const session = await bridge.showSession(String(meta.id), String(meta.project)) as {
+					meta: Record<string, unknown>;
+					turns: Array<Record<string, unknown>>;
+				};
 				for (const turn of session.turns) {
 					totalTurns++;
-					const calls = turn.toolCalls ?? [];
+					const calls = (turn.toolCalls ?? []) as Array<Record<string, unknown>>;
 					let turnHasError = false;
 					for (const tc of calls) {
 						totalToolCalls++;
@@ -69,8 +72,8 @@ export async function computeSessionMetrics(): Promise<TrigunaObservationData | 
 					}
 					if (!turnHasError) errorFreeTurns++;
 				}
-				const createdMs = new Date(meta.created).getTime();
-				const updatedMs = new Date(meta.updated).getTime();
+				const createdMs = new Date(String(meta.created)).getTime();
+				const updatedMs = new Date(String(meta.updated)).getTime();
 				if (createdMs < earliestTs) earliestTs = createdMs;
 				if (updatedMs > latestTs) latestTs = updatedMs;
 			} catch {

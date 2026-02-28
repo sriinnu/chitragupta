@@ -45,18 +45,21 @@ export function createHandoverTool(projectPath: string): McpToolHandler {
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			try {
-				const { loadSession, listSessions } = await import("@chitragupta/smriti/session-store");
+				const bridge = await import("./daemon-bridge.js");
 
 				let sessionId = args.sessionId ? String(args.sessionId) : undefined;
 				if (!sessionId) {
-					const sessions = listSessions(projectPath);
+					const sessions = await bridge.listSessions(projectPath);
 					if (sessions.length === 0) {
 						return { content: [{ type: "text", text: "No sessions found. Nothing to hand over." }] };
 					}
-					sessionId = sessions[0].id;
+					sessionId = String(sessions[0].id);
 				}
 
-				const session = loadSession(sessionId, projectPath);
+				const session = await bridge.showSession(sessionId, projectPath) as {
+					meta: Record<string, unknown>;
+					turns: Array<{ turnNumber: number; role: string; content: string; toolCalls?: Array<{ name: string; input: string; result?: unknown; isError?: boolean }> }>;
+				};
 				const allTurns = session.turns;
 				const turnWindow = args.turnWindow ? (Number(args.turnWindow) || 0) : 0;
 				const turns = turnWindow > 0 ? allTurns.slice(-turnWindow) : allTurns;
@@ -158,13 +161,14 @@ export function createHandoverTool(projectPath: string): McpToolHandler {
 					sections.push("");
 				}
 
-				writeChitraguptaState({
-					sessionId: session.meta.id,
-					project: projectPath,
-					turnCount: allTurns.length,
-					filesModified: [...filesModified],
-					lastTool: "chitragupta_handover",
-				});
+					const sessionIdForState = typeof session.meta.id === "string" ? session.meta.id : undefined;
+					writeChitraguptaState({
+						sessionId: sessionIdForState,
+						project: projectPath,
+						turnCount: allTurns.length,
+						filesModified: [...filesModified],
+						lastTool: "chitragupta_handover",
+					});
 
 				return {
 					content: [{ type: "text", text: truncateOutput(sections.join("\n")) }],
@@ -197,8 +201,8 @@ export function createDayShowTool(): McpToolHandler {
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const date = args.date ? String(args.date) : new Date().toISOString().slice(0, 10);
 			try {
-				const { readDayFile } = await import("@chitragupta/smriti/day-consolidation");
-				const content = readDayFile(date);
+				const bridge = await import("./daemon-bridge.js");
+				const content = await bridge.readDayFileViaDaemon(date);
 				if (!content) {
 					return { content: [{ type: "text", text: `No day file for ${date}. Run consolidation first, or the daemon will create it automatically.` }], _metadata: { action: "day_show", date } };
 				}
@@ -225,8 +229,8 @@ export function createDayListTool(): McpToolHandler {
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 30) || 30));
 			try {
-				const { listDayFiles } = await import("@chitragupta/smriti/day-consolidation");
-				const dates = listDayFiles().slice(0, limit);
+				const bridge = await import("./daemon-bridge.js");
+				const dates = (await bridge.listDayFilesViaDaemon()).slice(0, limit);
 				if (dates.length === 0) {
 					return { content: [{ type: "text", text: "No consolidated day files found. The daemon will create them automatically." }], _metadata: { action: "day_list" } };
 				}
@@ -260,8 +264,8 @@ export function createDaySearchTool(): McpToolHandler {
 				return { content: [{ type: "text", text: "Error: 'query' is required for search." }], isError: true };
 			}
 			try {
-				const { searchDayFiles } = await import("@chitragupta/smriti/day-consolidation");
-				const results = searchDayFiles(query, { limit });
+				const bridge = await import("./daemon-bridge.js");
+				const results = await bridge.searchDayFilesViaDaemon(query, { limit }) as Array<{ date: string; matches: Array<{ line: number; text: string }> }>;
 				if (results.length === 0) {
 					return { content: [{ type: "text", text: `No matches found for: ${query}` }], _metadata: { action: "day_search", query } };
 				}
@@ -299,8 +303,8 @@ export function createContextTool(projectPath: string): McpToolHandler {
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const project = args.project != null ? String(args.project) : projectPath;
 			try {
-				const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
-				const ctx = await loadProviderContext(project);
+				const bridge = await import("./daemon-bridge.js");
+				const ctx = await bridge.loadContextViaDaemon(project);
 				if (ctx.itemCount === 0) {
 					return { content: [{ type: "text", text: "No memory context found. This appears to be a fresh start." }], _metadata: { action: "context", itemCount: 0 } };
 				}

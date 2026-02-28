@@ -47,18 +47,18 @@ export function createHandoverSinceTool(projectPath: string): McpToolHandler {
 			const cursor = typeof args.cursor === "number" ? args.cursor : 0;
 
 			try {
-				const { listSessions, getTurnsSince, getMaxTurnNumber } = await import("@chitragupta/smriti/session-store");
+				const bridge = await import("./daemon-bridge.js");
 
 				let sessionId = args.sessionId ? String(args.sessionId) : undefined;
 				if (!sessionId) {
-					const sessions = listSessions(projectPath);
+					const sessions = await bridge.listSessions(projectPath);
 					if (sessions.length === 0) {
 						return { content: [{ type: "text", text: "No sessions found. Nothing to hand over." }] };
 					}
-					sessionId = sessions[0].id;
+					sessionId = String(sessions[0].id);
 				}
 
-				const maxTurn = getMaxTurnNumber(sessionId);
+				const maxTurn = await bridge.getMaxTurnNumberViaDaemon(sessionId);
 
 				// No new turns since cursor
 				if (cursor >= maxTurn && cursor > 0) {
@@ -68,7 +68,7 @@ export function createHandoverSinceTool(projectPath: string): McpToolHandler {
 					};
 				}
 
-				const newTurns = getTurnsSince(sessionId, cursor);
+				const newTurns = await bridge.getTurnsSinceViaDaemon(sessionId, cursor) as Array<{ turnNumber: number; role: string; content: string; toolCalls?: Array<{ name: string; input: string; result?: string; isError?: boolean }> }>;
 
 				if (newTurns.length === 0) {
 					return {
@@ -196,8 +196,8 @@ export function createMemoryChangesSinceTool(projectPath: string): McpToolHandle
 			}
 
 			try {
-				const { getSessionsModifiedSince } = await import("@chitragupta/smriti/session-store");
-				const modified = getSessionsModifiedSince(projectPath, sinceMs);
+				const bridge = await import("./daemon-bridge.js");
+				const modified = await bridge.getSessionsModifiedSinceViaDaemon(projectPath, sinceMs) as Array<{ id: string; title: string; created: string; updated: string }>;
 
 				const newSessions = modified.filter((s) => new Date(s.created).getTime() > sinceMs);
 				const updatedSessions = modified.filter((s) => new Date(s.created).getTime() <= sinceMs);
