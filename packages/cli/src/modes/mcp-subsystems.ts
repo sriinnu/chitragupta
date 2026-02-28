@@ -18,9 +18,16 @@ export interface SamitiLike {
 		messages: Array<{ id: string; sender: string; severity: string; content: string; timestamp: number }>;
 		subscribers: Set<string>;
 	}>;
-	listen(channel: string, opts?: { limit?: number }): Array<{
-		id: string; sender: string; severity: string; category: string;
-		content: string; timestamp: number;
+	listen(
+		channel: string,
+		opts?: { limit?: number },
+	): Array<{
+		id: string;
+		sender: string;
+		severity: string;
+		category: string;
+		content: string;
+		timestamp: number;
 	}>;
 	broadcast(
 		channel: string,
@@ -35,9 +42,17 @@ export interface SabhaEngineLike {
 		convener: string,
 		participants: Array<{ id: string; role: string; expertise: number; credibility: number }>,
 	): { id: string };
-	propose(sabhaId: string, proposerId: string, syllogism: {
-		pratijna: string; hetu: string; udaharana: string; upanaya: string; nigamana: string;
-	}): unknown;
+	propose(
+		sabhaId: string,
+		proposerId: string,
+		syllogism: {
+			pratijna: string;
+			hetu: string;
+			udaharana: string;
+			upanaya: string;
+			nigamana: string;
+		},
+	): unknown;
 	vote(sabhaId: string, participantId: string, position: "support" | "oppose" | "abstain", reasoning: string): unknown;
 	conclude(sabhaId: string): { finalVerdict: string | null; topic: string };
 	explain(sabhaId: string): string;
@@ -45,19 +60,35 @@ export interface SabhaEngineLike {
 
 /** Duck-typed AkashaField (shared knowledge traces). */
 export interface AkashaFieldLike {
-	query(topic: string, opts?: { type?: string; limit?: number }): Array<{
-		id: string; agentId: string; traceType: string; topic: string;
-		content: string; strength: number; reinforcements: number;
+	query(
+		topic: string,
+		opts?: { type?: string; limit?: number },
+	): Array<{
+		id: string;
+		agentId: string;
+		traceType: string;
+		topic: string;
+		content: string;
+		strength: number;
+		reinforcements: number;
 	}>;
 	leave(agentId: string, type: string, topic: string, content: string): { id: string };
 }
 
 /** Duck-typed VasanaEngine (behavioral tendencies). */
 export interface VasanaEngineLike {
-	getVasanas(project: string, topK?: number): Array<{
-		id: string; tendency: string; description: string;
-		strength: number; stability: number; valence: string;
-		reinforcementCount: number; predictiveAccuracy: number;
+	getVasanas(
+		project: string,
+		topK?: number,
+	): Array<{
+		id: string;
+		tendency: string;
+		description: string;
+		strength: number;
+		stability: number;
+		valence: string;
+		reinforcementCount: number;
+		predictiveAccuracy: number;
 	}>;
 }
 
@@ -72,7 +103,14 @@ export interface TrigunaLike {
 		dominant: string;
 	}>;
 	/** Feed an observation to update the Kalman filter. */
-	update(obs: { errorRate: number; tokenVelocity: number; loopCount: number; latency: number; successRate: number; userSatisfaction: number }): { sattva: number; rajas: number; tamas: number };
+	update(obs: {
+		errorRate: number;
+		tokenVelocity: number;
+		loopCount: number;
+		latency: number;
+		successRate: number;
+		userSatisfaction: number;
+	}): { sattva: number; rajas: number; tamas: number };
 }
 
 /** Duck-typed ChetanaController (consciousness layer). */
@@ -95,19 +133,25 @@ export interface ChetanaControllerLike {
 /** Duck-typed SoulManager (agent identity). */
 export interface SoulManagerLike {
 	getAll(): Array<{
-		id: string; name: string;
+		id: string;
+		name: string;
 		archetype: { name: string; traits: string[]; strengths: string[] };
-		purpose: string; learnedTraits: string[];
+		purpose: string;
+		learnedTraits: string[];
 		confidenceModel: Map<string, number>;
 		values: string[];
 	}>;
-	get(agentId: string): {
-		id: string; name: string;
-		archetype: { name: string; traits: string[]; strengths: string[] };
-		purpose: string; learnedTraits: string[];
-		confidenceModel: Map<string, number>;
-		values: string[];
-	} | undefined;
+	get(agentId: string):
+		| {
+				id: string;
+				name: string;
+				archetype: { name: string; traits: string[]; strengths: string[] };
+				purpose: string;
+				learnedTraits: string[];
+				confidenceModel: Map<string, number>;
+				values: string[];
+		  }
+		| undefined;
 }
 
 /** Duck-typed ActorSystem (P2P mesh). */
@@ -121,10 +165,34 @@ export interface ActorSystemLike {
 	shutdown(): Promise<void>;
 	getRouter(): unknown;
 	getGossipProtocol(): {
-		getView(): Array<{ actorId: string; status: string; expertise?: string[]; capabilities?: string[]; generation: number; lastSeen: number; originNodeId?: string }>;
-		findByCapability(cap: string): Array<{ actorId: string; status: string; capabilities?: string[]; originNodeId?: string; lastSeen: number; generation: number }>;
-		findByExpertise(exp: string): Array<{ actorId: string; status: string; expertise?: string[]; originNodeId?: string; lastSeen: number }>;
-		findAlive(): Array<{ actorId: string; status: string; capabilities?: string[]; expertise?: string[]; originNodeId?: string; lastSeen: number }>;
+		getView(): Array<{
+			actorId: string;
+			status: string;
+			expertise?: string[];
+			capabilities?: string[];
+			generation: number;
+			lastSeen: number;
+			originNodeId?: string;
+		}>;
+		findByCapability(cap: string): Array<{
+			actorId: string;
+			status: string;
+			capabilities?: string[];
+			originNodeId?: string;
+			lastSeen: number;
+			generation: number;
+		}>;
+		findByExpertise(
+			exp: string,
+		): Array<{ actorId: string; status: string; expertise?: string[]; originNodeId?: string; lastSeen: number }>;
+		findAlive(): Array<{
+			actorId: string;
+			status: string;
+			capabilities?: string[];
+			expertise?: string[];
+			originNodeId?: string;
+			lastSeen: number;
+		}>;
 	} | null;
 	getConnectionManager(): {
 		readonly nodeId: string;
@@ -133,8 +201,13 @@ export interface ActorSystemLike {
 		getPeers(): Array<{ peerId: string; endpoint: string; state: string; outbound: boolean }>;
 	} | null;
 	getCapabilityRouter(): {
-		resolve(query: { capabilities: string[]; strategy?: string }): { actorId: string; status: string; capabilities?: string[]; originNodeId?: string } | undefined;
-		findMatchingAll(caps: string[]): Array<{ actorId: string; status: string; capabilities?: string[]; originNodeId?: string }>;
+		resolve(query: {
+			capabilities: string[];
+			strategy?: string;
+		}): { actorId: string; status: string; capabilities?: string[]; originNodeId?: string } | undefined;
+		findMatchingAll(
+			caps: string[],
+		): Array<{ actorId: string; status: string; capabilities?: string[]; originNodeId?: string }>;
 	} | null;
 	getNetworkGossip(): { readonly locationCount: number; getLocations(): ReadonlyMap<string, string> } | null;
 }
@@ -197,13 +270,36 @@ export async function getSabha(): Promise<SabhaEngineLike> {
 	return _sabha;
 }
 
-/** Lazily create or return the AkashaField singleton. */
+/** Lazily create or return the AkashaField singleton with DB persistence. */
 export async function getAkasha(): Promise<AkashaFieldLike> {
 	if (!_akasha) {
 		const { AkashaField } = await import("@chitragupta/smriti");
-		_akasha = new AkashaField() as unknown as AkashaFieldLike;
+		const akasha = new AkashaField();
+		try {
+			const { DatabaseManager } = await import("@chitragupta/smriti/db/database");
+			const db = DatabaseManager.instance().get("agent");
+			if (db) akasha.restore(db);
+		} catch {
+			/* best-effort restore */
+		}
+		_akasha = akasha as unknown as AkashaFieldLike;
 	}
 	return _akasha;
+}
+
+/** Persist akasha traces to SQLite (call after deposit). */
+export async function persistAkasha(): Promise<void> {
+	if (!_akasha) return;
+	try {
+		const { DatabaseManager } = await import("@chitragupta/smriti/db/database");
+		const db = DatabaseManager.instance().get("agent");
+		if (db) {
+			const akasha = _akasha as unknown as { persist(db: unknown): void };
+			akasha.persist(db);
+		}
+	} catch {
+		/* best-effort persist */
+	}
 }
 
 /** Lazily create or return the VasanaEngine singleton. */
@@ -252,7 +348,8 @@ export async function getSoulManager(): Promise<SoulManagerLike> {
 export async function getActorSystem(): Promise<ActorSystemLike> {
 	if (!_actorSystem) {
 		const { ActorSystem } = await import("@chitragupta/sutra");
-		const sys = new ActorSystem(); sys.start();
+		const sys = new ActorSystem();
+		sys.start();
 		_actorSystem = sys as unknown as ActorSystemLike;
 	}
 	return _actorSystem;
@@ -260,7 +357,10 @@ export async function getActorSystem(): Promise<ActorSystemLike> {
 
 function parseEnvSkillPaths(value: string | undefined, delimiter: string): string[] {
 	if (!value) return [];
-	return value.split(delimiter).map((v) => v.trim()).filter((v) => v.length > 0);
+	return value
+		.split(delimiter)
+		.map((v) => v.trim())
+		.filter((v) => v.length > 0);
 }
 
 function buildSkillScanPaths(opts: {
@@ -305,73 +405,63 @@ function toRecordArray(value: unknown): Array<Record<string, unknown>> {
 	return value.filter((v): v is Record<string, unknown> => typeof v === "object" && v !== null);
 }
 
-function registerUiContributionFromSkill(
-	registry: UIExtensionRegistryLike,
-	manifest: Record<string, unknown>,
-): void {
+const WIDGET_POS = new Set(["left", "center", "right"]);
+const WIDGET_FMT = new Set(["plain", "ansi", "json"]);
+const PANEL_FMT = new Set(["plain", "ansi", "markdown", "json"]);
+const PANEL_TYPE = new Set(["sidebar", "modal", "overlay", "tab"]);
+
+function registerUiContributionFromSkill(registry: UIExtensionRegistryLike, manifest: Record<string, unknown>): void {
 	const rawUi = manifest.ui;
 	if (typeof rawUi !== "object" || rawUi === null) return;
-
 	const ui = rawUi as Record<string, unknown>;
-	const widgets = toRecordArray(ui.widgets).map((w) => {
-		const widget: Record<string, unknown> = {
-			id: toStringOrUndefined(w.id),
-			label: toStringOrUndefined(w.label),
-		};
-		const position = toStringOrUndefined(w.position);
-		if (position && (position === "left" || position === "center" || position === "right")) {
-			widget.position = position;
-		}
-		const refreshMs = Number(w.refreshMs);
-		if (Number.isFinite(refreshMs) && refreshMs > 0) widget.refreshMs = refreshMs;
-		const format = toStringOrUndefined(w.format);
-		if (format && (format === "plain" || format === "ansi" || format === "json")) {
-			widget.format = format;
-		}
-		return widget;
-	}).filter((w) => typeof w.id === "string" && typeof w.label === "string");
 
-	const keybinds = toRecordArray(ui.keybinds).map((k) => {
-		const keybind: Record<string, unknown> = {
-			key: toStringOrUndefined(k.key),
-			description: toStringOrUndefined(k.description),
-			command: toStringOrUndefined(k.command),
-		};
-		if (typeof k.args === "object" && k.args !== null) {
-			keybind.args = k.args as Record<string, unknown>;
-		}
-		return keybind;
-	}).filter((k) =>
-		typeof k.key === "string" &&
-		typeof k.description === "string" &&
-		typeof k.command === "string",
-	);
+	const widgets = toRecordArray(ui.widgets)
+		.map((w) => {
+			const r: Record<string, unknown> = { id: toStringOrUndefined(w.id), label: toStringOrUndefined(w.label) };
+			const pos = toStringOrUndefined(w.position);
+			if (pos && WIDGET_POS.has(pos)) r.position = pos;
+			const ms = Number(w.refreshMs);
+			if (Number.isFinite(ms) && ms > 0) r.refreshMs = ms;
+			const fmt = toStringOrUndefined(w.format);
+			if (fmt && WIDGET_FMT.has(fmt)) r.format = fmt;
+			return r;
+		})
+		.filter((w) => typeof w.id === "string" && typeof w.label === "string");
 
-	const panels = toRecordArray(ui.panels).map((p) => {
-		const panel: Record<string, unknown> = {
-			id: toStringOrUndefined(p.id),
-			title: toStringOrUndefined(p.title),
-			type: toStringOrUndefined(p.type),
-		};
-		const format = toStringOrUndefined(p.format);
-		if (format && (format === "plain" || format === "ansi" || format === "markdown" || format === "json")) {
-			panel.format = format;
-		}
-		return panel;
-	}).filter((p) =>
-		typeof p.id === "string" &&
-		typeof p.title === "string" &&
-		(typeof p.type === "string") &&
-		(p.type === "sidebar" || p.type === "modal" || p.type === "overlay" || p.type === "tab"),
-	);
+	const keybinds = toRecordArray(ui.keybinds)
+		.map((k) => {
+			const r: Record<string, unknown> = {
+				key: toStringOrUndefined(k.key),
+				description: toStringOrUndefined(k.description),
+				command: toStringOrUndefined(k.command),
+			};
+			if (typeof k.args === "object" && k.args !== null) r.args = k.args;
+			return r;
+		})
+		.filter((k) => typeof k.key === "string" && typeof k.description === "string" && typeof k.command === "string");
 
-	if (widgets.length === 0 && keybinds.length === 0 && panels.length === 0) {
-		return;
-	}
+	const panels = toRecordArray(ui.panels)
+		.map((p) => {
+			const r: Record<string, unknown> = {
+				id: toStringOrUndefined(p.id),
+				title: toStringOrUndefined(p.title),
+				type: toStringOrUndefined(p.type),
+			};
+			const fmt = toStringOrUndefined(p.format);
+			if (fmt && PANEL_FMT.has(fmt)) r.format = fmt;
+			return r;
+		})
+		.filter(
+			(p) =>
+				typeof p.id === "string" &&
+				typeof p.title === "string" &&
+				typeof p.type === "string" &&
+				PANEL_TYPE.has(p.type as string),
+		);
 
+	if (widgets.length === 0 && keybinds.length === 0 && panels.length === 0) return;
 	const skillName = String(manifest.name ?? "").trim();
 	if (!skillName) return;
-
 	registry.register({
 		skillName,
 		version: String(manifest.version ?? "0.0.0"),
@@ -384,12 +474,7 @@ function registerUiContributionFromSkill(
 
 async function bootstrapSkillRegistry(registry: SkillRegistryLike): Promise<void> {
 	try {
-		const [
-			{ SkillDiscovery },
-			{ getChitraguptaHome },
-			fs,
-			path,
-		] = await Promise.all([
+		const [{ SkillDiscovery }, { getChitraguptaHome }, fs, path] = await Promise.all([
 			import("@chitragupta/vidhya-skills"),
 			import("@chitragupta/core"),
 			import("node:fs"),
@@ -438,10 +523,9 @@ export async function getSkillRegistry(): Promise<SkillRegistryLike> {
 	if (!_skillRegistry) {
 		const { SkillRegistry } = await import("@chitragupta/vidhya-skills");
 		_skillRegistry = new SkillRegistry() as unknown as SkillRegistryLike;
-		_skillRegistryBootstrap = bootstrapSkillRegistry(_skillRegistry)
-			.finally(() => {
-				_skillRegistryBootstrap = undefined;
-			});
+		_skillRegistryBootstrap = bootstrapSkillRegistry(_skillRegistry).finally(() => {
+			_skillRegistryBootstrap = undefined;
+		});
 	}
 	if (_skillRegistryBootstrap) {
 		await _skillRegistryBootstrap;
