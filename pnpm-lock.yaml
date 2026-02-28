@@ -60,6 +60,9 @@ importers:
       '@chitragupta/core':
         specifier: workspace:*
         version: link:../core
+      '@chitragupta/daemon':
+        specifier: workspace:*
+        version: link:../daemon
       '@chitragupta/dharma':
         specifier: workspace:*
         version: link:../dharma
@@ -95,6 +98,22 @@ importers:
         version: link:../yantra
 
   packages/core: {}
+
+  packages/daemon:
+    dependencies:
+      '@chitragupta/anina':
+        specifier: workspace:*
+        version: link:../anina
+      '@chitragupta/core':
+        specifier: workspace:*
+        version: link:../core
+      '@chitragupta/smriti':
+        specifier: workspace:*
+        version: link:../smriti
+    devDependencies:
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
 
   packages/darpana:
     dependencies:
