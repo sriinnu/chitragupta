@@ -11,6 +11,86 @@
 import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
 import { writeChitraguptaState } from "./mcp-state.js";
 
+// ─── ANSI & Semantic Helpers ────────────────────────────────────────────────
+
+/** Strip ANSI escape sequences from text. */
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/\x1b\].*?\x07/g, "");
+}
+
+/** Tools whose args carry meaningful user intent (queries, tasks, proposals). */
+const SEMANTIC_TOOLS = new Set([
+	"chitragupta_recall", "chitragupta_memory_search", "chitragupta_prompt",
+	"chitragupta_record_conversation", "coding_agent", "sabha_deliberate",
+	"akasha_deposit", "akasha_traces",
+]);
+
+/** Tools that return status/summary — store one-line summary, not full output. */
+const SUMMARY_TOOLS = new Set([
+	"chitragupta_session_list", "chitragupta_session_show", "chitragupta_context",
+	"chitragupta_day_show", "chitragupta_day_search", "chitragupta_vidhis",
+	"mesh_status", "mesh_spawn", "health_status", "atman_report",
+	"vasana_tendencies", "chitragupta_consolidate",
+]);
+
+/** Filesystem/shell tools — store action + path, not full content. */
+const FILE_TOOLS = new Set([
+	"read", "write", "edit", "grep", "find", "ls", "bash", "diff", "watch",
+	"project_analysis",
+]);
+
+/** Extract user intent string from tool args. */
+function extractIntent(args: Record<string, unknown>): string {
+	for (const key of ["query", "message", "task", "proposal", "prompt", "content", "text"]) {
+		const val = args[key];
+		if (typeof val === "string" && val.length > 3 && val.length < 2000) {
+			return val.slice(0, 500);
+		}
+	}
+	return "";
+}
+
+/**
+ * Extract meaningful content from a tool call for session recording.
+ * Returns `[userContent, assistantContent]` — clean text, not raw JSON.
+ */
+function extractSemanticContent(
+	tool: string,
+	args: Record<string, unknown>,
+	resultText: string,
+	elapsedMs: number,
+): [string, string] {
+	const cleanResult = stripAnsi(resultText);
+
+	if (SEMANTIC_TOOLS.has(tool)) {
+		const intent = extractIntent(args);
+		const summary = cleanResult.slice(0, 500);
+		return [intent || `Used ${tool}`, `${tool}: ${summary}`];
+	}
+
+	if (FILE_TOOLS.has(tool)) {
+		const filePath = String(args.path ?? args.file_path ?? args.pattern ?? "");
+		const action = tool === "read" ? "Read" : tool === "write" ? "Wrote"
+			: tool === "edit" ? "Edited" : tool === "grep" ? "Searched"
+			: tool === "bash" ? "Ran" : `Used ${tool} on`;
+		return [
+			`${action} ${filePath}`.trim(),
+			`${action} ${filePath} (${elapsedMs.toFixed(0)}ms)`.trim(),
+		];
+	}
+
+	if (SUMMARY_TOOLS.has(tool)) {
+		const summary = cleanResult.split("\n")[0]?.slice(0, 200) ?? "";
+		return [`Checked ${tool}`, `${tool}: ${summary}`];
+	}
+
+	const intent = extractIntent(args);
+	return [
+		intent || `Used ${tool}`,
+		`${tool}: ${cleanResult.slice(0, 300)}`,
+	];
+}
+
 // ─── Session Recorder ───────────────────────────────────────────────────────
 
 /**
@@ -119,6 +199,8 @@ export class McpSessionRecorder {
 		if (isQuestion && !hasMemorySignal) return false;
 		if (!hasMemorySignal && !hasFirstPerson) return false;
 		if (tool === "chitragupta_record_conversation") return true;
+		// Semantic tools always carry user intent worth extracting
+		if (SEMANTIC_TOOLS.has(tool)) return true;
 		return hasMemorySignal;
 	}
 
@@ -161,25 +243,29 @@ export class McpSessionRecorder {
 				return;
 			}
 
-			const argSummary = Object.keys(info.args).length > 0 ? JSON.stringify(info.args, null, 2) : "(no args)";
-			await addTurn(sid, this.projectPath, {
-				turnNumber: 0,
-				role: "user",
-				content: `[tool:${info.tool}] ${argSummary}`,
-				agent: "mcp-client",
-				model: "mcp",
-			});
-			this.turnCounter++;
-
 			const resultText =
 				info.result.content
 					?.filter((c): c is { type: "text"; text: string } => c.type === "text")
 					.map((c) => c.text)
 					.join("\n") ?? "(no output)";
+
+			const [userContent, assistantContent] = extractSemanticContent(
+				info.tool, info.args, resultText, info.elapsedMs,
+			);
+
+			await addTurn(sid, this.projectPath, {
+				turnNumber: 0,
+				role: "user",
+				content: userContent,
+				agent: "mcp-client",
+				model: "mcp",
+			});
+			this.turnCounter++;
+
 			await addTurn(sid, this.projectPath, {
 				turnNumber: 0,
 				role: "assistant",
-				content: `[${info.tool} → ${info.elapsedMs.toFixed(0)}ms] ${resultText}`,
+				content: assistantContent,
 				agent: "mcp",
 				model: "mcp",
 			});
@@ -223,45 +309,27 @@ export class McpSessionRecorder {
 		result: McpToolResult;
 		elapsedMs: number;
 	}): Promise<void> {
+		const { appendMemory } = await import("@chitragupta/smriti/memory-store");
 		const resultText =
 			info.result.content
 				?.filter((c): c is { type: "text"; text: string } => c.type === "text")
 				.map((c) => c.text)
 				.join("\n") ?? "";
-
-		const projectScope = { type: "project" as const, path: this.projectPath };
+		const scope = { type: "project" as const, path: this.projectPath };
 
 		if (info.tool === "coding_agent") {
-			const { appendMemory } = await import("@chitragupta/smriti/memory-store");
 			const task = String(info.args.task ?? "").slice(0, 500);
-			const success = !info.result.isError && resultText.includes("✓");
-			const filesMatch = resultText.match(/(?:Modified|Created): (.+)/g);
-			const files = filesMatch ? filesMatch.join("; ") : "none";
-			const elapsed = (info.elapsedMs / 1000).toFixed(1);
-			await appendMemory(
-				projectScope,
-				[
-					`## Coding Agent: ${success ? "Success" : "Failed"}`,
-					`**Task**: ${task}`,
-					`**Files**: ${files}`,
-					`**Duration**: ${elapsed}s`,
-				].join("\n"),
-			);
-		}
-
-		if (info.tool === "sabha_deliberate") {
-			const { appendMemory } = await import("@chitragupta/smriti/memory-store");
+			const ok = !info.result.isError && resultText.includes("✓");
+			const files = resultText.match(/(?:Modified|Created): (.+)/g)?.join("; ") ?? "none";
+			await appendMemory(scope,
+				`## Coding Agent: ${ok ? "Success" : "Failed"}\n**Task**: ${task}\n**Files**: ${files}\n**Duration**: ${(info.elapsedMs / 1000).toFixed(1)}s`);
+		} else if (info.tool === "sabha_deliberate") {
 			const proposal = String(info.args.proposal ?? "").slice(0, 300);
 			const verdict = resultText.match(/verdict[:\s]*(\w+)/i)?.[1] ?? "unknown";
-			await appendMemory(projectScope, `## Deliberation: ${verdict}\n**Proposal**: ${proposal}`);
-		}
-
-		if (info.tool === "write" || info.tool === "edit") {
+			await appendMemory(scope, `## Deliberation: ${verdict}\n**Proposal**: ${proposal}`);
+		} else if ((info.tool === "write" || info.tool === "edit") && !info.result.isError) {
 			const filePath = String(info.args.path ?? "");
-			if (filePath && !info.result.isError) {
-				const { appendMemory } = await import("@chitragupta/smriti/memory-store");
-				await appendMemory(projectScope, `File ${info.tool === "write" ? "created" : "edited"}: ${filePath}`);
-			}
+			if (filePath) await appendMemory(scope, `File ${info.tool === "write" ? "created" : "edited"}: ${filePath}`);
 		}
 	}
 
@@ -319,7 +387,7 @@ export class McpSessionRecorder {
 						await addTurn(sid, this.projectPath, {
 							turnNumber: 0,
 							role,
-							content: `[conversation] ${truncated}`,
+							content: truncated,
 							agent: role === "user" ? "mcp-client" : "mcp-host",
 							model: "mcp",
 						});
