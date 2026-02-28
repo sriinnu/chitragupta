@@ -37,12 +37,13 @@ const localStorageMock: Storage = {
 
 // ── window / globalThis mocks ───────────────────────────────────
 
-if (typeof globalThis.localStorage === "undefined") {
-	Object.defineProperty(globalThis, "localStorage", {
-		value: localStorageMock,
-		writable: true,
-	});
-}
+// Always override — Node 22+ has native localStorage with different
+// backing store; tests must use our in-memory mock for determinism.
+Object.defineProperty(globalThis, "localStorage", {
+	value: localStorageMock,
+	writable: true,
+	configurable: true,
+});
 
 if (typeof globalThis.window === "undefined") {
 	Object.defineProperty(globalThis, "window", {

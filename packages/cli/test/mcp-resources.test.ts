@@ -41,7 +41,8 @@ describe("createPluginEcosystemResource", () => {
 
 		const resource = createPluginEcosystemResource();
 		const result = await resource.read("chitragupta://ecosystem/plugins");
-		const payload = JSON.parse(String(result[0]?.text ?? "{}")) as {
+		const first = result[0];
+		const payload = JSON.parse(first?.type === "text" ? first.text : "{}") as {
 			count: number;
 			uiExtensionCount: number;
 			plugins: Array<{
@@ -90,7 +91,8 @@ describe("createPluginEcosystemResource", () => {
 
 		const resource = createPluginEcosystemResource();
 		const result = await resource.read("chitragupta://ecosystem/plugins");
-		const payload = JSON.parse(String(result[0]?.text ?? "{}")) as {
+		const first = result[0];
+		const payload = JSON.parse(first?.type === "text" ? first.text : "{}") as {
 			count: number;
 			plugins: Array<{
 				name: string;

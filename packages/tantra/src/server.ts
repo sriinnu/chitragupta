@@ -5,41 +5,31 @@
  * Supports stdio and SSE transports.
  */
 
+import {
+	createErrorResponse,
+	createResponse,
+	INTERNAL_ERROR,
+	INVALID_PARAMS,
+	isRequest,
+	METHOD_NOT_FOUND,
+} from "./jsonrpc.js";
+import { handlePromptsGet, handlePromptsList, handleResourcesList, handleResourcesRead } from "./server-handlers.js";
+import { appendToolFooter, buildResponseMeta, resolveTraceContext, ToolCallRingBuffer } from "./server-telemetry.js";
+import type { ToolRegistry } from "./tool-registry.js";
+import { SSEServerTransport } from "./transport/sse.js";
+import { StdioServerTransport } from "./transport/stdio.js";
 import type {
+	JsonRpcNotification,
 	JsonRpcRequest,
 	JsonRpcResponse,
-	JsonRpcNotification,
+	McpPromptHandler,
+	McpResourceHandler,
 	McpServerConfig,
 	McpToolHandler,
-	McpResourceHandler,
-	McpPromptHandler,
-	ServerInfo,
 	ServerCapabilities,
+	ServerInfo,
 	ToolCallRecord,
 } from "./types.js";
-import {
-	createResponse,
-	createErrorResponse,
-	METHOD_NOT_FOUND,
-	INVALID_PARAMS,
-	INTERNAL_ERROR,
-	isRequest,
-} from "./jsonrpc.js";
-import { StdioServerTransport } from "./transport/stdio.js";
-import { SSEServerTransport } from "./transport/sse.js";
-import type { ToolRegistry } from "./tool-registry.js";
-import {
-	handleResourcesList,
-	handleResourcesRead,
-	handlePromptsList,
-	handlePromptsGet,
-} from "./server-handlers.js";
-import {
-	ToolCallRingBuffer,
-	resolveTraceContext,
-	buildResponseMeta,
-	appendToolFooter,
-} from "./server-telemetry.js";
 
 type AnyMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
 
@@ -72,9 +62,7 @@ export class McpServer {
 		}
 		if (config.resources) {
 			for (const resource of config.resources) {
-				const key = "uri" in resource.definition
-					? resource.definition.uri
-					: resource.definition.uriTemplate;
+				const key = "uri" in resource.definition ? resource.definition.uri : resource.definition.uriTemplate;
 				this._resources.set(key, resource);
 			}
 		}
@@ -88,10 +76,14 @@ export class McpServer {
 	// ─── Tool Management ──────────────────────────────────────────────────
 
 	/** Register a new tool handler. */
-	registerTool(handler: McpToolHandler): void { this._tools.set(handler.definition.name, handler); }
+	registerTool(handler: McpToolHandler): void {
+		this._tools.set(handler.definition.name, handler);
+	}
 
 	/** Unregister a tool by name. */
-	unregisterTool(name: string): void { this._tools.delete(name); }
+	unregisterTool(name: string): void {
+		this._tools.delete(name);
+	}
 
 	// ─── Dynamic Registry ────────────────────────────────────────────────
 
@@ -127,47 +119,23 @@ export class McpServer {
 
 		// Subscribe to live changes
 		this._registryUnsub = registry.onChange((event) => {
-			switch (event.type) {
-				case "tool:registered": {
-					const handler = registry.getTool(event.toolName);
-					if (handler && this._addRegistryTool(handler)) {
-						this._notifyToolsChanged();
-					}
-					break;
+			let changed = false;
+			if (event.type === "tool:registered" || event.type === "tool:enabled") {
+				const h = registry.getTool(event.toolName);
+				if (h) changed = this._addRegistryTool(h);
+			} else if (event.type === "tool:unregistered" || event.type === "tool:disabled") {
+				changed = this._removeRegistryTool(event.toolName);
+			} else if (event.type === "plugin:registered") {
+				for (const tn of event.toolNames) {
+					const h = registry.getTool(tn);
+					if (h) this._addRegistryTool(h);
 				}
-				case "tool:unregistered":
-					if (this._removeRegistryTool(event.toolName)) {
-						this._notifyToolsChanged();
-					}
-					break;
-				case "tool:enabled": {
-					const handler = registry.getTool(event.toolName);
-					if (handler && this._addRegistryTool(handler)) {
-						this._notifyToolsChanged();
-					}
-					break;
-				}
-				case "tool:disabled":
-					if (this._removeRegistryTool(event.toolName)) {
-						this._notifyToolsChanged();
-					}
-					break;
-				case "plugin:registered":
-					for (const toolName of event.toolNames) {
-						const handler = registry.getTool(toolName);
-						if (handler) {
-							this._addRegistryTool(handler);
-						}
-					}
-					this._notifyToolsChanged();
-					break;
-				case "plugin:unregistered":
-					for (const toolName of event.toolNames) {
-						this._removeRegistryTool(toolName);
-					}
-					this._notifyToolsChanged();
-					break;
+				changed = true;
+			} else if (event.type === "plugin:unregistered") {
+				for (const tn of event.toolNames) this._removeRegistryTool(tn);
+				changed = true;
 			}
+			if (changed) this._notifyToolsChanged();
 		});
 	}
 
@@ -209,9 +177,7 @@ export class McpServer {
 
 	/** Register a new resource handler. */
 	registerResource(handler: McpResourceHandler): void {
-		const key = "uri" in handler.definition
-			? handler.definition.uri
-			: handler.definition.uriTemplate;
+		const key = "uri" in handler.definition ? handler.definition.uri : handler.definition.uriTemplate;
 		const existing = this._resources.get(key);
 		this._resources.set(key, handler);
 
@@ -319,11 +285,7 @@ export class McpServer {
 				case "ping":
 					return createResponse(request.id, {});
 				default:
-					return createErrorResponse(
-						request.id,
-						METHOD_NOT_FOUND,
-						`Method not found: ${request.method}`,
-					);
+					return createErrorResponse(request.id, METHOD_NOT_FOUND, `Method not found: ${request.method}`);
 			}
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
@@ -334,10 +296,7 @@ export class McpServer {
 	/**
 	 * Handle "initialize" — return server info and capabilities.
 	 */
-	private _handleInitialize(
-		id: string | number,
-		_params?: Record<string, unknown>,
-	): JsonRpcResponse {
+	private _handleInitialize(id: string | number, _params?: Record<string, unknown>): JsonRpcResponse {
 		this._initialized = true;
 
 		const capabilities: ServerCapabilities = {};
@@ -372,16 +331,8 @@ export class McpServer {
 		return createResponse(id, { tools });
 	}
 
-	/**
-	 * Handle "tools/call" — execute a tool with trace propagation.
-	 *
-	 * Extracts or generates trace/span IDs, records execution to the ring
-	 * buffer, and includes `_meta` with trace + sandbox info in the response.
-	 */
-	private async _handleToolsCall(
-		id: string | number,
-		params?: Record<string, unknown>,
-	): Promise<JsonRpcResponse> {
+	/** Handle "tools/call" — execute a tool with trace propagation. */
+	private async _handleToolsCall(id: string | number, params?: Record<string, unknown>): Promise<JsonRpcResponse> {
 		if (!params || typeof params.name !== "string") {
 			return createErrorResponse(id, INVALID_PARAMS, "Missing required param: name");
 		}
@@ -421,10 +372,21 @@ export class McpServer {
 			appendToolFooter(result.content, toolName, elapsed, result._metadata, result.isError);
 			delete result._metadata;
 
-			this._ringBuffer.record({ toolName, traceId, spanId, durationMs: elapsed, isError: !!result.isError, timestamp: Date.now() });
+			this._ringBuffer.record({
+				toolName,
+				traceId,
+				spanId,
+				durationMs: elapsed,
+				isError: !!result.isError,
+				timestamp: Date.now(),
+			});
 
 			if (this._config.onToolCall) {
-				try { await this._config.onToolCall({ tool: toolName, args, result, elapsedMs: elapsed }); } catch { /* best-effort */ }
+				try {
+					await this._config.onToolCall({ tool: toolName, args, result, elapsedMs: elapsed });
+				} catch {
+					/* best-effort */
+				}
 			}
 
 			return createResponse(id, { ...result, _meta: buildResponseMeta(traceId, spanId, elapsed) });

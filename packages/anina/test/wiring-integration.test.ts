@@ -8,11 +8,11 @@
  * Wire 5: mesh-bootstrap creates actors and soul (separate module test)
  */
 
-import { describe, it, expect, vi } from "vitest";
-import { ToolExecutor } from "../src/tool-executor.js";
-import { LearningLoop } from "../src/learning-loop.js";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentLoopDeps } from "../src/agent-loop.js";
 import { runAgentLoop } from "../src/agent-loop.js";
+import { LearningLoop } from "../src/learning-loop.js";
+import { ToolExecutor } from "../src/tool-executor.js";
 
 // ─── Wire 1: Memory Recall Mid-Turn ─────────────────────────────────────────
 
@@ -35,7 +35,9 @@ describe("Wire 1: Memory Recall", () => {
 
 		expect(recalled).toHaveBeenCalledWith("read");
 		// Recalled context should be injected as system message
-		const systemMsgs = messages.filter(m => m.role === "system" && m.content.some(c => c.text?.includes("[Recalled context]")));
+		const systemMsgs = messages.filter(
+			(m) => m.role === "system" && m.content.some((c) => c.text?.includes("[Recalled context]")),
+		);
 		expect(systemMsgs.length).toBeGreaterThanOrEqual(1);
 	});
 
@@ -60,9 +62,7 @@ describe("Wire 1: Memory Recall", () => {
 
 		const deps = createMinimalDeps({
 			memoryRecall: recalled,
-			providerResponses: [
-				{ content: [{ type: "text", text: "just text" }], stopReason: "end_turn" },
-			],
+			providerResponses: [{ content: [{ type: "text", text: "just text" }], stopReason: "end_turn" }],
 		});
 
 		await runAgentLoop(deps);
@@ -76,7 +76,11 @@ describe("Wire 2: Skill Discovery", () => {
 	it("should try onToolNotFound callback before returning error", async () => {
 		const executor = new ToolExecutor();
 		const discoveredHandler = {
-			definition: { name: "discovered_tool", description: "dynamically found", inputSchema: { type: "object" as const, properties: {} } },
+			definition: {
+				name: "discovered_tool",
+				description: "dynamically found",
+				inputSchema: { type: "object" as const, properties: {} },
+			},
 			execute: vi.fn().mockResolvedValue({ content: "discovered result", isError: false }),
 		};
 		executor.setOnToolNotFound(async (_name) => discoveredHandler);
@@ -99,7 +103,9 @@ describe("Wire 2: Skill Discovery", () => {
 
 	it("should survive when onToolNotFound throws", async () => {
 		const executor = new ToolExecutor();
-		executor.setOnToolNotFound(async () => { throw new Error("discovery failed"); });
+		executor.setOnToolNotFound(async () => {
+			throw new Error("discovery failed");
+		});
 
 		const result = await executor.execute("broken_tool", {}, { sessionId: "s1", workingDirectory: "/tmp" });
 		expect(result.isError).toBe(true);
@@ -156,9 +162,7 @@ describe("Wire 4: LearningLoop serialization and persistence", () => {
 		const serialized = loop.serialize();
 		const restored = LearningLoop.deserialize(serialized);
 
-		expect(restored.getLearnedPatterns().frequencyRanking).toEqual(
-			loop.getLearnedPatterns().frequencyRanking,
-		);
+		expect(restored.getLearnedPatterns().frequencyRanking).toEqual(loop.getLearnedPatterns().frequencyRanking);
 	});
 });
 
@@ -171,9 +175,7 @@ function createMinimalDeps(opts: {
 	providerResponses?: Array<{ content: Array<Record<string, unknown>>; stopReason: string }>;
 	messages?: Array<Record<string, unknown>>;
 }): AgentLoopDeps {
-	const responses = opts.providerResponses ?? [
-		{ content: [{ type: "text", text: "hello" }], stopReason: "end_turn" },
-	];
+	const responses = opts.providerResponses ?? [{ content: [{ type: "text", text: "hello" }], stopReason: "end_turn" }];
 	let responseIdx = 0;
 	const allMessages: Array<Record<string, unknown>> = opts.messages ?? [];
 
@@ -200,8 +202,11 @@ function createMinimalDeps(opts: {
 		},
 		config: {
 			profile: {
-				id: "test", name: "Test", personality: "", expertise: [],
-				voice: "neutral" as "neutral",
+				id: "test",
+				name: "Test",
+				personality: "",
+				expertise: [],
+				voice: "friendly" as const,
 			},
 			providerId: "test",
 			model: "test-model",
@@ -210,6 +215,7 @@ function createMinimalDeps(opts: {
 			id: "test",
 			name: "test",
 			models: [],
+			auth: { type: "api-key" as const },
 			stream: async function* (_model, _context, _options) {
 				const resp = responses[responseIdx++] ?? responses[responses.length - 1];
 				for (const part of resp.content) {
@@ -224,14 +230,20 @@ function createMinimalDeps(opts: {
 						};
 					}
 				}
-				yield { type: "done" as const, stopReason: resp.stopReason as "end_turn", usage: { inputTokens: 0, outputTokens: 0 } };
+				yield {
+					type: "done" as const,
+					stopReason: resp.stopReason as "end_turn",
+					usage: { inputTokens: 0, outputTokens: 0 },
+				};
 			},
 		},
 		abortController: new AbortController(),
 		maxTurns: 10,
 		workingDirectory: "/tmp",
 		toolExecutor,
-		contextManager: { buildContext: () => ({ system: "test", messages: [], tools: [] }) } as unknown as AgentLoopDeps["contextManager"],
+		contextManager: {
+			buildContext: () => ({ system: "test", messages: [], tools: [] }),
+		} as unknown as AgentLoopDeps["contextManager"],
 		steeringManager: { getSteeringInstruction: () => null } as unknown as AgentLoopDeps["steeringManager"],
 		learningLoop: null,
 		autonomousAgent: null,
