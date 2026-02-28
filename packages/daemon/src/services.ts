@@ -12,6 +12,25 @@ import type { RpcRouter } from "./rpc-router.js";
 
 const log = createLogger("daemon:services");
 
+const DEFAULT_LIMIT = 10;
+const MAX_LIMIT = 200;
+
+function parseNonNegativeInt(value: unknown, field: string, fallback = 0): number {
+	const parsed = value == null ? fallback : Number(value);
+	if (!Number.isFinite(parsed) || parsed < 0) {
+		throw new Error(`Invalid ${field}`);
+	}
+	return Math.trunc(parsed);
+}
+
+function parseLimit(value: unknown, fallback = DEFAULT_LIMIT, max = MAX_LIMIT): number {
+	const parsed = value == null ? fallback : Number(value);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		throw new Error("Invalid limit");
+	}
+	return Math.min(max, Math.trunc(parsed));
+}
+
 /**
  * Register all smriti-backed services on the RPC router.
  *
@@ -27,6 +46,7 @@ export async function registerServices(router: RpcRouter): Promise<void> {
 	registerMemoryMethods(router, sessionDb);
 	registerReadMethods(router);
 	registerWriteMethods(router);
+	registerKnowledgeMethods(router, sessionStore);
 
 	log.info("Services registered", { methods: router.listMethods().length });
 }
@@ -82,7 +102,7 @@ function registerSessionMethods(
 
 	router.register("session.modified_since", async (params) => {
 		const project = String(params.project ?? "");
-		const sinceMs = Number(params.sinceMs ?? 0);
+		const sinceMs = parseNonNegativeInt(params.sinceMs, "sinceMs");
 		if (!project) throw new Error("Missing project");
 		return { sessions: store.getSessionsModifiedSince(project, sinceMs) };
 	}, "Get sessions modified since a timestamp");
@@ -119,7 +139,7 @@ function registerTurnMethods(
 
 	router.register("turn.since", async (params) => {
 		const sessionId = String(params.sessionId ?? "");
-		const sinceTurn = Number(params.sinceTurnNumber ?? 0);
+		const sinceTurn = parseNonNegativeInt(params.sinceTurnNumber, "sinceTurnNumber");
 		if (!sessionId) throw new Error("Missing sessionId");
 		return { turns: store.getTurnsSince(sessionId, sinceTurn) };
 	}, "Get turns since a given turn number");
@@ -138,7 +158,7 @@ function registerMemoryMethods(
 ): void {
 	router.register("memory.search", async (params) => {
 		const query = String(params.query ?? "");
-		const limit = Number(params.limit ?? 10);
+		const limit = parseLimit(params.limit);
 		if (!query) throw new Error("Missing query");
 
 		// FTS5 search on turns table
@@ -173,7 +193,7 @@ function registerMemoryMethods(
 	router.register("memory.recall", async (params) => {
 		const query = String(params.query ?? "");
 		const project = typeof params.project === "string" ? params.project : undefined;
-		const limit = Number(params.limit ?? 5);
+		const limit = parseLimit(params.limit, 5);
 		if (!query) throw new Error("Missing query");
 
 		const agentDb = db.getAgentDb();
@@ -203,7 +223,7 @@ function registerReadMethods(router: RpcRouter): void {
 	router.register("memory.unified_recall", async (params) => {
 		const query = String(params.query ?? "");
 		const project = typeof params.project === "string" ? params.project : undefined;
-		const limit = Number(params.limit ?? 5);
+		const limit = parseLimit(params.limit, 5);
 		if (!query) throw new Error("Missing query");
 		const { recall } = await import("@chitragupta/smriti/unified-recall");
 		const results = await recall(query, { limit, project });
@@ -238,7 +258,7 @@ function registerReadMethods(router: RpcRouter): void {
 
 	router.register("day.search", async (params) => {
 		const query = String(params.query ?? "");
-		const limit = Number(params.limit ?? 10);
+		const limit = parseLimit(params.limit);
 		if (!query) throw new Error("Missing query");
 		const { searchDayFiles } = await import("@chitragupta/smriti/day-consolidation");
 		const results = searchDayFiles(query, { limit });
@@ -252,6 +272,94 @@ function registerReadMethods(router: RpcRouter): void {
 		const ctx = await loadProviderContext(project);
 		return { assembled: ctx.assembled, itemCount: ctx.itemCount };
 	}, "Load provider context for a project");
+}
+
+/** Knowledge lifecycle methods (Vidhis + consolidation) via single-writer daemon. */
+function registerKnowledgeMethods(
+	router: RpcRouter,
+	store: typeof import("@chitragupta/smriti/session-store"),
+): void {
+	router.register("vidhi.list", async (params) => {
+		const project = String(params.project ?? "");
+		const limit = parseLimit(params.limit, 10, 100);
+		if (!project) throw new Error("Missing project");
+		const { VidhiEngine } = await import("@chitragupta/smriti");
+		const engine = new VidhiEngine({ project });
+		return { vidhis: engine.getVidhis(project, limit) };
+	}, "List learned procedures (vidhis) for a project");
+
+	router.register("vidhi.match", async (params) => {
+		const project = String(params.project ?? "");
+		const query = String(params.query ?? "");
+		if (!project) throw new Error("Missing project");
+		if (!query) throw new Error("Missing query");
+		const { VidhiEngine } = await import("@chitragupta/smriti");
+		const engine = new VidhiEngine({ project });
+		return { match: engine.match(query) ?? null };
+	}, "Match a learned procedure (vidhi) for a query");
+
+	router.register("consolidation.run", async (params) => {
+		const project = String(params.project ?? "");
+		const sessionCount = parseLimit(params.sessionCount, 10, 100);
+		if (!project) throw new Error("Missing project");
+
+		const { ConsolidationEngine, VidhiEngine } = await import("@chitragupta/smriti");
+		const consolidator = new ConsolidationEngine();
+		consolidator.load();
+
+		const recentMetas = store.listSessions(project).slice(0, sessionCount);
+		const sessions: Array<Record<string, unknown>> = [];
+		for (const meta of recentMetas) {
+			try {
+				const loaded = store.loadSession(String(meta.id), project);
+				if (loaded) sessions.push(loaded as unknown as Record<string, unknown>);
+			} catch {
+				// Skip unreadable sessions in consolidation pass.
+			}
+		}
+
+		if (sessions.length === 0) {
+			return {
+				sessionsAnalyzed: 0,
+				newRulesCount: 0,
+				reinforcedRulesCount: 0,
+				weakenedRulesCount: 0,
+				patternsDetectedCount: 0,
+				newRulesPreview: [] as string[],
+				vidhisNewCount: 0,
+				vidhisReinforcedCount: 0,
+			};
+		}
+
+		const result = consolidator.consolidate(
+			sessions as unknown as import("@chitragupta/smriti/types").Session[],
+		);
+		consolidator.decayRules();
+		consolidator.pruneRules();
+		consolidator.save();
+
+		let vidhisNewCount = 0;
+		let vidhisReinforcedCount = 0;
+		try {
+			const vidhiEngine = new VidhiEngine({ project });
+			const vidhiResult = vidhiEngine.extract();
+			vidhisNewCount = vidhiResult.newVidhis.length;
+			vidhisReinforcedCount = vidhiResult.reinforced.length;
+		} catch {
+			// Optional — consolidation still succeeds without vidhi extraction.
+		}
+
+		return {
+			sessionsAnalyzed: result.sessionsAnalyzed,
+			newRulesCount: result.newRules.length,
+			reinforcedRulesCount: result.reinforcedRules.length,
+			weakenedRulesCount: result.weakenedRules.length,
+			patternsDetectedCount: result.patternsDetected.length,
+			newRulesPreview: result.newRules.slice(0, 20).map((rule) => `[${rule.category}] ${rule.rule}`),
+			vidhisNewCount,
+			vidhisReinforcedCount,
+		};
+	}, "Run Svapna consolidation and Vidhi extraction for a project");
 }
 
 /** Write methods that enforce single-writer through daemon. */

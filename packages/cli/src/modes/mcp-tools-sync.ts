@@ -247,18 +247,35 @@ export function createVidhisTool(projectPath: string): McpToolHandler {
 			const limit = typeof args.limit === "number" ? args.limit : 10;
 
 			try {
-				const { VidhiEngine } = await import("@chitragupta/smriti");
-				const engine = new VidhiEngine({ project: projectPath });
+				const bridge = await import("./daemon-bridge.js");
 
 				if (query) {
-					const matched = engine.match(query);
+					const matched = await bridge.matchVidhiViaDaemon(projectPath, query) as {
+						name: string;
+						steps: Array<{ toolName: string; description: string }>;
+						triggers: string[];
+						confidence: number;
+						successRate: number;
+						successCount: number;
+						failureCount: number;
+						parameterSchema: Record<string, { name: string; description: string }>;
+					} | null;
 					if (matched) {
 						return { content: [{ type: "text", text: `Best match for "${query}":\n\n${formatVidhi(matched)}` }], _metadata: { action: "vidhis_search", matches: 1 } };
 					}
 					return { content: [{ type: "text", text: `No vidhis match "${query}".` }], _metadata: { action: "vidhis_search", matches: 0 } };
 				}
 
-				const vidhis = engine.getVidhis(projectPath, limit);
+				const vidhis = await bridge.listVidhisViaDaemon(projectPath, limit) as Array<{
+					name: string;
+					steps: Array<{ toolName: string; description: string }>;
+					triggers: string[];
+					confidence: number;
+					successRate: number;
+					successCount: number;
+					failureCount: number;
+					parameterSchema: Record<string, { name: string; description: string }>;
+				}>;
 				if (vidhis.length === 0) {
 					return { content: [{ type: "text", text: "No learned procedures (vidhis) found. Procedures are extracted during Svapna consolidation from repeated successful tool sequences." }], _metadata: { action: "vidhis_list", count: 0 } };
 				}
@@ -292,54 +309,33 @@ export function createConsolidateTool(projectPath: string): McpToolHandler {
 			const sessionCount = typeof args.sessionCount === "number" ? args.sessionCount : 10;
 
 			try {
-				const { ConsolidationEngine, VidhiEngine } = await import("@chitragupta/smriti");
 				const bridge = await import("./daemon-bridge.js");
-
-				const consolidator = new ConsolidationEngine();
-				consolidator.load();
-
-				const recentMetas = await bridge.listSessions(projectPath);
-				const sessions: Array<Record<string, unknown>> = [];
-				for (const meta of recentMetas.slice(0, sessionCount)) {
-					try {
-						const s = await bridge.showSession(String(meta.id), projectPath);
-						if (s) sessions.push(s);
-					} catch { /* skip */ }
-				}
-
-				if (sessions.length === 0) {
+				const result = await bridge.runConsolidationViaDaemon(projectPath, sessionCount);
+				if (result.sessionsAnalyzed === 0) {
 					return { content: [{ type: "text", text: "No sessions found to consolidate." }], _metadata: { action: "consolidate", sessions: 0 } };
 				}
-
-				const result = consolidator.consolidate(sessions as unknown as import("@chitragupta/smriti/types").Session[]);
-				consolidator.decayRules();
-				consolidator.pruneRules();
-
-				let vidhiSummary = "";
-				try {
-					const vidhiEngine = new VidhiEngine({ project: projectPath });
-					const vr = vidhiEngine.extract();
-					vidhiSummary = `\nVidhis: ${vr.newVidhis.length} new, ${vr.reinforced.length} reinforced`;
-				} catch { /* optional */ }
-
-				consolidator.save();
 
 				const lines: string[] = [
 					`Swapna Consolidation Complete`,
 					`Sessions analyzed: ${result.sessionsAnalyzed}`,
-					`New rules: ${result.newRules.length}`,
-					`Rules reinforced: ${result.reinforcedRules.length}`,
-					`Rules weakened: ${result.weakenedRules.length}`,
-					`Patterns detected: ${result.patternsDetected.length}`,
+					`New rules: ${result.newRulesCount}`,
+					`Rules reinforced: ${result.reinforcedRulesCount}`,
+					`Rules weakened: ${result.weakenedRulesCount}`,
+					`Patterns detected: ${result.patternsDetectedCount}`,
+					`Vidhis: ${result.vidhisNewCount} new, ${result.vidhisReinforcedCount} reinforced`,
 				];
-				if (vidhiSummary) lines.push(vidhiSummary.trim());
-				if (result.newRules.length > 0) {
+				if (result.newRulesPreview.length > 0) {
 					lines.push("", "New rules:");
-					for (const rule of result.newRules.slice(0, 10)) lines.push(`  - [${rule.category}] ${rule.rule}`);
+					for (const rule of result.newRulesPreview.slice(0, 10)) lines.push(`  - ${rule}`);
 				}
 				return {
 					content: [{ type: "text", text: lines.join("\n") }],
-					_metadata: { action: "consolidate", sessions: result.sessionsAnalyzed, newRules: result.newRules.length, reinforced: result.reinforcedRules.length },
+					_metadata: {
+						action: "consolidate",
+						sessions: result.sessionsAnalyzed,
+						newRules: result.newRulesCount,
+						reinforced: result.reinforcedRulesCount,
+					},
 				};
 			} catch (err) {
 				return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
