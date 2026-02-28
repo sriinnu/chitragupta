@@ -65,13 +65,12 @@ export function createMemorySearchTool(projectPath: string): McpToolHandler {
 			}
 
 			try {
-				const { searchMemory } = await import("@chitragupta/smriti/search");
-				const { listMemoryScopes } = await import("@chitragupta/smriti/memory-store");
-				const results = searchMemory(query);
+				const bridge = await import("./daemon-bridge.js");
+				const results = await bridge.searchMemoryFiles(query);
 				const limited = results.slice(0, limit);
 
 				if (limited.length === 0) {
-					const scopes = listMemoryScopes();
+					const scopes = await bridge.listMemoryScopesViaDaemon();
 					const hint = scopes.length === 0
 						? " No memory files exist yet — use the `memory` tool with action 'write' or 'append' to create memory."
 						: ` Searched ${scopes.length} memory scope(s).`;
@@ -79,19 +78,20 @@ export function createMemorySearchTool(projectPath: string): McpToolHandler {
 				}
 
 				const formatted = limited.map((r, i) => {
-					const source = r.scope.type === "project"
-						? `project:${r.scope.path}`
-						: r.scope.type === "global"
+					const scope = (r.scope ?? {}) as Record<string, unknown>;
+					const source = scope.type === "project"
+						? `project:${scope.path}`
+						: scope.type === "global"
 							? "global"
-							: r.scope.type === "agent"
-								? `agent:${r.scope.agentId}`
-								: `session:${r.scope.sessionId}`;
-					return `[${i + 1}] (score: ${(r.relevance ?? 0).toFixed(2)}, source: ${source})\n${r.content}`;
+							: scope.type === "agent"
+								? `agent:${scope.agentId}`
+								: `session:${scope.sessionId}`;
+					return `[${i + 1}] (score: ${((r.relevance as number) ?? 0).toFixed(2)}, source: ${source})\n${r.content}`;
 				}).join("\n\n---\n\n");
 
 				return {
 					content: [{ type: "text", text: truncateOutput(formatted) }],
-					_metadata: { typed: { query, results: limited.map((r) => ({ text: r.content.slice(0, 200), score: r.relevance ?? 0, source: r.scope.type })) } },
+					_metadata: { typed: { query, results: limited.map((r) => ({ text: String(r.content).slice(0, 200), score: (r.relevance as number) ?? 0, source: ((r.scope ?? {}) as Record<string, unknown>).type })) } },
 				};
 			} catch (err) {
 				return {

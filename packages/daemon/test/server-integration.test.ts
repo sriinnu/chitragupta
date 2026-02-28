@@ -91,4 +91,11 @@ describe("Server integration (real socket)", () => {
 		expect(typeof health.pid).toBe("number");
 		expect(typeof health.methods).toBe("number");
 	});
+
+	it("should reject second daemon bind when socket is already live", async () => {
+		const secondRouter = new RpcRouter();
+		await expect(startServer({ paths, router: secondRouter }))
+			.rejects
+			.toThrow("Socket already in use by a live daemon");
+	});
 });

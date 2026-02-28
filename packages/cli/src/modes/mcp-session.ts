@@ -140,8 +140,8 @@ export class McpSessionRecorder {
 
 			if (!this.contextInjected && this.sessionId) {
 				try {
-					const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
-					const ctx = await loadProviderContext(this.projectPath);
+					const ctxBridge = await import("./daemon-bridge.js");
+					const ctx = await ctxBridge.loadContextViaDaemon(this.projectPath);
 					if (ctx.assembled.trim()) {
 						const bridge = await import("./daemon-bridge.js");
 						await bridge.addTurn(this.sessionId, this.projectPath, {
@@ -272,7 +272,6 @@ export class McpSessionRecorder {
 			this.turnCounter++;
 
 			try {
-				const bridge = await import("./daemon-bridge.js");
 				const userText = this.extractUserText(info.args);
 				if (userText && this.shouldExtractFact(info.tool, userText)) {
 					await bridge.extractFacts(userText, this.projectPath);

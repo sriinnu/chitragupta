@@ -100,12 +100,12 @@ export function startServer(options: ServerModeOptions): {
 			}
 
 			if (req.method === "GET" && pathname === "/memory/search") {
-				handleMemorySearch(params, res);
+				await handleMemorySearch(params, res);
 				return;
 			}
 
 			if (req.method === "GET" && pathname === "/sessions") {
-				handleSessionsList(projectPath, res);
+				await handleSessionsList(projectPath, res);
 				return;
 			}
 
@@ -116,7 +116,7 @@ export function startServer(options: ServerModeOptions): {
 					errorResponse(res, 400, "Missing session ID in path");
 					return;
 				}
-				handleSessionGet(sessionId, projectPath, res);
+				await handleSessionGet(sessionId, projectPath, res);
 				return;
 			}
 

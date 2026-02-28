@@ -9,8 +9,11 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Agent, AgentEventType, AgentMessage, ToolHandler } from "@chitragupta/anina";
-import { listSessions, loadSession } from "@chitragupta/smriti/session-store";
-import { searchMemory } from "@chitragupta/smriti/search";
+import {
+	listSessions as listSessionsViaDaemon,
+	showSession,
+	searchMemoryFiles,
+} from "./daemon-bridge.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -325,8 +328,8 @@ export async function handleToolExecute(
 	}
 }
 
-/** GET /memory/search?q=...&limit=N — Search memory. */
-export function handleMemorySearch(params: URLSearchParams, res: ServerResponse): void {
+/** GET /memory/search?q=...&limit=N — Search memory via daemon. */
+export async function handleMemorySearch(params: URLSearchParams, res: ServerResponse): Promise<void> {
 	const query = params.get("q");
 	const limitStr = params.get("limit");
 
@@ -335,12 +338,12 @@ export function handleMemorySearch(params: URLSearchParams, res: ServerResponse)
 		return;
 	}
 
-	const results = searchMemory(query);
+	const results = await searchMemoryFiles(query);
 	const limit = limitStr ? parseInt(limitStr, 10) : 20;
 	const limited = results.slice(0, limit);
 
 	jsonResponse(res, 200, {
-		results: limited.map((r) => ({
+		results: limited.map((r: Record<string, unknown>) => ({
 			content: r.content, relevance: r.relevance ?? 0, scope: r.scope,
 		})),
 		count: limited.length,
@@ -348,11 +351,11 @@ export function handleMemorySearch(params: URLSearchParams, res: ServerResponse)
 	});
 }
 
-/** GET /sessions — List sessions. */
-export function handleSessionsList(projectPath: string | undefined, res: ServerResponse): void {
-	const sessions = listSessions(projectPath);
+/** GET /sessions — List sessions via daemon. */
+export async function handleSessionsList(projectPath: string | undefined, res: ServerResponse): Promise<void> {
+	const sessions = await listSessionsViaDaemon(projectPath);
 	jsonResponse(res, 200, {
-		sessions: sessions.map((s) => ({
+		sessions: sessions.map((s: Record<string, unknown>) => ({
 			id: s.id, title: s.title, created: s.created, updated: s.updated,
 			agent: s.agent, model: s.model, totalCost: s.totalCost, tags: s.tags,
 		})),
@@ -360,14 +363,17 @@ export function handleSessionsList(projectPath: string | undefined, res: ServerR
 	});
 }
 
-/** GET /sessions/:id — Get session details. */
-export function handleSessionGet(
+/** GET /sessions/:id — Get session details via daemon. */
+export async function handleSessionGet(
 	sessionId: string,
 	projectPath: string | undefined,
 	res: ServerResponse,
-): void {
+): Promise<void> {
 	try {
-		const session = loadSession(sessionId, projectPath ?? process.cwd());
+		const session = await showSession(sessionId, projectPath ?? process.cwd()) as {
+			meta: Record<string, unknown>;
+			turns: Array<Record<string, unknown>>;
+		};
 		jsonResponse(res, 200, {
 			meta: session.meta, turns: session.turns, turnCount: session.turns.length,
 		});

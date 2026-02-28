@@ -180,8 +180,8 @@ export function createRecallTool(): McpToolHandler {
 			}
 
 			try {
-				const { recall } = await import("@chitragupta/smriti/unified-recall");
-				const results = await recall(query, { limit, project });
+				const bridge = await import("./daemon-bridge.js");
+				const results = await bridge.unifiedRecall(query, { limit, project }) as Array<{ score: number; answer: string; primarySource: string; sessionId?: string; date?: string }>;
 				if (results.length === 0) {
 					return { content: [{ type: "text", text: `No recall results for: ${query}` }], _metadata: { action: "recall", query } };
 				}
@@ -293,16 +293,16 @@ export function createConsolidateTool(projectPath: string): McpToolHandler {
 
 			try {
 				const { ConsolidationEngine, VidhiEngine } = await import("@chitragupta/smriti");
-				const { listSessions, loadSession } = await import("@chitragupta/smriti/session-store");
+				const bridge = await import("./daemon-bridge.js");
 
 				const consolidator = new ConsolidationEngine();
 				consolidator.load();
 
-				const recentMetas = listSessions(projectPath).slice(0, sessionCount);
-				const sessions: import("@chitragupta/smriti/types").Session[] = [];
-				for (const meta of recentMetas) {
+				const recentMetas = await bridge.listSessions(projectPath);
+				const sessions: Array<Record<string, unknown>> = [];
+				for (const meta of recentMetas.slice(0, sessionCount)) {
 					try {
-						const s = loadSession(meta.id, projectPath);
+						const s = await bridge.showSession(String(meta.id), projectPath);
 						if (s) sessions.push(s);
 					} catch { /* skip */ }
 				}
@@ -311,7 +311,7 @@ export function createConsolidateTool(projectPath: string): McpToolHandler {
 					return { content: [{ type: "text", text: "No sessions found to consolidate." }], _metadata: { action: "consolidate", sessions: 0 } };
 				}
 
-				const result = consolidator.consolidate(sessions);
+				const result = consolidator.consolidate(sessions as unknown as import("@chitragupta/smriti/types").Session[]);
 				consolidator.decayRules();
 				consolidator.pruneRules();
 

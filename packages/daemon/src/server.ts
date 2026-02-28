@@ -8,9 +8,10 @@
  */
 
 import net from "node:net";
+import fs from "node:fs";
 import { createLogger } from "@chitragupta/core";
 import type { DaemonPaths } from "./paths.js";
-import { cleanStaleSocket, ensureDirs } from "./paths.js";
+import { ensureDirs } from "./paths.js";
 import {
 	ErrorCode,
 	createErrorResponse,
@@ -26,12 +27,26 @@ import type { RpcRouter } from "./rpc-router.js";
 
 const log = createLogger("daemon:server");
 
+/** Max size of a single NDJSON message (1 MB). */
+const MAX_MESSAGE_SIZE = 1 * 1024 * 1024;
+
+/** Max accumulated buffer per connection before forced disconnect (5 MB). */
+const MAX_BUFFER_SIZE = 5 * 1024 * 1024;
+
+/** Max concurrent pending requests per connection. */
+const MAX_PENDING_REQUESTS = 100;
+
+/** Application-level server error code (JSON-RPC). */
+const SERVER_ERROR = -32000;
+
 /** Per-connection state. */
 interface ClientConnection {
 	id: string;
 	socket: net.Socket;
 	buffer: string;
 	connectedAt: number;
+	/** Number of in-flight (pending) requests. */
+	pendingRequests: number;
 }
 
 /** Server configuration. */
@@ -65,7 +80,6 @@ export async function startServer(config: DaemonServerConfig): Promise<DaemonSer
 	const clients = new Map<string, ClientConnection>();
 
 	ensureDirs(paths);
-	cleanStaleSocket(paths.socket);
 
 	const server = net.createServer((socket) => {
 		if (clients.size >= maxConnections) {
@@ -76,12 +90,27 @@ export async function startServer(config: DaemonServerConfig): Promise<DaemonSer
 		}
 
 		const clientId = crypto.randomUUID();
-		const conn: ClientConnection = { id: clientId, socket, buffer: "", connectedAt: Date.now() };
+		const conn: ClientConnection = {
+			id: clientId, socket, buffer: "", connectedAt: Date.now(), pendingRequests: 0,
+		};
 		clients.set(clientId, conn);
 		log.debug("Client connected", { clientId, total: clients.size });
 
 		socket.on("data", (chunk) => {
 			conn.buffer += chunk.toString("utf-8");
+
+			// Buffer overflow guard — disconnect before OOM
+			if (conn.buffer.length > MAX_BUFFER_SIZE) {
+				log.warn("Buffer limit exceeded, closing connection", {
+					clientId, bufferSize: conn.buffer.length,
+				});
+				const err = createErrorResponse(0, SERVER_ERROR, "Buffer limit exceeded");
+				conn.socket.write(serialize(err));
+				conn.socket.destroy();
+				clients.delete(clientId);
+				return;
+			}
+
 			processBuffer(conn, router);
 		});
 
@@ -102,14 +131,9 @@ export async function startServer(config: DaemonServerConfig): Promise<DaemonSer
 		log.error("Server error", err);
 	});
 
-	// Bind to socket path
-	await new Promise<void>((resolve, reject) => {
-		server.listen(paths.socket, () => {
-			log.info("Daemon listening", { socket: paths.socket });
-			resolve();
-		});
-		server.once("error", reject);
-	});
+	// Bind to socket path with stale-socket/liveness safety.
+	await bindServerSocket(server, paths.socket);
+	log.info("Daemon listening", { socket: paths.socket });
 
 	return {
 		stop: () => stopServer(server, clients),
@@ -127,6 +151,17 @@ function processBuffer(conn: ClientConnection, router: RpcRouter): void {
 
 		if (line.length === 0) continue;
 
+		// Per-message size cap
+		if (line.length > MAX_MESSAGE_SIZE) {
+			log.warn("Message exceeds size limit", {
+				clientId: conn.id, size: line.length, max: MAX_MESSAGE_SIZE,
+			});
+			const err = createErrorResponse(0, SERVER_ERROR, "Message too large");
+			conn.socket.write(serialize(err));
+			conn.socket.destroy();
+			return;
+		}
+
 		const msg = parseMessage(line);
 		if (!msg) {
 			const errResp = createErrorResponse(0, ErrorCode.ParseError, "Invalid JSON");
@@ -135,9 +170,21 @@ function processBuffer(conn: ClientConnection, router: RpcRouter): void {
 		}
 
 		if (isRequest(msg)) {
-			handleRequest(conn, msg, router).catch((err) => {
-				log.error("Unhandled request error", err, { method: msg.method });
-			});
+			// Backpressure: reject if too many pending requests
+			if (conn.pendingRequests >= MAX_PENDING_REQUESTS) {
+				log.warn("Backpressure: too many pending requests", {
+					clientId: conn.id, pending: conn.pendingRequests,
+				});
+				const err = createErrorResponse(msg.id, SERVER_ERROR, "Too many pending requests");
+				conn.socket.write(serialize(err));
+				continue;
+			}
+			conn.pendingRequests++;
+			handleRequest(conn, msg, router)
+				.catch((err) => {
+					log.error("Unhandled request error", err, { method: msg.method });
+				})
+				.finally(() => { conn.pendingRequests--; });
 		} else if (isNotification(msg)) {
 			router.handle(msg.method, msg.params ?? {}).catch((err) => {
 				log.warn("Notification handler error", { method: msg.method, error: String(err) });
@@ -180,4 +227,75 @@ async function stopServer(server: net.Server, clients: Map<string, ClientConnect
 	});
 
 	log.info("Daemon server stopped");
+}
+
+/**
+ * Bind server to socket path safely.
+ *
+ * If socket path is in use, probe whether another daemon is alive.
+ * - Alive: fail fast (do not unlink live socket)
+ * - Dead/stale: unlink once and retry bind
+ */
+async function bindServerSocket(server: net.Server, socketPath: string): Promise<void> {
+	let staleUnlinked = false;
+
+	for (;;) {
+		try {
+			await listenOnce(server, socketPath);
+			return;
+		} catch (err) {
+			const code = (err as NodeJS.ErrnoException).code;
+			if (code !== "EADDRINUSE") throw err;
+
+			const live = await isSocketLive(socketPath);
+			if (live) {
+				throw new Error(`Socket already in use by a live daemon: ${socketPath}`);
+			}
+			if (staleUnlinked) {
+				throw new Error(`Failed to recover stale socket: ${socketPath}`);
+			}
+			try {
+				fs.unlinkSync(socketPath);
+				staleUnlinked = true;
+				log.warn("Removed stale socket file before retrying bind", { socket: socketPath });
+			} catch (unlinkErr) {
+				if ((unlinkErr as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkErr;
+				staleUnlinked = true;
+			}
+		}
+	}
+}
+
+/** Listen once and resolve on successful bind. */
+function listenOnce(server: net.Server, socketPath: string): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		const onError = (err: unknown) => {
+			server.off("listening", onListening);
+			reject(err);
+		};
+		const onListening = () => {
+			server.off("error", onError);
+			resolve();
+		};
+		server.once("error", onError);
+		server.once("listening", onListening);
+		server.listen(socketPath);
+	});
+}
+
+/** Probe whether a daemon is actively accepting connections on the socket. */
+function isSocketLive(socketPath: string): Promise<boolean> {
+	return new Promise<boolean>((resolve) => {
+		const probe = net.createConnection(socketPath);
+		let settled = false;
+		const finish = (live: boolean) => {
+			if (settled) return;
+			settled = true;
+			probe.destroy();
+			resolve(live);
+		};
+		probe.once("connect", () => finish(true));
+		probe.once("error", () => finish(false));
+		probe.setTimeout(250, () => finish(false));
+	});
 }

@@ -25,6 +25,7 @@ export async function registerServices(router: RpcRouter): Promise<void> {
 	registerSessionMethods(router, sessionStore, sessionDb);
 	registerTurnMethods(router, sessionStore);
 	registerMemoryMethods(router, sessionDb);
+	registerReadMethods(router);
 	registerWriteMethods(router);
 
 	log.info("Services registered", { methods: router.listMethods().length });
@@ -79,6 +80,13 @@ function registerSessionMethods(
 		return { projects: store.listSessionProjects() };
 	}, "List projects with session counts");
 
+	router.register("session.modified_since", async (params) => {
+		const project = String(params.project ?? "");
+		const sinceMs = Number(params.sinceMs ?? 0);
+		if (!project) throw new Error("Missing project");
+		return { sessions: store.getSessionsModifiedSince(project, sinceMs) };
+	}, "Get sessions modified since a timestamp");
+
 	router.register("session.meta.update", async (params) => {
 		const id = String(params.id ?? "");
 		const updates = (params.updates ?? {}) as Parameters<typeof store.updateSessionMeta>[1];
@@ -115,6 +123,12 @@ function registerTurnMethods(
 		if (!sessionId) throw new Error("Missing sessionId");
 		return { turns: store.getTurnsSince(sessionId, sinceTurn) };
 	}, "Get turns since a given turn number");
+
+	router.register("turn.max_number", async (params) => {
+		const sessionId = String(params.sessionId ?? "");
+		if (!sessionId) throw new Error("Missing sessionId");
+		return { maxTurn: store.getMaxTurnNumber(sessionId) };
+	}, "Get max turn number for a session");
 }
 
 /** Memory recall and search methods. */
@@ -182,6 +196,62 @@ function registerMemoryMethods(
 
 		return { results: rows, query, project };
 	}, "Recall memories relevant to a query");
+}
+
+/** Read-through methods for memory files, day files, recall, and context. */
+function registerReadMethods(router: RpcRouter): void {
+	router.register("memory.unified_recall", async (params) => {
+		const query = String(params.query ?? "");
+		const project = typeof params.project === "string" ? params.project : undefined;
+		const limit = Number(params.limit ?? 5);
+		if (!query) throw new Error("Missing query");
+		const { recall } = await import("@chitragupta/smriti/unified-recall");
+		const results = await recall(query, { limit, project });
+		return { results };
+	}, "Unified recall across all memory layers");
+
+	router.register("memory.file_search", async (params) => {
+		const query = String(params.query ?? "");
+		if (!query) throw new Error("Missing query");
+		const { searchMemory } = await import("@chitragupta/smriti/search");
+		const results = searchMemory(query);
+		return { results };
+	}, "Search memory markdown files");
+
+	router.register("memory.scopes", async () => {
+		const { listMemoryScopes } = await import("@chitragupta/smriti/memory-store");
+		return { scopes: listMemoryScopes() };
+	}, "List available memory scopes");
+
+	router.register("day.show", async (params) => {
+		const date = String(params.date ?? "");
+		if (!date) throw new Error("Missing date");
+		const { readDayFile } = await import("@chitragupta/smriti/day-consolidation");
+		const content = readDayFile(date);
+		return { date, content: content ?? null };
+	}, "Read a consolidated day file");
+
+	router.register("day.list", async () => {
+		const { listDayFiles } = await import("@chitragupta/smriti/day-consolidation");
+		return { dates: listDayFiles() };
+	}, "List available day files");
+
+	router.register("day.search", async (params) => {
+		const query = String(params.query ?? "");
+		const limit = Number(params.limit ?? 10);
+		if (!query) throw new Error("Missing query");
+		const { searchDayFiles } = await import("@chitragupta/smriti/day-consolidation");
+		const results = searchDayFiles(query, { limit });
+		return { results };
+	}, "Search across day files");
+
+	router.register("context.load", async (params) => {
+		const project = String(params.project ?? "");
+		if (!project) throw new Error("Missing project");
+		const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
+		const ctx = await loadProviderContext(project);
+		return { assembled: ctx.assembled, itemCount: ctx.itemCount };
+	}, "Load provider context for a project");
 }
 
 /** Write methods that enforce single-writer through daemon. */
