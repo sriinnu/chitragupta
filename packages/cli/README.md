@@ -1,5 +1,15 @@
 # @yugenlab/chitragupta
 
+## Orchestrator Contract
+
+The CLI provider/runtime layer follows these rules:
+
+- Provider and model resolution is owned by the core runtime, not the entrypoint.
+- Follow policy-first resolution: allow/deny lists and routing policy are authoritative.
+- Always attempt recovery paths before surfacing user-visible failures (fallback providers, retries, cooldown-aware retries).
+- Keep continuity: emit clear routing/audit traces for every selection, retry, and fallback.
+- Ensure consistent behavior across interactive mode, print mode, API mode, MCP mode, and WebSocket mode.
+
 ![Logo](../../assets/logos/cli.svg)
 
 **CLI entry point for Chitragupta -- the front door to the entire system.**
