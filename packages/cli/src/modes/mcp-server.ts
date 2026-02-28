@@ -299,6 +299,21 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		});
 	});
 
+	// 4b.1 Warm daemon RPC bridge so first tool call avoids cold connect.
+	setImmediate(() => {
+		void (async () => {
+			try {
+				const { getDaemonClient } = await import("./daemon-bridge.js");
+				await getDaemonClient({ autoStart: true });
+				process.stderr.write("[daemon] RPC bridge warm\n");
+			} catch (err) {
+				process.stderr.write(
+					`[daemon] RPC warm-up skipped: ${err instanceof Error ? err.message : String(err)}\n`,
+				);
+			}
+		})();
+	});
+
 	// 4c. Dynamic ToolRegistry (runtime tool registration via plugins)
 	const registry = new ToolRegistry({ strictNamespaces: true, validateSchemas: true });
 	server.attachRegistry(registry);
