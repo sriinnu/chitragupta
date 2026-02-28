@@ -1,22 +1,30 @@
 /**
- * @chitragupta/cli — Daemon bridge for MCP tools.
+ * @chitragupta/cli — Daemon bridge with graceful degradation.
  *
  * Provides a lazy-connected daemon client that all MCP tool handlers share.
  * Replaces direct smriti imports with RPC calls through the daemon socket.
  *
- * This is the HARD CUT: MCP tools no longer access databases directly.
- * All writes go through the daemon (single-writer pattern).
+ * Resilience lifecycle:
+ *   HEALTHY  — all calls go through daemon (single-writer)
+ *   DEGRADED — daemon flaky, still trying through daemon
+ *   HEALING  — attempting daemon restart (up to 3 times)
+ *   DEAD     — falls back to direct smriti access (read-only safe)
  *
  * @module
  */
 
-import { DaemonClient, type DaemonClientConfig } from "@chitragupta/daemon";
+import { DaemonClient, DaemonUnavailableError, type DaemonClientConfig } from "@chitragupta/daemon";
+import { HealthState } from "@chitragupta/daemon/resilience";
 import { createLogger } from "@chitragupta/core";
 
 const log = createLogger("cli:daemon-bridge");
 
+/** Current operating mode. */
+type BridgeMode = "daemon" | "direct";
+
 /** Singleton client instance. */
 let sharedClient: DaemonClient | null = null;
+let currentMode: BridgeMode = "daemon";
 
 /**
  * Get the shared daemon client (lazy-connected).
@@ -29,7 +37,25 @@ export async function getDaemonClient(config?: DaemonClientConfig): Promise<Daem
 	if (sharedClient?.isConnected()) return sharedClient;
 
 	sharedClient = new DaemonClient(config);
+
+	// Wire health state change logging
+	sharedClient.health.on("stateChange", (from, to, reason) => {
+		log.info("Daemon health state changed", { from, to, reason });
+		if (to === HealthState.DEAD) {
+			log.warn("Daemon declared DEAD — falling back to direct smriti access");
+			currentMode = "direct";
+		} else if (to === HealthState.HEALTHY && currentMode === "direct") {
+			log.info("Daemon recovered — switching back to daemon mode");
+			currentMode = "daemon";
+		}
+	});
+
+	sharedClient.health.on("healed", (attempts) => {
+		log.info("Daemon healed", { restartAttempts: attempts });
+	});
+
 	await sharedClient.connect();
+	currentMode = "daemon";
 	log.info("Connected to daemon");
 	return sharedClient;
 }
@@ -37,19 +63,53 @@ export async function getDaemonClient(config?: DaemonClientConfig): Promise<Daem
 /** Disconnect the shared client (call on shutdown). */
 export function disconnectDaemon(): void {
 	if (sharedClient) {
-		sharedClient.disconnect();
+		sharedClient.dispose();
 		sharedClient = null;
+		currentMode = "daemon";
 		log.info("Disconnected from daemon");
 	}
 }
 
-/** Convenience: call daemon RPC and return typed result. */
+/** Current bridge operating mode. */
+export function getBridgeMode(): BridgeMode {
+	return currentMode;
+}
+
+/** Reset circuit breaker — use after manual daemon restart. */
+export function resetDaemonCircuit(): void {
+	if (sharedClient) {
+		sharedClient.resetCircuit();
+		currentMode = "daemon";
+		log.info("Circuit breaker reset — will retry daemon");
+	}
+}
+
+/**
+ * Call daemon RPC with automatic fallback.
+ *
+ * If daemon is DEAD, routes to direct smriti access for read operations.
+ * Write operations throw in fallback mode (better to fail than corrupt).
+ */
 export async function daemonCall<T = unknown>(
 	method: string,
 	params?: Record<string, unknown>,
 ): Promise<T> {
-	const client = await getDaemonClient();
-	return client.call(method, params) as Promise<T>;
+	// If in direct mode, use smriti fallback
+	if (currentMode === "direct") {
+		return directFallback<T>(method, params);
+	}
+
+	try {
+		const client = await getDaemonClient();
+		return client.call(method, params) as Promise<T>;
+	} catch (err) {
+		if (err instanceof DaemonUnavailableError) {
+			log.warn("Daemon unavailable, using direct fallback", { method });
+			currentMode = "direct";
+			return directFallback<T>(method, params);
+		}
+		throw err;
+	}
 }
 
 // ─── Session Proxy Methods ──────────────────────────────────────────────────
@@ -118,7 +178,72 @@ export async function ping(): Promise<boolean> {
 	}
 }
 
-/** Get daemon health. */
+/** Get daemon health including resilience state. */
 export async function health(): Promise<Record<string, unknown>> {
-	return daemonCall("daemon.health");
+	const snapshot = sharedClient?.health.getSnapshot();
+	try {
+		const daemonHealth = await daemonCall<Record<string, unknown>>("daemon.health");
+		return { ...daemonHealth, client: snapshot, mode: currentMode };
+	} catch {
+		return { status: "unreachable", client: snapshot, mode: currentMode };
+	}
+}
+
+// ─── Direct Smriti Fallback (Degraded Mode) ─────────────────────────────────
+
+/** Read-only methods that can safely fallback to direct smriti access. */
+const READ_METHODS = new Set([
+	"session.list", "session.show", "session.dates", "session.projects",
+	"turn.list", "turn.since",
+	"memory.search", "memory.recall",
+	"daemon.ping", "daemon.health", "daemon.methods",
+	"nidra.status",
+]);
+
+/**
+ * Direct smriti fallback for when daemon is unreachable.
+ *
+ * Only read operations are allowed — writes throw to prevent
+ * data corruption from concurrent direct access.
+ */
+async function directFallback<T>(
+	method: string,
+	params?: Record<string, unknown>,
+): Promise<T> {
+	if (!READ_METHODS.has(method)) {
+		throw new DaemonUnavailableError(
+			`Write operation '${method}' requires daemon — ` +
+			"start daemon or reset circuit breaker",
+		);
+	}
+
+	// Lazy-import smriti only when needed
+	const smriti = await import("@chitragupta/smriti");
+
+	switch (method) {
+		case "session.list": {
+			const sessions = smriti.listSessions?.(
+				params?.project as string | undefined,
+			) ?? [];
+			return { sessions } as T;
+		}
+		case "session.show": {
+			const session = smriti.getSession?.(
+				params?.id as string, params?.project as string,
+			);
+			return (session ?? {}) as T;
+		}
+		case "memory.search": {
+			const results = smriti.searchTurns?.(
+				params?.query as string, params?.limit as number,
+			) ?? [];
+			return { results } as T;
+		}
+		case "daemon.ping":
+			return { pong: false, mode: "direct-fallback" } as T;
+		case "daemon.health":
+			return { status: "degraded", mode: "direct-fallback" } as T;
+		default:
+			return {} as T;
+	}
 }

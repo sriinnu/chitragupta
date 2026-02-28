@@ -13,6 +13,7 @@
 	"exports": {
 		".": "./dist/index.js",
 		"./client": "./dist/client.js",
+		"./resilience": "./dist/resilience.js",
 		"./paths": "./dist/paths.js",
 		"./process": "./dist/process.js"
 	},
