@@ -322,6 +322,7 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	const shutdown = async () => {
 		triggerSvapnaConsolidation(projectPath);
 		clearChitraguptaState();
+		try { const { disconnectDaemon } = await import("./daemon-bridge.js"); disconnectDaemon(); } catch { /* best-effort */ }
 		await server.stop();
 		process.exit(0);
 	};

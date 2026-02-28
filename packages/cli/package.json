@@ -65,7 +65,8 @@
 		"@chitragupta/niyanta": "workspace:*",
 		"@chitragupta/vayu": "workspace:*",
 		"@chitragupta/sutra": "workspace:*",
-		"@chitragupta/netra": "workspace:*"
+		"@chitragupta/netra": "workspace:*",
+		"@chitragupta/daemon": "workspace:*"
 	},
 	"files": [
 		"bin",

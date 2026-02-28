@@ -1,162 +1,118 @@
 /**
  * @chitragupta/cli — Daemon subcommand handler.
  *
- * Provides CLI kill switch and lifecycle management for the background daemon:
- *   chitragupta daemon start   — fork detached daemon, write PID file
- *   chitragupta daemon stop    — send SIGTERM to daemon PID (kill switch)
- *   chitragupta daemon status  — show daemon health, uptime, capabilities
+ * CLI interface for the centralized daemon:
+ *   chitragupta daemon start   — spawn background daemon (socket server + consolidation)
+ *   chitragupta daemon stop    — send SIGTERM to daemon (kill switch)
+ *   chitragupta daemon status  — show daemon health, socket, uptime
  *   chitragupta daemon restart — stop + start
+ *   chitragupta daemon ping    — verify daemon responds via socket
  */
 
-import fs from "node:fs";
-import path from "node:path";
-import { getChitraguptaHome } from "@chitragupta/core";
-
-/** Path to the daemon PID file. */
-function getPidPath(): string {
-	return path.join(getChitraguptaHome(), "daemon.pid");
-}
-
-/** Read PID from file, or null if not found. */
-function readPid(): number | null {
-	const pidPath = getPidPath();
-	if (!fs.existsSync(pidPath)) return null;
-	try {
-		const raw = fs.readFileSync(pidPath, "utf8").trim();
-		const pid = parseInt(raw, 10);
-		return isNaN(pid) ? null : pid;
-	} catch {
-		return null;
-	}
-}
-
-/** Check if a process with the given PID is alive. */
-function isAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0); // Signal 0 = existence check
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-/**
- * Start the daemon as a detached child process.
- * Writes the PID to ~/.chitragupta/daemon.pid.
- */
-async function startDaemon(): Promise<void> {
-	const existingPid = readPid();
-	if (existingPid !== null && isAlive(existingPid)) {
-		process.stdout.write(`  Daemon already running (PID ${existingPid})\n`);
-		return;
-	}
-
-	const { fork } = await import("node:child_process");
-	const entryPoint = path.resolve(
-		path.dirname(new URL(import.meta.url).pathname),
-		"../setup-daemon.js",
-	);
-
-	const child = fork(entryPoint, [], {
-		detached: true,
-		stdio: "ignore",
-		env: { ...process.env, CHITRAGUPTA_DAEMON: "1" },
-	});
-
-	if (!child.pid) {
-		process.stderr.write("  Error: Failed to fork daemon process\n");
-		process.exit(1);
-	}
-
-	child.unref();
-
-	const pidPath = getPidPath();
-	const pidDir = path.dirname(pidPath);
-	fs.mkdirSync(pidDir, { recursive: true });
-	fs.writeFileSync(pidPath, String(child.pid), "utf8");
-
-	process.stdout.write(`  Daemon started (PID ${child.pid})\n`);
-	process.stdout.write(`  PID file: ${pidPath}\n`);
-}
-
-/**
- * Stop the daemon by sending SIGTERM to the PID from the PID file.
- * Removes the PID file after successful termination.
- */
-function stopDaemon(): void {
-	const pid = readPid();
-	if (pid === null) {
-		process.stdout.write("  Daemon is not running (no PID file)\n");
-		return;
-	}
-
-	if (!isAlive(pid)) {
-		process.stdout.write(`  Daemon (PID ${pid}) is not running — cleaning up PID file\n`);
-		fs.unlinkSync(getPidPath());
-		return;
-	}
-
-	try {
-		process.kill(pid, "SIGTERM");
-		process.stdout.write(`  Sent SIGTERM to daemon (PID ${pid})\n`);
-		fs.unlinkSync(getPidPath());
-		process.stdout.write("  PID file removed — daemon stopped\n");
-	} catch (err) {
-		process.stderr.write(`  Error stopping daemon: ${err instanceof Error ? err.message : String(err)}\n`);
-	}
-}
-
-/** Show daemon status: PID, uptime, health. */
-async function showStatus(): Promise<void> {
-	const pid = readPid();
-	if (pid === null) {
-		process.stdout.write("  Daemon: not running (no PID file)\n");
-		return;
-	}
-
-	const alive = isAlive(pid);
-	process.stdout.write(`  Daemon PID:  ${pid}\n`);
-	process.stdout.write(`  Alive:       ${alive ? "yes" : "no (stale PID file)"}\n`);
-	process.stdout.write(`  PID file:    ${getPidPath()}\n`);
-
-	if (!alive) {
-		process.stdout.write("\n  Daemon process is not running. Run 'chitragupta daemon start' to start it.\n");
-	}
-}
+import { checkStatus, spawnDaemon, stopDaemon, resolvePaths, createClient } from "@chitragupta/daemon";
 
 /**
  * Handle the `daemon` subcommand.
  *
- * @param action - The sub-action: start, stop, status, restart.
+ * @param action - The sub-action: start, stop, status, restart, ping.
  */
 export async function runDaemonCommand(action?: string): Promise<void> {
 	process.stdout.write("\n  Chitragupta Daemon\n\n");
 
 	switch (action) {
 		case "start":
-			await startDaemon();
+			await handleStart();
 			break;
 		case "stop":
-			stopDaemon();
+			await handleStop();
 			break;
 		case "status":
-			await showStatus();
+			handleStatus();
 			break;
 		case "restart":
-			stopDaemon();
-			// Brief pause to let the old process terminate
-			await new Promise((r) => setTimeout(r, 1000));
-			await startDaemon();
+			await handleStop();
+			await new Promise((r) => setTimeout(r, 500));
+			await handleStart();
+			break;
+		case "ping":
+			await handlePing();
 			break;
 		default:
-			process.stdout.write("  Usage: chitragupta daemon <start|stop|status|restart>\n");
-			process.stdout.write("\n  Actions:\n");
-			process.stdout.write("    start    Start background daemon\n");
-			process.stdout.write("    stop     Kill switch — send SIGTERM to daemon\n");
-			process.stdout.write("    status   Show daemon health and uptime\n");
-			process.stdout.write("    restart  Stop then start\n");
+			printUsage();
 			break;
 	}
 
 	process.stdout.write("\n");
+}
+
+/** Start the daemon as a detached background process. */
+async function handleStart(): Promise<void> {
+	try {
+		const pid = await spawnDaemon();
+		const paths = resolvePaths();
+		process.stdout.write(`  Daemon started (PID ${pid})\n`);
+		process.stdout.write(`  Socket: ${paths.socket}\n`);
+		process.stdout.write(`  PID file: ${paths.pid}\n`);
+		process.stdout.write(`  Logs: ${paths.logDir}/\n`);
+	} catch (err) {
+		process.stderr.write(`  Error: ${err instanceof Error ? err.message : String(err)}\n`);
+		process.exit(1);
+	}
+}
+
+/** Stop a running daemon. */
+async function handleStop(): Promise<void> {
+	const stopped = await stopDaemon();
+	if (stopped) {
+		process.stdout.write("  Daemon stopped.\n");
+	} else {
+		process.stdout.write("  Daemon is not running.\n");
+	}
+}
+
+/** Show daemon status. */
+function handleStatus(): void {
+	const status = checkStatus();
+	const paths = resolvePaths();
+
+	process.stdout.write(`  Running:   ${status.running ? "yes" : "no"}\n`);
+	process.stdout.write(`  PID:       ${status.pid ?? "(none)"}\n`);
+	process.stdout.write(`  Socket:    ${paths.socket}\n`);
+	process.stdout.write(`  PID file:  ${paths.pid}\n`);
+	process.stdout.write(`  Logs:      ${paths.logDir}/\n`);
+
+	if (!status.running) {
+		process.stdout.write("\n  Run 'chitragupta daemon start' to start.\n");
+	}
+}
+
+/** Ping the daemon via socket to verify it responds. */
+async function handlePing(): Promise<void> {
+	try {
+		const client = await createClient({ autoStart: false, timeout: 3_000 });
+		const start = performance.now();
+		const result = (await client.call("daemon.ping")) as Record<string, unknown>;
+		const elapsed = performance.now() - start;
+		client.disconnect();
+
+		if (result.pong) {
+			process.stdout.write(`  Pong! (${elapsed.toFixed(1)}ms)\n`);
+		} else {
+			process.stdout.write("  Unexpected response.\n");
+		}
+	} catch (err) {
+		process.stderr.write(`  Daemon not reachable: ${err instanceof Error ? err.message : String(err)}\n`);
+		process.exit(1);
+	}
+}
+
+/** Print usage help. */
+function printUsage(): void {
+	process.stdout.write("  Usage: chitragupta daemon <start|stop|status|restart|ping>\n");
+	process.stdout.write("\n  Actions:\n");
+	process.stdout.write("    start    Spawn background daemon (socket server + consolidation)\n");
+	process.stdout.write("    stop     Kill switch — send SIGTERM to daemon\n");
+	process.stdout.write("    status   Show daemon health, socket path, PID\n");
+	process.stdout.write("    restart  Stop then start\n");
+	process.stdout.write("    ping     Verify daemon responds via socket\n");
 }

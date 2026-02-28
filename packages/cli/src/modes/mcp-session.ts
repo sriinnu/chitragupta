@@ -125,14 +125,14 @@ export class McpSessionRecorder {
 		this.ensureSessionPromise = (async () => {
 			if (!this.sessionId) {
 				try {
-					const { createSession } = await import("@chitragupta/smriti/session-store");
-					const session = createSession({
+					const bridge = await import("./daemon-bridge.js");
+					const result = await bridge.createSession({
 						project: this.projectPath,
 						agent: "mcp",
 						model: "mcp-client",
 						title: `MCP session`,
 					});
-					this.sessionId = session.meta.id;
+					this.sessionId = result.id;
 				} catch (err) {
 					process.stderr.write(`[chitragupta] session init failed: ${err}\n`);
 				}
@@ -143,8 +143,8 @@ export class McpSessionRecorder {
 					const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
 					const ctx = await loadProviderContext(this.projectPath);
 					if (ctx.assembled.trim()) {
-						const { addTurn } = await import("@chitragupta/smriti/session-store");
-						await addTurn(this.sessionId, this.projectPath, {
+						const bridge = await import("./daemon-bridge.js");
+						await bridge.addTurn(this.sessionId, this.projectPath, {
 							turnNumber: 0,
 							role: "assistant",
 							content: `[system:context] ${ctx.assembled}`,
@@ -221,12 +221,12 @@ export class McpSessionRecorder {
 		if (!sid) return;
 
 		try {
-			const { addTurn } = await import("@chitragupta/smriti/session-store");
+			const bridge = await import("./daemon-bridge.js");
 			const isConversationBatch = info.tool === "chitragupta_record_conversation";
 
 			if (isConversationBatch) {
 				const turnCount = Array.isArray(info.args.turns) ? info.args.turns.length : 0;
-				await addTurn(sid, this.projectPath, {
+				await bridge.addTurn(sid, this.projectPath, {
 					turnNumber: 0,
 					role: "assistant",
 					content: `[tool:${info.tool}] recorded ${turnCount} conversation turn(s)`,
@@ -253,7 +253,7 @@ export class McpSessionRecorder {
 				info.tool, info.args, resultText, info.elapsedMs,
 			);
 
-			await addTurn(sid, this.projectPath, {
+			await bridge.addTurn(sid, this.projectPath, {
 				turnNumber: 0,
 				role: "user",
 				content: userContent,
@@ -262,7 +262,7 @@ export class McpSessionRecorder {
 			});
 			this.turnCounter++;
 
-			await addTurn(sid, this.projectPath, {
+			await bridge.addTurn(sid, this.projectPath, {
 				turnNumber: 0,
 				role: "assistant",
 				content: assistantContent,
@@ -375,7 +375,7 @@ export class McpSessionRecorder {
 						return { content: [{ type: "text", text: "Session not available." }], isError: true };
 					}
 
-					const { addTurn } = await import("@chitragupta/smriti/session-store");
+					const bridge = await import("./daemon-bridge.js");
 					let recorded = 0;
 					for (const turn of capped) {
 						const role = (turn as Record<string, unknown>).role;
@@ -384,7 +384,7 @@ export class McpSessionRecorder {
 							continue;
 
 						const truncated = content.length > 100_000 ? content.slice(0, 100_000) + "\n...[truncated]" : content;
-						await addTurn(sid, this.projectPath, {
+						await bridge.addTurn(sid, this.projectPath, {
 							turnNumber: 0,
 							role,
 							content: truncated,

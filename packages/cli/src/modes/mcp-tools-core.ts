@@ -105,7 +105,7 @@ export function createMemorySearchTool(projectPath: string): McpToolHandler {
 
 // ─── Session List ───────────────────────────────────────────────────────────
 
-/** Create the `chitragupta_session_list` tool — lists recent sessions. */
+/** Create the `chitragupta_session_list` tool — lists recent sessions via daemon. */
 export function createSessionListTool(projectPath: string): McpToolHandler {
 	return {
 		definition: {
@@ -124,8 +124,8 @@ export function createSessionListTool(projectPath: string): McpToolHandler {
 			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 20) || 20));
 
 			try {
-				const { listSessions } = await import("@chitragupta/smriti/session-store");
-				const sessions = listSessions(projectPath);
+				const { listSessions } = await import("./daemon-bridge.js");
+				const sessions = await listSessions(projectPath);
 				const limited = sessions.slice(0, limit);
 
 				if (limited.length === 0) {
@@ -153,7 +153,7 @@ export function createSessionListTool(projectPath: string): McpToolHandler {
 
 // ─── Session Show ───────────────────────────────────────────────────────────
 
-/** Create the `chitragupta_session_show` tool — shows a specific session. */
+/** Create the `chitragupta_session_show` tool — shows a specific session via daemon. */
 export function createSessionShowTool(projectPath: string): McpToolHandler {
 	return {
 		definition: {
@@ -179,8 +179,11 @@ export function createSessionShowTool(projectPath: string): McpToolHandler {
 			}
 
 			try {
-				const { loadSession } = await import("@chitragupta/smriti/session-store");
-				const session = loadSession(sessionId, projectPath);
+				const { showSession } = await import("./daemon-bridge.js");
+				const session = (await showSession(sessionId, projectPath)) as {
+					meta: Record<string, unknown>;
+					turns: Array<Record<string, unknown>>;
+				};
 
 				const turns = turnLimit ? session.turns.slice(0, turnLimit) : session.turns;
 				const formatted = turns.map((t) =>
@@ -199,7 +202,7 @@ export function createSessionShowTool(projectPath: string): McpToolHandler {
 				const full = `${header}\n\n${"=".repeat(60)}\n\n${formatted}`;
 				return {
 					content: [{ type: "text", text: truncateOutput(full) }],
-					_metadata: { typed: { meta: { id: session.meta.id, title: session.meta.title, agent: session.meta.agent, model: session.meta.model, created: session.meta.created, turnCount: session.turns.length }, turns: turns.map((t) => ({ turnNumber: t.turnNumber, role: t.role, contentPreview: t.content.slice(0, 100), toolCalls: t.toolCalls?.map((tc) => tc.name) })) } },
+					_metadata: { typed: { meta: { id: session.meta.id, title: session.meta.title, agent: session.meta.agent, model: session.meta.model, created: session.meta.created, turnCount: session.turns.length }, turns: turns.map((t) => ({ turnNumber: t.turnNumber, role: t.role, contentPreview: String(t.content).slice(0, 100) })) } },
 				};
 			} catch (err) {
 				return {

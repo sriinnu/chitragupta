@@ -402,10 +402,9 @@ async function handleRun(subcommand: string | undefined, rest: string[]): Promis
 	await run.runRunCommand(subcommand, rest);
 }
 
-async function handleDaemon(subcommand: string | undefined, rest: string[]): Promise<void> {
-	const { parseDaemonArgs, runDaemonMode } = await import("./modes/daemon.js");
-	const daemonOpts = parseDaemonArgs([subcommand, ...rest].filter(Boolean) as string[]);
-	await runDaemonMode(daemonOpts);
+async function handleDaemon(subcommand: string | undefined, _rest: string[]): Promise<void> {
+	const { runDaemonCommand } = await import("./modes/daemon-cmd.js");
+	await runDaemonCommand(subcommand);
 }
 
 // ─── Utility Helpers ─────────────────────────────────────────────────────────
