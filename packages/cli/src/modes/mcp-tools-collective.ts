@@ -9,7 +9,7 @@
  */
 
 import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
-import { getSamiti, getSabha, getAkasha } from "./mcp-subsystems.js";
+import { getAkasha, getSabha, getSamiti, persistAkasha } from "./mcp-subsystems.js";
 
 // ─── Samiti Channels ────────────────────────────────────────────────────────
 
@@ -26,7 +26,10 @@ export function createSamitiChannelsTool(): McpToolHandler {
 				type: "object",
 				properties: {
 					channel: { type: "string", description: "Channel name (e.g., '#security'). Omit to list all channels." },
-					limit: { type: "number", description: "Maximum messages to return when querying a specific channel. Default: 20." },
+					limit: {
+						type: "number",
+						description: "Maximum messages to return when querying a specific channel. Default: 20.",
+					},
 				},
 			},
 		},
@@ -41,9 +44,9 @@ export function createSamitiChannelsTool(): McpToolHandler {
 					if (messages.length === 0) {
 						return { content: [{ type: "text", text: `No messages in channel "${channel}".` }] };
 					}
-					const formatted = messages.map((m) =>
-						`[${new Date(m.timestamp).toISOString()}] (${m.severity}) ${m.sender}: ${m.content}`,
-					).join("\n");
+					const formatted = messages
+						.map((m) => `[${new Date(m.timestamp).toISOString()}] (${m.severity}) ${m.sender}: ${m.content}`)
+						.join("\n");
 					return { content: [{ type: "text", text: `Messages in ${channel} (${messages.length}):\n\n${formatted}` }] };
 				}
 
@@ -51,13 +54,15 @@ export function createSamitiChannelsTool(): McpToolHandler {
 				if (channels.length === 0) {
 					return { content: [{ type: "text", text: "No ambient channels active." }] };
 				}
-				const lines = channels.map((ch) =>
-					`- ${ch.name}: ${ch.description} (${ch.messages.length} msgs, ${ch.subscribers.size} subs)`,
+				const lines = channels.map(
+					(ch) => `- ${ch.name}: ${ch.description} (${ch.messages.length} msgs, ${ch.subscribers.size} subs)`,
 				);
 				return { content: [{ type: "text", text: `Ambient Channels (${channels.length}):\n\n${lines.join("\n")}` }] };
 			} catch (err) {
 				return {
-					content: [{ type: "text", text: `samiti_channels failed: ${err instanceof Error ? err.message : String(err)}` }],
+					content: [
+						{ type: "text", text: `samiti_channels failed: ${err instanceof Error ? err.message : String(err)}` },
+					],
 					isError: true,
 				};
 			}
@@ -96,7 +101,7 @@ export function createSamitiBroadcastTool(): McpToolHandler {
 			const VALID_SEVERITIES = ["info", "warning", "critical"] as const;
 			const rawSeverity = String(args.severity ?? "info");
 			const severity = (VALID_SEVERITIES as readonly string[]).includes(rawSeverity)
-				? rawSeverity as typeof VALID_SEVERITIES[number]
+				? (rawSeverity as (typeof VALID_SEVERITIES)[number])
 				: "info";
 
 			if (!channel) {
@@ -117,7 +122,9 @@ export function createSamitiBroadcastTool(): McpToolHandler {
 				return { content: [{ type: "text", text: `Broadcast sent. Message ID: ${msg.id}` }] };
 			} catch (err) {
 				return {
-					content: [{ type: "text", text: `samiti_broadcast failed: ${err instanceof Error ? err.message : String(err)}` }],
+					content: [
+						{ type: "text", text: `samiti_broadcast failed: ${err instanceof Error ? err.message : String(err)}` },
+					],
 					isError: true,
 				};
 			}
@@ -145,7 +152,10 @@ export function createSabhaDeliberateTool(): McpToolHandler {
 			inputSchema: {
 				type: "object",
 				properties: {
-					proposal: { type: "string", description: "The proposition to deliberate on (e.g., 'Should we refactor the auth module?')." },
+					proposal: {
+						type: "string",
+						description: "The proposition to deliberate on (e.g., 'Should we refactor the auth module?').",
+					},
 					agents: {
 						type: "array",
 						items: { type: "string" },
@@ -185,9 +195,12 @@ export function createSabhaDeliberateTool(): McpToolHandler {
 				});
 
 				for (const participant of participants) {
-					const position = participant.role === "proposer" ? "support" as const
-						: participant.role === "challenger" ? "oppose" as const
-						: "abstain" as const;
+					const position =
+						participant.role === "proposer"
+							? ("support" as const)
+							: participant.role === "challenger"
+								? ("oppose" as const)
+								: ("abstain" as const);
 					sabha.vote(session.id, participant.id, position, `${participant.role} perspective on: ${proposal}`);
 				}
 
@@ -195,11 +208,15 @@ export function createSabhaDeliberateTool(): McpToolHandler {
 				const explanation = sabha.explain(session.id);
 
 				return {
-					content: [{ type: "text", text: `Deliberation complete.\n\nVerdict: ${result.finalVerdict}\n\n${explanation}` }],
+					content: [
+						{ type: "text", text: `Deliberation complete.\n\nVerdict: ${result.finalVerdict}\n\n${explanation}` },
+					],
 				};
 			} catch (err) {
 				return {
-					content: [{ type: "text", text: `sabha_deliberate failed: ${err instanceof Error ? err.message : String(err)}` }],
+					content: [
+						{ type: "text", text: `sabha_deliberate failed: ${err instanceof Error ? err.message : String(err)}` },
+					],
 					isError: true,
 				};
 			}
@@ -224,7 +241,8 @@ export function createAkashaTracesTool(): McpToolHandler {
 					query: { type: "string", description: "Search query to match against trace topics and content." },
 					type: {
 						type: "string",
-						description: "Filter by trace type: 'solution', 'warning', 'shortcut', 'pattern', 'correction', 'preference'.",
+						description:
+							"Filter by trace type: 'solution', 'warning', 'shortcut', 'pattern', 'correction', 'preference'.",
 						enum: ["solution", "warning", "shortcut", "pattern", "correction", "preference"],
 					},
 					limit: { type: "number", description: "Maximum traces to return. Default: 10." },
@@ -240,9 +258,10 @@ export function createAkashaTracesTool(): McpToolHandler {
 
 			const VALID_TRACE_TYPES = ["solution", "warning", "shortcut", "pattern", "correction", "preference"] as const;
 			const rawType = args.type != null ? String(args.type) : undefined;
-			const traceType = rawType && (VALID_TRACE_TYPES as readonly string[]).includes(rawType)
-				? rawType as typeof VALID_TRACE_TYPES[number]
-				: undefined;
+			const traceType =
+				rawType && (VALID_TRACE_TYPES as readonly string[]).includes(rawType)
+					? (rawType as (typeof VALID_TRACE_TYPES)[number])
+					: undefined;
 			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 10) || 10));
 
 			try {
@@ -253,17 +272,22 @@ export function createAkashaTracesTool(): McpToolHandler {
 					return { content: [{ type: "text", text: "No matching traces found in the Akasha field." }] };
 				}
 
-				const formatted = traces.map((t, i) =>
-					`[${i + 1}] (${t.traceType}, strength: ${t.strength.toFixed(3)}, reinforcements: ${t.reinforcements})\n` +
-					`  Topic: ${t.topic}\n` +
-					`  Agent: ${t.agentId}\n` +
-					`  ${t.content}`,
-				).join("\n\n");
+				const formatted = traces
+					.map(
+						(t, i) =>
+							`[${i + 1}] (${t.traceType}, strength: ${t.strength.toFixed(3)}, reinforcements: ${t.reinforcements})\n` +
+							`  Topic: ${t.topic}\n` +
+							`  Agent: ${t.agentId}\n` +
+							`  ${t.content}`,
+					)
+					.join("\n\n");
 
 				return { content: [{ type: "text", text: `Akasha Traces (${traces.length}):\n\n${formatted}` }] };
 			} catch (err) {
 				return {
-					content: [{ type: "text", text: `akasha_traces failed: ${err instanceof Error ? err.message : String(err)}` }],
+					content: [
+						{ type: "text", text: `akasha_traces failed: ${err instanceof Error ? err.message : String(err)}` },
+					],
 					isError: true,
 				};
 			}
@@ -305,17 +329,18 @@ export function createAkashaDepositTool(): McpToolHandler {
 			const VALID_TRACE_TYPES = ["solution", "warning", "shortcut", "pattern", "correction", "preference"] as const;
 			const rawType = String(args.type ?? "solution");
 			const depositType = (VALID_TRACE_TYPES as readonly string[]).includes(rawType)
-				? rawType as typeof VALID_TRACE_TYPES[number]
+				? (rawType as (typeof VALID_TRACE_TYPES)[number])
 				: "solution";
-			const topics = Array.isArray(args.topics)
-				? (args.topics as string[]).map(String)
-				: [];
+			const topics = Array.isArray(args.topics) ? (args.topics as string[]).map(String) : [];
 
 			if (!content) {
 				return { content: [{ type: "text", text: "Error: content is required" }], isError: true };
 			}
 			if (!rawType || !(VALID_TRACE_TYPES as readonly string[]).includes(rawType)) {
-				return { content: [{ type: "text", text: `Error: type must be one of: ${VALID_TRACE_TYPES.join(", ")}` }], isError: true };
+				return {
+					content: [{ type: "text", text: `Error: type must be one of: ${VALID_TRACE_TYPES.join(", ")}` }],
+					isError: true,
+				};
 			}
 			if (topics.length === 0) {
 				return { content: [{ type: "text", text: "Error: at least one topic is required" }], isError: true };
@@ -325,10 +350,13 @@ export function createAkashaDepositTool(): McpToolHandler {
 				const akasha = await getAkasha();
 				const topic = topics.join(" ");
 				const trace = akasha.leave("mcp-client", depositType, topic, content);
+				await persistAkasha();
 				return { content: [{ type: "text", text: `Trace deposited. ID: ${trace.id}` }] };
 			} catch (err) {
 				return {
-					content: [{ type: "text", text: `akasha_deposit failed: ${err instanceof Error ? err.message : String(err)}` }],
+					content: [
+						{ type: "text", text: `akasha_deposit failed: ${err instanceof Error ? err.message : String(err)}` },
+					],
 					isError: true,
 				};
 			}
