@@ -18,12 +18,51 @@ import { registerServices } from "./services.js";
 
 const log = createLogger("daemon:entry");
 
+// ─── Process-Level Resilience ────────────────────────────────────────────────
+
+/** Catch uncaught exceptions — log and continue, don't crash. */
+process.on("uncaughtException", (err) => {
+	log.error("Uncaught exception (not crashing)", err);
+});
+
+/** Catch unhandled rejections — log, don't crash. */
+process.on("unhandledRejection", (reason) => {
+	log.error("Unhandled rejection", reason instanceof Error ? reason : undefined, {
+		reason: reason instanceof Error ? undefined : String(reason),
+	});
+});
+
+/** Periodic memory pressure check — warn at 80% of heap limit. */
+const HEAP_LIMIT = 256 * 1024 * 1024; // matches --max-old-space-size=256
+let memoryWarned = false;
+
+function checkMemoryPressure(): void {
+	const { heapUsed } = process.memoryUsage();
+	const usage = heapUsed / HEAP_LIMIT;
+	if (usage > 0.8 && !memoryWarned) {
+		memoryWarned = true;
+		log.warn("Memory pressure high", {
+			heapUsed: `${(heapUsed / 1024 / 1024).toFixed(0)}MB`,
+			limit: `${(HEAP_LIMIT / 1024 / 1024).toFixed(0)}MB`,
+			usage: `${(usage * 100).toFixed(0)}%`,
+		});
+		// Hint to V8 to collect garbage
+		if (global.gc) global.gc();
+	} else if (usage < 0.6) {
+		memoryWarned = false;
+	}
+}
+
 /** Main daemon bootstrap — called once on process start. */
 async function main(): Promise<void> {
 	const paths = resolvePaths();
 	ensureDirs(paths);
 
 	log.info("Daemon starting", { pid: process.pid, socket: paths.socket });
+
+	// Start memory pressure monitoring (every 30s)
+	const memTimer = setInterval(checkMemoryPressure, 30_000);
+	memTimer.unref();
 
 	// Build RPC router and register services
 	const router = new RpcRouter();

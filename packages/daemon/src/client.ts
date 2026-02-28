@@ -1,8 +1,12 @@
 /**
- * @chitragupta/daemon — Client: connect to daemon via Unix socket.
+ * @chitragupta/daemon — Self-healing client.
  *
- * Auto-starts the daemon if not running (Docker daemon pattern).
- * NDJSON framing, request/response correlation by id.
+ * Connects to daemon via Unix socket with full resilience:
+ * - Auto-start daemon if not running (Docker daemon pattern)
+ * - Circuit breaker: HEALTHY → DEGRADED → HEALING → HEALTHY or DEAD
+ * - Auto-restart daemon on crash (up to 3 attempts with backoff)
+ * - Proactive heartbeat detects failures before requests do
+ * - NDJSON framing, request/response correlation by id
  *
  * @module
  */
@@ -10,6 +14,7 @@
 import net from "node:net";
 import { resolvePaths } from "./paths.js";
 import { createRequest, parseMessage, serialize, type RpcResponse } from "./protocol.js";
+import { HealthMonitor, HealthState, type CircuitBreakerConfig } from "./resilience.js";
 
 /** Client configuration. */
 export interface DaemonClientConfig {
@@ -21,6 +26,10 @@ export interface DaemonClientConfig {
 	autoStart?: boolean;
 	/** Max retries after auto-start (default: 5). */
 	maxRetries?: number;
+	/** Circuit breaker / resilience config. */
+	resilience?: CircuitBreakerConfig;
+	/** Enable proactive heartbeat (default: true). */
+	heartbeat?: boolean;
 }
 
 /** Pending request waiting for a response. */
@@ -40,12 +49,22 @@ export class DaemonClient {
 	private readonly autoStart: boolean;
 	private readonly maxRetries: number;
 	private connected = false;
+	private healing = false;
+
+	/** Health monitor — tracks circuit breaker state. */
+	readonly health: HealthMonitor;
 
 	constructor(config: DaemonClientConfig = {}) {
 		this.socketPath = config.socketPath ?? resolvePaths().socket;
 		this.timeout = config.timeout ?? 10_000;
 		this.autoStart = config.autoStart ?? true;
 		this.maxRetries = config.maxRetries ?? 5;
+		this.health = new HealthMonitor(config.resilience);
+
+		// Start heartbeat if enabled (default: true for long-lived clients)
+		if (config.heartbeat !== false) {
+			this.health.startHeartbeat(() => this.pingDaemon());
+		}
 	}
 
 	/** Connect to the daemon. Auto-starts if needed. */
@@ -64,22 +83,119 @@ export class DaemonClient {
 
 	/**
 	 * Send an RPC request and await the response.
-	 * Self-healing: if socket dies mid-call, reconnects and retries once.
+	 *
+	 * Self-healing lifecycle:
+	 * 1. If circuit is open (DEAD), throws immediately
+	 * 2. Sends request — on success, records healthy
+	 * 3. On socket failure: disconnects, reconnects (auto-spawns), retries once
+	 * 4. On repeated failures: transitions HEALTHY → DEGRADED → HEALING
+	 * 5. In HEALING: attempts daemon restart with exponential backoff
+	 * 6. After 3 failed restarts: circuit opens (DEAD)
 	 */
 	async call(method: string, params?: Record<string, unknown>): Promise<unknown> {
+		// Circuit open — don't even try
+		if (this.health.isCircuitOpen()) {
+			throw new DaemonUnavailableError(
+				"Daemon unreachable — circuit open. Use direct access or reset.",
+			);
+		}
+
 		if (!this.connected) await this.connect();
 
 		try {
-			return await this.sendRequest(method, params);
+			const result = await this.sendRequest(method, params);
+			this.health.recordSuccess();
+			return result;
 		} catch (err) {
-			// Self-heal: if write fails (daemon crashed), reconnect and retry once
+			const reason = err instanceof Error ? err.message : String(err);
+			const shouldHeal = this.health.recordFailure(reason);
+
+			// If socket died, attempt self-healing
 			if (!this.connected || this.socket?.destroyed) {
-				this.disconnect();
-				await this.connect();
-				return this.sendRequest(method, params);
+				return this.selfHeal(method, params, shouldHeal);
 			}
 			throw err;
 		}
+	}
+
+	/**
+	 * Self-healing: reconnect, optionally restart daemon, retry the request.
+	 *
+	 * Flow:
+	 * - Disconnect dead socket
+	 * - Try reconnect (daemon may still be alive on a new connection)
+	 * - If reconnect fails and in HEALING state: restart daemon
+	 * - Retry the original request once
+	 */
+	private async selfHeal(
+		method: string,
+		params: Record<string, unknown> | undefined,
+		shouldRestart: boolean,
+	): Promise<unknown> {
+		if (this.healing) {
+			throw new DaemonUnavailableError("Already healing — request dropped");
+		}
+
+		this.healing = true;
+		try {
+			this.disconnect();
+
+			// Try simple reconnect first (daemon may have recovered)
+			try {
+				await this.connect();
+				const result = await this.sendRequest(method, params);
+				this.health.recordSuccess();
+				return result;
+			} catch {
+				// Reconnect failed — need daemon restart
+			}
+
+			// If health says we should restart
+			if (shouldRestart && this.autoStart) {
+				const healed = await this.attemptRestart();
+				if (healed) {
+					const result = await this.sendRequest(method, params);
+					this.health.recordSuccess();
+					return result;
+				}
+			}
+
+			throw new DaemonUnavailableError(
+				`Daemon recovery failed (state: ${this.health.getState()})`,
+			);
+		} finally {
+			this.healing = false;
+		}
+	}
+
+	/**
+	 * Attempt to restart the daemon with exponential backoff.
+	 * Returns true if daemon was restarted and we reconnected.
+	 */
+	private async attemptRestart(): Promise<boolean> {
+		const cooldown = this.health.getRestartCooldown();
+		await sleep(cooldown);
+
+		try {
+			const { spawnDaemon } = await import("./process.js");
+			await spawnDaemon();
+
+			// Wait and retry connection
+			for (let attempt = 1; attempt <= 3; attempt++) {
+				await sleep(300 * attempt);
+				try {
+					await this.tryConnect();
+					this.health.recordRestartAttempt(true);
+					return true;
+				} catch {
+					// Keep trying
+				}
+			}
+		} catch {
+			// Spawn failed
+		}
+
+		return this.health.recordRestartAttempt(false);
 	}
 
 	/** Internal: send a request and await correlation. */
@@ -92,7 +208,14 @@ export class DaemonClient {
 			}, this.timeout);
 
 			this.pending.set(req.id, { resolve, reject, timer });
-			this.socket!.write(serialize(req));
+
+			try {
+				this.socket!.write(serialize(req));
+			} catch (err) {
+				this.pending.delete(req.id);
+				clearTimeout(timer);
+				reject(err);
+			}
 		});
 	}
 
@@ -100,7 +223,11 @@ export class DaemonClient {
 	notify(method: string, params?: Record<string, unknown>): void {
 		if (!this.connected || !this.socket) return;
 		const msg = { jsonrpc: "2.0" as const, method, params };
-		this.socket.write(JSON.stringify(msg) + "\n");
+		try {
+			this.socket.write(JSON.stringify(msg) + "\n");
+		} catch {
+			// Best-effort — notifications are fire-and-forget
+		}
 	}
 
 	/** Disconnect from the daemon. */
@@ -116,9 +243,36 @@ export class DaemonClient {
 		this.buffer = "";
 	}
 
+	/** Full cleanup — disconnect + dispose health monitor. */
+	dispose(): void {
+		this.disconnect();
+		this.health.dispose();
+	}
+
 	/** Whether the client is connected. */
 	isConnected(): boolean {
 		return this.connected;
+	}
+
+	/** Current health state. */
+	healthState(): HealthState {
+		return this.health.getState();
+	}
+
+	/** Reset circuit breaker — use after manual daemon restart. */
+	resetCircuit(): void {
+		this.health.reset();
+	}
+
+	/** Silent ping for heartbeat — returns true if daemon responds. */
+	private async pingDaemon(): Promise<boolean> {
+		if (!this.connected || !this.socket) return false;
+		try {
+			const result = await this.sendRequest("daemon.ping");
+			return (result as { pong?: boolean })?.pong === true;
+		} catch {
+			return false;
+		}
 	}
 
 	/** Attempt a single connection to the socket. */
@@ -196,6 +350,14 @@ export class DaemonClient {
 				}
 			}
 		}
+	}
+}
+
+/** Error thrown when daemon is unreachable and circuit is open. */
+export class DaemonUnavailableError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "DaemonUnavailableError";
 	}
 }
 

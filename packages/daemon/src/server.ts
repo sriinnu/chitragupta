@@ -40,7 +40,7 @@ export interface DaemonServerConfig {
 	paths: DaemonPaths;
 	/** RPC method router. */
 	router: RpcRouter;
-	/** Max concurrent connections (default: 32). */
+	/** Max concurrent connections (default: 256). */
 	maxConnections?: number;
 }
 
@@ -61,7 +61,7 @@ export interface DaemonServer {
  * parses NDJSON frames, and routes JSON-RPC requests.
  */
 export async function startServer(config: DaemonServerConfig): Promise<DaemonServer> {
-	const { paths, router, maxConnections = 32 } = config;
+	const { paths, router, maxConnections = 256 } = config;
 	const clients = new Map<string, ClientConnection>();
 
 	ensureDirs(paths);

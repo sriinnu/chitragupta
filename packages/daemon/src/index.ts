@@ -8,7 +8,10 @@
  */
 
 // Public API: client (what consumers use)
-export { DaemonClient, createClient, type DaemonClientConfig } from "./client.js";
+export { DaemonClient, DaemonUnavailableError, createClient, type DaemonClientConfig } from "./client.js";
+
+// Public API: resilience (health states, circuit breaker)
+export { HealthMonitor, HealthState, type CircuitBreakerConfig, type HealthEvents } from "./resilience.js";
 
 // Public API: paths (for tooling and diagnostics)
 export { resolvePaths, ensureDirs, cleanStaleSocket, type DaemonPaths } from "./paths.js";
