@@ -67,6 +67,9 @@ export class DaemonClient {
 		}
 	}
 
+	/** Socket error codes that mean "daemon not running" (should auto-start). */
+	private static readonly DAEMON_DOWN_CODES = new Set(["ECONNREFUSED", "ENOENT", "EACCES"]);
+
 	/** Connect to the daemon. Auto-starts if needed. */
 	async connect(): Promise<void> {
 		if (this.connected) return;
@@ -74,7 +77,8 @@ export class DaemonClient {
 		try {
 			await this.tryConnect();
 		} catch (err) {
-			if (!this.autoStart || (err as NodeJS.ErrnoException).code !== "ECONNREFUSED") {
+			const code = (err as NodeJS.ErrnoException).code;
+			if (!this.autoStart || !code || !DaemonClient.DAEMON_DOWN_CODES.has(code)) {
 				throw err;
 			}
 			await this.startAndRetry();
@@ -86,10 +90,10 @@ export class DaemonClient {
 	 *
 	 * Self-healing lifecycle:
 	 * 1. If circuit is open (DEAD), throws immediately
-	 * 2. Sends request — on success, records healthy
-	 * 3. On socket failure: disconnects, reconnects (auto-spawns), retries once
-	 * 4. On repeated failures: transitions HEALTHY → DEGRADED → HEALING
-	 * 5. In HEALING: attempts daemon restart with exponential backoff
+	 * 2. Connects if needed — connect failure enters healing path
+	 * 3. Sends request — on success, records healthy
+	 * 4. On socket failure: disconnects, reconnects (auto-spawns), retries once
+	 * 5. On repeated failures: transitions HEALTHY → DEGRADED → HEALING
 	 * 6. After 3 failed restarts: circuit opens (DEAD)
 	 */
 	async call(method: string, params?: Record<string, unknown>): Promise<unknown> {
@@ -100,7 +104,16 @@ export class DaemonClient {
 			);
 		}
 
-		if (!this.connected) await this.connect();
+		// Connect with failure tracking — connect errors enter healing path
+		if (!this.connected) {
+			try {
+				await this.connect();
+			} catch (err) {
+				const reason = err instanceof Error ? err.message : String(err);
+				const shouldHeal = this.health.recordFailure(reason);
+				return this.selfHeal(method, params, shouldHeal);
+			}
+		}
 
 		try {
 			const result = await this.sendRequest(method, params);

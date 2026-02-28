@@ -7,7 +7,7 @@
  * @module
  */
 
-import { execFile, fork } from "node:child_process";
+import { fork } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { createLogger } from "@chitragupta/core";
@@ -92,8 +92,64 @@ export async function spawnDaemon(): Promise<number> {
 		return status.pid;
 	}
 
+	const paths = resolvePaths();
+
+	// Acquire lock to prevent concurrent spawn races (multiple MCP sessions starting daemon)
+	const lockAcquired = acquireLock(paths.lock);
+	if (!lockAcquired) {
+		log.info("Another process is spawning the daemon, waiting...");
+		// Wait for the other spawner to finish, then check if daemon is up
+		for (let i = 0; i < 20; i++) {
+			await new Promise((r) => setTimeout(r, 500));
+			const recheck = checkStatus();
+			if (recheck.running && recheck.pid) return recheck.pid;
+		}
+		throw new Error("Daemon spawn lock held too long — check for stale lock file");
+	}
+
+	try {
+		return await doSpawn(paths);
+	} finally {
+		releaseLock(paths.lock);
+	}
+}
+
+/** Acquire a file-based lock. Returns false if already held. */
+function acquireLock(lockPath: string): boolean {
+	try {
+		fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+		// O_EXCL fails if file exists — atomic lock acquisition
+		const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+		fs.writeSync(fd, `${process.pid}\n${Date.now()}`);
+		fs.closeSync(fd);
+		return true;
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+			// Check if lock is stale (older than 30s)
+			try {
+				const stat = fs.statSync(lockPath);
+				if (Date.now() - stat.mtimeMs > 30_000) {
+					fs.unlinkSync(lockPath);
+					return acquireLock(lockPath); // Retry once after removing stale lock
+				}
+			} catch { /* lock disappeared — race is fine */ }
+			return false;
+		}
+		throw err;
+	}
+}
+
+/** Release the lock file. */
+function releaseLock(lockPath: string): void {
+	try { fs.unlinkSync(lockPath); } catch { /* best-effort */ }
+}
+
+/** Internal: actual daemon spawn after lock acquired. */
+async function doSpawn(paths: ReturnType<typeof resolvePaths>): Promise<number> {
 	// Resolve the daemon entry point — works from both src/ (tsx dev) and dist/ (built)
-	const pkgRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+	// Use fileURLToPath for correct handling of encoded chars and Windows drive letters
+	const { fileURLToPath } = await import("node:url");
+	const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 	const daemonEntry = path.join(pkgRoot, "dist", "entry.js");
 
 	if (!fs.existsSync(daemonEntry)) {
@@ -103,7 +159,6 @@ export async function spawnDaemon(): Promise<number> {
 		);
 	}
 
-	const paths = resolvePaths();
 	fs.mkdirSync(paths.logDir, { recursive: true });
 
 	const outLog = fs.openSync(path.join(paths.logDir, "daemon.out.log"), "a");

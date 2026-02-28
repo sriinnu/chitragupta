@@ -272,11 +272,10 @@ export class McpSessionRecorder {
 			this.turnCounter++;
 
 			try {
-				const { getFactExtractor } = await import("@chitragupta/smriti/fact-extractor");
-				const extractor = getFactExtractor();
+				const bridge = await import("./daemon-bridge.js");
 				const userText = this.extractUserText(info.args);
 				if (userText && this.shouldExtractFact(info.tool, userText)) {
-					await extractor.extractAndSave(userText, { type: "global" }, { type: "project", path: this.projectPath });
+					await bridge.extractFacts(userText, this.projectPath);
 				}
 			} catch {
 				/* best-effort */
@@ -309,27 +308,33 @@ export class McpSessionRecorder {
 		result: McpToolResult;
 		elapsedMs: number;
 	}): Promise<void> {
-		const { appendMemory } = await import("@chitragupta/smriti/memory-store");
+		const bridge = await import("./daemon-bridge.js");
 		const resultText =
 			info.result.content
 				?.filter((c): c is { type: "text"; text: string } => c.type === "text")
 				.map((c) => c.text)
 				.join("\n") ?? "";
-		const scope = { type: "project" as const, path: this.projectPath };
 
 		if (info.tool === "coding_agent") {
 			const task = String(info.args.task ?? "").slice(0, 500);
 			const ok = !info.result.isError && resultText.includes("✓");
 			const files = resultText.match(/(?:Modified|Created): (.+)/g)?.join("; ") ?? "none";
-			await appendMemory(scope,
-				`## Coding Agent: ${ok ? "Success" : "Failed"}\n**Task**: ${task}\n**Files**: ${files}\n**Duration**: ${(info.elapsedMs / 1000).toFixed(1)}s`);
+			await bridge.appendMemoryViaDaemon("project",
+				`## Coding Agent: ${ok ? "Success" : "Failed"}\n**Task**: ${task}\n**Files**: ${files}\n**Duration**: ${(info.elapsedMs / 1000).toFixed(1)}s`,
+				this.projectPath);
 		} else if (info.tool === "sabha_deliberate") {
 			const proposal = String(info.args.proposal ?? "").slice(0, 300);
 			const verdict = resultText.match(/verdict[:\s]*(\w+)/i)?.[1] ?? "unknown";
-			await appendMemory(scope, `## Deliberation: ${verdict}\n**Proposal**: ${proposal}`);
+			await bridge.appendMemoryViaDaemon("project",
+				`## Deliberation: ${verdict}\n**Proposal**: ${proposal}`,
+				this.projectPath);
 		} else if ((info.tool === "write" || info.tool === "edit") && !info.result.isError) {
 			const filePath = String(info.args.path ?? "");
-			if (filePath) await appendMemory(scope, `File ${info.tool === "write" ? "created" : "edited"}: ${filePath}`);
+			if (filePath) {
+				await bridge.appendMemoryViaDaemon("project",
+					`File ${info.tool === "write" ? "created" : "edited"}: ${filePath}`,
+					this.projectPath);
+			}
 		}
 	}
 
@@ -396,8 +401,6 @@ export class McpSessionRecorder {
 					}
 
 					try {
-						const { getFactExtractor } = await import("@chitragupta/smriti/fact-extractor");
-						const extractor = getFactExtractor();
 						for (const turn of capped) {
 							const t = turn as Record<string, unknown>;
 							if (
@@ -407,11 +410,7 @@ export class McpSessionRecorder {
 								t.content.length < 5000 &&
 								this.shouldExtractFact("chitragupta_record_conversation", t.content)
 							) {
-								await extractor.extractAndSave(
-									t.content,
-									{ type: "global" },
-									{ type: "project", path: this.projectPath },
-								);
+								await bridge.extractFacts(t.content, this.projectPath);
 							}
 						}
 					} catch {
