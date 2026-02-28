@@ -46,6 +46,7 @@ import {
 	buildMeshApiHandlers,
 	type MeshBootstrapResult,
 } from "./mesh-bootstrap.js";
+import { createToolNotFoundResolver } from "./shared-factories.js";
 
 const log = createLogger("cli:main-serve");
 
@@ -373,6 +374,16 @@ async function createServerAgent(params: CreateServerAgentParams): Promise<{ res
 		lokapala: modules.servLokapala as unknown as import("@chitragupta/anina").LokapalaGuardians | undefined,
 		kaala: mesh.kaala as unknown as AgentConfig["kaala"],
 		enableLearning: true, enableAutonomy: true, enableMemory: true, project: projectPath,
+		onToolNotFound: createToolNotFoundResolver({
+			tools,
+			vidyaOrchestrator: modules.servVidyaOrchestrator as {
+				bridge?: { getSkillForTool(toolName: string): { name: string } | null };
+				recommend?(query: string): Array<{ skill?: { name?: string }; score?: number }>;
+			} | undefined,
+			onGap: (toolName: string) => {
+				try { log.debug("tool-not-found", { toolName }); } catch { /* best-effort */ }
+			},
+		}),
 	};
 
 	const agent = new Agent(agentConfig);

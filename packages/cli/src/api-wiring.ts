@@ -27,6 +27,7 @@ import { resolveAgentLimits } from "./agent-limits.js";
 
 /** Result of API infrastructure wiring. */
 export interface ApiWiringResult {
+	vidyaOrchestrator?: import("@chitragupta/vidhya-skills").VidyaOrchestrator;
 	policyAdapter?: AgentConfig["policyEngine"];
 	embeddingProvider?: Awaited<ReturnType<typeof createEmbeddingProviderInstance>>;
 	memoryContext?: string;
@@ -228,6 +229,7 @@ async function wireSkills(
 				{ persistPath: path.join(stateDir, "vidya-state.json"), enableAutoComposition: true },
 			);
 			await vidyaOrchestrator.initialize();
+			result.vidyaOrchestrator = vidyaOrchestrator;
 		} catch { /* best-effort */ }
 	} catch { /* vidhya-skills is optional */ }
 }

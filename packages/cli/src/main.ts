@@ -62,6 +62,7 @@ import { guideProviderSetup } from "./provider-setup.js";
 import { handleDaemonCommand, handleSwapnaCommand } from "./main-subcommands.js";
 import { handleServeCommand } from "./main-serve-mode.js";
 import { wireTuiInfrastructure } from "./main-tui-wiring.js";
+import { createToolNotFoundResolver } from "./shared-factories.js";
 import {
 	resolveSession,
 	runPratyabhijna,
@@ -266,6 +267,13 @@ export async function main(args: ParsedArgs): Promise<void> {
 		onSkillGap: (toolName: string) => {
 			process.stderr.write(`[skill-gap] ${toolName}\n`);
 		},
+		onToolNotFound: createToolNotFoundResolver({
+			tools: wiring.tools,
+			vidyaOrchestrator: wiring.vidyaOrchestrator,
+			onGap: (toolName) => {
+				try { process.stderr.write(`[tool-not-found] ${toolName}\n`); } catch { /* best-effort */ }
+			},
+		}),
 	};
 
 	const agent = new Agent(agentConfig);

@@ -57,6 +57,7 @@ import {
 
 import { wireApiInfrastructure } from "./api-wiring.js";
 import { buildInstance } from "./api-instance.js";
+import { createToolNotFoundResolver } from "./shared-factories.js";
 
 // ─── Re-export public types from sub-modules ────────────────────────────────
 
@@ -221,6 +222,13 @@ export async function createChitragupta(
 		onSkillGap: (toolName: string) => {
 			process.stderr.write(`[skill-gap] ${toolName}\n`);
 		},
+		onToolNotFound: createToolNotFoundResolver({
+			tools,
+			vidyaOrchestrator: wiring.vidyaOrchestrator,
+			onGap: (toolName: string) => {
+				try { process.stderr.write(`[tool-not-found] ${toolName}\n`); } catch { /* best-effort */ }
+			},
+		}),
 	};
 
 	const agent = new Agent(agentConfig);

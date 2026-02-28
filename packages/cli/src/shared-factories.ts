@@ -13,6 +13,7 @@
 
 import path from "path";
 import { resolveAgentLimits } from "./agent-limits.js";
+import type { ToolHandler } from "@chitragupta/anina";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -62,6 +63,122 @@ export interface LoadSkillTiersOptions {
 	skillRegistry: {
 		registerWithPriority(manifest: unknown, priority: number, sourcePath?: string): void;
 		unregisterBySourcePath(sourcePath: string): void;
+	};
+}
+
+/** Optional dependencies passed to the tool-not-found resolver. */
+export interface ToolNotFoundResolverParams {
+	/** All currently loaded tool handlers. */
+	tools: ToolHandler[];
+	/** Vidya orchestrator for semantic matching. */
+	vidyaOrchestrator?: {
+		bridge?: {
+			getSkillForTool(toolName: string): { name: string } | null;
+		};
+		recommend?(query: string): Array<{ skill?: { name?: string }; score?: number }>;
+	};
+	/** Called whenever a tool could not be resolved. */
+	onGap?: (toolName: string) => void;
+}
+
+/**
+ * Create a resolver used by AgentConfig.onToolNotFound.
+ *
+ * Resolution strategy:
+ * 1) Exact/normalized tool-name match
+ * 2) Heuristic fuzzy match against tool-name fragments
+ * 3) Vidya direct skill/tool mapping and recommendations
+ * 4) Best-effort return of undefined + gap telemetry
+ */
+export function createToolNotFoundResolver(params: ToolNotFoundResolverParams): (toolName: string) => Promise<ToolHandler | undefined> {
+	const normalize = (value: string): string => value
+		.toLowerCase()
+		.trim()
+		.replace(/[^a-z0-9]+/g, "_")
+		.replace(/_+/g, "_")
+		.replace(/^_|_$/g, "");
+
+	const compact = (value: string): string => normalize(value).replace(/_/g, "");
+
+	const toolByNormalized = new Map<string, ToolHandler>();
+	for (const tool of params.tools) {
+		const name = tool?.definition?.name;
+		if (typeof name === "string" && name.length > 0) {
+			toolByNormalized.set(normalize(name), tool);
+			toolByNormalized.set(compact(name), tool);
+		}
+	}
+
+	const isToolMatch = (tool: ToolHandler, requested: string): boolean => {
+		const requestedNorm = normalize(requested);
+		const requestedCompact = compact(requested);
+		const candidateNorm = normalize(tool.definition.name);
+		const candidateCompact = compact(tool.definition.name);
+
+		if (candidateNorm === requestedNorm || candidateCompact === requestedCompact) return true;
+		if (requestedNorm && (candidateNorm.includes(requestedNorm) || requestedNorm.includes(candidateNorm))) return true;
+		if (requestedCompact && (candidateCompact.includes(requestedCompact) || requestedCompact.includes(candidateCompact))) return true;
+
+		return false;
+	};
+
+	const findFromVidyaByName = async (name: string): Promise<string | undefined> => {
+		const orchestrator = params.vidyaOrchestrator;
+		if (!orchestrator) return undefined;
+
+		try {
+			const bridge = (orchestrator as { bridge?: { getSkillForTool?: (t: string) => { name?: string } | null } }).bridge;
+			const direct = bridge?.getSkillForTool?.(name)?.name;
+			if (direct) return direct;
+		} catch { /* ignore */ }
+
+		try {
+			const recommend = params.vidyaOrchestrator?.recommend;
+			if (!recommend) return undefined;
+			const matches = await Promise.resolve(recommend(`${name} tool`));
+			if (!matches?.length) return undefined;
+			const top = matches
+				.filter((m) => typeof m?.skill?.name === "string")
+				.sort((a, b) => (b?.score ?? 0) - (a?.score ?? 0))[0];
+			return top?.skill?.name;
+		} catch { /* ignore */ }
+
+		return undefined;
+	};
+
+	return async (toolName: string): Promise<ToolHandler | undefined> => {
+		const requested = toolName?.trim();
+		if (!requested) return undefined;
+
+		const requestedNorm = normalize(requested);
+		const requestedCompact = compact(requested);
+
+		const exact = toolByNormalized.get(requestedNorm) ?? toolByNormalized.get(requestedCompact);
+		if (exact) return exact;
+
+		// Heuristic token/substring match
+		for (const tool of params.tools) {
+			if (isToolMatch(tool, requested)) return tool;
+		}
+
+		// Semantic/skill-guided match
+		const semanticName = await findFromVidyaByName(requested);
+		if (semanticName) {
+			const semNorm = normalize(semanticName);
+			if (toolByNormalized.has(semNorm)) return toolByNormalized.get(semNorm)!;
+
+			const compactSem = compact(semanticName);
+			if (toolByNormalized.has(compactSem)) return toolByNormalized.get(compactSem)!;
+
+			for (const tool of params.tools) {
+				if (normalize(tool.definition.name).includes(semNorm) || compact(tool.definition.name).includes(compactSem)) {
+					return tool;
+				}
+			}
+		}
+
+		if (params.onGap) params.onGap(requested);
+		return undefined;
 	};
 }
 
