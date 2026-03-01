@@ -25,6 +25,8 @@ import {
 } from "@chitragupta/swara/providers";
 import {
 	createOllamaEmbeddings,
+	createOpenAIEmbeddings,
+	createOnnxEmbeddings,
 	detectAvailableCLIs,
 } from "@chitragupta/swara";
 import type { EmbeddingProvider, CLIAvailability } from "@chitragupta/swara";
@@ -341,17 +343,36 @@ export function getActionType(toolName: string): PolicyAction["type"] {
 // ─── Embedding Provider ─────────────────────────────────────────────────────
 
 /**
- * Attempt to create an embedding provider. Tries Ollama first
- * (nomic-embed-text). Returns undefined if unavailable.
+ * Create the best available embedding provider.
+ *
+ * Fallback chain: Ollama (local, free) → OpenAI (cloud, needs key) →
+ * ONNX (bundled MiniLM, zero-dep) → undefined (hash fallback in smriti).
  */
 export async function createEmbeddingProviderInstance(): Promise<EmbeddingProvider | undefined> {
+	// 1. Ollama — best quality, free, local
 	try {
-		const provider = createOllamaEmbeddings();
-		const configured = await provider.isConfigured();
-		if (configured) return provider;
-	} catch {
-		// Ollama unavailable — fall through
-	}
+		const ollama = createOllamaEmbeddings();
+		if (await ollama.isConfigured()) return ollama;
+	} catch { /* Ollama unavailable */ }
+
+	// 2. OpenAI — cloud, uses existing API key
+	try {
+		const openai = createOpenAIEmbeddings();
+		if (await openai.isConfigured()) return openai;
+	} catch { /* No OpenAI key */ }
+
+	// 3. ONNX — bundled all-MiniLM-L6-v2, no external deps
+	try {
+		const onnx = createOnnxEmbeddings();
+		if (await onnx.isConfigured()) return onnx;
+	} catch { /* @huggingface/transformers not installed */ }
+
+	// 4. Nothing available — smriti falls back to hash (with warning)
+	process.stderr.write(
+		"[chitragupta] Warning: No embedding provider available. " +
+		"Semantic search will be degraded. Install Ollama, set OPENAI_API_KEY, " +
+		"or run: npm install @huggingface/transformers\n",
+	);
 	return undefined;
 }
 

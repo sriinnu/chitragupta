@@ -86,5 +86,13 @@ HEALTH.md
 # Git worktrees (local lane branches)
 .worktrees/
 
+# pnpm build approvals (machine-specific)
+.pnpm-approved-builds.json
+
 # Legacy
 .lodestar
+
+# Large app icons (regenerate with iconutil)
+apps/macos-menubar/Sources/Assets.xcassets/AppIcon.appiconset/icon_1024x1024.png
+apps/macos-menubar/Sources/Assets.xcassets/AppIcon.appiconset/icon_512x512.png
+apps/macos-menubar/Sources/Assets.xcassets/AppIcon.appiconset/icon_256x256.png

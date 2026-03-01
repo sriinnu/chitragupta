@@ -9,6 +9,7 @@
  */
 
 import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
+import { DaemonUnavailableError } from "@chitragupta/daemon";
 import { writeChitraguptaState } from "./mcp-state.js";
 
 // ─── ANSI & Semantic Helpers ────────────────────────────────────────────────
@@ -50,10 +51,7 @@ function extractIntent(args: Record<string, unknown>): string {
 	return "";
 }
 
-/**
- * Extract meaningful content from a tool call for session recording.
- * Returns `[userContent, assistantContent]` — clean text, not raw JSON.
- */
+/** Extract meaningful content from a tool call. Returns `[userContent, assistantContent]`. */
 function extractSemanticContent(
 	tool: string,
 	args: Record<string, unknown>,
@@ -89,6 +87,13 @@ function extractSemanticContent(
 		intent || `Used ${tool}`,
 		`${tool}: ${cleanResult.slice(0, 300)}`,
 	];
+}
+
+/** Check if error indicates daemon is unreachable (socket errors, unavailable). */
+function isDaemonError(err: unknown): boolean {
+	if (err instanceof DaemonUnavailableError) return true;
+	const code = (err as NodeJS.ErrnoException).code;
+	return typeof code === "string" && ["ECONNREFUSED", "ENOENT", "EPIPE", "ECONNRESET"].includes(code);
 }
 
 // ─── Session Recorder ───────────────────────────────────────────────────────
@@ -178,10 +183,7 @@ export class McpSessionRecorder {
 		return null;
 	}
 
-	/**
-	 * Decide if text is worth fact extraction.
-	 * Filters short chatter, commands, and generic questions to avoid noisy memory.
-	 */
+	/** Decide if text is worth fact extraction (filters chatter and commands). */
 	private shouldExtractFact(tool: string, text: string): boolean {
 		const normalized = text.trim();
 		const lower = normalized.toLowerCase();
@@ -222,18 +224,11 @@ export class McpSessionRecorder {
 
 		try {
 			const bridge = await import("./daemon-bridge.js");
-			const isConversationBatch = info.tool === "chitragupta_record_conversation";
 
-			if (isConversationBatch) {
-				const turnCount = Array.isArray(info.args.turns) ? info.args.turns.length : 0;
-				await bridge.addTurn(sid, this.projectPath, {
-					turnNumber: 0,
-					role: "assistant",
-					content: `[tool:${info.tool}] recorded ${turnCount} conversation turn(s)`,
-					agent: "mcp",
-					model: "mcp",
-				});
-				this.turnCounter++;
+			// chitragupta_record_conversation: execute handler already records
+			// each turn individually via bridge.addTurn(). Skip the meta-turn
+			// to avoid polluting the turns table with noise.
+			if (info.tool === "chitragupta_record_conversation") {
 				writeChitraguptaState({
 					sessionId: sid,
 					project: this.projectPath,
@@ -294,6 +289,12 @@ export class McpSessionRecorder {
 			});
 		} catch (err) {
 			process.stderr.write(`[chitragupta] record failed: ${err}\n`);
+			// Invalidate cached session on daemon restart / connection loss
+			// so the next call creates a fresh session via the new daemon.
+			if (err instanceof DaemonUnavailableError || isDaemonError(err)) {
+				this.sessionId = null;
+				this.contextInjected = false;
+			}
 		}
 	}
 
@@ -430,6 +431,11 @@ export class McpSessionRecorder {
 
 					return { content: [{ type: "text", text: `Recorded ${recorded} conversation turn(s).` }] };
 				} catch (err) {
+					// Invalidate session on daemon disconnection so next call reconnects
+					if (isDaemonError(err)) {
+						this.sessionId = null;
+						this.contextInjected = false;
+					}
 					return {
 						content: [{ type: "text", text: `Failed to record: ${err instanceof Error ? err.message : String(err)}` }],
 						isError: true,

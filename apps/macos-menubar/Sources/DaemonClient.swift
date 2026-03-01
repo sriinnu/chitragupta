@@ -1,7 +1,8 @@
-/// Network client for the Chitragupta daemon HTTP API.
+/// Network client for the Chitragupta daemon HTTP health server.
 ///
-/// Polls `GET /api/daemon/status` every 5 seconds.
-/// Provides start/stop/consolidate actions via POST endpoints.
+/// Talks directly to the daemon process on port 7788 (loopback).
+/// Does NOT depend on the CLI server (port 3141).
+/// Polls `GET /status` every 5 seconds.
 /// Published properties drive SwiftUI reactivity.
 
 import AppKit
@@ -16,6 +17,7 @@ final class DaemonClient: ObservableObject {
     @Published var status: AggregatedStatus?
     @Published var isConnected = false
     @Published var lastError: String?
+    @Published var isStarting = false
 
     // MARK: - Configuration
 
@@ -24,7 +26,7 @@ final class DaemonClient: ObservableObject {
     private var pollTimer: Timer?
     private let decoder = JSONDecoder()
 
-    nonisolated static let defaultURL = URL(string: "http://127.0.0.1:3141")!
+    nonisolated static let defaultURL = URL(string: "http://127.0.0.1:3690")!
     private nonisolated static let pollInterval: TimeInterval = 5.0
 
     // MARK: - Init
@@ -56,46 +58,97 @@ final class DaemonClient: ObservableObject {
         }
     }
 
-    /// Fetch aggregated daemon status.
+    /// Fetch aggregated daemon status. Only publishes when values change.
     func fetchStatus() async {
-        let url = baseURL.appendingPathComponent("api/daemon/status")
+        let url = baseURL.appendingPathComponent("status")
         do {
             let (data, response) = try await session.data(from: url)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                isConnected = false
+                if isConnected { isConnected = false }
                 return
             }
-            let decoded = try decoder.decode(DaemonStatusResponse.self, from: data)
-            status = decoded.data
-            isConnected = decoded.data?.daemon.alive ?? false
-            lastError = nil
+            let decoded = try decoder.decode(AggregatedStatus.self, from: data)
+            // Only publish when display-relevant fields changed — avoids
+            // full SwiftUI view tree re-render on every poll cycle.
+            if status != decoded { status = decoded }
+            let alive = decoded.daemon.alive
+            if isConnected != alive { isConnected = alive }
+            if lastError != nil { lastError = nil }
         } catch {
-            isConnected = false
-            status = nil
-            lastError = error.localizedDescription
+            if isConnected { isConnected = false }
+            if status != nil { status = nil }
+            let msg = error.localizedDescription
+            if lastError != msg { lastError = msg }
         }
     }
 
     // MARK: - Actions
 
-    /// Start the daemon process.
-    func startDaemon() async {
-        await postAction(path: "api/daemon/start")
+    /// Spawn the daemon as a detached background process.
+    ///
+    /// GUI apps don't inherit terminal PATH. We source nvm/homebrew
+    /// directly (no interactive shell — `-i` causes pipe deadlocks
+    /// from macOS session save/restore messages).
+    func startDaemon() {
+        guard !isStarting else { return }
+        isStarting = true
+        lastError = nil
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let script = """
+            # Load nvm/homebrew into PATH (GUI apps have bare PATH)
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null)"
+
+            REPO="$HOME/Sriinnu/Personal/AUriva/chitragupta"
+            if [ -f "$REPO/packages/daemon/dist/process.js" ]; then
+                cd "$REPO"
+                exec node --input-type=module -e \
+                  "import{spawnDaemon}from'./packages/daemon/dist/process.js';await spawnDaemon()"
+            fi
+            exec chitragupta daemon start
+            """
+
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            task.arguments = ["-c", script]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+
+            do {
+                try task.run()
+                task.waitUntilExit()
+
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.isStarting = false
+                    if task.terminationStatus != 0 {
+                        self.lastError = "Could not start daemon (exit \(task.terminationStatus))"
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self?.isStarting = false
+                    self?.lastError = "Launch failed: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
-    /// Stop the daemon process.
+    /// Stop the daemon process via graceful shutdown.
     func stopDaemon() async {
-        await postAction(path: "api/daemon/stop")
+        await postAction(path: "shutdown")
     }
 
     /// Wake Nidra to trigger consolidation.
     func consolidate() async {
-        await postAction(path: "api/nidra/wake")
+        await postAction(path: "consolidate")
     }
 
-    /// Open the Hub dashboard in the default browser.
+    /// Open the Hub dashboard in the default browser (CLI server).
     func openHub() {
-        let hubURL = baseURL.appendingPathComponent("hub")
+        let hubURL = URL(string: "http://127.0.0.1:3141/hub")!
         NSWorkspace.shared.open(hubURL)
     }
 
@@ -117,6 +170,12 @@ final class DaemonClient: ObservableObject {
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    /// Format PID for display.
+    static func formatPid(_ pid: Int?) -> String {
+        guard let p = pid else { return "—" }
+        return "\(p)"
     }
 
     /// Format bytes into human-readable string.

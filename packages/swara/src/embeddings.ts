@@ -262,23 +262,84 @@ export function createOpenAIEmbeddings(options?: OpenAIEmbeddingOptions): Embedd
 	return { id: "openai-embeddings", embed, embedBatch, isConfigured, models };
 }
 
+// ─── ONNX Local Embeddings ───────────────────────────────────────────────────
+
+/** Options for the ONNX local embedding provider. */
+export interface OnnxEmbeddingOptions {
+	/** HuggingFace model ID. Default: "Xenova/all-MiniLM-L6-v2". */
+	model?: string;
+}
+
+/**
+ * Create an embedding provider using a local ONNX model via
+ * `@huggingface/transformers`. Zero external deps — runs in-process
+ * with WASM backend. Model downloads on first use (~22MB), cached after.
+ */
+export function createOnnxEmbeddings(options?: OnnxEmbeddingOptions): EmbeddingProvider {
+	const modelId = options?.model ?? "Xenova/all-MiniLM-L6-v2";
+	const dimensions = 384;
+
+	const models: EmbeddingModel[] = [
+		{ id: modelId, name: "MiniLM-L6-v2 (ONNX)", dimensions, maxTokens: 512 },
+	];
+
+	/** Lazily loaded pipeline — heavy init, reused across calls. */
+	let pipelinePromise: Promise<unknown> | null = null;
+
+	async function getPipeline(): Promise<(text: string, opts: Record<string, unknown>) => Promise<{ data: Float32Array }>> {
+		if (!pipelinePromise) {
+			pipelinePromise = import("@huggingface/transformers").then(
+				(mod) => mod.pipeline("feature-extraction", modelId, { dtype: "fp32" }),
+			);
+		}
+		return pipelinePromise as Promise<(text: string, opts: Record<string, unknown>) => Promise<{ data: Float32Array }>>;
+	}
+
+	async function embed(text: string): Promise<EmbeddingResult> {
+		const extractor = await getPipeline();
+		const output = await extractor(text, { pooling: "mean", normalize: true });
+		return { embedding: Array.from(output.data), model: modelId, tokens: 0 };
+	}
+
+	async function embedBatch(texts: string[]): Promise<EmbeddingResult[]> {
+		const results: EmbeddingResult[] = [];
+		for (const text of texts) {
+			results.push(await embed(text));
+		}
+		return results;
+	}
+
+	async function isConfigured(): Promise<boolean> {
+		try {
+			await import("@huggingface/transformers");
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	return { id: "onnx-embeddings", embed, embedBatch, isConfigured, models };
+}
+
 // ─── Factory Dispatcher ─────────────────────────────────────────────────────
 
 /**
  * Create an embedding provider by type.
  *
- * @param type - "ollama" for local Ollama or "openai" for OpenAI-compatible APIs.
+ * @param type - "ollama" for local, "openai" for cloud, "onnx" for bundled ONNX model.
  * @param options - Provider-specific options (baseUrl, model, apiKey).
  */
 export function createEmbeddingProvider(
-	type: "ollama" | "openai",
-	options?: OllamaEmbeddingOptions & OpenAIEmbeddingOptions,
+	type: "ollama" | "openai" | "onnx",
+	options?: OllamaEmbeddingOptions & OpenAIEmbeddingOptions & OnnxEmbeddingOptions,
 ): EmbeddingProvider {
 	switch (type) {
 		case "ollama":
 			return createOllamaEmbeddings(options);
 		case "openai":
 			return createOpenAIEmbeddings(options);
+		case "onnx":
+			return createOnnxEmbeddings(options);
 		default:
 			throw new ProviderError(
 				`Unknown embedding provider type: ${type as string}`,

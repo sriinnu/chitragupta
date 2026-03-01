@@ -14,6 +14,7 @@ import { resolvePaths, ensureDirs } from "./paths.js";
 import { writePid, installSignalHandlers } from "./process.js";
 import { RpcRouter } from "./rpc-router.js";
 import { startServer, type DaemonServer } from "./server.js";
+import { startHttpServer, type DaemonHttpServer } from "./http-server.js";
 import { registerServices } from "./services.js";
 
 const log = createLogger("daemon:entry");
@@ -89,6 +90,16 @@ async function main(): Promise<void> {
 	// Wire connection count into health report
 	router.setConnectionCount(() => server.connectionCount());
 
+	// Start HTTP health server (for menubar/taskbar/browser clients)
+	let httpServer: DaemonHttpServer | null = null;
+	try {
+		httpServer = await startHttpServer({ router });
+	} catch (err) {
+		log.warn("HTTP health server failed to start — running without it", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+
 	// Start Nidra consolidation daemon (cron + backfill)
 	let nidraStop: (() => Promise<void>) | null = null;
 	try {
@@ -104,6 +115,9 @@ async function main(): Promise<void> {
 		log.info("Daemon shutting down");
 		if (nidraStop) {
 			try { await nidraStop(); } catch { /* best-effort */ }
+		}
+		if (httpServer) {
+			try { await httpServer.stop(); } catch { /* best-effort */ }
 		}
 		await server.stop();
 	};
@@ -121,6 +135,7 @@ async function main(): Promise<void> {
 	log.info("Daemon ready", {
 		pid: process.pid,
 		socket: paths.socket,
+		http: httpServer ? `:${httpServer.port()}` : "disabled",
 		methods: router.listMethods().length,
 		nidra: nidraStop ? "active" : "disabled",
 	});

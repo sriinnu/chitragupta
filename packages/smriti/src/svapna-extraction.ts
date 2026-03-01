@@ -113,11 +113,19 @@ export async function svapnaReplay(
 			content: string; tool_calls: string | null; created_at: number;
 		}>;
 
+	// Filter noise turns (system context, meta-turns, compressed prompts)
+	const realTurns = turns.filter((t) => {
+		if (t.content.startsWith("[system:context]")) return false;
+		if (t.content.startsWith("[compressed] [system:context]")) return false;
+		if (/^\[tool:chitragupta_record_conversation\] recorded \d+/.test(t.content)) return false;
+		return true;
+	});
+
 	// Build historical frequency table for tool-result patterns
 	const patternCounts = new Map<string, number>();
 	let totalPatterns = 0;
 
-	for (const turn of turns) {
+	for (const turn of realTurns) {
 		const calls = parseToolCalls(turn.tool_calls);
 		for (const tc of calls) {
 			const key = `${tc.name}:${tc.isError ? "err" : "ok"}`;
@@ -129,7 +137,7 @@ export async function svapnaReplay(
 	// Score each turn with surprise
 	const scoredTurns: ScoredTurn[] = [];
 
-	for (const turn of turns) {
+	for (const turn of realTurns) {
 		const calls = parseToolCalls(turn.tool_calls);
 		let surprise = 0;
 

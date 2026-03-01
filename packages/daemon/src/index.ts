@@ -31,5 +31,6 @@ export {
 
 // Server + router (for daemon entry point and tests)
 export { startServer, type DaemonServer, type DaemonServerConfig } from "./server.js";
+export { startHttpServer, DEFAULT_HTTP_PORT, type DaemonHttpServer, type DaemonHttpConfig } from "./http-server.js";
 export { RpcRouter, RpcMethodError, type RpcHandler, type MethodMeta } from "./rpc-router.js";
 export { registerServices } from "./services.js";

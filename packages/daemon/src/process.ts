@@ -201,13 +201,22 @@ async function doSpawn(paths: ReturnType<typeof resolvePaths>): Promise<number> 
 	const outLog = fs.openSync(path.join(paths.logDir, "daemon.out.log"), "a");
 	const errLog = fs.openSync(path.join(paths.logDir, "daemon.err.log"), "a");
 
+	// Strip CHITRAGUPTA_HOME from parent env — the daemon is the single-writer
+	// for ~/.chitragupta and must always use the default home directory.
+	// MCP servers may run with CHITRAGUPTA_HOME overridden for test isolation,
+	// but the daemon they spawn must not inherit that override.
+	const { CHITRAGUPTA_HOME: _stripped, ...parentEnv } = process.env;
+
 	const child = fork(daemonEntry, [], {
 		detached: true,
 		stdio: ["ignore", outLog, errLog, "ipc"],
+		// Clear parent's execArgv — flags like --input-type leak into fork()
+		// and crash the daemon with ERR_INPUT_TYPE_NOT_ALLOWED.
+		execArgv: ["--max-old-space-size=256", "--max-semi-space-size=16"],
 		env: {
-			...process.env,
+			...parentEnv,
 			CHITRAGUPTA_DAEMON: "1",
-			NODE_OPTIONS: "--max-old-space-size=256 --max-semi-space-size=16",
+			NODE_OPTIONS: "",
 		},
 	});
 
