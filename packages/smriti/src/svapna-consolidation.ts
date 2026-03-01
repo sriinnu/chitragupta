@@ -201,6 +201,9 @@ export class SvapnaConsolidation {
 		let totalOriginalTokens = 0;
 
 		for (const turn of turns) {
+			// Skip system context and noise — these produce garbage rules
+			if (this.isNoiseTurn(turn.content)) continue;
+
 			const tokens = estimateTokens(turn.content);
 			totalOriginalTokens += tokens;
 			const calls = parseToolCalls(turn.tool_calls);
@@ -339,6 +342,17 @@ export class SvapnaConsolidation {
 		while ((match = pathPattern.exec(content)) !== null) anchors.push(match[0]);
 
 		return [...new Set(anchors)].slice(0, 5);
+	}
+
+	/**
+	 * Detect noise turns that should be excluded from consolidation.
+	 * System context, compressed prompts, and meta-turns produce garbage rules.
+	 */
+	private isNoiseTurn(content: string): boolean {
+		if (content.startsWith("[system:context]")) return true;
+		if (content.startsWith("[compressed] [system:context]")) return true;
+		if (/^\[tool:chitragupta_record_conversation\] recorded \d+/.test(content)) return true;
+		return false;
 	}
 
 	/** Classify epistemological source (Pramana) of a turn's content. */

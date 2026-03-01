@@ -400,6 +400,167 @@ context persists          ← next session picks up where you left off
 
 ---
 
+## Daemon
+
+Chitragupta runs a **centralized daemon** — a single background process per user that owns all persistent state. Every MCP client session, CLI invocation, and Hub dashboard connects to this one daemon. No double-writes, no lock contention, no stale reads.
+
+### Why a Daemon?
+
+Without it, every MCP session opens its own SQLite connection. Two Claude Code sessions writing to the same database = WAL contention, stale reads, and silent data loss. The daemon is the single writer — all clients talk to it over IPC, and it serializes all mutations.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────┐
+│                 Chitragupta Daemon                    │
+│                  (one per user)                       │
+│                                                      │
+│  ┌─────────────┐  ┌─────────────┐  ┌──────────────┐ │
+│  │ Unix Socket  │  │ HTTP Server │  │    Nidra     │ │
+│  │ JSON-RPC 2.0 │  │ :3690       │  │ Consolidation│ │
+│  │ (NDJSON)     │  │ (loopback)  │  │ (cron 2am)  │ │
+│  └──────┬───────┘  └──────┬──────┘  └──────┬───────┘ │
+│         │                 │                │         │
+│  ┌──────┴─────────────────┴────────────────┴───────┐ │
+│  │              RPC Router (40+ methods)            │ │
+│  └──────┬──────────────┬───────────────┬───────────┘ │
+│         │              │               │             │
+│  ┌──────┴──────┐ ┌─────┴─────┐ ┌──────┴──────┐      │
+│  │  agent.db   │ │ graph.db  │ │ vectors.db  │      │
+│  │  (FTS5)     │ │ (KG)      │ │ (embeddings)│      │
+│  └─────────────┘ └───────────┘ └─────────────┘      │
+└──────────────────────────────────────────────────────┘
+        ▲               ▲               ▲
+        │               │               │
+   ┌────┴────┐    ┌─────┴─────┐   ┌────┴─────┐
+   │MCP Client│   │ CLI / Hub │   │ Menubar  │
+   │(socket)  │   │ (socket)  │   │ (HTTP)   │
+   └──────────┘   └───────────┘   └──────────┘
+```
+
+**Two interfaces, same daemon:**
+
+| Interface | Port/Path | Protocol | Clients |
+|-----------|-----------|----------|---------|
+| Unix Socket | `~/Library/Caches/chitragupta/daemon/chitragupta.sock` | JSON-RPC 2.0 over NDJSON | MCP sessions, CLI, Hub server |
+| HTTP Server | `127.0.0.1:3690` | REST (JSON) | macOS menubar, browser, curl |
+| Named Pipe | `\\.\pipe\chitragupta` (Windows) | JSON-RPC 2.0 | Same as Unix socket |
+
+### Lifecycle
+
+```bash
+# Start — forks a detached Node.js process
+chitragupta daemon start
+#   → acquires lock (prevents concurrent spawns)
+#   → forks entry.js with detached:true, stdio:ignore
+#   → waits for IPC "ready" signal (max 10s)
+#   → writes PID file to ~/.chitragupta/daemon.pid
+#   → exits (daemon survives parent exit)
+
+# Status — check if running
+chitragupta daemon status
+
+# Stop — graceful SIGTERM, falls back to SIGKILL after 5s
+chitragupta daemon stop
+
+# Restart — stop + 500ms delay + start
+chitragupta daemon restart
+
+# Ping — verify socket response time
+chitragupta daemon ping
+```
+
+The daemon auto-spawns when any MCP client connects — you rarely need to start it manually.
+
+### HTTP API (port 3690)
+
+Loopback-only. No auth needed — same trust boundary as the Unix socket.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/ping` | Liveness check. Returns `{ pong: true, ts: <epoch_ms> }` |
+| `GET` | `/status` | Aggregated health — daemon vitals, DB counts, Nidra state |
+| `POST` | `/consolidate` | Trigger Nidra memory consolidation |
+| `POST` | `/shutdown` | Graceful daemon shutdown |
+
+**Example: check status**
+
+```bash
+curl -s http://127.0.0.1:3690/status | jq
+```
+
+```json
+{
+  "daemon": {
+    "alive": true,
+    "pid": 14801,
+    "uptime": 86420,
+    "memory": 47185920,
+    "connections": 2,
+    "methods": 42
+  },
+  "nidra": { "state": "awake", "running": false },
+  "db": {
+    "turns": 1247,
+    "sessions": 68,
+    "rules": 312,
+    "vidhis": 22,
+    "samskaras": 15,
+    "vasanas": 8,
+    "akashaTraces": 44
+  },
+  "timestamp": 1709312400000
+}
+```
+
+### Three SQLite Databases
+
+The daemon manages three separate databases (single-writer, WAL mode):
+
+| Database | What It Stores | Search Method |
+|----------|---------------|---------------|
+| `agent.db` | Turns, sessions, rules, vidhis, samskaras, vasanas | FTS5 (BM25) |
+| `graph.db` | Knowledge graph — entities, edges, Pramana types | Graph traversal + PageRank |
+| `vectors.db` | Embeddings (Float32Array BLOBs) | Brute-force cosine similarity |
+
+Retrieval uses **Reciprocal Rank Fusion** across 4 signals: BM25 + vector cosine + GraphRAG + Pramana epistemic weights.
+
+### Platform Paths
+
+| Platform | Daemon Directory | Socket/Pipe |
+|----------|-----------------|-------------|
+| **macOS** | `~/Library/Caches/chitragupta/daemon/` | `<daemon_dir>/chitragupta.sock` |
+| **Linux** | `$XDG_RUNTIME_DIR/chitragupta/` or `~/.chitragupta/daemon/` | `<daemon_dir>/chitragupta.sock` |
+| **Windows** | `%LOCALAPPDATA%\chitragupta\daemon\` | `\\.\pipe\chitragupta` |
+
+Other paths: PID file at `~/.chitragupta/daemon.pid`, logs at `~/.chitragupta/logs/`.
+
+Override with environment variables: `CHITRAGUPTA_SOCKET`, `CHITRAGUPTA_PID`, `CHITRAGUPTA_HOME`, `CHITRAGUPTA_DAEMON_DIR`.
+
+### Process Safety
+
+- **Single-writer guarantee** — all SQLite writes go through the daemon; clients only read via RPC
+- **Lock-based spawn** — file-based lock prevents concurrent daemon starts (O_EXCL atomic creation)
+- **Stale lock detection** — locks older than 30s with dead holder PIDs are automatically broken
+- **Crash policy** — uncaught exceptions trigger clean exit (not silent continuation); clients detect death and auto-restart
+- **Memory pressure** — 256MB heap limit, periodic GC hints at 80% usage
+- **Signal handling** — SIGTERM/SIGINT for graceful shutdown, SIGHUP on Unix, `taskkill` on Windows
+- **Nidra consolidation** — cron at 2am, backfills missed days on startup, manual trigger via RPC
+
+### macOS Menubar App
+
+A native SwiftUI menubar app that monitors the daemon in real-time:
+
+- **Status bar icon** — animated sacred flame (green/amber/gray by health)
+- **Live dashboard** — PID, uptime, memory, connections, Nidra state, memory pipeline counts
+- **Start/Stop controls** — start daemon from the menubar when offline, stop via HTTP
+- **Consolidation trigger** — manually wake Nidra for memory consolidation
+- **Hub link** — open the web dashboard in the browser
+
+Build: `cd apps/macos-menubar && xcodegen && xcodebuild`
+
+---
+
 ## The 17 Packages
 
 | Package | What It Does | Internal Name | Meaning |

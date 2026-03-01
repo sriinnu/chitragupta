@@ -1,28 +1,26 @@
-/// Data models matching the `/api/daemon/status` JSON response.
+/// Data models matching the daemon HTTP `/status` JSON response.
 ///
 /// All structs are Codable for direct JSONDecoder mapping.
-/// Mirrors the TypeScript `AggregatedStatus` interface.
+/// The daemon HTTP server returns the status directly (no wrapper).
 
 import Foundation
 
-/// Top-level response from `GET /api/daemon/status`.
-struct DaemonStatusResponse: Codable {
-    let ok: Bool
-    let data: AggregatedStatus?
-}
-
-/// Aggregated daemon status payload.
-struct AggregatedStatus: Codable {
+/// Top-level response from `GET /status` on the daemon HTTP server.
+/// Fields match the daemon's aggregated status output.
+struct AggregatedStatus: Codable, Equatable {
     let daemon: DaemonInfo
     let nidra: NidraInfo?
     let db: DbCounts?
-    let circuit: CircuitInfo?
-    let triguna: TrigunaInfo?
     let timestamp: Int
+
+    /// Compare only display-relevant fields (exclude timestamp).
+    static func == (lhs: AggregatedStatus, rhs: AggregatedStatus) -> Bool {
+        lhs.daemon == rhs.daemon && lhs.nidra == rhs.nidra && lhs.db == rhs.db
+    }
 }
 
 /// Daemon process information.
-struct DaemonInfo: Codable {
+struct DaemonInfo: Codable, Equatable {
     let alive: Bool
     let pid: Int?
     let uptime: Int?
@@ -32,14 +30,15 @@ struct DaemonInfo: Codable {
 }
 
 /// Nidra sleep/consolidation state.
-struct NidraInfo: Codable {
-    let state: String
+struct NidraInfo: Codable, Equatable {
+    let state: String?
+    let running: Bool?
     let consolidationProgress: Double?
     let lastConsolidationEnd: Int?
 }
 
 /// Database table row counts.
-struct DbCounts: Codable {
+struct DbCounts: Codable, Equatable {
     let turns: Int
     let sessions: Int
     let rules: Int
@@ -49,15 +48,8 @@ struct DbCounts: Codable {
     let akashaTraces: Int
 }
 
-/// Circuit breaker state.
-struct CircuitInfo: Codable {
-    let state: String
-    let consecutiveFailures: Int
-    let mode: String
-}
-
 /// Triguna health values (sums to ~1.0).
-struct TrigunaInfo: Codable {
+struct TrigunaInfo: Codable, Equatable {
     let sattva: Double
     let rajas: Double
     let tamas: Double

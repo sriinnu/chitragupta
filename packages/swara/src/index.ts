@@ -164,10 +164,11 @@ export type {
 } from "./env-detection.js";
 
 // ─── Embeddings ─────────────────────────────────────────────────────────────
-/** Create embedding providers for Ollama and OpenAI with configurable models. */
+/** Create embedding providers for Ollama, OpenAI, and local ONNX models. */
 export {
 	createOllamaEmbeddings,
 	createOpenAIEmbeddings,
+	createOnnxEmbeddings,
 	createEmbeddingProvider,
 	EMBEDDING_MODELS,
 } from "./embeddings.js";
@@ -177,6 +178,7 @@ export type {
 	EmbeddingProvider,
 	OllamaEmbeddingOptions,
 	OpenAIEmbeddingOptions,
+	OnnxEmbeddingOptions,
 } from "./embeddings.js";
 
 // ─── Turiya — Meta-Observer & Contextual Model Router ───────────────────

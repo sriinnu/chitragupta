@@ -58,6 +58,9 @@
 	"dependencies": {
 		"@chitragupta/core": "workspace:*"
 	},
+	"optionalDependencies": {
+		"@huggingface/transformers": "^3.0.0"
+	},
 	"files": [
 		"dist",
 		"README.md"
