@@ -47,6 +47,7 @@ export async function registerServices(router: RpcRouter): Promise<void> {
 	registerReadMethods(router);
 	registerWriteMethods(router);
 	registerKnowledgeMethods(router, sessionStore);
+	registerDaemonMethods(router, sessionDb);
 
 	log.info("Services registered", { methods: router.listMethods().length });
 }
@@ -360,6 +361,39 @@ function registerKnowledgeMethods(
 			vidhisReinforcedCount,
 		};
 	}, "Run Svapna consolidation and Vidhi extraction for a project");
+}
+
+/** Daemon introspection methods for observability. */
+function registerDaemonMethods(
+	router: RpcRouter,
+	db: typeof import("@chitragupta/smriti/session-db"),
+): void {
+	router.register("daemon.status", async () => {
+		const agentDb = db.getAgentDb();
+
+		/** Count rows in a table, returning 0 if the table doesn't exist. */
+		const count = (table: string): number => {
+			try {
+				const row = agentDb.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number } | undefined;
+				return row?.n ?? 0;
+			} catch {
+				return 0;
+			}
+		};
+
+		return {
+			counts: {
+				turns: count("turns"),
+				sessions: count("sessions"),
+				rules: count("rules"),
+				vidhis: count("vidhis"),
+				samskaras: count("samskaras"),
+				vasanas: count("vasanas"),
+				akashaTraces: count("akasha_traces"),
+			},
+			timestamp: Date.now(),
+		};
+	}, "Aggregated DB table counts for observability dashboards");
 }
 
 /** Write methods that enforce single-writer through daemon. */

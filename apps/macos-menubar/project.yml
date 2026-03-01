@@ -1,0 +1,25 @@
+name: ChitraguptaMenubar
+options:
+  bundleIdPrefix: ai.chitragupta
+  deploymentTarget:
+    macOS: "13.0"
+targets:
+  ChitraguptaMenubar:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleName: Chitragupta
+        CFBundleDisplayName: Chitragupta
+        LSUIElement: true
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.chitragupta.menubar
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1

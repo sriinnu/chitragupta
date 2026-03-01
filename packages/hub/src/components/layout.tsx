@@ -59,6 +59,7 @@ const NAV_SECTIONS: NavSection[] = [
 		items: [
 			{ path: "/memory", label: "Memory", icon: "\uD83D\uDCDD" },
 			{ path: "/skills", label: "Skills", icon: "\u26A1" },
+			{ path: "/daemon", label: "Daemon", icon: "\uD83D\uDD25" },
 			{ path: "/collaboration", label: "Collaboration", icon: "\uD83E\uDD1D" },
 			{ path: "/agents", label: "Agents", icon: "\uD83D\uDC65" },
 			{ path: "/workflows", label: "Workflows", icon: "\uD83D\uDD04" },
@@ -84,6 +85,7 @@ const BREADCRUMB_LABELS: Record<string, string> = {
 	"/evolution": "Evolution",
 	"/memory": "Memory",
 	"/skills": "Skills",
+	"/daemon": "Daemon",
 	"/collaboration": "Collaboration",
 	"/agents": "Agents",
 	"/workflows": "Workflows",

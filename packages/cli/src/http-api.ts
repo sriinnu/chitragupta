@@ -21,6 +21,7 @@ import { mountIntelligenceRoutes } from "./routes/intelligence.js";
 import { mountEvolutionRoutes } from "./routes/evolution.js";
 import { mountAutonomyRoutes } from "./routes/autonomy.js";
 import { mountWorkflowRoutes } from "./routes/workflow.js";
+import { mountDaemonStatusRoutes } from "./routes/daemon-status.js";
 import { mountWebhookRoutes } from "./http-routes-webhooks.js";
 import type { CollaborationDeps } from "./routes/collaboration-types.js";
 import { createAuthMiddleware } from "@chitragupta/dharma";
@@ -112,6 +113,20 @@ export function createChitraguptaAPI(deps: ApiDeps, config?: ServerConfig): Chit
 		getKartavyaEngine: deps.getKartavyaEngine as () => undefined,
 		getKalaChakra: deps.getKalaChakra as () => undefined,
 		getProjectPath: deps.getProjectPath ?? (() => "."),
+	});
+
+	// Daemon monitoring (menubar + Hub dashboard)
+	mountDaemonStatusRoutes(server, {
+		getDaemonClient: async () => {
+			try {
+				const { getDaemonClient: getClient } = await import("./modes/daemon-bridge.js");
+				const client = await getClient();
+				return client as unknown as { call(method: string, params?: Record<string, unknown>): Promise<unknown>; isConnected(): boolean };
+			} catch {
+				return null;
+			}
+		},
+		getTriguna: deps.getTriguna as () => { getState(): { sattva: number; rajas: number; tamas: number } } | undefined,
 	});
 
 	// Workflow engine (Vayu DAG)
