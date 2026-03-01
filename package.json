@@ -4,7 +4,7 @@
 	"type": "module",
 	"version": "0.1.21",
 	"license": "MIT",
-	"description": "The Autonomous AI Agent Platform — 14-package TypeScript monorepo with zero-LLM cognitive layer, GraphRAG memory, bi-temporal knowledge graph, and self-evolving skills",
+	"description": "The Autonomous AI Agent Platform — 17-package TypeScript monorepo with zero-LLM cognitive layer, GraphRAG memory, bi-temporal knowledge graph, centralized daemon, and self-evolving skills",
 	"keywords": [
 		"ai",
 		"ai-agents",
