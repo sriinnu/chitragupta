@@ -8,10 +8,10 @@
 
 <p align="center">
   <a href="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml"><img src="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/tests-10%2C849-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-11%2C453-brightgreen" alt="Tests" />
   <img src="https://img.shields.io/badge/node-%3E%3D22-blue" alt="Node" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
-  <img src="https://img.shields.io/badge/packages-16-orange" alt="Packages" />
+  <img src="https://img.shields.io/badge/packages-17-orange" alt="Packages" />
   <a href="https://deepwiki.com/sriinnu/chitragupta"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" /></a>
 </p>
 
@@ -400,7 +400,7 @@ context persists          ← next session picks up where you left off
 
 ---
 
-## The 16 Packages
+## The 17 Packages
 
 | Package | What It Does | Internal Name | Meaning |
 |---------|-------------|---------------|---------|
@@ -419,11 +419,12 @@ context persists          ← next session picks up where you left off
 | [`@chitragupta/niyanta`](./packages/niyanta) | Orchestrator — multi-armed bandit, task routing, agent evaluation, auto-scaling | Niyanta | Director |
 | [`@chitragupta/hub`](./packages/hub) | Web Dashboard — Preact SPA, device pairing, real-time monitoring | — | — |
 | [`@chitragupta/cli`](./packages/cli) | Entry Point — interactive CLI, HTTP server, MCP server, onboarding | — | — |
+| [`@chitragupta/daemon`](./packages/daemon) | Daemon — Unix socket, single-writer SQLite, JSON-RPC, health monitor, circuit breaker | Sevaka | Guardian |
 | [`@chitragupta/darpana`](./packages/darpana) | LLM Proxy — mirrors Anthropic API to any provider, <5ms overhead, zero-config | Darpana | Mirror |
 
 > **npm:** Published as [`@yugenlab/chitragupta`](https://www.npmjs.com/package/@yugenlab/chitragupta) — `npm install -g @yugenlab/chitragupta`
 
-Build order: `core -> swara -> anina -> smriti -> ui -> yantra -> dharma -> netra -> vayu -> sutra -> tantra -> vidhya-skills -> niyanta -> hub -> cli` · `darpana` (standalone, depends on core only)
+Build order: `core -> swara -> anina -> smriti -> ui -> yantra -> dharma -> netra -> vayu -> sutra -> tantra -> vidhya-skills -> niyanta -> daemon -> hub -> cli` · `darpana` (standalone, depends on core only)
 
 ---
 
@@ -592,11 +593,11 @@ SWIM-based protocol: `alive` → `suspect` (no heartbeat) → `dead` (evicted). 
 
 | Metric | Value |
 |--------|-------|
-| Test files | 340+ |
-| Total tests | 10,849 |
+| Test files | 367+ |
+| Total tests | 11,453 |
 | Failures | 0 |
 | TypeScript errors | 0 |
-| Packages | 16 |
+| Packages | 17 |
 | p99 latency (load test) | 1.2ms at 500 RPS |
 | Security audit | 36 issues found and resolved |
 

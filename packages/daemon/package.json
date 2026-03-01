@@ -1,7 +1,7 @@
 {
 	"name": "@chitragupta/daemon",
-	"version": "0.1.0",
-	"description": "Centralized daemon — one process per user, Unix socket, all clients connect to it",
+	"version": "0.1.1",
+	"description": "Centralized daemon — one process per user, Unix domain socket, JSON-RPC 2.0, single-writer SQLite, health monitoring, and auto-recovery",
 	"type": "module",
 	"license": "MIT",
 	"repository": {
@@ -9,7 +9,11 @@
 		"url": "https://github.com/sriinnu/chitragupta.git",
 		"directory": "packages/daemon"
 	},
-	"keywords": ["chitragupta", "daemon", "socket", "rpc", "memory"],
+	"homepage": "https://github.com/sriinnu/chitragupta/tree/main/packages/daemon#readme",
+	"bugs": {
+		"url": "https://github.com/sriinnu/chitragupta/issues"
+	},
+	"keywords": ["chitragupta", "daemon", "socket", "rpc", "memory", "unix-socket", "json-rpc", "single-writer", "health-monitor", "circuit-breaker"],
 	"exports": {
 		".": "./dist/index.js",
 		"./client": "./dist/client.js",
