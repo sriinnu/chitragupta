@@ -7,11 +7,11 @@
  * @module
  */
 
-import { fork } from "node:child_process";
+import { execSync, fork } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { createLogger } from "@chitragupta/core";
-import { resolvePaths } from "./paths.js";
+import { resolvePaths, isWindows } from "./paths.js";
 
 const log = createLogger("daemon:process");
 
@@ -49,8 +49,23 @@ export function removePid(pidPath: string): void {
 	}
 }
 
-/** Check if a process with the given PID is alive. */
+/**
+ * Check if a process with the given PID is alive.
+ * On Windows, uses `tasklist` since `kill(pid, 0)` is unreliable.
+ */
 export function isProcessAlive(pid: number): boolean {
+	if (isWindows()) {
+		try {
+			const output = execSync(`tasklist /FI "PID eq ${pid}" /NH`, {
+				encoding: "utf-8",
+				timeout: 3000,
+				windowsHide: true,
+			});
+			return output.includes(String(pid));
+		} catch {
+			return false;
+		}
+	}
 	try {
 		process.kill(pid, 0);
 		return true;
@@ -231,8 +246,10 @@ async function doSpawn(paths: ReturnType<typeof resolvePaths>): Promise<number> 
 }
 
 /**
- * Stop a running daemon by sending SIGTERM.
- * Falls back to SIGKILL after 5 seconds.
+ * Stop a running daemon.
+ *
+ * On Unix: sends SIGTERM, falls back to SIGKILL after 5s.
+ * On Windows: attempts RPC shutdown first, falls back to `taskkill /F /T`.
  */
 export async function stopDaemon(): Promise<boolean> {
 	const status = checkStatus();
@@ -242,25 +259,52 @@ export async function stopDaemon(): Promise<boolean> {
 	}
 
 	const pid = status.pid;
-	process.kill(pid, "SIGTERM");
-	log.info("Sent SIGTERM to daemon", { pid });
 
-	// Wait for process to exit
-	for (let i = 0; i < 50; i++) {
-		await new Promise((r) => setTimeout(r, 100));
-		if (!isProcessAlive(pid)) {
-			const paths = resolvePaths();
-			removePid(paths.pid);
-			log.info("Daemon stopped gracefully", { pid });
-			return true;
+	if (isWindows()) {
+		// Prefer graceful RPC shutdown — SIGTERM is unreliable on Windows
+		try {
+			const { createClient } = await import("./client.js");
+			const client = await createClient();
+			await client.call("daemon.shutdown");
+			client.disconnect();
+		} catch {
+			log.debug("RPC shutdown failed, will force-kill", { pid });
 		}
-	}
 
-	// Force kill
-	try {
-		process.kill(pid, "SIGKILL");
-	} catch {
-		/* already dead */
+		// Wait for graceful exit
+		for (let i = 0; i < 50; i++) {
+			await new Promise((r) => setTimeout(r, 100));
+			if (!isProcessAlive(pid)) {
+				const paths = resolvePaths();
+				removePid(paths.pid);
+				log.info("Daemon stopped gracefully", { pid });
+				return true;
+			}
+		}
+
+		// Force kill via taskkill
+		forceKillWindows(pid);
+	} else {
+		process.kill(pid, "SIGTERM");
+		log.info("Sent SIGTERM to daemon", { pid });
+
+		// Wait for process to exit
+		for (let i = 0; i < 50; i++) {
+			await new Promise((r) => setTimeout(r, 100));
+			if (!isProcessAlive(pid)) {
+				const paths = resolvePaths();
+				removePid(paths.pid);
+				log.info("Daemon stopped gracefully", { pid });
+				return true;
+			}
+		}
+
+		// Force kill
+		try {
+			process.kill(pid, "SIGKILL");
+		} catch {
+			/* already dead */
+		}
 	}
 
 	const paths = resolvePaths();
@@ -269,9 +313,23 @@ export async function stopDaemon(): Promise<boolean> {
 	return true;
 }
 
+/** Force-kill a process on Windows using `taskkill /F /T`. */
+function forceKillWindows(pid: number): void {
+	try {
+		execSync(`taskkill /PID ${pid} /F /T`, {
+			encoding: "utf-8",
+			timeout: 5000,
+			windowsHide: true,
+		});
+	} catch {
+		/* process may already be dead */
+	}
+}
+
 /**
  * Install signal handlers for graceful daemon shutdown.
  * Called from the daemon entry point.
+ * On Windows, skips SIGHUP (not supported).
  */
 export function installSignalHandlers(onShutdown: () => Promise<void>): void {
 	let shutting = false;
@@ -292,5 +350,9 @@ export function installSignalHandlers(onShutdown: () => Promise<void>): void {
 
 	process.on("SIGTERM", () => { handler("SIGTERM").catch(() => process.exit(1)); });
 	process.on("SIGINT", () => { handler("SIGINT").catch(() => process.exit(1)); });
-	process.on("SIGHUP", () => { handler("SIGHUP").catch(() => process.exit(1)); });
+
+	// SIGHUP is not supported on Windows — skip to avoid crash
+	if (!isWindows()) {
+		process.on("SIGHUP", () => { handler("SIGHUP").catch(() => process.exit(1)); });
+	}
 }

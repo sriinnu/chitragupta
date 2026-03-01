@@ -11,7 +11,7 @@ import net from "node:net";
 import fs from "node:fs";
 import { createLogger } from "@chitragupta/core";
 import type { DaemonPaths } from "./paths.js";
-import { ensureDirs } from "./paths.js";
+import { ensureDirs, isWindows } from "./paths.js";
 import {
 	ErrorCode,
 	createErrorResponse,
@@ -254,6 +254,12 @@ async function bindServerSocket(server: net.Server, socketPath: string): Promise
 			if (staleUnlinked) {
 				throw new Error(`Failed to recover stale socket: ${socketPath}`);
 			}
+
+			// Named pipes on Windows are virtual — no file to unlink
+			if (isWindows()) {
+				throw new Error(`Named pipe in use but daemon not responding: ${socketPath}`);
+			}
+
 			try {
 				fs.unlinkSync(socketPath);
 				staleUnlinked = true;

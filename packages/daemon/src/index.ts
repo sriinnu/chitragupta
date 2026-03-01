@@ -14,7 +14,7 @@ export { DaemonClient, DaemonUnavailableError, createClient, type DaemonClientCo
 export { HealthMonitor, HealthState, type CircuitBreakerConfig, type HealthEvents } from "./resilience.js";
 
 // Public API: paths (for tooling and diagnostics)
-export { resolvePaths, ensureDirs, cleanStaleSocket, type DaemonPaths } from "./paths.js";
+export { resolvePaths, ensureDirs, cleanStaleSocket, isWindows, getPlatform, type DaemonPaths } from "./paths.js";
 
 // Public API: process management (for CLI commands)
 export { checkStatus, spawnDaemon, stopDaemon, type DaemonStatus } from "./process.js";

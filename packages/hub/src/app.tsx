@@ -34,6 +34,7 @@ import { Collaboration } from "./pages/collaboration.js";
 import { Evolution } from "./pages/evolution.js";
 import { Agents } from "./pages/agents.js";
 import { Workflows } from "./pages/workflows.js";
+import { Daemon } from "./pages/daemon.js";
 import { ChatPanel } from "./components/chat-panel.js";
 
 // ── App root ───────────────────────────────────────────────────────
@@ -95,6 +96,7 @@ export function App(): preact.JSX.Element {
 					<Evolution path="/evolution" />
 					<Agents path="/agents" />
 					<Workflows path="/workflows" />
+					<Daemon path="/daemon" />
 					<Pairing path="/pair" />
 				</Router>
 			</Layout>
