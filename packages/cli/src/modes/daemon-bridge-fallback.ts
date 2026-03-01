@@ -22,6 +22,7 @@ export const FALLBACK_METHODS = new Set([
 	"memory.file_search", "memory.scopes", "memory.unified_recall",
 	"day.show", "day.list", "day.search",
 	"context.load",
+	"vidhi.list", "vidhi.match",
 	"daemon.ping", "daemon.health",
 ]);
 
@@ -123,6 +124,16 @@ export async function directFallback<T>(
 				params?.project as string, Number(params?.sinceMs ?? 0),
 			);
 			return { sessions: modified } as T;
+		}
+		case "vidhi.list": {
+			const { VidhiEngine } = await import("@chitragupta/smriti");
+			const engine = new VidhiEngine({ project: params?.project as string });
+			return { vidhis: engine.getVidhis(params?.project as string, Number(params?.limit ?? 10)) } as T;
+		}
+		case "vidhi.match": {
+			const { VidhiEngine: VE } = await import("@chitragupta/smriti");
+			const ve = new VE({ project: params?.project as string });
+			return { match: ve.match(params?.query as string) ?? null } as T;
 		}
 		case "daemon.ping":
 			return { pong: false, mode: "direct-fallback" } as T;

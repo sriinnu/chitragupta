@@ -143,6 +143,17 @@ describe("daemon-bridge fallback contract", () => {
 			expect(methods).toContain("daemon.ping");
 			expect(methods).toContain("daemon.health");
 		});
+
+		it("includes vidhi read methods", () => {
+			const methods = extractFallbackMethods();
+			expect(methods).toContain("vidhi.list");
+			expect(methods).toContain("vidhi.match");
+		});
+
+		it("excludes consolidation write method", () => {
+			const methods = extractFallbackMethods();
+			expect(methods).not.toContain("consolidation.run");
+		});
 	});
 
 	// ─── Write Rejection ─────────────────────────────────────────────────────
