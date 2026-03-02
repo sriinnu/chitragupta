@@ -28,7 +28,8 @@
 	"bin": {
 		"chitragupta": "bin/chitragupta.js",
 		"chitragupta-mcp": "bin/chitragupta-mcp.js",
-		"chitragupta-code": "bin/chitragupta-code.js"
+		"chitragupta-code": "bin/chitragupta-code.js",
+		"chitragupta-snapshot": "bin/chitragupta-snapshot.js"
 	},
 	"main": "dist/cli.js",
 	"types": "dist/cli.d.ts",
@@ -44,6 +45,10 @@
 		"./mcp": {
 			"types": "./dist/modes/mcp-server.d.ts",
 			"import": "./dist/modes/mcp-server.js"
+		},
+		"./telemetry": {
+			"types": "./dist/modes/mcp-telemetry.d.ts",
+			"import": "./dist/modes/mcp-telemetry.js"
 		}
 	},
 	"scripts": {
