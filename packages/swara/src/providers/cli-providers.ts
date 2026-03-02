@@ -145,12 +145,13 @@ export const claudeCodeProvider: ProviderDefinition = createCLIProvider({
 			? ["--print", "-", "--output-format", "text"]
 			: ["--print", contextToPrompt(context), "--output-format", "text"];
 
-		if (context.systemPrompt) {
+		// Keep system prompt in argv only for small payloads.
+		if (context.systemPrompt && !viaStdin) {
 			args.push("--system-prompt", context.systemPrompt);
 		}
 		return args;
 	},
-	getStdinPrompt: (context) => contextToPrompt(context),
+	getStdinPrompt: (context) => buildFullPrompt(context),
 	parseOutput: (stdout) => stdout.trim(),
 });
 

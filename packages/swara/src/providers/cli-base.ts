@@ -68,6 +68,11 @@ export interface CLIProviderConfig {
 	cwd?: string;
 	/** Extra environment variables passed to the CLI process. */
 	env?: Record<string, string>;
+	/**
+	 * Child-process environment strategy.
+	 * Defaults to `replace` to avoid oversized inherited env payloads.
+	 */
+	envMode?: "merge" | "replace";
 }
 
 // ─── Factory ────────────────────────────────────────────────────────────────
@@ -91,11 +96,14 @@ function extractUserText(context: Context): string {
 }
 
 /**
- * Estimate the total byte size of a Context's user message text.
- * Used to decide whether to pipe the prompt via stdin.
+ * Estimate total prompt byte size (system + user text).
+ * Used to decide whether to pipe payload via stdin.
  */
 function estimatePromptBytes(context: Context): number {
 	let total = 0;
+	if (context.systemPrompt) {
+		total += Buffer.byteLength(context.systemPrompt, "utf-8");
+	}
 	for (const msg of context.messages) {
 		if (msg.role === "user") {
 			for (const part of msg.content) {
@@ -106,6 +114,45 @@ function estimatePromptBytes(context: Context): number {
 		}
 	}
 	return total;
+}
+
+/**
+ * Parent env keys retained for CLI child process execution when envMode is
+ * `replace`. This keeps process startup stable while avoiding oversized env
+ * payloads that can trigger E2BIG.
+ */
+const SAFE_CLI_ENV_KEYS = [
+	"PATH", "HOME", "USER", "LOGNAME", "SHELL",
+	"TMPDIR", "TMP", "TEMP", "TERM",
+	"LANG", "LC_ALL", "LC_CTYPE",
+	"PWD", "OLDPWD", "COLORTERM", "NO_COLOR", "FORCE_COLOR",
+	"SystemRoot", "ComSpec", "PATHEXT", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+	"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+	"http_proxy", "https_proxy", "all_proxy", "no_proxy",
+	"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
+	"GROQ_API_KEY", "XAI_API_KEY", "MISTRAL_API_KEY", "TOGETHER_API_KEY",
+	"OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "CEREBRAS_API_KEY",
+	"AZURE_OPENAI_API_KEY", "OLLAMA_HOST", "OLLAMA_API_KEY",
+] as const;
+
+/**
+ * Builds a minimized environment map for CLI child processes.
+ *
+ * @param extraEnv Explicit env overrides from provider config.
+ * @returns Minimal safe env map.
+ */
+function buildSafeCLIEnv(extraEnv: Record<string, string> | undefined): Record<string, string> {
+	const safe: Record<string, string> = {};
+	for (const key of SAFE_CLI_ENV_KEYS) {
+		const value = process.env[key];
+		if (typeof value === "string" && value.length > 0) {
+			safe[key] = value;
+		}
+	}
+	if (extraEnv) {
+		Object.assign(safe, extraEnv);
+	}
+	return safe;
 }
 
 /**
@@ -148,7 +195,8 @@ export function createCLIProvider(config: CLIProviderConfig): ProviderDefinition
 			result = await pool.execute(config.command, args, {
 				timeout: defaultTimeout,
 				cwd: config.cwd,
-				env: config.env,
+				env: buildSafeCLIEnv(config.env),
+				envMode: config.envMode ?? "replace",
 				stdin: stdinPayload,
 			});
 		} catch (err) {
@@ -204,6 +252,8 @@ export function createCLIProvider(config: CLIProviderConfig): ProviderDefinition
 		try {
 			const result = await pool.execute("which", [config.command], {
 				timeout: 5_000,
+				env: buildSafeCLIEnv(config.env),
+				envMode: config.envMode ?? "replace",
 			});
 			return result.exitCode === 0;
 		} catch {
