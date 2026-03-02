@@ -75,8 +75,8 @@ export type DeviationType = "change-point" | "anomaly" | "stable";
 
 /** Default BOCPD configuration with sensible priors. */
 export const DEFAULT_VASANA_CONFIG: VasanaConfig = {
-	lambda: 50, changePointThreshold: 0.3, stabilityWindow: 5,
-	windowSize: 20, holdoutTrainRatio: 0.7, accuracyThreshold: 0.6,
+	lambda: 50, changePointThreshold: 0.4, stabilityWindow: 3,
+	windowSize: 10, holdoutTrainRatio: 0.7, accuracyThreshold: 0.4,
 	decayHalfLifeMs: 30 * 86_400_000, promotionMinProjects: 3,
 	maxRunLength: 200, priorMu: 0, priorKappa: 1, priorAlpha: 1,
 	anomalyRevertWindow: 3, anomalyConfirmRatio: 0.5,

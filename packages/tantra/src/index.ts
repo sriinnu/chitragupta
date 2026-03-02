@@ -162,6 +162,25 @@ export type {
 /** Trace + sandbox metadata attached to tool responses, and ring buffer records. */
 export type { ToolExecutionMeta, ToolCallRecord } from "./types.js";
 
+// ─── Extension API ─────────────────────────────────────────────────────────
+/** Extension lifecycle hook types and manifest contracts. */
+export type {
+	ExtensionHookName,
+	ExtensionHooks,
+	ExtensionManifest,
+	LoadedExtension,
+	ExtensionLoaderConfig,
+	SessionContext,
+	TurnContext,
+	ToolCallContext,
+	ToolResultContext,
+	ErrorContext,
+} from "./extension-types.js";
+/** Hook registry for dispatching extension lifecycle hooks. */
+export { HookRegistry } from "./extension-hooks.js";
+/** Extension loader for discovering and managing extensions from disk. */
+export { ExtensionLoader } from "./extension-loader.js";
+
 /** Realtime event types re-exported from sutra for consumer convenience. */
 export type {
 	ChitraguptaEvent,
