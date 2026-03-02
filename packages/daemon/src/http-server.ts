@@ -12,7 +12,9 @@
  */
 
 import http from "node:http";
-import { createLogger } from "@chitragupta/core";
+import fs from "node:fs";
+import path from "node:path";
+import { createLogger, getChitraguptaHome } from "@chitragupta/core";
 import type { RpcRouter } from "./rpc-router.js";
 
 const log = createLogger("daemon:http");
@@ -42,10 +44,12 @@ export interface DaemonHttpConfig {
  * Start the daemon HTTP health server.
  *
  * Routes:
- * - `GET  /status`      — aggregated daemon health, DB counts, nidra state
- * - `POST /consolidate` — trigger Nidra consolidation
- * - `POST /shutdown`    — graceful daemon shutdown
- * - `GET  /ping`        — simple liveness check
+ * - `GET  /status`               — aggregated daemon health, DB counts, nidra state
+ * - `POST /consolidate`          — trigger Nidra consolidation
+ * - `POST /shutdown`             — graceful daemon shutdown
+ * - `GET  /ping`                 — simple liveness check
+ * - `GET  /telemetry/instances`  — live MCP instances from heartbeat files
+ * - `GET  /telemetry/watch`      — long-poll for state changes
  */
 export async function startHttpServer(config: DaemonHttpConfig): Promise<DaemonHttpServer> {
 	const { router, port = DEFAULT_HTTP_PORT, host = "127.0.0.1" } = config;
@@ -88,6 +92,16 @@ export async function startHttpServer(config: DaemonHttpConfig): Promise<DaemonH
 				return;
 			}
 
+			if (req.method === "GET" && url === "/telemetry/instances") {
+				handleTelemetryInstances(res);
+				return;
+			}
+
+			if (req.method === "GET" && url.startsWith("/telemetry/watch")) {
+				handleTelemetryWatch(url, res);
+				return;
+			}
+
 			jsonResponse(res, 404, { error: "Not found" });
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
@@ -106,6 +120,8 @@ export async function startHttpServer(config: DaemonHttpConfig): Promise<DaemonH
 		port: () => actualPort,
 	};
 }
+
+// ─── Status Handler ─────────────────────────────────────────────────────────
 
 /**
  * Aggregate status from multiple RPC methods.
@@ -146,6 +162,114 @@ async function handleStatus(router: RpcRouter, res: http.ServerResponse): Promis
 		timestamp: Date.now(),
 	});
 }
+
+// ─── Telemetry Handlers ─────────────────────────────────────────────────────
+
+/** Get the telemetry instances directory path. */
+function getTelemetryDir(): string {
+	return path.join(getChitraguptaHome(), "telemetry", "instances");
+}
+
+/**
+ * Scan heartbeat files from the telemetry directory.
+ * Inline implementation — avoids circular dependency on @chitragupta/cli.
+ *
+ * @param dir - Directory to scan.
+ * @param staleMs - Max age in ms to consider alive. Default: 10000.
+ * @returns Array of parsed heartbeat records.
+ */
+function scanHeartbeatFiles(dir: string, staleMs = 10_000): Record<string, unknown>[] {
+	if (!fs.existsSync(dir)) return [];
+	const now = Date.now();
+	const results: Record<string, unknown>[] = [];
+	try {
+		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name.startsWith(".tmp-")) continue;
+			try {
+				const fp = path.join(dir, entry.name);
+				const stat = fs.statSync(fp);
+				if (now - stat.mtimeMs > staleMs) continue;
+				results.push(JSON.parse(fs.readFileSync(fp, "utf-8")) as Record<string, unknown>);
+			} catch { /* skip corrupt */ }
+		}
+	} catch { /* dir unreadable */ }
+	return results;
+}
+
+/**
+ * Compute FNV-1a 32-bit fingerprint of heartbeat state.
+ * Used for long-polling: only return data when state changes.
+ *
+ * @param instances - Array of heartbeat records.
+ * @returns 8-character hex hash.
+ */
+function computeHeartbeatFingerprint(instances: Record<string, unknown>[]): string {
+	const parts = instances.map(i => `${i.pid}:${i.heartbeatSeq}:${i.state}`).join("|");
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < parts.length; i++) {
+		hash ^= parts.charCodeAt(i);
+		hash = (Math.imul(hash, 0x01000193)) >>> 0;
+	}
+	return hash.toString(16).padStart(8, "0");
+}
+
+/**
+ * Return all live MCP instances from heartbeat files.
+ * Reads ~/.chitragupta/telemetry/instances/ and filters stale entries.
+ */
+function handleTelemetryInstances(res: http.ServerResponse): void {
+	try {
+		const dir = getTelemetryDir();
+		const instances = scanHeartbeatFiles(dir);
+		const fingerprint = computeHeartbeatFingerprint(instances);
+		jsonResponse(res, 200, { instances, fingerprint, count: instances.length, timestamp: Date.now() });
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		jsonResponse(res, 500, { error: `Telemetry scan failed: ${msg}` });
+	}
+}
+
+/**
+ * Long-poll telemetry endpoint. Returns only when state changes.
+ * Client sends ?fingerprint=<hash> from previous response.
+ * Polls every 1s for up to 30s, then returns current state regardless.
+ */
+function handleTelemetryWatch(url: string, res: http.ServerResponse): void {
+	const params = new URL(url, "http://localhost").searchParams;
+	const clientFingerprint = params.get("fingerprint") ?? "";
+	const maxWaitMs = Math.min(30_000, parseInt(params.get("timeout") ?? "30000", 10) || 30_000);
+
+	try {
+		const dir = getTelemetryDir();
+		const deadline = Date.now() + maxWaitMs;
+		const pollIntervalMs = 1000;
+
+		const poll = (): void => {
+			const instances = scanHeartbeatFiles(dir);
+			const fingerprint = computeHeartbeatFingerprint(instances);
+
+			if (fingerprint !== clientFingerprint || Date.now() >= deadline) {
+				jsonResponse(res, 200, {
+					instances,
+					fingerprint,
+					count: instances.length,
+					timestamp: Date.now(),
+					changed: fingerprint !== clientFingerprint,
+				});
+				return;
+			}
+
+			setTimeout(poll, pollIntervalMs);
+		};
+
+		poll();
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		jsonResponse(res, 500, { error: `Telemetry watch failed: ${msg}` });
+	}
+}
+
+// ─── Utilities ──────────────────────────────────────────────────────────────
 
 /** Write a JSON response. */
 function jsonResponse(res: http.ServerResponse, status: number, body: unknown): void {

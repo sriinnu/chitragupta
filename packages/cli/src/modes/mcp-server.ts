@@ -1,22 +1,13 @@
 /**
  * @chitragupta/cli — MCP Server Mode.
  *
- * Runs Chitragupta as an MCP (Model Context Protocol) server, exposing
- * its tools, memory, and agent capabilities to MCP clients like
- * Claude Code, Codex, Gemini CLI, or any MCP-compatible host.
- *
- * Supports two transports:
- *   - stdio: For direct process spawning (Claude Code's preferred mode)
- *   - sse:   For HTTP-based connections
- *
- * All tool definitions are extracted into dedicated modules (mcp-tools-*.ts).
- * This file is the thin orchestration layer: collect tools → create server → start.
+ * Thin orchestration layer: collect tools → apply tiers → create server → start.
+ * Supports stdio and SSE transports. Tool definitions in mcp-tools-*.ts.
  *
  * @module
  */
 
-import type { McpToolHandler } from "@chitragupta/tantra";
-import type { ChitraguptaToolHandler } from "@chitragupta/tantra";
+import type { McpToolHandler, ChitraguptaToolHandler } from "@chitragupta/tantra";
 import type { ToolHandler } from "@chitragupta/core";
 import { McpServer, ToolRegistry, chitraguptaToolToMcp } from "@chitragupta/tantra";
 
@@ -24,6 +15,8 @@ import fs from "fs";
 import path from "path";
 import { getBuiltinTools } from "../bootstrap.js";
 import { CLI_PACKAGE_VERSION } from "../version.js";
+import { startHeartbeat } from "./mcp-telemetry.js";
+import { applyToolTiers, isCompactMode, getTierStats } from "./mcp-tool-tiers.js";
 
 // ─── Extracted modules ───────────────────────────────────────────────────────
 
@@ -231,18 +224,22 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	const recorder = new McpSessionRecorder(projectPath);
 	mcpTools.push(recorder.createRecordConversationTool());
 
-	// ─── 3. Create + START server IMMEDIATELY ────────────────────────
+	// ─── 3. Apply tool tiers + Create + START server IMMEDIATELY ────
 	//
 	// The transport MUST be ready before any file I/O or dynamic imports.
 	// MCP clients send `initialize` immediately on spawn — if the stdin
 	// listener isn't set up yet, the client times out waiting for a response.
+
+	const finalTools = applyToolTiers(mcpTools);
+	const heartbeat = startHeartbeat({ workspace: projectPath, transport });
+	let toolCallCount = 0;
 
 	const server = new McpServer({
 		name,
 		version: CLI_PACKAGE_VERSION,
 		transport,
 		ssePort: port,
-		tools: mcpTools,
+		tools: finalTools,
 		resources: [createMemoryResource(projectPath)],
 		prompts: [
 			createSavePrompt(),
@@ -257,18 +254,22 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			createMemorySearchPrompt(),
 			createSessionPrompt(),
 		],
-		onToolCall: (info) => recorder.recordToolCall(info),
+		onToolCall: (info) => {
+			recorder.recordToolCall(info);
+			heartbeat.update({ toolCallCount: ++toolCallCount, lastToolCallAt: Date.now(), state: "busy" });
+		},
 	});
 
 	await server.start();
 
 	const startupMs = performance.now() - t0;
+	const compact = isCompactMode();
+	const tierInfo = compact ? ` ${JSON.stringify(getTierStats(mcpTools))}` : "";
 	process.stderr.write(
 		`Chitragupta MCP server ready (${transport}` +
 			`${transport === "sse" ? ` on port ${port}` : ""}) in ${startupMs.toFixed(0)}ms\n` +
-			`  Tools: ${mcpTools.length}\n` +
-			`  Project: ${projectPath}\n` +
-			`  Agent: ${enableAgent ? "enabled" : "disabled"}\n`,
+			`  Tools: ${finalTools.length}${tierInfo}  Project: ${projectPath}\n` +
+			`  Agent: ${enableAgent ? "enabled" : "disabled"}  Telemetry: pid=${process.pid}\n`,
 	);
 
 	// ─── 4. Post-start initialization ────────────────────────────────
@@ -335,6 +336,8 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 
 	// 4e. Graceful shutdown — trigger Svapna dream-cycle before exit
 	const shutdown = async () => {
+		heartbeat.update({ state: "shutting_down" });
+		heartbeat.stop();
 		triggerSvapnaConsolidation(projectPath);
 		clearChitraguptaState();
 		try { const { disconnectDaemon } = await import("./daemon-bridge.js"); disconnectDaemon(); } catch { /* best-effort */ }
@@ -411,6 +414,8 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 
 		// Add daemon to shutdown sequence — trigger Svapna before exit
 		const shutdownWithDaemon = async () => {
+			heartbeat.update({ state: "shutting_down" });
+			heartbeat.stop();
 			triggerSvapnaConsolidation(projectPath);
 			try {
 				await daemonManager.stop();

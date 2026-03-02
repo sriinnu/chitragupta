@@ -9,6 +9,7 @@
 
 import { createLogger } from "@chitragupta/core";
 import type { RpcRouter } from "./rpc-router.js";
+import { registerTelemetryMethods } from "./services-telemetry.js";
 
 const log = createLogger("daemon:services");
 
@@ -48,6 +49,7 @@ export async function registerServices(router: RpcRouter): Promise<void> {
 	registerWriteMethods(router);
 	registerKnowledgeMethods(router, sessionStore);
 	registerDaemonMethods(router, sessionDb);
+	registerTelemetryMethods(router);
 
 	log.info("Services registered", { methods: router.listMethods().length });
 }
