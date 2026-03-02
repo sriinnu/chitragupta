@@ -62,6 +62,9 @@ export function loadSessionSequences(
 	).all(config.project) as Array<{ id: string }>;
 
 	const sessionIds = new Set(sessionRows.map((r) => r.id));
+	process.stderr.write(
+		`[vidhi-extraction] loadSessionSequences: project=${config.project} sessions=${sessionIds.size}\n`,
+	);
 	if (sessionIds.size === 0) return new Map();
 
 	// Load turns with tool calls, ordered by session then turn number
@@ -71,6 +74,10 @@ export function loadSessionSequences(
 		WHERE session_id IN (SELECT id FROM sessions WHERE project = ?)
 		ORDER BY session_id, turn_number ASC
 	`).all(config.project) as TurnRow[];
+
+	process.stderr.write(
+		`[vidhi-extraction] loadSessionSequences: found ${turnRows.length} turn rows with tool_calls\n`,
+	);
 
 	const result = new Map<string, IndexedToolCall[]>();
 	let lastUserMessage = "";
@@ -108,6 +115,11 @@ export function loadSessionSequences(
 		}
 	}
 
+	process.stderr.write(
+		`[vidhi-extraction] loadSessionSequences: ${result.size} sessions with tool sequences, ` +
+		`total calls=${[...result.values()].reduce((s, v) => s + v.length, 0)}\n`,
+	);
+
 	return result;
 }
 
@@ -119,6 +131,11 @@ export function extractAndAggregate(
 	sessionSequences: Map<string, IndexedToolCall[]>,
 	config: VidhiConfig,
 ): NgramAggregate[] {
+	process.stderr.write(
+		`[vidhi-extraction] extractAndAggregate: ${sessionSequences.size} sessions, ` +
+		`minSessions=${config.minSessions}, minSuccessRate=${config.minSuccessRate}\n`,
+	);
+
 	// key -> { sessionId -> NgramInstance }
 	const ngramMap = new Map<string, Map<string, NgramInstance>>();
 
@@ -157,6 +174,10 @@ export function extractAndAggregate(
 		}
 	}
 
+	process.stderr.write(
+		`[vidhi-extraction] extractAndAggregate: ${ngramMap.size} distinct n-grams before filtering\n`,
+	);
+
 	// Aggregate and filter
 	const aggregates: NgramAggregate[] = [];
 
@@ -183,6 +204,10 @@ export function extractAndAggregate(
 			successRate,
 		});
 	}
+
+	process.stderr.write(
+		`[vidhi-extraction] extractAndAggregate: ${aggregates.length} n-grams passed filters\n`,
+	);
 
 	// Rank by frequency x length (longer common sequences preferred)
 	aggregates.sort((a, b) => {

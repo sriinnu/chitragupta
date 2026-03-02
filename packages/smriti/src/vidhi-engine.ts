@@ -80,8 +80,8 @@ interface VidhiRow {
 
 /** Default configuration values. */
 const DEFAULT_CONFIG: Omit<VidhiConfig, "project"> = {
-	minSessions: 3,
-	minSuccessRate: 0.8,
+	minSessions: 2,
+	minSuccessRate: 0.6,
 	minSequenceLength: 2,
 	maxSequenceLength: 5,
 };
