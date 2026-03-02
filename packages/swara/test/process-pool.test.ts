@@ -1,6 +1,21 @@
 import { describe, it, expect } from "vitest";
 import { ProcessPool } from "@chitragupta/swara";
 
+async function readEnv(
+	pool: ProcessPool,
+	keys: string[],
+	options: Record<string, unknown> = {},
+): Promise<Record<string, string | null>> {
+	const script = [
+		`const keys = ${JSON.stringify(keys)};`,
+		"const out = Object.fromEntries(keys.map((k) => [k, process.env[k] ?? null]));",
+		"process.stdout.write(JSON.stringify(out));",
+	].join("\n");
+	const result = await pool.execute(process.execPath, ["-e", script], options as any);
+	expect(result.exitCode).toBe(0);
+	return JSON.parse(result.stdout) as Record<string, string | null>;
+}
+
 describe("ProcessPool", () => {
 	describe("constructor", () => {
 		it("creates pool with default maxConcurrency=5 and defaultTimeout=30000", () => {
@@ -58,6 +73,53 @@ describe("ProcessPool", () => {
 			);
 			expect(result.stdout).toBe("vedic_value");
 			expect(result.exitCode).toBe(0);
+		});
+
+		it("defaults to envMode=merge and includes parent env", async () => {
+			const pool = new ProcessPool();
+			const parentKey = "SWARA_PP_PARENT_DEFAULT";
+			const childKey = "SWARA_PP_CHILD_DEFAULT";
+			const prevParent = process.env[parentKey];
+			const prevChild = process.env[childKey];
+
+			try {
+				process.env[parentKey] = "from-parent";
+				delete process.env[childKey];
+				const out = await readEnv(pool, [parentKey, childKey], {
+					env: { [childKey]: "from-child" },
+				});
+				expect(out[parentKey]).toBe("from-parent");
+				expect(out[childKey]).toBe("from-child");
+			} finally {
+				if (prevParent === undefined) delete process.env[parentKey];
+				else process.env[parentKey] = prevParent;
+				if (prevChild === undefined) delete process.env[childKey];
+				else process.env[childKey] = prevChild;
+			}
+		});
+
+		it("envMode=replace excludes parent env and keeps explicit env", async () => {
+			const pool = new ProcessPool();
+			const parentKey = "SWARA_PP_PARENT_REPLACE";
+			const childKey = "SWARA_PP_CHILD_REPLACE";
+			const prevParent = process.env[parentKey];
+			const prevChild = process.env[childKey];
+
+			try {
+				process.env[parentKey] = "parent-secret";
+				delete process.env[childKey];
+				const out = await readEnv(pool, [parentKey, childKey], {
+					envMode: "replace",
+					env: { [childKey]: "child-only" },
+				});
+				expect(out[parentKey]).toBeNull();
+				expect(out[childKey]).toBe("child-only");
+			} finally {
+				if (prevParent === undefined) delete process.env[parentKey];
+				else process.env[parentKey] = prevParent;
+				if (prevChild === undefined) delete process.env[childKey];
+				else process.env[childKey] = prevChild;
+			}
 		});
 	});
 

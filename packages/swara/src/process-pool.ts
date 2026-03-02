@@ -23,8 +23,14 @@ export interface ProcessExecOptions {
 	timeout?: number;
 	/** Working directory for the child process. */
 	cwd?: string;
-	/** Additional environment variables (merged with process.env). */
+	/** Additional environment variables passed to the child process. */
 	env?: Record<string, string>;
+	/**
+	 * Environment merge strategy.
+	 * - `merge` (default): child env = `{ ...process.env, ...env }`
+	 * - `replace`: child env = `{ ...env }` only
+	 */
+	envMode?: "merge" | "replace";
 	/** Data to pipe into the child's stdin. */
 	stdin?: string;
 }
@@ -140,9 +146,12 @@ export class ProcessPool {
 		const startTime = Date.now();
 		const timeout = options.timeout ?? this.defaultTimeout;
 
-		const env = options.env
-			? { ...process.env, ...options.env }
-			: process.env;
+		const envMode = options.envMode ?? "merge";
+		const env = envMode === "replace"
+			? { ...(options.env ?? {}) }
+			: options.env
+				? { ...process.env, ...options.env }
+				: process.env;
 
 		const child = spawn(command, args, {
 			cwd: options.cwd,

@@ -304,6 +304,45 @@ describe("CLI Provider Base (createCLIProvider)", () => {
 		);
 	});
 
+	it("should pipe via stdin when system prompt alone exceeds threshold", async () => {
+		(mockPool.execute as any).mockResolvedValue({
+			stdout: "ok",
+			stderr: "",
+			exitCode: 0,
+			killed: false,
+			duration: 100,
+		});
+		const hugeSystemPrompt = "s".repeat(STDIN_THRESHOLD_BYTES + 256);
+		const buildArgs = vi.fn().mockReturnValue(["--print", "-", "--output-format", "text"]);
+		const config: CLIProviderConfig = {
+			id: "test-cli",
+			name: "Test CLI",
+			command: "cmd",
+			models: [testModel],
+			buildArgs,
+			parseOutput: (s) => s.trim(),
+			getStdinPrompt: () => hugeSystemPrompt,
+			pool: mockPool,
+		};
+		const provider = createCLIProvider(config);
+		await collectEvents(provider.stream("test-cli-model", {
+			systemPrompt: hugeSystemPrompt,
+			messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+		}, {}));
+
+		expect(buildArgs).toHaveBeenCalledWith(
+			"test-cli-model",
+			expect.any(Object),
+			expect.any(Object),
+			true,
+		);
+		expect(mockPool.execute).toHaveBeenCalledWith(
+			"cmd",
+			["--print", "-", "--output-format", "text"],
+			expect.objectContaining({ stdin: hugeSystemPrompt }),
+		);
+	});
+
 	it("should NOT pipe via stdin when prompt is below threshold", async () => {
 		(mockPool.execute as any).mockResolvedValue({
 			stdout: "small ok",
@@ -337,6 +376,75 @@ describe("CLI Provider Base (createCLIProvider)", () => {
 			"cmd",
 			["--print", "hello"],
 			expect.objectContaining({ stdin: undefined }),
+		);
+	});
+
+	it("uses envMode=replace by default and forwards explicit env overrides", async () => {
+		(mockPool.execute as any).mockResolvedValue({
+			stdout: "ok",
+			stderr: "",
+			exitCode: 0,
+			killed: false,
+			duration: 10,
+		});
+		const unsafeKey = "SWARA_CLI_TEST_TOKEN";
+		const prevUnsafe = process.env[unsafeKey];
+
+		try {
+			process.env[unsafeKey] = "do-not-forward";
+			const config: CLIProviderConfig = {
+				id: "test-cli",
+				name: "Test CLI",
+				command: "cmd",
+				models: [testModel],
+				buildArgs: () => ["--print", "hello"],
+				parseOutput: (s) => s.trim(),
+				env: { SWARA_CLI_EXPLICIT: "explicit-value" },
+				pool: mockPool,
+			};
+			const provider = createCLIProvider(config);
+			await collectEvents(provider.stream("test-cli-model", minimalContext("Hello"), {}));
+
+			const execOptions = (mockPool.execute as any).mock.calls[0][2] as {
+				envMode?: string;
+				env?: Record<string, string | undefined>;
+			};
+			expect(execOptions.envMode).toBe("replace");
+			expect(execOptions.env?.SWARA_CLI_EXPLICIT).toBe("explicit-value");
+			expect(execOptions.env?.[unsafeKey]).toBeUndefined();
+			if (process.env.PATH !== undefined) {
+				expect(execOptions.env?.PATH).toBe(process.env.PATH);
+			}
+		} finally {
+			if (prevUnsafe === undefined) delete process.env[unsafeKey];
+			else process.env[unsafeKey] = prevUnsafe;
+		}
+	});
+
+	it("allows overriding envMode to merge", async () => {
+		(mockPool.execute as any).mockResolvedValue({
+			stdout: "ok",
+			stderr: "",
+			exitCode: 0,
+			killed: false,
+			duration: 10,
+		});
+		const config: CLIProviderConfig = {
+			id: "test-cli",
+			name: "Test CLI",
+			command: "cmd",
+			models: [testModel],
+			buildArgs: () => ["--print", "hello"],
+			parseOutput: (s) => s.trim(),
+			envMode: "merge",
+			pool: mockPool,
+		};
+		const provider = createCLIProvider(config);
+		await collectEvents(provider.stream("test-cli-model", minimalContext("Hello"), {}));
+		expect(mockPool.execute).toHaveBeenCalledWith(
+			"cmd",
+			["--print", "hello"],
+			expect.objectContaining({ envMode: "merge" }),
 		);
 	});
 });

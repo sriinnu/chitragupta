@@ -137,7 +137,7 @@ export interface AgentConfig {
 	model: string;
 	/** Optional tool handlers to register. */
 	tools?: ToolHandler[];
-	/** Optional resolver for dynamic tool discovery when a tool is missing. */
+	/** Dynamic tool discovery callback when the requested tool is not registered. */
 	onToolNotFound?: (toolName: string) => Promise<ToolHandler | undefined>;
 	/** Optional callback invoked when tool execution fails for skill-gap tracking. */
 	onSkillGap?: (toolName: string) => void;
