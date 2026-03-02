@@ -112,7 +112,14 @@ async function main() {
 		splitting: true,
 		sourcemap: true,
 		treeShaking: true,
-		external: ["better-sqlite3"],
+		external: [
+			"better-sqlite3",
+			"onnxruntime-node",
+			"onnxruntime-node/*",
+			"sqlite-vec",
+			"sqlite-vec/*",
+			"*.node",
+		],
 		logLevel: "info",
 		metafile: true,
 		// Ensure chunk filenames are clean
