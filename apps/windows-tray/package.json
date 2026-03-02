@@ -1,0 +1,14 @@
+{
+  "name": "@yugenlab/chitragupta-tray",
+  "version": "0.1.0",
+  "description": "Chitragupta system tray app for Windows (also works on macOS/Linux)",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {},
+  "os": ["win32", "darwin", "linux"],
+  "private": true
+}
