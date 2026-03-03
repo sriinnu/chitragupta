@@ -263,26 +263,18 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	await server.start();
 
 	const startupMs = performance.now() - t0;
-	const compact = isCompactMode();
-	const tierInfo = compact ? ` ${JSON.stringify(getTierStats(mcpTools))}` : "";
+	const tierInfo = isCompactMode() ? ` ${JSON.stringify(getTierStats(mcpTools))}` : "";
+	const sseInfo = transport === "sse" ? ` on port ${port}` : "";
 	process.stderr.write(
-		`Chitragupta MCP server ready (${transport}` +
-			`${transport === "sse" ? ` on port ${port}` : ""}) in ${startupMs.toFixed(0)}ms\n` +
-			`  Tools: ${finalTools.length}${tierInfo}  Project: ${projectPath}\n` +
-			`  Agent: ${enableAgent ? "enabled" : "disabled"}  Telemetry: pid=${process.pid}\n`,
+		`Chitragupta MCP server ready (${transport}${sseInfo}) in ${startupMs.toFixed(0)}ms\n` +
+		`  Tools: ${finalTools.length}${tierInfo}  Project: ${projectPath}\n` +
+		`  Agent: ${enableAgent ? "enabled" : "disabled"}  Telemetry: pid=${process.pid}\n`,
 	);
 
-	// ─── 4. Post-start initialization ────────────────────────────────
-	//
-	// Everything below runs AFTER the transport is ready. The initialize
-	// handshake can proceed while these non-critical subsystems spin up.
+	// ─── 4. Post-start initialization (non-critical, after transport ready) ───
 
-	// 4a. Register OS integration surface resources (need server reference)
-	server.registerResource(
-		createSystemMetricsResource(() => ({
-			toolCount: mcpTools.length,
-		})),
-	);
+	// 4a. Register OS integration surface resources
+	server.registerResource(createSystemMetricsResource(() => ({ toolCount: mcpTools.length })));
 	server.registerResource(createPluginEcosystemResource());
 	server.registerResource(createSystemConfigResource(projectPath, transport));
 	server.registerResource(createRecentToolCallsResource(() => server.getRecentCalls()));
@@ -319,6 +311,15 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	const registry = new ToolRegistry({ strictNamespaces: true, validateSchemas: true });
 	server.attachRegistry(registry);
 	(server as unknown as Record<string, unknown>)._toolRegistry = registry;
+
+	// 4c.1 Wire onBashSpawn extension hook into yantra bash tool
+	try {
+		const yan = await import("@chitragupta/yantra");
+		const tan = await import("@chitragupta/tantra");
+		const hooks = new tan.HookRegistry();
+		(server as unknown as Record<string, unknown>)._hookRegistry = hooks;
+		yan.setBashSpawnHook((ctx) => hooks.dispatchBashSpawn(ctx));
+	} catch { /* Hook wiring is optional */ }
 
 	// 4d. EventBridge + MCP notification sink (fire-and-forget)
 	//

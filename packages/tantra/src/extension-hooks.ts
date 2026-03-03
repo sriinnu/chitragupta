@@ -21,6 +21,7 @@ import type {
 	ModelSelectContext,
 	CompactContext,
 	SessionSwitchContext,
+	BashSpawnContext,
 } from "./extension-types.js";
 
 /** Hook handler function type — union of all possible context types. */
@@ -50,6 +51,7 @@ export class HookRegistry {
 			"onSessionStart", "onSessionEnd", "onTurnStart", "onTurnEnd",
 			"onToolCall", "onToolResult", "onError",
 			"onInput", "onBeforeAgentStart", "onModelSelect", "onCompact", "onSessionSwitch",
+			"onBashSpawn",
 		];
 
 		for (const name of hookNames) {
@@ -129,6 +131,20 @@ export class HookRegistry {
 	/** Dispatch onSessionSwitch. */
 	async dispatchSessionSwitch(ctx: SessionSwitchContext): Promise<void> {
 		await this.dispatch("onSessionSwitch", ctx);
+	}
+
+	/**
+	 * Dispatch onBashSpawn — returns the (potentially modified) context.
+	 *
+	 * Each extension in the chain can:
+	 * - Inspect the command and cwd
+	 * - Set `ctx.cancel = true` with a `cancelReason` to block execution
+	 * - Set `ctx.modifiedCommand` to rewrite the command (e.g. SSH delegation)
+	 * - Set `ctx.modifiedCwd` to change the working directory
+	 */
+	async dispatchBashSpawn(ctx: BashSpawnContext): Promise<BashSpawnContext> {
+		await this.dispatch("onBashSpawn", ctx);
+		return ctx;
 	}
 
 	/** Get hook registration count per hook name. */
