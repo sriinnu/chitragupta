@@ -170,11 +170,19 @@ export type {
 	ExtensionManifest,
 	LoadedExtension,
 	ExtensionLoaderConfig,
+	ExtensionAPI,
+	ExtensionCommand,
+	ExtensionShortcut,
 	SessionContext,
 	TurnContext,
 	ToolCallContext,
 	ToolResultContext,
 	ErrorContext,
+	InputContext,
+	BeforeAgentContext,
+	ModelSelectContext,
+	CompactContext,
+	SessionSwitchContext,
 } from "./extension-types.js";
 /** Hook registry for dispatching extension lifecycle hooks. */
 export { HookRegistry } from "./extension-hooks.js";

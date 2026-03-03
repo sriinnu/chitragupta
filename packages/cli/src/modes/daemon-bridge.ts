@@ -233,6 +233,19 @@ export async function addTurn(
 	await daemonCall("turn.add", { sessionId, project, turn });
 }
 
+/** List turns with timestamps for a session. Project is optional. */
+export async function listTurns(
+	sessionId: string,
+	project?: string,
+): Promise<Array<Record<string, unknown>>> {
+	const params: Record<string, unknown> = { sessionId };
+	if (project) params.project = project;
+	const result = await daemonCall<{ turns: Array<Record<string, unknown>> }>(
+		"turn.list", params,
+	);
+	return result.turns;
+}
+
 // ─── Memory Proxy Methods ───────────────────────────────────────────────────
 
 /** Full-text search across turns. */

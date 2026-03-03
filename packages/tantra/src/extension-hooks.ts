@@ -16,6 +16,11 @@ import type {
 	ToolCallContext,
 	ToolResultContext,
 	ErrorContext,
+	InputContext,
+	BeforeAgentContext,
+	ModelSelectContext,
+	CompactContext,
+	SessionSwitchContext,
 } from "./extension-types.js";
 
 /** Hook handler function type — union of all possible context types. */
@@ -44,6 +49,7 @@ export class HookRegistry {
 		const hookNames: ExtensionHookName[] = [
 			"onSessionStart", "onSessionEnd", "onTurnStart", "onTurnEnd",
 			"onToolCall", "onToolResult", "onError",
+			"onInput", "onBeforeAgentStart", "onModelSelect", "onCompact", "onSessionSwitch",
 		];
 
 		for (const name of hookNames) {
@@ -96,6 +102,33 @@ export class HookRegistry {
 	/** Dispatch an error hook. */
 	async dispatchError(ctx: ErrorContext): Promise<void> {
 		await this.dispatch("onError", ctx);
+	}
+
+	/** Dispatch onInput — returns the (possibly transformed) context. */
+	async dispatchInput(ctx: InputContext): Promise<InputContext> {
+		await this.dispatch("onInput", ctx);
+		return ctx;
+	}
+
+	/** Dispatch onBeforeAgentStart — extensions can inject system prompt segments. */
+	async dispatchBeforeAgentStart(ctx: BeforeAgentContext): Promise<BeforeAgentContext> {
+		await this.dispatch("onBeforeAgentStart", ctx);
+		return ctx;
+	}
+
+	/** Dispatch onModelSelect. */
+	async dispatchModelSelect(ctx: ModelSelectContext): Promise<void> {
+		await this.dispatch("onModelSelect", ctx);
+	}
+
+	/** Dispatch onCompact. */
+	async dispatchCompact(ctx: CompactContext): Promise<void> {
+		await this.dispatch("onCompact", ctx);
+	}
+
+	/** Dispatch onSessionSwitch. */
+	async dispatchSessionSwitch(ctx: SessionSwitchContext): Promise<void> {
+		await this.dispatch("onSessionSwitch", ctx);
 	}
 
 	/** Get hook registration count per hook name. */
