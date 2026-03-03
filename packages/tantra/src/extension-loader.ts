@@ -6,8 +6,14 @@
  * uncompiled .ts, native import for .js/.mjs).
  *
  * Directory layout:
- *   ~/.chitragupta/extensions/*.ts   (global extensions)
- *   .chitragupta/extensions/*.ts     (project-local extensions)
+ *   ~/.chitragupta/extensions/*.ts       (global loose files)
+ *   ~/.chitragupta/extensions/npm/<pkg>/ (npm-installed packages)
+ *   ~/.chitragupta/extensions/git/<repo>/ (git-cloned repos)
+ *   ~/.chitragupta/extensions/local/<name>/ (symlinked local)
+ *   .chitragupta/extensions/*.ts          (project-local extensions)
+ *
+ * Package manifest: packages with a `chitragupta` key in package.json
+ * have their `extensions` array resolved as entry points.
  *
  * Hot-reload: optional fs.watch on extension directories.
  *
@@ -30,6 +36,25 @@ import { HookRegistry } from "./extension-hooks.js";
 
 const MAX_EXTENSIONS = 50;
 const VALID_EXTENSIONS = new Set([".ts", ".js", ".mjs"]);
+
+/** Conventional entry points to probe when no manifest is present. */
+const CONVENTIONAL_ENTRIES = [
+	"extensions/index.ts",
+	"extensions/index.js",
+	"src/index.ts",
+	"src/index.js",
+	"index.ts",
+	"index.js",
+] as const;
+
+/** Package subdirectory types installed by `chitragupta extension install`. */
+const PACKAGE_SOURCE_DIRS = ["npm", "git", "local"] as const;
+
+/** Shape of the `chitragupta` key in a package.json manifest. */
+interface PackageManifestKey {
+	extensions?: string[];
+	skills?: string[];
+}
 
 /**
  * ExtensionLoader — discovers, loads, and manages extensions.
@@ -104,16 +129,23 @@ export class ExtensionLoader {
 
 	/**
 	 * Discover and load all extensions from configured directories.
-	 * Global extensions load first, then project-local (which can override).
+	 *
+	 * Load order:
+	 *   1. Loose files in global dir (~/.chitragupta/extensions/*.ts)
+	 *   2. Package dirs (npm/, git/, local/ under global dir)
+	 *   3. Loose files in project dir (.chitragupta/extensions/*.ts)
+	 *   4. Package dirs in project dir (if present)
 	 */
 	async loadAll(): Promise<{ loaded: number; errors: string[] }> {
 		const errors: string[] = [];
 		let loaded = 0;
 
-		// Discover extension files
+		// Discover extension files from all sources
 		const files = [
 			...this.discoverFiles(this.config.globalDir),
+			...this.discoverPackageDirs(this.config.globalDir),
 			...this.discoverFiles(this.config.projectDir),
+			...this.discoverPackageDirs(this.config.projectDir),
 		];
 
 		for (const filePath of files) {
@@ -268,7 +300,7 @@ export class ExtensionLoader {
 
 	// ── Private ─────────────────────────────────────────────────────
 
-	/** Discover extension files in a directory. */
+	/** Discover loose extension files in a directory (not subdirectories). */
 	private discoverFiles(dir: string): string[] {
 		if (!fs.existsSync(dir)) return [];
 
@@ -314,6 +346,48 @@ export class ExtensionLoader {
 			sessionId: () => this.sessionCtx.sessionId,
 			model: () => this.sessionCtx.model,
 		};
+	}
+
+	/**
+	 * Discover extension entry points from package subdirectories.
+	 * Scans npm/, git/, local/ under the given base directory.
+	 */
+	private discoverPackageDirs(baseDir: string): string[] {
+		const results: string[] = [];
+		for (const sourceType of PACKAGE_SOURCE_DIRS) {
+			const sourceDir = path.join(baseDir, sourceType);
+			if (!fs.existsSync(sourceDir)) continue;
+			try {
+				const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
+				for (const entry of entries) {
+					if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+					if (entry.name.startsWith(".")) continue;
+					const pkgDir = path.join(sourceDir, entry.name);
+					results.push(...this.resolvePackageEntryPoints(pkgDir));
+				}
+			} catch { /* directory unreadable — skip */ }
+		}
+		return results;
+	}
+
+	/** Resolve extension entry points from a package directory via manifest or conventions. */
+	private resolvePackageEntryPoints(pkgDir: string): string[] {
+		const pkgJsonPath = path.join(pkgDir, "package.json");
+		if (fs.existsSync(pkgJsonPath)) {
+			try {
+				const raw = fs.readFileSync(pkgJsonPath, "utf-8");
+				const pkg = JSON.parse(raw) as Record<string, unknown>;
+				const manifest = pkg.chitragupta as PackageManifestKey | undefined;
+				if (manifest && Array.isArray(manifest.extensions) && manifest.extensions.length > 0) {
+					return manifest.extensions.map(ep => path.resolve(pkgDir, ep)).filter(ep => fs.existsSync(ep));
+				}
+			} catch { /* invalid JSON — fall through */ }
+		}
+		for (const candidate of CONVENTIONAL_ENTRIES) {
+			const fullPath = path.join(pkgDir, candidate);
+			if (fs.existsSync(fullPath)) return [fullPath];
+		}
+		return this.discoverFiles(pkgDir);
 	}
 
 	/** Start file watchers for hot-reload. */
