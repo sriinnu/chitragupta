@@ -81,6 +81,9 @@ export async function handleSubcommand(
 		case "run":
 			await handleRun(subcommand, rest);
 			break;
+		case "focus":
+			await handleFocus(subcommand, rest);
+			break;
 		case "daemon":
 			await handleDaemon(subcommand, rest);
 			return; // Daemon runs until killed
@@ -413,6 +416,11 @@ async function handleDaemon(subcommand: string | undefined, _rest: string[]): Pr
 async function handleExtension(subcommand: string | undefined, rest: string[]): Promise<void> {
 	const { handleExtensionCommand } = await import("./commands/extension.js");
 	await handleExtensionCommand(subcommand, rest);
+}
+
+async function handleFocus(subcommand: string | undefined, rest: string[]): Promise<void> {
+	const { handleFocusCommand } = await import("./commands/focus.js");
+	await handleFocusCommand(subcommand, rest);
 }
 
 // ─── Utility Helpers ─────────────────────────────────────────────────────────
