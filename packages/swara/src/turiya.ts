@@ -355,7 +355,13 @@ export class TuriyaRouter {
 		];
 	}
 
-	/** Heuristic classification for cold start (before enough data for LinUCB). */
+	/**
+	 * Heuristic classification for cold start (before enough data for LinUCB).
+	 *
+	 * IMPORTANT: no-llm is only for explicit memory/session/status/help commands.
+	 * All other messages (questions, chat, coding, math, explanations) must go
+	 * to an LLM tier. When in doubt, send to haiku — no-llm is the exception.
+	 */
 	private heuristicClassify(context: TuriyaContext): TuriyaDecision {
 		const { complexity, urgency, precision, codeRatio, creativity } = context;
 		const score = complexity * 0.25 + precision * 0.2 + codeRatio * 0.2
@@ -364,9 +370,16 @@ export class TuriyaRouter {
 		let tier: TuriyaTier;
 		let rationale: string;
 
-		if (score < 0.1) {
+		// no-llm is ONLY valid when all feature dimensions are near-zero AND
+		// conversationDepth is low — this means pure tool dispatch commands.
+		// A score of 0.0 exactly means zero signal from all dimensions.
+		const allDimensionsNearZero = complexity < 0.01 && urgency < 0.01
+			&& precision < 0.01 && codeRatio < 0.01 && creativity < 0.01
+			&& context.conversationDepth < 0.01;
+
+		if (allDimensionsNearZero) {
 			tier = "no-llm";
-			rationale = "Trivial request — pure tool dispatch, no LLM needed.";
+			rationale = "Pure tool dispatch — all context dimensions near zero.";
 		} else if (score < 0.25) {
 			tier = "haiku";
 			rationale = "Simple request — lightweight model suffices.";
@@ -381,10 +394,6 @@ export class TuriyaRouter {
 		if (complexity > 0.7) {
 			tier = "opus";
 			rationale = "High complexity detected — routing to strongest model.";
-		}
-		if (urgency > 0.3 && tier === "no-llm") {
-			tier = "haiku";
-			rationale = "Urgent request — needs at least a lightweight model.";
 		}
 
 		return {

@@ -120,7 +120,16 @@ export function routeModelForTurn(
 				const decision = options.turiyaRouter.classify(ctx);
 				routing.lastTuriyaDecision = decision;
 				if (decision.tier === "no-llm") {
-					noLlmTemplateResponse = buildNoLlmTemplateResponse(message, classification.intent);
+					// Safety net: if the template returns null, the message
+					// doesn't match any known no-llm pattern — send to LLM.
+					const templateResult = buildNoLlmTemplateResponse(message, classification.intent);
+					if (templateResult !== null) {
+						noLlmTemplateResponse = templateResult;
+					} else {
+						log.debug("no-llm tier overridden: template returned null, routing to haiku", {
+							message: message.slice(0, 80),
+						});
+					}
 				} else {
 					const tierModelHints: Record<string, string[]> = {
 						"haiku": ["haiku", "claude-haiku", "gpt-4o-mini", "gemini-flash"],
@@ -171,11 +180,17 @@ export function routeModelForTurn(
 				systemPrompt: undefined,
 			});
 			if (decision.skipLLM) {
-				noLlmTemplateResponse = buildNoLlmTemplateResponse(message, decision.taskType);
-				stdout.write(
-					dim(`  [marga: ${decision.taskType}/${decision.complexity} → no-llm]\n`),
-				);
-				return { noLlmTemplateResponse };
+				const templateResult = buildNoLlmTemplateResponse(message, decision.taskType);
+				if (templateResult !== null) {
+					noLlmTemplateResponse = templateResult;
+					stdout.write(
+						dim(`  [marga: ${decision.taskType}/${decision.complexity} → no-llm]\n`),
+					);
+					return { noLlmTemplateResponse };
+				}
+				log.debug("marga skipLLM overridden: template returned null", {
+					message: message.slice(0, 80),
+				});
 			}
 			if (decision.modelId && decision.modelId !== routing.currentModel) {
 				if (options.providerRegistry) {
