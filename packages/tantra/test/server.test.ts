@@ -140,7 +140,7 @@ describe("McpServer", () => {
       const result = res.result as { content: Array<{ type: string; text: string }>; _metadata?: unknown };
       expect(result.content[0].text).toContain("Hello, Alice!");
       const plain = stripAnsi(result.content[0].text);
-      expect(plain).toMatch(/═══ greet ═/);
+      expect(plain).toMatch(/─── greet ─/);
       expect(plain).toMatch(/⏱ [\d.]+ms/);
       // _metadata must not leak to wire
       expect(result._metadata).toBeUndefined();
@@ -235,7 +235,7 @@ describe("McpServer", () => {
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("tool broke");
       const plain = stripAnsi(result.content[0].text);
-      expect(plain).toMatch(/═══ fail ═/);
+      expect(plain).toMatch(/─── fail ─/);
       expect(plain).toMatch(/⏱ [\d.]+ms/);
     });
   });

@@ -83,14 +83,14 @@ const BANNER_LINES = [
 	"     ╚═════╝╚═╝  ╚═╝╚═╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝        ╚═╝   ╚═╝  ╚═╝",
 ];
 
-/** Saffron (#FF9933) -> Gold (#FFD700) gradient, 6 steps. */
+/** Amber (#F59E0B) → Cyan (#06B6D4) gradient, 6 steps. */
 const GRADIENT: Array<[number, number, number]> = [
-	[255, 153, 51],
-	[255, 167, 38],
-	[255, 183, 28],
-	[255, 199, 18],
-	[255, 211, 8],
-	[255, 215, 0],
+	[245, 158, 11],
+	[200, 170, 50],
+	[150, 182, 100],
+	[100, 190, 150],
+	[50, 192, 190],
+	[6, 182, 212],
 ];
 
 /** Print the colorized ASCII banner to stdout. */
@@ -100,7 +100,7 @@ export function printBanner(): void {
 		const [r, g, b] = GRADIENT[i % GRADIENT.length];
 		process.stdout.write(`${rgb(r, g, b)}${BANNER_LINES[i]}${reset}\n`);
 	}
-	process.stdout.write(dim("          चि  The Eternal Record Keeper — v0.5.0\n"));
+	process.stdout.write(dim("          ⛩  The Eternal Record Keeper — v0.5.0\n"));
 	process.stdout.write("\n");
 }
 

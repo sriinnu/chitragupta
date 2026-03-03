@@ -15,8 +15,13 @@ import type { Theme } from "@chitragupta/ui";
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("DEFAULT_THEME", () => {
-	it("should have the name 'nakshatram'", () => {
-		expect(DEFAULT_THEME.name).toBe("nakshatram");
+	it("should have the name 'aurora'", () => {
+		expect(DEFAULT_THEME.name).toBe("aurora");
+	});
+
+	it("spinner should alternate torii and lotus symbols", () => {
+		expect(DEFAULT_THEME.symbols.spinner).toContain("\u26E9");
+		expect(DEFAULT_THEME.symbols.spinner).toContain("\uD804\uDC4D");
 	});
 
 	it("should contain all required color keys", () => {
@@ -102,8 +107,8 @@ describe("MINIMAL_THEME", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("CHITRAGUPTA_THEME", () => {
-	it("should have the name 'chitragupta'", () => {
-		expect(CHITRAGUPTA_THEME.name).toBe("chitragupta");
+	it("should have the name 'nebula'", () => {
+		expect(CHITRAGUPTA_THEME.name).toBe("nebula");
 	});
 
 	it("should contain all required color keys", () => {
@@ -143,16 +148,16 @@ describe("CHITRAGUPTA_THEME", () => {
 		expect(CHITRAGUPTA_THEME.colors.background).toBe("#1A1A4E");
 	});
 
-	it("should use deep saffron primary", () => {
-		expect(CHITRAGUPTA_THEME.colors.primary).toBe("#E8850A");
+	it("should use violet primary", () => {
+		expect(CHITRAGUPTA_THEME.colors.primary).toBe("#A78BFA");
 	});
 
-	it("should use gold secondary", () => {
-		expect(CHITRAGUPTA_THEME.colors.secondary).toBe("#FFD700");
+	it("should use cyan secondary", () => {
+		expect(CHITRAGUPTA_THEME.colors.secondary).toBe("#06B6D4");
 	});
 
-	it("should use the Devanagari chi prompt symbol", () => {
-		expect(CHITRAGUPTA_THEME.symbols.prompt).toBe("\u091A\u093F");
+	it("should use the torii gate prompt symbol", () => {
+		expect(CHITRAGUPTA_THEME.symbols.prompt).toBe("\u26E9");
 	});
 });
 
@@ -161,19 +166,21 @@ describe("CHITRAGUPTA_THEME", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Brand consistency", () => {
-	it("DEFAULT_THEME should use saffron as primary", () => {
-		expect(DEFAULT_THEME.colors.primary).toBe("#FF9933");
+	it("DEFAULT_THEME should use amber as primary", () => {
+		expect(DEFAULT_THEME.colors.primary).toBe("#F59E0B");
 	});
 
-	it("DEFAULT_THEME should use gold as secondary", () => {
-		expect(DEFAULT_THEME.colors.secondary).toBe("#FFD700");
+	it("DEFAULT_THEME should use cyan as secondary", () => {
+		expect(DEFAULT_THEME.colors.secondary).toBe("#06B6D4");
 	});
 
-	it("DEFAULT_THEME should use the Devanagari chi prompt symbol", () => {
-		expect(DEFAULT_THEME.symbols.prompt).toBe("\u091A\u093F");
+	it("DEFAULT_THEME should use the torii gate prompt symbol", () => {
+		expect(DEFAULT_THEME.symbols.prompt).toBe("\u26E9");
 	});
 
-	it("both branded themes should share the chi prompt symbol", () => {
+	it("both branded themes should share the torii gate prompt symbol", () => {
+		expect(DEFAULT_THEME.symbols.prompt).toBe("\u26E9");           // ⛩ torii gate
+		expect(CHITRAGUPTA_THEME.symbols.prompt).toBe("\u26E9");      // ⛩ torii gate
 		expect(DEFAULT_THEME.symbols.prompt).toBe(CHITRAGUPTA_THEME.symbols.prompt);
 	});
 });
@@ -187,12 +194,12 @@ describe("getTheme", () => {
 		expect(getTheme("default")).toBe(DEFAULT_THEME);
 	});
 
-	it("should return DEFAULT_THEME for 'nakshatram'", () => {
-		expect(getTheme("nakshatram")).toBe(DEFAULT_THEME);
+	it("should return DEFAULT_THEME for 'aurora'", () => {
+		expect(getTheme("aurora")).toBe(DEFAULT_THEME);
 	});
 
-	it("should return CHITRAGUPTA_THEME for 'chitragupta'", () => {
-		expect(getTheme("chitragupta")).toBe(CHITRAGUPTA_THEME);
+	it("should return CHITRAGUPTA_THEME for 'nebula'", () => {
+		expect(getTheme("nebula")).toBe(CHITRAGUPTA_THEME);
 	});
 
 	it("should return MINIMAL_THEME for 'minimal'", () => {

@@ -22,6 +22,7 @@ const readSource = (rel: string) =>
 
 const syncToolsSource = readSource("../src/modes/mcp-tools-sync.ts");
 const mcpServerSource = readSource("../src/modes/mcp-server.ts");
+const mcpDaemonWiringSource = (() => { try { return readSource("../src/modes/mcp-daemon-wiring.ts"); } catch { return ""; } })();
 const mcpSessionSource = readSource("../src/modes/mcp-session.ts");
 const servicesSource = readSource("../../daemon/src/services.ts");
 const servicesHelpersSource = readSource("../../daemon/src/services-helpers.ts");
@@ -198,7 +199,8 @@ describe("Issue 3: Eager daemon warm-up", () => {
 	});
 
 	it("DaemonManager auto-starts in background", () => {
-		expect(mcpServerSource).toContain("daemonManager.start().catch");
+		const combined = mcpServerSource + mcpDaemonWiringSource;
+		expect(combined).toContain("daemonManager.start().catch");
 	});
 });
 

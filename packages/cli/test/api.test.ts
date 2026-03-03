@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => {
 		agentProfile: "chitragupta",
 		compaction: { enabled: true, threshold: 80 },
 		memory: { autoSave: true, searchDepth: 3 },
-		theme: "nakshatram",
+		theme: "aurora",
 		plugins: [],
 	};
 	const mockLoadGlobalSettings = vi.fn().mockReturnValue(mockSettings);

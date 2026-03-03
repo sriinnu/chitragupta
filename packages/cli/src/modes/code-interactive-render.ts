@@ -23,14 +23,14 @@ import {
 
 // ─── ANSI Helpers ───────────────────────────────────────────────────────────
 
-/** Saffron (#FF9933) → Gold (#FFD700) gradient for the banner. */
+/** Amber (#F59E0B) → Cyan (#06B6D4) gradient for the banner. */
 const GRADIENT: Array<[number, number, number]> = [
-	[255, 153, 51],
-	[255, 167, 38],
-	[255, 183, 28],
-	[255, 199, 18],
-	[255, 211, 8],
-	[255, 215, 0],
+	[245, 158, 11],
+	[200, 170, 50],
+	[150, 182, 100],
+	[100, 190, 150],
+	[50, 192, 190],
+	[6, 182, 212],
 ];
 
 const BANNER = [

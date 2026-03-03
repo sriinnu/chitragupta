@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml"><img src="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/tests-11%2C453-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-11%2C502-brightgreen" alt="Tests" />
   <img src="https://img.shields.io/badge/node-%3E%3D22-blue" alt="Node" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
   <img src="https://img.shields.io/badge/packages-17-orange" alt="Packages" />
@@ -22,6 +22,17 @@ Chitragupta is an AI agent platform that treats cognition as a first-class engin
 It exposes a **CLI**, an **HTTP server**, an **MCP server**, a **web dashboard (Hub)**, and a **programmatic API**. It is designed to be consumed by other applications.
 
 Named after the divine scribe in Vedic tradition — the keeper of the hidden record — internally, every module carries a Sanskrit name that defines its purpose. Externally, everything speaks English.
+
+### Visual Identity
+
+```
+⛩  Prompt — Torii gate (idle state)
+⛩ 𑁍  Spinner — alternates Torii ↔ Brahmi Lotus (processing)
+───  Tool header — thin rule with amber highlight
+▹  Tool bullet — outline triangle with cyan accent
+```
+
+Two built-in themes: **Aurora** (amber/cyan) and **Nebula** (violet/cyan, ink-blue background). Both use the same ⛩ 𑁍 iconography. A **Minimal** theme uses ASCII-only for broad terminal compatibility.
 
 ---
 
@@ -569,7 +580,7 @@ Build: `cd apps/macos-menubar && xcodegen && xcodebuild`
 | [`@chitragupta/swara`](./packages/swara) | AI Providers — LLM streaming, cost tracking, model routing, embeddings | Swara | Voice |
 | [`@chitragupta/anina`](./packages/anina) | Agent Runtime — tool execution, consciousness, learning loop, identity | Anina | Soul |
 | [`@chitragupta/smriti`](./packages/smriti) | Memory — 4-stream memory, GraphRAG, bi-temporal edges, hybrid search, compaction | Smriti | Remembrance |
-| [`@chitragupta/ui`](./packages/ui) | Terminal UI — theme, ANSI rendering, markdown, progress, diff viewer | — | — |
+| [`@chitragupta/ui`](./packages/ui) | Terminal UI — themes (Aurora/Nebula/Minimal), ANSI rendering, markdown, progress, diff viewer | — | — |
 | [`@chitragupta/yantra`](./packages/yantra) | Tools — 12+ built-in tools, sandbox, .env fortress, credential protection | Yantra | Instrument |
 | [`@chitragupta/dharma`](./packages/dharma) | Policy — security rules, rate limiting, approval gates, karma tracking | Dharma | Law |
 | [`@chitragupta/netra`](./packages/netra) | Vision — image analysis, pixel diffing, screenshot capture, multimodal | Netra | Eye |
@@ -754,8 +765,8 @@ SWIM-based protocol: `alive` → `suspect` (no heartbeat) → `dead` (evicted). 
 
 | Metric | Value |
 |--------|-------|
-| Test files | 367+ |
-| Total tests | 11,453 |
+| Test files | 371+ |
+| Total tests | 11,502 |
 | Failures | 0 |
 | TypeScript errors | 0 |
 | Packages | 17 |

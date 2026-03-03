@@ -61,25 +61,25 @@ export interface Theme {
 
 // ─── Default Theme ──────────────────────────────────────────────────────────
 
-/** Nakshatram — the default Chitragupta theme. Saffron & gold palette inspired by Vedic cosmology. */
+/** Default Chitragupta theme. Warm amber & teal palette with modern Unicode iconography. */
 export const DEFAULT_THEME: Theme = {
-	name: "nakshatram",
+	name: "aurora",
 	colors: {
-		primary: "#FF9933",    // Saffron — identity, the divine flame
-		secondary: "#FFD700",  // Gold — wisdom, illumination
+		primary: "#F59E0B",    // Amber — warm identity
+		secondary: "#06B6D4",  // Cyan — clarity, intelligence
 		success: "#22c55e",    // Emerald — success
-		warning: "#f59e0b",    // Topaz — warning
-		error: "#ef4444",      // Ruby — error
-		info: "#FFD700",       // Gold — info, warm knowledge
+		warning: "#f59e0b",    // Amber — warning
+		error: "#ef4444",      // Red — error
+		info: "#06B6D4",       // Cyan — info
 		muted: "#484f58",      // Muted gray
 		background: "#0d1117", // Deep background
 		foreground: "#e6edf3", // Primary text
 		border: "#30363d",     // Subtle border
-		thinking: "#FFD700",   // Gold — reasoning glow
-		tool: "#FF9933",       // Saffron — tool calls
-		agent: "#ec4899",      // Lotus — sub-agents
+		thinking: "#A78BFA",   // Violet — reasoning
+		tool: "#F59E0B",       // Amber — tool calls
+		agent: "#ec4899",      // Pink — sub-agents
 		cost: "#10b981",       // Money green
-		tokens: "#FFD700",     // Gold — token counts
+		tokens: "#06B6D4",     // Cyan — token counts
 		git: "#f97316",        // Orange
 		bgDeep: "#0d1117",
 		bgSurface: "#161b22",
@@ -87,13 +87,13 @@ export const DEFAULT_THEME: Theme = {
 		bgOverlay: "#21262d",
 	},
 	symbols: {
-		prompt: "\u091A\u093F",  // चि — the Chitragupta mark
-		thinking: "\u25C6",
-		success: "\u2713",
-		error: "\u2717",
-		warning: "\u26A0",
-		info: "\u2139",
-		spinner: ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"],
+		prompt: "\u26E9",        // ⛩ — torii gate
+		thinking: "\u25C6",      // ◆ — filled diamond
+		success: "\u2713",       // ✓
+		error: "\u2717",         // ✗
+		warning: "\u26A0",       // ⚠
+		info: "\u25CB",          // ○
+		spinner: ["\u26E9", "\uD804\uDC4D", "\u26E9", "\uD804\uDC4D"],  // ⛩ 𑁍 — torii ↔ lotus
 		branch: "\u251C",
 		branchEnd: "\u2514",
 		branchLine: "\u2502",
@@ -102,39 +102,39 @@ export const DEFAULT_THEME: Theme = {
 
 // ─── Chitragupta Premium Theme ──────────────────────────────────────────────
 
-/** Chitragupta — premium Vedic theme. Deep saffron, warm gold, ink blue depths. */
+/** Nebula — deep ink theme with violet accents. */
 export const CHITRAGUPTA_THEME: Theme = {
-	name: "chitragupta",
+	name: "nebula",
 	colors: {
-		primary: "#E8850A",    // Deep saffron — the scribe's flame
-		secondary: "#FFD700",  // Pure gold — divine ink
-		success: "#4ade80",    // Bright emerald — karma fulfilled
-		warning: "#fbbf24",    // Warm amber — caution
-		error: "#f87171",      // Soft ruby — transgression
-		info: "#FFD700",       // Gold — illumination
+		primary: "#A78BFA",    // Violet — intelligence
+		secondary: "#06B6D4",  // Cyan — clarity
+		success: "#4ade80",    // Bright emerald
+		warning: "#fbbf24",    // Warm amber
+		error: "#f87171",      // Soft red
+		info: "#06B6D4",       // Cyan
 		muted: "#5c5c7a",     // Muted twilight
-		background: "#1A1A4E", // Ink blue — the cosmic ledger
-		foreground: "#f0e6d3", // Parchment — aged manuscript
+		background: "#1A1A4E", // Ink blue
+		foreground: "#f0e6d3", // Parchment
 		border: "#2d2d6b",     // Deep indigo border
-		thinking: "#FFD700",   // Gold — contemplation
-		tool: "#FF9933",       // Saffron — yantra activation
-		agent: "#e879a8",      // Lotus pink — agent presence
-		cost: "#4ade80",       // Emerald — artha (wealth)
-		tokens: "#E8850A",     // Deep saffron — token flow
-		git: "#FF9933",        // Saffron — branch lineage
-		bgDeep: "#12123a",     // Deepest ink
-		bgSurface: "#1e1e56",  // Surface ink blue
-		bgHover: "#2a2a6e",    // Hover indigo
-		bgOverlay: "#33337a",  // Overlay violet-blue
+		thinking: "#A78BFA",   // Violet — reasoning
+		tool: "#F59E0B",       // Amber — tool execution
+		agent: "#e879a8",      // Pink — agent presence
+		cost: "#4ade80",       // Emerald
+		tokens: "#06B6D4",     // Cyan — token flow
+		git: "#F59E0B",        // Amber
+		bgDeep: "#12123a",
+		bgSurface: "#1e1e56",
+		bgHover: "#2a2a6e",
+		bgOverlay: "#33337a",
 	},
 	symbols: {
-		prompt: "\u091A\u093F",  // चि — the Chitragupta mark
-		thinking: "\u25C8",      // ◈ — diamond with dot, inner focus
-		success: "\u2713",       // checkmark
-		error: "\u2717",         // cross
-		warning: "\u26A0",       // warning
-		info: "\u27D0",          // ⟐ — diamond with left-pointing
-		spinner: ["\u0950", "\u25C7", "\u0950", "\u25C6", "\u0950", "\u25C7", "\u0950", "\u25C6"], // ॐ ◇ ◆ cycle
+		prompt: "\u26E9",        // ⛩ — torii gate
+		thinking: "\u25C8",      // ◈ — diamond target
+		success: "\u2713",       // ✓
+		error: "\u2717",         // ✗
+		warning: "\u26A0",       // ⚠
+		info: "\u25CB",          // ○
+		spinner: ["\uD804\uDC4D", "\u26E9", "\uD804\uDC4D", "\u26E9"],  // 𑁍 ⛩ — lotus ↔ torii
 		branch: "\u251C",
 		branchEnd: "\u2514",
 		branchLine: "\u2502",
@@ -186,8 +186,8 @@ export const MINIMAL_THEME: Theme = {
 
 const themes: Map<string, Theme> = new Map([
 	["default", DEFAULT_THEME],
-	["nakshatram", DEFAULT_THEME],
-	["chitragupta", CHITRAGUPTA_THEME],
+	["aurora", DEFAULT_THEME],
+	["nebula", CHITRAGUPTA_THEME],
 	["minimal", MINIMAL_THEME],
 ]);
 
