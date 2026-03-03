@@ -4,6 +4,7 @@ export { ToolExecutor } from "./tool-executor.js";
 export { ContextManager, DEFAULT_COMPACTION_CONFIG } from "./context-manager.js";
 export type { CompactionConfig, CompactionTier } from "./context-manager.js";
 export { SteeringManager } from "./steering.js";
+export type { SteeringInstruction, SteeringPriority, SteeringMode } from "./steering.js";
 export { MemoryBridge } from "./memory-bridge.js";
 export {
 	MAX_SUB_AGENTS,
