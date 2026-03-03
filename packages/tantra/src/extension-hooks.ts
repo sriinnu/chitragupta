@@ -22,6 +22,7 @@ import type {
 	CompactContext,
 	SessionSwitchContext,
 	ResourcesDiscoverContext,
+	BashSpawnContext,
 } from "./extension-types.js";
 
 /** Hook handler function type — union of all possible context types. */
@@ -51,7 +52,7 @@ export class HookRegistry {
 			"onSessionStart", "onSessionEnd", "onTurnStart", "onTurnEnd",
 			"onToolCall", "onToolResult", "onError",
 			"onInput", "onBeforeAgentStart", "onModelSelect", "onCompact",
-			"onSessionSwitch", "onResourcesDiscover",
+			"onSessionSwitch", "onResourcesDiscover", "onBashSpawn",
 		];
 
 		for (const name of hookNames) {
@@ -136,6 +137,12 @@ export class HookRegistry {
 	/** Dispatch onResourcesDiscover — extensions can contribute resources during discovery. */
 	async dispatchResourcesDiscover(ctx: ResourcesDiscoverContext): Promise<void> {
 		await this.dispatch("onResourcesDiscover", ctx);
+	}
+
+	/** Dispatch onBashSpawn — returns the (potentially modified) context. */
+	async dispatchBashSpawn(ctx: BashSpawnContext): Promise<BashSpawnContext> {
+		await this.dispatch("onBashSpawn", ctx);
+		return ctx;
 	}
 
 	/** Get hook registration count per hook name. */

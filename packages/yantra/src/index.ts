@@ -60,8 +60,8 @@ export type { GrepConfig } from "./grep.js";
 export { configureRead } from "./read.js";
 export type { ReadConfig } from "./read.js";
 
-export { configureBash } from "./bash.js";
-export type { BashConfig } from "./bash.js";
+export { configureBash, setBashSpawnHook, clearBashSpawnHook } from "./bash.js";
+export type { BashConfig, BashSpawnHookContext } from "./bash.js";
 
 // ─── Diff utilities (public API) ────────────────────────────────────────────
 export { computeUnifiedDiff } from "./diff.js";

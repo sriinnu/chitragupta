@@ -1,11 +1,4 @@
-/**
- * @chitragupta/cli — MCP Server Mode.
- *
- * Thin orchestration layer: collect tools → apply tiers → create server → start.
- * Supports stdio and SSE transports. Tool definitions in mcp-tools-*.ts.
- *
- * @module
- */
+/** @chitragupta/cli — MCP Server Mode. Collect tools → apply tiers → create server → start. */
 
 import type { McpToolHandler, ChitraguptaToolHandler } from "@chitragupta/tantra";
 import type { ToolHandler } from "@chitragupta/core";
@@ -263,23 +256,18 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	await server.start();
 
 	const startupMs = performance.now() - t0;
-	const compact = isCompactMode();
-	const tierInfo = compact ? ` ${JSON.stringify(getTierStats(mcpTools))}` : "";
+	const tierInfo = isCompactMode() ? ` ${JSON.stringify(getTierStats(mcpTools))}` : "";
+	const sseInfo = transport === "sse" ? ` on port ${port}` : "";
 	process.stderr.write(
-		`Chitragupta MCP server ready (${transport}` +
-			`${transport === "sse" ? ` on port ${port}` : ""}) in ${startupMs.toFixed(0)}ms\n` +
-			`  Tools: ${finalTools.length}${tierInfo}  Project: ${projectPath}\n` +
-			`  Agent: ${enableAgent ? "enabled" : "disabled"}  Telemetry: pid=${process.pid}\n`,
+		`Chitragupta MCP server ready (${transport}${sseInfo}) in ${startupMs.toFixed(0)}ms\n` +
+		`  Tools: ${finalTools.length}${tierInfo}  Project: ${projectPath}\n` +
+		`  Agent: ${enableAgent ? "enabled" : "disabled"}  Telemetry: pid=${process.pid}\n`,
 	);
 
-	// ─── 4. Post-start initialization (runs AFTER transport is ready) ───
+	// ─── 4. Post-start initialization (non-critical, after transport ready) ───
 
-	// 4a. Register OS integration surface resources (need server reference)
-	server.registerResource(
-		createSystemMetricsResource(() => ({
-			toolCount: mcpTools.length,
-		})),
-	);
+	// 4a. Register OS integration surface resources
+	server.registerResource(createSystemMetricsResource(() => ({ toolCount: mcpTools.length })));
 	server.registerResource(createPluginEcosystemResource());
 	server.registerResource(createSystemConfigResource(projectPath, transport));
 	server.registerResource(createRecentToolCallsResource(() => server.getRecentCalls()));
@@ -318,9 +306,16 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	(server as unknown as Record<string, unknown>)._toolRegistry = registry;
 
 	// 4c.1 Wire extension system into MCP (tools, hooks, hot-reload)
-	wireExtensionsToMcp({ projectPath, toolRegistry: registry, onToolCall: (info) => {
+	wireExtensionsToMcp({ projectPath, toolRegistry: registry, onToolCall: () => {
 		heartbeat.update({ lastToolCallAt: Date.now(), state: "busy" });
-	} }).catch((err: unknown) => {
+	} }).then((bridge) => {
+		// 4c.2 Wire bash spawn hook using the extension bridge's HookRegistry
+		try {
+			import("@chitragupta/yantra").then((yan) => {
+				yan.setBashSpawnHook((ctx) => bridge.hookRegistry.dispatchBashSpawn(ctx));
+			}).catch(() => { /* yantra import optional */ });
+		} catch { /* Hook wiring is optional */ }
+	}).catch((err: unknown) => {
 		process.stderr.write(`[extensions] Wire failed: ${err instanceof Error ? err.message : String(err)}\n`);
 	});
 
