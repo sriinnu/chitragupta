@@ -21,6 +21,7 @@ import type {
 	ModelSelectContext,
 	CompactContext,
 	SessionSwitchContext,
+	ResourcesDiscoverContext,
 } from "./extension-types.js";
 
 /** Hook handler function type — union of all possible context types. */
@@ -49,7 +50,8 @@ export class HookRegistry {
 		const hookNames: ExtensionHookName[] = [
 			"onSessionStart", "onSessionEnd", "onTurnStart", "onTurnEnd",
 			"onToolCall", "onToolResult", "onError",
-			"onInput", "onBeforeAgentStart", "onModelSelect", "onCompact", "onSessionSwitch",
+			"onInput", "onBeforeAgentStart", "onModelSelect", "onCompact",
+			"onSessionSwitch", "onResourcesDiscover",
 		];
 
 		for (const name of hookNames) {
@@ -129,6 +131,11 @@ export class HookRegistry {
 	/** Dispatch onSessionSwitch. */
 	async dispatchSessionSwitch(ctx: SessionSwitchContext): Promise<void> {
 		await this.dispatch("onSessionSwitch", ctx);
+	}
+
+	/** Dispatch onResourcesDiscover — extensions can contribute resources during discovery. */
+	async dispatchResourcesDiscover(ctx: ResourcesDiscoverContext): Promise<void> {
+		await this.dispatch("onResourcesDiscover", ctx);
 	}
 
 	/** Get hook registration count per hook name. */
