@@ -64,6 +64,11 @@ function registerSessionMethods(
 			model: typeof params.model === "string" ? params.model : undefined,
 			provider: typeof params.provider === "string" ? params.provider : undefined,
 			branch: typeof params.branch === "string" ? params.branch : undefined,
+			parentSessionId: typeof params.parentSessionId === "string" ? params.parentSessionId : undefined,
+			tags: Array.isArray(params.tags) ? params.tags.filter((v): v is string => typeof v === "string") : undefined,
+			metadata: (typeof params.metadata === "object" && params.metadata !== null && !Array.isArray(params.metadata))
+				? params.metadata as Record<string, unknown>
+				: undefined,
 		};
 		if (!opts.project) throw new Error("Missing project");
 		const session = store.createSession(opts);
@@ -393,14 +398,14 @@ function registerDaemonMethods(
 				external: mem.external,
 			},
 			methods: router.listMethods().length,
-			counts: {
-				turns: count("turns"),
-				sessions: count("sessions"),
-				rules: count("rules"),
-				vidhis: count("vidhis"),
-				samskaras: count("samskaras"),
-				vasanas: count("vasanas"),
-				akashaTraces: count("akasha_traces"),
+				counts: {
+					turns: count("turns"),
+					sessions: count("sessions"),
+					rules: count("consolidation_rules"),
+					vidhis: count("vidhis"),
+					samskaras: count("samskaras"),
+					vasanas: count("vasanas"),
+					akashaTraces: count("akasha_traces"),
 			},
 			timestamp: Date.now(),
 		};

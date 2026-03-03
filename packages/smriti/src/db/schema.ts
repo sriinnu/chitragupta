@@ -13,7 +13,7 @@
 import type { DatabaseManager } from "./database.js";
 
 // Current schema versions — bump when adding migrations
-const AGENT_SCHEMA_VERSION = 4;
+const AGENT_SCHEMA_VERSION = 5;
 const GRAPH_SCHEMA_VERSION = 1;
 const VECTORS_SCHEMA_VERSION = 1;
 
@@ -135,6 +135,23 @@ export function initAgentSchema(dbm: DatabaseManager): void {
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_kartavyas_status ON kartavyas(status);
+
+		-- ─── Akasha Traces (shared stigmergic memory) ────────────────────
+		CREATE TABLE IF NOT EXISTS akasha_traces (
+			id          TEXT PRIMARY KEY,
+			agent_id    TEXT NOT NULL,
+			trace_type  TEXT NOT NULL,
+			topic       TEXT NOT NULL,
+			content     TEXT NOT NULL,
+			strength    REAL NOT NULL,
+			reinforcements INTEGER NOT NULL DEFAULT 0,
+			metadata    TEXT,
+			created_at  INTEGER NOT NULL,
+			last_reinforced_at INTEGER NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_akasha_topic ON akasha_traces(topic);
+		CREATE INDEX IF NOT EXISTS idx_akasha_strength ON akasha_traces(strength DESC);
 	`);
 
 	// ─── Phase 1 migration: Self-Evolution Engine tables ─────────────
@@ -266,6 +283,27 @@ export function initAgentSchema(dbm: DatabaseManager): void {
 			CREATE INDEX IF NOT EXISTS idx_rta_audit_timestamp ON rta_audit(timestamp DESC);
 			CREATE INDEX IF NOT EXISTS idx_rta_audit_rule_id ON rta_audit(rule_id);
 			CREATE INDEX IF NOT EXISTS idx_rta_audit_denied ON rta_audit(allowed) WHERE allowed = 0;
+		`);
+	}
+
+	// ─── Phase 5 migration: Ensure akasha_traces exists in base schema ──
+	if (currentVersion < 5) {
+		db.exec(`
+			CREATE TABLE IF NOT EXISTS akasha_traces (
+				id          TEXT PRIMARY KEY,
+				agent_id    TEXT NOT NULL,
+				trace_type  TEXT NOT NULL,
+				topic       TEXT NOT NULL,
+				content     TEXT NOT NULL,
+				strength    REAL NOT NULL,
+				reinforcements INTEGER NOT NULL DEFAULT 0,
+				metadata    TEXT,
+				created_at  INTEGER NOT NULL,
+				last_reinforced_at INTEGER NOT NULL
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_akasha_topic ON akasha_traces(topic);
+			CREATE INDEX IF NOT EXISTS idx_akasha_strength ON akasha_traces(strength DESC);
 		`);
 	}
 

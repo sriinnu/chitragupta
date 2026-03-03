@@ -13,8 +13,11 @@
  */
 
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
+import { getChitraguptaHome } from "@chitragupta/core";
 import { NidraDaemon } from "./nidra-daemon.js";
-import type { NidraConfig, NidraState } from "./types.js";
+import type { NidraConfig, NidraState, NidraSnapshot } from "./types.js";
 import {
 	formatDate, scheduleLongTimeout,
 	consolidateLastMonth as runMonthlyConsolidation,
@@ -77,6 +80,60 @@ const DEFAULT_CONFIG: ChitraguptaDaemonConfig = {
 	yearlyConsolidationHour: 4,
 	dayFileRetentionMonths: 6,
 };
+
+const CONSOLIDATION_LOCK_STALE_MS = 2 * 60 * 60 * 1000; // 2h
+
+function getConsolidationLockPath(date: string): string {
+	const safeDate = date.replace(/[^0-9-]/g, "");
+	return path.join(getChitraguptaHome(), "consolidation", "locks", `${safeDate}.lock`);
+}
+
+function readLockPid(lockPath: string): number | null {
+	try {
+		const firstLine = fs.readFileSync(lockPath, "utf-8").split("\n")[0]?.trim() ?? "";
+		const pid = parseInt(firstLine, 10);
+		return Number.isFinite(pid) && pid > 0 ? pid : null;
+	} catch {
+		return null;
+	}
+}
+
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function acquireDateLock(date: string): (() => void) | null {
+	const lockPath = getConsolidationLockPath(date);
+	const dir = path.dirname(lockPath);
+	fs.mkdirSync(dir, { recursive: true });
+
+	try {
+		const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+		fs.writeSync(fd, `${process.pid}\n${Date.now()}\n`);
+		fs.closeSync(fd);
+		return () => {
+			try { fs.unlinkSync(lockPath); } catch { /* best-effort */ }
+		};
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "EEXIST") return null;
+		try {
+			const stat = fs.statSync(lockPath);
+			const ageMs = Date.now() - stat.mtimeMs;
+			if (ageMs <= CONSOLIDATION_LOCK_STALE_MS) return null;
+			const holderPid = readLockPid(lockPath);
+			if (holderPid !== null && isProcessAlive(holderPid)) return null;
+			fs.unlinkSync(lockPath);
+			return acquireDateLock(date);
+		} catch {
+			return null;
+		}
+	}
+}
 
 // ─── Daemon ─────────────────────────────────────────────────────────────────
 
@@ -163,6 +220,11 @@ export class ChitraguptaDaemon extends EventEmitter {
 		};
 	}
 
+	/** Get a detailed Nidra snapshot (state, phase, progress, heartbeat). */
+	getNidraSnapshot(): NidraSnapshot | null {
+		return this.nidra?.snapshot() ?? null;
+	}
+
 	// ─── Consolidation ────────────────────────────────────────────────
 
 	/** Consolidate today's sessions into a day file. */
@@ -173,6 +235,16 @@ export class ChitraguptaDaemon extends EventEmitter {
 	/** Consolidate sessions for a specific date. */
 	async consolidateDate(date: string): Promise<void> {
 		if (this.consolidating) return;
+		const releaseDateLock = acquireDateLock(date);
+		if (!releaseDateLock) {
+			this.emit("consolidation", {
+				type: "progress",
+				date,
+				phase: "lock",
+				detail: "skipped: consolidation lock held by another process",
+			});
+			return;
+		}
 		this.consolidating = true;
 		this.emit("consolidation", { type: "start", date } as ConsolidationEvent);
 
@@ -244,6 +316,7 @@ export class ChitraguptaDaemon extends EventEmitter {
 			});
 		} finally {
 			this.consolidating = false;
+			releaseDateLock();
 		}
 	}
 

@@ -192,6 +192,17 @@ describe("Schema initialization", () => {
 			expect(cols).toContain("project");
 		});
 
+		it("should create akasha_traces table", () => {
+			const db = dbm.get("agent");
+			const info = db.prepare("PRAGMA table_info(akasha_traces)").all() as Array<{ name: string }>;
+			const cols = info.map((r) => r.name);
+			expect(cols).toContain("id");
+			expect(cols).toContain("agent_id");
+			expect(cols).toContain("trace_type");
+			expect(cols).toContain("topic");
+			expect(cols).toContain("strength");
+		});
+
 		it("should allow inserting and querying sessions", () => {
 			const db = dbm.get("agent");
 			const now = Date.now();
@@ -346,7 +357,7 @@ describe("Schema initialization", () => {
 			initAgentSchema(dbm);
 			const db = dbm.get("agent");
 			const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-			expect(row.version).toBe(4);
+			expect(row.version).toBe(5);
 		});
 
 		it("should skip re-initialization when version matches", () => {
@@ -355,7 +366,7 @@ describe("Schema initialization", () => {
 			initAgentSchema(dbm);
 			const db = dbm.get("agent");
 			const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-			expect(row.version).toBe(4);
+			expect(row.version).toBe(5);
 		});
 	});
 });

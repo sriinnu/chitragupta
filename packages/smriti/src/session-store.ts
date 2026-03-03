@@ -62,6 +62,51 @@ function atomicRename(tmpPath: string, targetPath: string): void {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+function localDateString(now: Date = new Date()): string {
+	const yyyy = now.getFullYear().toString();
+	const mm = (now.getMonth() + 1).toString().padStart(2, "0");
+	const dd = now.getDate().toString().padStart(2, "0");
+	return `${yyyy}-${mm}-${dd}`;
+}
+
+function resolveMcpClientKey(opts: SessionOpts): string | undefined {
+	if ((opts.agent ?? "chitragupta") !== "mcp") return undefined;
+	const fromMetadata = opts.metadata?.clientKey;
+	if (typeof fromMetadata === "string" && fromMetadata.trim()) {
+		return fromMetadata.trim();
+	}
+	for (const key of [
+		"CHITRAGUPTA_CLIENT_KEY",
+		"CODEX_THREAD_ID",
+		"CLAUDE_CODE_SESSION_ID",
+		"CLAUDE_SESSION_ID",
+	]) {
+		const value = process.env[key];
+		if (typeof value === "string" && value.trim()) return value.trim();
+	}
+	return undefined;
+}
+
+function findReusableMcpSession(project: string, clientKey: string): Session | null {
+	try {
+		const db = getAgentDb();
+		const todayPrefix = `session-${localDateString()}-`;
+		const row = db.prepare(
+			`SELECT id FROM sessions
+			 WHERE project = ?
+			   AND agent = 'mcp'
+			   AND id LIKE ?
+			   AND json_extract(metadata, '$.clientKey') = ?
+			 ORDER BY updated_at DESC
+			 LIMIT 1`,
+		).get(project, `${todayPrefix}%`, clientKey) as { id?: unknown } | undefined;
+		if (typeof row?.id !== "string" || row.id.length === 0) return null;
+		return loadSession(row.id, project);
+	} catch {
+		return null;
+	}
+}
+
 /**
  * Generate a date-based session ID: session-YYYY-MM-DD-<projhash>[-N]
  *
@@ -73,8 +118,7 @@ function generateSessionId(project: string): { id: string; filePath: string } {
 	const now = new Date();
 	const yyyy = now.getFullYear().toString();
 	const mm = (now.getMonth() + 1).toString().padStart(2, "0");
-	const dd = now.getDate().toString().padStart(2, "0");
-	const dateStr = `${yyyy}-${mm}-${dd}`;
+	const dateStr = localDateString(now);
 	const projHash = hashProject(project).slice(0, 8);
 	const baseId = `session-${dateStr}-${projHash}`;
 
@@ -159,8 +203,16 @@ function patchFrontmatterUpdated(content: string, updatedIso: string): string {
  * Write-through: also inserts into agent.db sessions table.
  */
 export function createSession(opts: SessionOpts): Session {
+	const clientKey = resolveMcpClientKey(opts);
+	if (clientKey) {
+		const existing = findReusableMcpSession(opts.project, clientKey);
+		if (existing) return existing;
+	}
+
 	const now = new Date().toISOString();
 	const { id, filePath } = generateSessionId(opts.project);
+	const metadata = { ...(opts.metadata ?? {}) };
+	if (clientKey) metadata.clientKey = clientKey;
 
 	const meta: SessionMeta = {
 		id,
@@ -176,7 +228,7 @@ export function createSession(opts: SessionOpts): Session {
 		tags: opts.tags ?? [],
 		totalCost: 0,
 		totalTokens: 0,
-		metadata: opts.metadata,
+		metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
 	};
 
 	if (opts.provider) {

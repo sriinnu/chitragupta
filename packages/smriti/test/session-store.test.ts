@@ -142,7 +142,43 @@ describe("SessionStore v2", () => {
 			});
 			expect(session.meta.tags).toEqual(["debug", "refactor"]);
 		});
-	});
+
+		it("should reuse same-day MCP session for the same client key", () => {
+			const s1 = createSession({
+				project: "/test/mcp-reuse",
+				agent: "mcp",
+				model: "mcp-client",
+				title: "Tab Session",
+				metadata: { clientKey: "tab-1" },
+			});
+			const s2 = createSession({
+				project: "/test/mcp-reuse",
+				agent: "mcp",
+				model: "mcp-client",
+				title: "Should Reuse",
+				metadata: { clientKey: "tab-1" },
+			});
+			expect(s2.meta.id).toBe(s1.meta.id);
+			expect(listSessions("/test/mcp-reuse").length).toBe(1);
+		});
+
+		it("should create separate MCP sessions for different client keys", () => {
+			const s1 = createSession({
+				project: "/test/mcp-split",
+				agent: "mcp",
+				model: "mcp-client",
+				metadata: { clientKey: "tab-a" },
+			});
+			const s2 = createSession({
+				project: "/test/mcp-split",
+				agent: "mcp",
+				model: "mcp-client",
+				metadata: { clientKey: "tab-b" },
+			});
+			expect(s2.meta.id).not.toBe(s1.meta.id);
+			expect(listSessions("/test/mcp-split").length).toBe(2);
+		});
+		});
 
 	describe("loadSession", () => {
 		it("should load a previously saved session", () => {

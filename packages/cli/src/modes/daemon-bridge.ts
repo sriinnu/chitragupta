@@ -219,9 +219,31 @@ export async function showSession(id: string, project: string): Promise<Record<s
 	return daemonCall("session.show", { id, project });
 }
 
+function deriveMcpClientKey(): string | undefined {
+	for (const key of ["CHITRAGUPTA_CLIENT_KEY", "CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"]) {
+		const value = process.env[key];
+		if (typeof value === "string" && value.trim()) return value.trim();
+	}
+	const head = (process.env.PATH ?? "").split(":")[0] ?? "";
+	const match = head.match(/\/tmp\/arg0\/([^/:]+)$/);
+	return match?.[1];
+}
+
 /** Create a new session. */
 export async function createSession(opts: Record<string, unknown>): Promise<{ id: string }> {
-	return daemonCall("session.create", opts);
+	const next = { ...opts };
+	if (next.agent === "mcp") {
+		const metadata =
+			(typeof next.metadata === "object" && next.metadata !== null && !Array.isArray(next.metadata))
+				? { ...(next.metadata as Record<string, unknown>) }
+				: {};
+		if (typeof metadata.clientKey !== "string" || !metadata.clientKey.trim()) {
+			const key = deriveMcpClientKey();
+			if (key) metadata.clientKey = key;
+		}
+		if (Object.keys(metadata).length > 0) next.metadata = metadata;
+	}
+	return daemonCall("session.create", next);
 }
 
 /** Add a turn to a session. */
