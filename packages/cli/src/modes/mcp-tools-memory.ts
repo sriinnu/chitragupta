@@ -114,7 +114,7 @@ export function createHandoverTool(projectPath: string): McpToolHandler {
 					: "(unknown)";
 
 				const sections: string[] = [];
-				sections.push("चि Handover Summary", "━".repeat(40));
+				sections.push("⛩ Handover Summary", "━".repeat(40));
 				sections.push(`Session: ${session.meta.id}`, `Title: ${session.meta.title}`);
 				sections.push(`Turns: ${allTurns.length} | Model: ${session.meta.model}`, `Created: ${session.meta.created}`, "");
 				sections.push("## Original Request", userRequest, "");

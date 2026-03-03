@@ -8,12 +8,12 @@
 import { bold, dim, green, yellow, cyan, red, reset } from "./ansi.js";
 import { hexToAnsi } from "./theme.js";
 
-// ─── Saffron/Gold Theme Colors ──────────────────────────────────────────────
+// ─── Theme Colors ──────────────────────────────────────────────────────────
 
-/** Saffron — primary tool color (#FF9933) */
-const SAFFRON = hexToAnsi("#FF9933");
-/** Gold — secondary accent (#FFD700) */
-const GOLD = hexToAnsi("#FFD700");
+/** Amber — primary tool color */
+const AMBER = hexToAnsi("#F59E0B");
+/** Cyan — secondary accent */
+const TEAL = hexToAnsi("#06B6D4");
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -214,10 +214,10 @@ const HEADER_WIDTH = 40;
 
 function buildHeader(toolName: string): string {
 	const label = ` ${toolName} `;
-	const leftBar = "═══";
+	const leftBar = "───";
 	const rightPad = Math.max(1, HEADER_WIDTH - leftBar.length - label.length);
-	const rightBar = "═".repeat(rightPad);
-	return dim(leftBar) + `${SAFFRON}${bold(label)}${reset}` + dim(rightBar);
+	const rightBar = "─".repeat(rightPad);
+	return dim(leftBar) + `${AMBER}${bold(label)}${reset}` + dim(rightBar);
 }
 
 // ─── Main Formatter ─────────────────────────────────────────────────────────
@@ -227,8 +227,8 @@ function buildHeader(toolName: string): string {
  *
  * @example
  * ```
- * ═══ bash ═══════════════════════════════
- * ▸ exit: 0 | output: 4.6KB (~1.2k tokens)
+ * ─── bash ─────────────────────────────
+ * ▹ exit: 0 | output: 4.6KB (~1.2k tokens)
  * ⏱ 42.3ms
  * ```
  */
@@ -245,7 +245,7 @@ export function formatToolFooter(opts: ToolFooterOpts): string {
 	const tokens = formatTokens(estimateTokens(outputBytes));
 	const outputPart = `${dim("output:")} ${green(bytes)} ${yellow(`(${tokens} tokens)`)}`;
 
-	const bullet = `${GOLD}▸${reset}`;
+	const bullet = `${TEAL}▹${reset}`;
 
 	if (toolMetrics.length > 0) {
 		const metricStr = toolMetrics.join(dim(" | "));

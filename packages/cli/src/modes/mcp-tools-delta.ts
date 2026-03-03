@@ -113,7 +113,7 @@ export function createHandoverSinceTool(projectPath: string): McpToolHandler {
 
 				const newCursor = newTurns[newTurns.length - 1].turnNumber;
 				const sections: string[] = [
-					`चि Incremental Handover (cursor ${cursor} → ${newCursor})`,
+					`⛩ Incremental Handover (cursor ${cursor} → ${newCursor})`,
 					`Session: ${sessionId}`,
 					`New turns: ${newTurns.length}`,
 					"",
