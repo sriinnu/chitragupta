@@ -5,8 +5,10 @@ import type { ToolHandler } from "@chitragupta/core";
 import { McpServer, ToolRegistry, chitraguptaToolToMcp } from "@chitragupta/tantra";
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { getBuiltinTools } from "../bootstrap.js";
+import { createToolNotFoundResolver } from "../shared-factories.js";
 import { CLI_PACKAGE_VERSION } from "../version.js";
 import { startHeartbeat } from "./mcp-telemetry.js";
 import { applyToolTiers, isCompactMode, getTierStats } from "./mcp-tool-tiers.js";
@@ -70,6 +72,7 @@ import {
 	createSkillsRecommendTool,
 } from "./mcp-tools-skills.js";
 import { createCompletionTool } from "./mcp-tools-completion.js";
+import { createRepoMapTool } from "./mcp-tools-netra.js";
 import { createUIExtensionsTool, createWidgetDataTool } from "./mcp-tools-plugins.js";
 import {
 	createMemoryResource,
@@ -211,6 +214,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	mcpTools.push(createUIExtensionsTool());
 	mcpTools.push(createWidgetDataTool());
 
+	// Netra — Repo Map
+	mcpTools.push(createRepoMapTool(projectPath));
+
 	// ─── 2. Session recording ───────────────────────────────────────
 
 	const recorder = new McpSessionRecorder(projectPath);
@@ -226,6 +232,28 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	const heartbeat = startHeartbeat({ workspace: projectPath, transport });
 	heartbeat.update({ model: "mcp" });
 	let toolCallCount = 0;
+
+	// ─── 2b. Wire 2 + Wire 4: Tool-not-found resolver + learning persist ───
+	//
+	// In interactive mode these live on AgentConfig. In MCP server mode we wire
+	// them directly into McpServerConfig.onToolNotFound and ensure the
+	// learning persistence directory exists for future Agent sessions.
+
+	const learningPersistPath = path.join(os.homedir(), ".chitragupta", "learning", "session-state.json");
+	const learningDir = path.dirname(learningPersistPath);
+	fs.mkdirSync(learningDir, { recursive: true });
+
+	const toolNotFoundResolver = createToolNotFoundResolver({
+		tools: builtinTools,
+		onGap: (toolName) => {
+			process.stderr.write(`[skill-gap] ${toolName}\n`);
+			// Append to learning persist file for cross-session gap tracking
+			try {
+				const entry = JSON.stringify({ type: "skill-gap", tool: toolName, ts: Date.now() }) + "\n";
+				fs.appendFileSync(learningPersistPath, entry);
+			} catch { /* best-effort persistence */ }
+		},
+	});
 
 	const server = new McpServer({
 		name,
@@ -247,6 +275,12 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			createMemorySearchPrompt(),
 			createSessionPrompt(),
 		],
+		onToolNotFound: async (toolName, _args) => {
+			const resolved = await toolNotFoundResolver(toolName);
+			if (!resolved) return undefined;
+			// Convert core ToolHandler → MCP McpToolHandler via bridge
+			return chitraguptaToolToMcp(resolved as unknown as ChitraguptaToolHandler);
+		},
 		onToolCall: (info) => {
 			recorder.recordToolCall(info);
 			heartbeat.update({ toolCallCount: ++toolCallCount, lastToolCallAt: Date.now(), state: "busy" });
@@ -344,92 +378,10 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	process.on("SIGTERM", shutdown);
 
 	// ─── 5. Auto-start daemon (self-healing, skill sync) ─────────────
-
 	try {
-		const { DaemonManager } = await import("@chitragupta/anina");
-		const { getChitraguptaHome } = await import("@chitragupta/core");
-
-		const home = getChitraguptaHome();
-		const skillPaths: string[] = [];
-		const autoApproveSafe = new Set(["1", "true", "yes", "on"]).has(
-			(process.env.CHITRAGUPTA_DAEMON_AUTO_APPROVE_SAFE ?? "").trim().toLowerCase(),
-		);
-
-		// Scan skill directories if they exist
-		const potentialSkillDirs = [
-			path.join(home, "skills"),
-			path.join(projectPath, "skills"),
-			path.join(projectPath, "skills-core"),
-		];
-		for (const dir of potentialSkillDirs) {
-			try {
-				if (fs.existsSync(dir)) skillPaths.push(dir);
-			} catch {
-				/* skip */
-			}
-		}
-
-		const daemonManager = new DaemonManager({
-			daemon: { consolidateOnIdle: true, backfillOnStartup: true },
-			skillScanPaths: skillPaths,
-			enableSkillSync: skillPaths.length > 0,
-			skillScanIntervalMs: 300_000,
-			autoApproveSafe,
-		});
-
-		// Wire Samiti for health/skill notifications
-		try {
-			const { Samiti } = await import("@chitragupta/sutra");
-			const samiti = new Samiti();
-			type SetSamitiParam = Parameters<typeof daemonManager.setSamiti>[0];
-			daemonManager.setSamiti(samiti as unknown as SetSamitiParam);
-		} catch {
-			// Samiti is optional — daemon works without it
-		}
-
-		// Log daemon events
-		daemonManager.on("health", (event: { from: string; to: string; reason: string }) => {
-			process.stderr.write(`[daemon] ${event.from} → ${event.to}: ${event.reason}\n`);
-		});
-		daemonManager.on("skill-sync", (event: { type: string; detail: string }) => {
-			if (event.type !== "scan-start") {
-				process.stderr.write(`[daemon:skills] ${event.type}: ${event.detail}\n`);
-			}
-		});
-		daemonManager.on("error", () => {
-			// Suppress unhandled error throw — errors are tracked in the manager
-		});
-
-		// Start daemon in background (don't block MCP server)
-		daemonManager.start().catch((err: unknown) => {
-			process.stderr.write(`[daemon] auto-start failed: ${err}\n`);
-		});
-
-		// Wire daemon touch into session recording
-		recorder.daemonManager = daemonManager;
-
-		// Add daemon to shutdown sequence — trigger Svapna before exit
-		const shutdownWithDaemon = async () => {
-			heartbeat.update({ state: "shutting_down" });
-			heartbeat.stop();
-			triggerSvapnaConsolidation(projectPath);
-			try {
-				await daemonManager.stop();
-			} catch {
-				/* best-effort */
-			}
-			clearChitraguptaState();
-			await server.stop();
-			process.exit(0);
-		};
-		process.removeListener("SIGINT", shutdown);
-		process.removeListener("SIGTERM", shutdown);
-		process.on("SIGINT", shutdownWithDaemon);
-		process.on("SIGTERM", shutdownWithDaemon);
-
-		process.stderr.write(`[daemon] Auto-started (skills: ${skillPaths.length} paths)\n`);
+		const { wireDaemon } = await import("./mcp-daemon-wiring.js");
+		await wireDaemon({ projectPath, recorder, heartbeat, server, previousShutdown: shutdown });
 	} catch (err) {
-		// Daemon auto-start is best-effort — MCP server works without it
 		process.stderr.write(`[daemon] Auto-start skipped: ${err instanceof Error ? err.message : String(err)}\n`);
 	}
 
