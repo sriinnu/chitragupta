@@ -24,6 +24,7 @@ const syncToolsSource = readSource("../src/modes/mcp-tools-sync.ts");
 const mcpServerSource = readSource("../src/modes/mcp-server.ts");
 const mcpSessionSource = readSource("../src/modes/mcp-session.ts");
 const servicesSource = readSource("../../daemon/src/services.ts");
+const servicesHelpersSource = readSource("../../daemon/src/services-helpers.ts");
 const fallbackSource = readSource("../src/modes/daemon-bridge-fallback.ts");
 const bridgeSource = readSource("../src/modes/daemon-bridge.ts");
 
@@ -197,19 +198,19 @@ describe("Issue 3: Eager daemon warm-up", () => {
 
 describe("Issue 4: Numeric parameter validation", () => {
 	it("parseNonNegativeInt helper exists", () => {
-		expect(servicesSource).toContain("function parseNonNegativeInt(value: unknown, field: string");
+		expect(servicesHelpersSource).toContain("function parseNonNegativeInt(value: unknown, field: string");
 	});
 
 	it("parseLimit helper exists", () => {
-		expect(servicesSource).toContain("function parseLimit(value: unknown");
+		expect(servicesHelpersSource).toContain("function parseLimit(value: unknown");
 	});
 
 	it("parseNonNegativeInt rejects NaN", () => {
-		expect(servicesSource).toContain("!Number.isFinite(parsed)");
+		expect(servicesHelpersSource).toContain("!Number.isFinite(parsed)");
 	});
 
 	it("parseLimit caps at max", () => {
-		expect(servicesSource).toContain("Math.min(max, Math.trunc(parsed))");
+		expect(servicesHelpersSource).toContain("Math.min(max, Math.trunc(parsed))");
 	});
 
 	describe("all numeric RPC params use validators", () => {

@@ -49,6 +49,8 @@ export interface HeartbeatData {
 	lastToolCallAt: number | null;
 	/** Transport type. */
 	transport: "stdio" | "sse";
+	/** Mesh WebSocket port (for P2P auto-discovery). Null if mesh not active. */
+	meshPort: number | null;
 }
 
 /** Options for the heartbeat writer. */
@@ -74,7 +76,7 @@ export interface HeartbeatHandle {
 /** Fields that can be updated after start. */
 type MutableHeartbeatFields = Pick<
 	HeartbeatData,
-	"sessionId" | "model" | "contextPressure" | "state" | "toolCallCount" | "turnCount" | "lastToolCallAt"
+	"sessionId" | "model" | "contextPressure" | "state" | "toolCallCount" | "turnCount" | "lastToolCallAt" | "meshPort"
 >;
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -125,6 +127,7 @@ export function startHeartbeat(options: HeartbeatOptions): HeartbeatHandle {
 		toolCallCount: 0,
 		turnCount: 0,
 		lastToolCallAt: null,
+		meshPort: null,
 	};
 
 	function buildSnapshot(): HeartbeatData {
@@ -144,6 +147,7 @@ export function startHeartbeat(options: HeartbeatOptions): HeartbeatHandle {
 			turnCount: mutable.turnCount,
 			lastToolCallAt: mutable.lastToolCallAt,
 			transport,
+			meshPort: mutable.meshPort,
 		};
 	}
 

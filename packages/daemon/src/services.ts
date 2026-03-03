@@ -10,27 +10,11 @@
 import { createLogger } from "@chitragupta/core";
 import type { RpcRouter } from "./rpc-router.js";
 import { registerTelemetryMethods } from "./services-telemetry.js";
+import {
+	normalizeParams, parseNonNegativeInt, parseLimit, DAEMON_START_MS,
+} from "./services-helpers.js";
 
 const log = createLogger("daemon:services");
-
-const DEFAULT_LIMIT = 10;
-const MAX_LIMIT = 200;
-
-function parseNonNegativeInt(value: unknown, field: string, fallback = 0): number {
-	const parsed = value == null ? fallback : Number(value);
-	if (!Number.isFinite(parsed) || parsed < 0) {
-		throw new Error(`Invalid ${field}`);
-	}
-	return Math.trunc(parsed);
-}
-
-function parseLimit(value: unknown, fallback = DEFAULT_LIMIT, max = MAX_LIMIT): number {
-	const parsed = value == null ? fallback : Number(value);
-	if (!Number.isFinite(parsed) || parsed <= 0) {
-		throw new Error("Invalid limit");
-	}
-	return Math.min(max, Math.trunc(parsed));
-}
 
 /**
  * Register all smriti-backed services on the RPC router.
@@ -103,7 +87,8 @@ function registerSessionMethods(
 		return { projects: store.listSessionProjects() };
 	}, "List projects with session counts");
 
-	router.register("session.modified_since", async (params) => {
+	router.register("session.modified_since", async (rawParams) => {
+		const params = normalizeParams(rawParams);
 		const project = String(params.project ?? "");
 		const sinceMs = parseNonNegativeInt(params.sinceMs, "sinceMs");
 		if (!project) throw new Error("Missing project");
@@ -124,7 +109,8 @@ function registerTurnMethods(
 	router: RpcRouter,
 	store: typeof import("@chitragupta/smriti/session-store"),
 ): void {
-	router.register("turn.add", async (params) => {
+	router.register("turn.add", async (rawParams) => {
+		const params = normalizeParams(rawParams);
 		const sessionId = String(params.sessionId ?? "");
 		const project = String(params.project ?? "");
 		const turn = params.turn as Parameters<typeof store.addTurn>[2];
@@ -133,21 +119,33 @@ function registerTurnMethods(
 		return { added: true };
 	}, "Add a turn to a session");
 
-	router.register("turn.list", async (params) => {
+	router.register("turn.list", async (rawParams) => {
+		const params = normalizeParams(rawParams);
 		const sessionId = String(params.sessionId ?? "");
-		const project = String(params.project ?? "");
-		if (!sessionId || !project) throw new Error("Missing sessionId or project");
+		if (!sessionId) throw new Error("Missing sessionId");
+
+		// Project is optional — look up from sessions table if not provided
+		let project = String(params.project ?? "");
+		if (!project) {
+			const sessions = store.listSessions();
+			const match = sessions.find((s) => String(s.id) === sessionId);
+			project = match ? String(match.project ?? "") : "";
+		}
+		if (!project) throw new Error(`Cannot resolve project for session ${sessionId}`);
+
 		return { turns: store.listTurnsWithTimestamps(sessionId, project) };
 	}, "List turns with timestamps for a session");
 
-	router.register("turn.since", async (params) => {
+	router.register("turn.since", async (rawParams) => {
+		const params = normalizeParams(rawParams);
 		const sessionId = String(params.sessionId ?? "");
 		const sinceTurn = parseNonNegativeInt(params.sinceTurnNumber, "sinceTurnNumber");
 		if (!sessionId) throw new Error("Missing sessionId");
 		return { turns: store.getTurnsSince(sessionId, sinceTurn) };
 	}, "Get turns since a given turn number");
 
-	router.register("turn.max_number", async (params) => {
+	router.register("turn.max_number", async (rawParams) => {
+		const params = normalizeParams(rawParams);
 		const sessionId = String(params.sessionId ?? "");
 		if (!sessionId) throw new Error("Missing sessionId");
 		return { maxTurn: store.getMaxTurnNumber(sessionId) };
@@ -372,6 +370,7 @@ function registerDaemonMethods(
 ): void {
 	router.register("daemon.status", async () => {
 		const agentDb = db.getAgentDb();
+		const mem = process.memoryUsage();
 
 		/** Count rows in a table, returning 0 if the table doesn't exist. */
 		const count = (table: string): number => {
@@ -384,6 +383,16 @@ function registerDaemonMethods(
 		};
 
 		return {
+			version: "0.1.26",
+			pid: process.pid,
+			uptime: (Date.now() - DAEMON_START_MS) / 1000,
+			memory: {
+				rss: mem.rss,
+				heapUsed: mem.heapUsed,
+				heapTotal: mem.heapTotal,
+				external: mem.external,
+			},
+			methods: router.listMethods().length,
 			counts: {
 				turns: count("turns"),
 				sessions: count("sessions"),
@@ -395,7 +404,19 @@ function registerDaemonMethods(
 			},
 			timestamp: Date.now(),
 		};
-	}, "Aggregated DB table counts for observability dashboards");
+	}, "Full daemon status: version, PID, uptime, memory, DB counts");
+
+	router.register("daemon.health", async () => {
+		const mem = process.memoryUsage();
+		return {
+			alive: true,
+			pid: process.pid,
+			uptime: (Date.now() - DAEMON_START_MS) / 1000,
+			memory: mem.rss,
+			methods: router.listMethods().length,
+			connections: null,
+		};
+	}, "Lightweight health check for monitoring");
 }
 
 /** Write methods that enforce single-writer through daemon. */
