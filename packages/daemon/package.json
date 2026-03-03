@@ -39,7 +39,7 @@
 	"types": "dist/index.d.ts",
 	"scripts": {
 		"build": "tsc",
-		"test": "vitest run --config ../../vitest.config.ts packages/daemon/test/"
+		"test": "sh -lc 'cd ../.. && pnpm exec vitest run --config vitest.config.ts packages/daemon/test/*.test.ts'"
 	},
 	"dependencies": {
 		"@chitragupta/core": "workspace:*",
