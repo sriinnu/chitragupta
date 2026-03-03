@@ -35,7 +35,8 @@ export type ExtensionHookName =
 	| "onBeforeAgentStart"
 	| "onModelSelect"
 	| "onCompact"
-	| "onSessionSwitch";
+	| "onSessionSwitch"
+	| "onBashSpawn";
 
 /** Context passed to session lifecycle hooks. */
 export interface SessionContext {
@@ -119,7 +120,31 @@ export interface SessionSwitchContext {
 	projectPath: string;
 }
 
-/** Hook handler function signatures — 12 lifecycle hooks. */
+/**
+ * Context passed to onBashSpawn hook before shell command execution.
+ *
+ * Extensions can inspect, modify, or cancel the command before it runs.
+ * The hook chain is processed in registration order — each extension
+ * sees the (potentially modified) context from the previous extension.
+ */
+export interface BashSpawnContext {
+	/** The command to execute. */
+	command: string;
+	/** Working directory for the command. */
+	cwd: string;
+	/** Environment variables (sanitized subset, no credentials). */
+	env: Record<string, string>;
+	/** Set to true to cancel execution. */
+	cancel?: boolean;
+	/** Reason for cancellation (shown to user). */
+	cancelReason?: string;
+	/** Modified command (if extension wants to rewrite). */
+	modifiedCommand?: string;
+	/** Modified working directory. */
+	modifiedCwd?: string;
+}
+
+/** Hook handler function signatures — 13 lifecycle hooks. */
 export interface ExtensionHooks {
 	onSessionStart?: (ctx: SessionContext) => void | Promise<void>;
 	onSessionEnd?: (ctx: SessionContext) => void | Promise<void>;
@@ -133,6 +158,7 @@ export interface ExtensionHooks {
 	onModelSelect?: (ctx: ModelSelectContext) => void | Promise<void>;
 	onCompact?: (ctx: CompactContext) => void | Promise<void>;
 	onSessionSwitch?: (ctx: SessionSwitchContext) => void | Promise<void>;
+	onBashSpawn?: (ctx: BashSpawnContext) => void | Promise<void>;
 }
 
 /** Command registration for extensions (pi-inspired). */
