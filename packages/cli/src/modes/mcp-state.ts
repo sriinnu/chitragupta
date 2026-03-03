@@ -11,6 +11,7 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { getHeartbeatPath } from "./mcp-telemetry.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -58,6 +59,22 @@ export function getStatePath(): string {
 	return path.join(os.homedir(), ".chitragupta", "mcp-state.json");
 }
 
+/** Mirror session/turn state into this process heartbeat file (best-effort). */
+function syncHeartbeatState(state: McpState): void {
+	try {
+		const heartbeatPath = getHeartbeatPath(state.pid);
+		if (!fs.existsSync(heartbeatPath)) return;
+		const heartbeat = JSON.parse(fs.readFileSync(heartbeatPath, "utf-8")) as Record<string, unknown>;
+		heartbeat.sessionId = state.sessionId ?? null;
+		heartbeat.turnCount = typeof state.turnCount === "number" ? state.turnCount : 0;
+		const tmpPath = heartbeatPath + "." + Date.now().toString(36) + ".tmp";
+		fs.writeFileSync(tmpPath, JSON.stringify(heartbeat, null, 2));
+		fs.renameSync(tmpPath, heartbeatPath);
+	} catch {
+		/* best-effort heartbeat sync */
+	}
+}
+
 /**
  * Merge `partial` into the state file (atomic write via temp + rename).
  * Best-effort — never throws.
@@ -83,23 +100,24 @@ export function writeChitraguptaState(partial: McpStatePatch): void {
 		}
 
 		const mergedBase: Partial<McpState> = { ...existing, ...normalized };
-		const merged: McpState = {
-			active: mergedBase.active ?? true,
-			pid: process.pid,
-			startedAt: _mcpStartedAt,
+			const merged: McpState = {
+				active: mergedBase.active ?? true,
+				pid: process.pid,
+				startedAt: _mcpStartedAt,
 			lastUpdate: now,
 			sessionId: mergedBase.sessionId,
 			project: mergedBase.project,
 			turnCount: mergedBase.turnCount,
-			filesModified: mergedBase.filesModified,
-			lastTool: mergedBase.lastTool,
-		};
-		const tmpPath = statePath + "." + Date.now().toString(36) + ".tmp";
-		fs.writeFileSync(tmpPath, JSON.stringify(merged, null, 2));
-		fs.renameSync(tmpPath, statePath);
-	} catch {
-		// Best-effort state persistence — never block MCP operations
-	}
+				filesModified: mergedBase.filesModified,
+				lastTool: mergedBase.lastTool,
+			};
+			const tmpPath = statePath + "." + Date.now().toString(36) + ".tmp";
+			fs.writeFileSync(tmpPath, JSON.stringify(merged, null, 2));
+			fs.renameSync(tmpPath, statePath);
+			syncHeartbeatState(merged);
+		} catch {
+			// Best-effort state persistence — never block MCP operations
+		}
 }
 
 /**

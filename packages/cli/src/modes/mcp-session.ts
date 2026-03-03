@@ -19,6 +19,20 @@ function stripAnsi(text: string): string {
 	return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/\x1b\].*?\x07/g, "");
 }
 
+/** Truncate long payloads before persisting in turn.toolCalls JSON. */
+function truncateForStorage(text: string, maxChars = 4000): string {
+	return text.length <= maxChars ? text : `${text.slice(0, maxChars)}...[truncated]`;
+}
+
+/** Safely stringify a value for tool-call persistence (handles circular refs). */
+function stringifyForStorage(value: unknown, maxChars = 4000): string {
+	try {
+		return truncateForStorage(JSON.stringify(value), maxChars);
+	} catch {
+		return truncateForStorage(String(value), maxChars);
+	}
+}
+
 /** Tools whose args carry meaningful user intent (queries, tasks, proposals). */
 const SEMANTIC_TOOLS = new Set([
 	"chitragupta_recall", "chitragupta_memory_search", "chitragupta_prompt",
@@ -120,6 +134,11 @@ export class McpSessionRecorder {
 	/** Current turn count for this session. */
 	get turns(): number {
 		return this.turnCounter;
+	}
+
+	/** Current daemon-backed session id for this MCP process. */
+	get activeSessionId(): string | null {
+		return this.sessionId;
 	}
 
 	/** Lazily create a session and inject provider context on first call. */
@@ -243,10 +262,17 @@ export class McpSessionRecorder {
 					?.filter((c): c is { type: "text"; text: string } => c.type === "text")
 					.map((c) => c.text)
 					.join("\n") ?? "(no output)";
+			const cleanResult = stripAnsi(resultText);
 
 			const [userContent, assistantContent] = extractSemanticContent(
 				info.tool, info.args, resultText, info.elapsedMs,
 			);
+			const toolCall = {
+				name: info.tool,
+				input: stringifyForStorage(info.args),
+				result: truncateForStorage(cleanResult),
+				isError: info.result.isError === true,
+			};
 
 			await bridge.addTurn(sid, this.projectPath, {
 				turnNumber: 0,
@@ -263,6 +289,7 @@ export class McpSessionRecorder {
 				content: assistantContent,
 				agent: "mcp",
 				model: "mcp",
+				toolCalls: [toolCall],
 			});
 			this.turnCounter++;
 

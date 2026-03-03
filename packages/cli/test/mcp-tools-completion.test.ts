@@ -20,6 +20,9 @@ const createOpenAIAdapterSpy = vi.fn(() => ({
 	name: "OpenAI",
 	complete: vi.fn(),
 }));
+const runAgentPromptWithFallbackSpy = vi.fn(
+	async () => ({ response: "auto response", providerId: "claude", attempts: 1 }),
+);
 
 vi.mock("@chitragupta/swara", () => {
 	class MockCompletionRouter {
@@ -36,6 +39,10 @@ vi.mock("@chitragupta/swara", () => {
 		createOpenAIAdapter: createOpenAIAdapterSpy,
 	};
 });
+
+vi.mock("../src/modes/mcp-agent-prompt.js", () => ({
+	runAgentPromptWithFallback: runAgentPromptWithFallbackSpy,
+}));
 
 async function createTool() {
 	const mod = await import("../src/modes/mcp-tools-completion.js");
@@ -56,6 +63,7 @@ describe("mcp-tools-completion", () => {
 		const result = await tool.execute({ prompt: "hello", provider: "openai" });
 
 		expect(result.isError).toBeUndefined();
+		expect(runAgentPromptWithFallbackSpy).not.toHaveBeenCalled();
 		expect(createOpenAIAdapterSpy).toHaveBeenCalledTimes(1);
 		expect(routerConfigSpy).toHaveBeenCalledWith(expect.objectContaining({ defaultModel: "gpt-4o" }));
 		expect(completeSpy).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-4o" }));
@@ -63,15 +71,30 @@ describe("mcp-tools-completion", () => {
 		expect((result.content[0] as { text?: string }).text).toContain("model:gpt-4o");
 	});
 
-	it("uses an available provider default when provider is omitted and only one adapter is loaded", async () => {
-		vi.stubEnv("OPENAI_API_KEY", "test-openai-key");
-
+	it("uses smart fallback runner in auto mode (CLI -> Ollama -> API)", async () => {
 		const tool = await createTool();
 		const result = await tool.execute({ prompt: "hello" });
 
 		expect(result.isError).toBeUndefined();
-		expect(routerConfigSpy).toHaveBeenCalledWith(expect.objectContaining({ defaultModel: "gpt-4o" }));
-		expect(completeSpy).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-4o" }));
+		expect(runAgentPromptWithFallbackSpy).toHaveBeenCalledWith({ message: "hello" });
+		expect(routerConfigSpy).not.toHaveBeenCalled();
+		expect((result.content[0] as { text?: string }).text).toBe("auto response");
+		expect(result._metadata).toEqual({
+			typed: {
+				model: "auto",
+				provider: "claude",
+				attempts: 1,
+			},
+		});
+	});
+
+	it("passes explicit model through to the smart fallback runner", async () => {
+		const tool = await createTool();
+		await tool.execute({ prompt: "hello", model: "qwen3:8b" });
+		expect(runAgentPromptWithFallbackSpy).toHaveBeenCalledWith({
+			message: "hello",
+			model: "qwen3:8b",
+		});
 	});
 
 	it("returns a clear error for unsupported pinned providers", async () => {
@@ -84,18 +107,23 @@ describe("mcp-tools-completion", () => {
 		expect(routerConfigSpy).not.toHaveBeenCalled();
 	});
 
-	it("matches no-provider error text to the actually supported adapters", async () => {
+	it("matches pinned-provider error text to the required API key", async () => {
 		const tool = await createTool();
 		const pinned = await tool.execute({ prompt: "hello", provider: "openai" });
-		const unpinned = await tool.execute({ prompt: "hello" });
 
 		expect(pinned.isError).toBe(true);
 		expect((pinned.content[0] as { text?: string }).text).toContain("Set OPENAI_API_KEY");
-		expect(unpinned.isError).toBe(true);
-		expect((unpinned.content[0] as { text?: string }).text).toContain(
-			"Set ANTHROPIC_API_KEY or OPENAI_API_KEY",
+	});
+
+	it("surfaces smart fallback failures in completion errors", async () => {
+		runAgentPromptWithFallbackSpy.mockRejectedValueOnce(new Error("All attempts failed"));
+		const tool = await createTool();
+		const result = await tool.execute({ prompt: "hello" });
+
+		expect(result.isError).toBe(true);
+		expect((result.content[0] as { text?: string }).text).toContain(
+			"Completion failed: All attempts failed",
 		);
-		expect((unpinned.content[0] as { text?: string }).text).not.toContain("Ollama");
 	});
 
 	it("advertises only currently supported pinned providers in the tool schema", async () => {
@@ -106,6 +134,8 @@ describe("mcp-tools-completion", () => {
 				?.description ?? ""
 		);
 
+		expect(description).toContain("CLI");
+		expect(description).toContain("Ollama");
 		expect(description).toContain("anthropic/openai");
 		expect(description).not.toContain("gemini");
 		expect(description).not.toContain("mistral");

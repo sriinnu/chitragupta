@@ -76,6 +76,14 @@ describe("Issue 1: Single-writer guarantee", () => {
 			const saveIdx = servicesSource.indexOf("consolidator.save()", consolRunIdx);
 			expect(saveIdx).toBeGreaterThan(consolRunIdx);
 		});
+
+		it("session.create forwards metadata/client key fields to session-store", () => {
+			const createIdx = servicesSource.indexOf('"session.create"');
+			const nextIdx = servicesSource.indexOf("router.register", createIdx + 1);
+			const body = servicesSource.slice(createIdx, nextIdx);
+			expect(body).toContain("metadata:");
+			expect(body).toContain("parentSessionId:");
+		});
 	});
 
 	describe("write operations excluded from fallback", () => {

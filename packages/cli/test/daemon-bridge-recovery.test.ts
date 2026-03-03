@@ -4,6 +4,7 @@ let shouldConnect = true;
 let instanceCount = 0;
 let connectCount = 0;
 let callCount = 0;
+let lastCall: { method: string; params?: Record<string, unknown> } | null = null;
 
 vi.mock("@chitragupta/daemon", () => {
 	class MockHealth {
@@ -31,8 +32,9 @@ vi.mock("@chitragupta/daemon", () => {
 			this.connected = true;
 		}
 
-		async call(method: string): Promise<unknown> {
+		async call(method: string, params?: Record<string, unknown>): Promise<unknown> {
 			callCount++;
+			lastCall = { method, params };
 			if (method === "daemon.ping") return { pong: true };
 			return { ok: true };
 		}
@@ -71,6 +73,8 @@ describe("daemon-bridge recovery", () => {
 		instanceCount = 0;
 		connectCount = 0;
 		callCount = 0;
+		lastCall = null;
+		vi.unstubAllEnvs();
 		vi.resetModules();
 	});
 
@@ -110,5 +114,25 @@ describe("daemon-bridge recovery", () => {
 		expect(second).toBe(true);
 		expect(connectCount).toBeGreaterThanOrEqual(2);
 		expect(callCount).toBeGreaterThan(0);
+	});
+
+	it("injects an MCP clientKey into session.create metadata", async () => {
+		vi.stubEnv("CHITRAGUPTA_CLIENT_KEY", "");
+		vi.stubEnv("CODEX_THREAD_ID", "");
+		vi.stubEnv("CLAUDE_CODE_SESSION_ID", "");
+		vi.stubEnv("CLAUDE_SESSION_ID", "");
+		vi.stubEnv("PATH", "/home/sriinnu/.codex/tmp/arg0/codex-argTEST:/usr/bin");
+		const bridge = await import("../src/modes/daemon-bridge.js");
+
+		await bridge.createSession({
+			project: "/tmp/project",
+			agent: "mcp",
+			model: "mcp-client",
+			title: "MCP session",
+		});
+
+		expect(lastCall?.method).toBe("session.create");
+		const metadata = (lastCall?.params?.metadata ?? null) as { clientKey?: string } | null;
+		expect(metadata?.clientKey).toBe("codex-argTEST");
 	});
 });

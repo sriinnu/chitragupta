@@ -150,6 +150,56 @@ async function main(): Promise<void> {
 async function startNidra(router: RpcRouter): Promise<() => Promise<void>> {
 	const { ChitraguptaDaemon } = await import("@chitragupta/anina");
 
+	type NidraActivity = "offline" | "listening" | "dreaming" | "consolidating" | "consolidated" | "learning";
+	const deriveNidraActivity = (
+		summary: {
+			running: boolean;
+			nidraState: "LISTENING" | "DREAMING" | "DEEP_SLEEP";
+		},
+		snapshot: {
+			state: "LISTENING" | "DREAMING" | "DEEP_SLEEP";
+			lastStateChange: number;
+			lastHeartbeat: number;
+			lastConsolidationStart?: number;
+			lastConsolidationEnd?: number;
+			consolidationPhase?: string;
+			consolidationProgress: number;
+		} | null,
+		now: number,
+	): { activity: NidraActivity; attention: string | null } => {
+		if (!summary.running) return { activity: "offline", attention: "nidra_not_running" };
+		if (!snapshot) return { activity: "listening", attention: "snapshot_missing" };
+
+		const heartbeatAge = now - snapshot.lastHeartbeat;
+		if (heartbeatAge > 8 * 60 * 1000) {
+			return { activity: "learning", attention: `heartbeat_stale_${Math.round(heartbeatAge / 1000)}s` };
+		}
+
+		if (snapshot.state === "DREAMING" && snapshot.consolidationPhase) {
+			return { activity: "consolidating", attention: null };
+		}
+		if (snapshot.state === "DREAMING") {
+			return { activity: "dreaming", attention: null };
+		}
+
+		const recentConsolidationEnd = snapshot.lastConsolidationEnd
+			? now - snapshot.lastConsolidationEnd
+			: Number.POSITIVE_INFINITY;
+		if (recentConsolidationEnd <= 10 * 60 * 1000) {
+			return { activity: "consolidated", attention: null };
+		}
+
+		if (snapshot.state === "DEEP_SLEEP") {
+			const deepSleepAge = now - snapshot.lastStateChange;
+			if (deepSleepAge > 90 * 60 * 1000) {
+				return { activity: "learning", attention: `deep_sleep_long_${Math.round(deepSleepAge / 1000)}s` };
+			}
+			return { activity: "learning", attention: null };
+		}
+
+		return { activity: "listening", attention: null };
+	};
+
 	const nidra = new ChitraguptaDaemon({
 		consolidationHour: 2,
 		maxBackfillDays: 7,
@@ -167,8 +217,44 @@ async function startNidra(router: RpcRouter): Promise<() => Promise<void>> {
 
 	// Register consolidation RPC methods
 	router.register("nidra.status", async () => {
-		const state = nidra.getState();
-		return { state: state.nidraState, running: state.running };
+		const summary = nidra.getState();
+		const snapshot = nidra.getNidraSnapshot();
+		const now = Date.now();
+		const activity = deriveNidraActivity(
+			{
+				running: summary.running,
+				nidraState: summary.nidraState,
+			},
+			snapshot
+				? {
+					state: snapshot.state,
+					lastStateChange: snapshot.lastStateChange,
+					lastHeartbeat: snapshot.lastHeartbeat,
+					lastConsolidationStart: snapshot.lastConsolidationStart,
+					lastConsolidationEnd: snapshot.lastConsolidationEnd,
+					consolidationPhase: snapshot.consolidationPhase,
+					consolidationProgress: snapshot.consolidationProgress,
+				}
+				: null,
+			now,
+		);
+		return {
+			state: summary.nidraState,
+			running: summary.running,
+			activity: activity.activity,
+			attention: activity.attention,
+			lastStateChange: snapshot?.lastStateChange ?? null,
+			lastHeartbeat: snapshot?.lastHeartbeat ?? null,
+			lastConsolidationStart: snapshot?.lastConsolidationStart ?? null,
+			lastConsolidationEnd: snapshot?.lastConsolidationEnd ?? null,
+			consolidationPhase: snapshot?.consolidationPhase ?? null,
+			consolidationProgress: snapshot?.consolidationProgress ?? 0,
+			lastConsolidationDate: summary.lastConsolidation,
+			lastBackfillDate: summary.lastBackfill,
+			consolidatedDatesCount: summary.consolidatedDates.length,
+			uptimeMs: summary.uptime,
+			timestamp: now,
+		};
 	}, "Get Nidra sleep-cycle state");
 
 	router.register("nidra.consolidate", async (params) => {

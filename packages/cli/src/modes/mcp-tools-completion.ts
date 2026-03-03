@@ -33,13 +33,8 @@ function isSupportedCompletionProvider(
 	return SUPPORTED_COMPLETION_PROVIDERS.includes(value as SupportedCompletionProvider);
 }
 
-function buildNoAdaptersError(
-	pinnedProvider: SupportedCompletionProvider | undefined,
-): string {
-	if (pinnedProvider) {
-		return `Provider "${pinnedProvider}" is unavailable. Set ${PROVIDER_ENV_KEYS[pinnedProvider]} and retry.`;
-	}
-	return "No completion providers available. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.";
+function buildNoAdaptersError(pinnedProvider: SupportedCompletionProvider): string {
+	return `Provider "${pinnedProvider}" is unavailable. Set ${PROVIDER_ENV_KEYS[pinnedProvider]} and retry.`;
 }
 
 function resolveModel(
@@ -91,9 +86,9 @@ export function createCompletionTool(): McpToolHandler {
 		definition: {
 			name: "chitragupta_completion",
 			description:
-				"Send a prompt to an LLM via Chitragupta's multi-provider completion router. " +
-				"Supports model selection, provider pinning (anthropic/openai), and token limits. " +
-				"Falls back through configured provider chain on transient errors.",
+				"Send a prompt to an LLM via Chitragupta's smart routing. " +
+				"Auto mode prefers local CLI providers first, then local Ollama, then API keys. " +
+				"Supports model selection, optional API provider pinning (anthropic/openai), and token limits.",
 			inputSchema: {
 				type: "object",
 				properties: {
@@ -110,8 +105,8 @@ export function createCompletionTool(): McpToolHandler {
 					provider: {
 						type: "string",
 						description:
-							"Provider ID to pin the request to ('anthropic' or 'openai'). " +
-							"If omitted, the router resolves provider from model/default routing.",
+							"API provider ID to pin the request to ('anthropic' or 'openai'). " +
+							"If omitted, uses CLI->Ollama->API fallback.",
 					},
 					maxTokens: {
 						type: "number",
@@ -148,8 +143,35 @@ export function createCompletionTool(): McpToolHandler {
 				? Math.max(1, Math.min(100_000, Number(args.maxTokens) || 4096))
 				: 4096;
 
+			try {
+				// Auto mode: CLI providers first, then local Ollama, then API keys.
+				if (!pinnedProvider) {
+					const { runAgentPromptWithFallback } = await import("./mcp-agent-prompt.js");
+					const result = await runAgentPromptWithFallback({
+						message: prompt,
+						...(model ? { model } : {}),
+					});
+					return {
+						content: [{ type: "text", text: result.response || "(empty response)" }],
+						_metadata: {
+							typed: {
+								model: model ?? "auto",
+								provider: result.providerId,
+								attempts: result.attempts,
+							},
+						},
+					};
+				}
+
+				// Pinned API mode: respect requested cloud provider.
 				try {
-					const adapters = await loadProviderAdapters(pinnedProvider);
+					const { loadCredentials } = await import("../bootstrap.js");
+					loadCredentials();
+				} catch {
+					// best-effort: credentials may already be in env
+				}
+
+				const adapters = await loadProviderAdapters(pinnedProvider);
 
 				if (adapters.length === 0) {
 					return {
@@ -158,8 +180,8 @@ export function createCompletionTool(): McpToolHandler {
 					};
 				}
 
-					const selectedModel = resolveModel(model, pinnedProvider, adapters);
-					const router = await getCompletionRouter(adapters, pinnedProvider);
+				const selectedModel = resolveModel(model, pinnedProvider, adapters);
+				const router = await getCompletionRouter(adapters, pinnedProvider);
 
 				const response = await router.complete({
 					model: selectedModel,

@@ -23,6 +23,7 @@ import { estimateTokens } from "./graphrag-scoring.js";
 import { svapnaReplay, svapnaRecombine, parseToolCalls } from "./svapna-extraction.js";
 import { svapnaCrystallize } from "./svapna-rules.js";
 import { svapnaProceduralize } from "./svapna-vidhi.js";
+import { svapnaExtractSamskaras } from "./svapna-samskara.js";
 import { DEFAULT_CONFIG, PRAMANA_PRESERVATION } from "./svapna-types.js";
 import type {
 	SvapnaConfig,
@@ -65,6 +66,7 @@ export class SvapnaConsolidation {
 	private config: SvapnaConfig;
 	private db: DatabaseManager;
 	private cycleId: string;
+	private lastSamskarasProcessed = 0;
 
 	/**
 	 * Create a new Svapna consolidation cycle.
@@ -89,6 +91,7 @@ export class SvapnaConsolidation {
 	async run(onProgress?: (phase: string, progress: number) => void): Promise<SvapnaResult> {
 		const cycleStart = performance.now();
 		const report = onProgress ?? (() => {});
+		this.lastSamskarasProcessed = 0;
 
 		this.logCycle("running");
 
@@ -150,6 +153,8 @@ export class SvapnaConsolidation {
 
 	/** Phase 3: Vasana formation — aggregate samskaras into tendencies. */
 	async crystallize(): Promise<CrystallizeResult> {
+		const extraction = await svapnaExtractSamskaras(this.db, this.config);
+		this.lastSamskarasProcessed = extraction.samskarasProcessed;
 		return svapnaCrystallize(this.db, this.config);
 	}
 
@@ -385,7 +390,7 @@ export class SvapnaConsolidation {
 				result ? "ALL" : null, result?.totalDurationMs ?? null,
 				result?.phases.crystallize.vasanasCreated ?? 0,
 				result?.phases.proceduralize.vidhisCreated ?? 0,
-				0, result?.phases.replay.turnsScored ?? 0,
+				this.lastSamskarasProcessed, result?.phases.replay.turnsScored ?? 0,
 				status, Date.now(),
 			);
 

@@ -12,10 +12,14 @@
  */
 
 import http from "node:http";
-import fs from "node:fs";
-import path from "node:path";
-import { createLogger, getChitraguptaHome } from "@chitragupta/core";
+import { createLogger } from "@chitragupta/core";
 import type { RpcRouter } from "./rpc-router.js";
+import { renderStatusDashboard } from "./http-status-ui.js";
+import {
+	computeTelemetryFingerprint,
+	readTelemetryTimeline,
+	scanTelemetryInstances,
+} from "./telemetry-files.js";
 
 const log = createLogger("daemon:http");
 
@@ -50,12 +54,12 @@ export interface DaemonHttpConfig {
  * - `GET  /ping`                 — simple liveness check
  * - `GET  /telemetry/instances`  — live MCP instances from heartbeat files
  * - `GET  /telemetry/watch`      — long-poll for state changes
+ * - `GET  /telemetry/timeline`   — cleanup timeline for stale/corrupt MCP files
  */
 export async function startHttpServer(config: DaemonHttpConfig): Promise<DaemonHttpServer> {
 	const { router, port = DEFAULT_HTTP_PORT, host = "127.0.0.1" } = config;
 
 	const server = http.createServer(async (req, res) => {
-		res.setHeader("Content-Type", "application/json");
 		res.setHeader("Access-Control-Allow-Origin", "*");
 		res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
 		res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -68,37 +72,55 @@ export async function startHttpServer(config: DaemonHttpConfig): Promise<DaemonH
 		}
 
 		try {
-			const url = req.url ?? "/";
+			const rawUrl = req.url ?? "/";
+			const url = new URL(rawUrl, "http://localhost");
+			const pathname = url.pathname;
+			const format = (url.searchParams.get("format") ?? "").toLowerCase();
+			const accept = (req.headers.accept ?? "").toLowerCase();
 
-			if (req.method === "GET" && url === "/ping") {
+			if (req.method === "GET" && pathname === "/ping") {
 				jsonResponse(res, 200, { pong: true, ts: Date.now() });
 				return;
 			}
 
-			if (req.method === "GET" && url === "/status") {
-				await handleStatus(router, res);
+			if (req.method === "GET" && (pathname === "/status" || pathname === "/status/ui")) {
+				const payload = await buildStatusPayload(router);
+				const wantsHtml =
+					format === "html" ||
+					pathname === "/status/ui" ||
+					(pathname === "/status" && format !== "json" && accept.includes("text/html"));
+				if (wantsHtml) {
+					htmlResponse(res, 200, renderStatusDashboard(payload));
+				} else {
+					jsonResponse(res, 200, payload);
+				}
 				return;
 			}
 
-			if (req.method === "POST" && url === "/consolidate") {
+			if (req.method === "POST" && pathname === "/consolidate") {
 				const result = await router.handle("nidra.consolidate", {});
 				jsonResponse(res, 200, { ok: true, data: result });
 				return;
 			}
 
-			if (req.method === "POST" && url === "/shutdown") {
+			if (req.method === "POST" && pathname === "/shutdown") {
 				const result = await router.handle("daemon.shutdown", {});
 				jsonResponse(res, 200, { ok: true, data: result });
 				return;
 			}
 
-			if (req.method === "GET" && url === "/telemetry/instances") {
+			if (req.method === "GET" && pathname === "/telemetry/instances") {
 				handleTelemetryInstances(res);
 				return;
 			}
 
-			if (req.method === "GET" && url.startsWith("/telemetry/watch")) {
-				handleTelemetryWatch(url, res);
+			if (req.method === "GET" && pathname === "/telemetry/watch") {
+				handleTelemetryWatch(rawUrl, res);
+				return;
+			}
+
+			if (req.method === "GET" && pathname === "/telemetry/timeline") {
+				handleTelemetryTimeline(rawUrl, res);
 				return;
 			}
 
@@ -129,7 +151,83 @@ export async function startHttpServer(config: DaemonHttpConfig): Promise<DaemonH
  * Calls daemon.health, daemon.status, and nidra.status in parallel.
  * Each call is independent — partial failures still return what succeeded.
  */
-async function handleStatus(router: RpcRouter, res: http.ServerResponse): Promise<void> {
+async function buildStatusPayload(router: RpcRouter): Promise<Record<string, unknown>> {
+	const telemetry = scanTelemetryInstances({
+		staleMs: 15_000,
+		cleanupStale: true,
+		cleanupCorrupt: true,
+		cleanupOrphan: true,
+	});
+	const rawInstances = telemetry.instances;
+	const fingerprint = computeTelemetryFingerprint(rawInstances);
+	const now = Date.now();
+	const activeWindowMs = 2 * 60 * 1000;
+	const busyStaleMs = 5 * 60 * 1000;
+
+	const instances = rawInstances.map((raw) => {
+		const instance = {
+			pid: typeof raw.pid === "number" ? raw.pid : null,
+			state: typeof raw.state === "string" ? raw.state : null,
+			sessionId: typeof raw.sessionId === "string" ? raw.sessionId : null,
+			workspace: typeof raw.workspace === "string" ? raw.workspace : null,
+			username: typeof raw.username === "string" ? raw.username : null,
+			hostname: typeof raw.hostname === "string" ? raw.hostname : null,
+			transport: typeof raw.transport === "string" ? raw.transport : null,
+			model: typeof raw.model === "string" ? raw.model : null,
+			startedAt: typeof raw.startedAt === "string" ? raw.startedAt : null,
+			uptime: typeof raw.uptime === "number" ? raw.uptime : null,
+			toolCallCount: typeof raw.toolCallCount === "number" ? raw.toolCallCount : 0,
+			turnCount: typeof raw.turnCount === "number" ? raw.turnCount : 0,
+			lastToolCallAt: typeof raw.lastToolCallAt === "number" ? raw.lastToolCallAt : null,
+			provider: typeof raw.provider === "string" ? raw.provider : "unknown",
+			providerSessionId: typeof raw.providerSessionId === "string" ? raw.providerSessionId : null,
+			clientKey: typeof raw.clientKey === "string" ? raw.clientKey : null,
+			agentNickname: typeof raw.agentNickname === "string" ? raw.agentNickname : null,
+			agentRole: typeof raw.agentRole === "string" ? raw.agentRole : null,
+			parentThreadId: typeof raw.parentThreadId === "string" ? raw.parentThreadId : null,
+			agent: "mcp",
+		};
+
+		const attentionReasons: string[] = [];
+		const hasSession = instance.sessionId !== null || instance.providerSessionId !== null;
+		if (!hasSession) attentionReasons.push("missing_session_identity");
+		if (!instance.model) attentionReasons.push("missing_model");
+		if (
+			instance.state === "busy"
+			&& typeof instance.lastToolCallAt === "number"
+			&& now - instance.lastToolCallAt > busyStaleMs
+		) {
+			attentionReasons.push("busy_too_long");
+		}
+		const isActive = instance.state === "busy"
+			|| (
+				typeof instance.lastToolCallAt === "number"
+				&& now - instance.lastToolCallAt <= activeWindowMs
+			);
+
+		return {
+			...instance,
+			isActive,
+			needsAttention: attentionReasons.length > 0,
+			attentionReasons,
+		};
+	});
+
+	const openSessions = instances.filter((i) => i.sessionId !== null || i.providerSessionId !== null);
+	const activeConversations = instances.filter((i) => i.isActive);
+	const attentionInstances = instances.filter((i) => i.needsAttention);
+	const byWorkspace = instances.reduce<Record<string, number>>((acc, inst) => {
+		const key = inst.workspace ?? "(unknown)";
+		acc[key] = (acc[key] ?? 0) + 1;
+		return acc;
+	}, {});
+	const byProvider = instances.reduce<Record<string, number>>((acc, inst) => {
+		const key = inst.provider ?? "unknown";
+		acc[key] = (acc[key] ?? 0) + 1;
+		return acc;
+	}, {});
+	const users = [...new Set(instances.map((i) => i.username).filter((v): v is string => !!v))];
+
 	const [healthResult, dbResult, nidraResult] = await Promise.allSettled([
 		router.handle("daemon.health", {}),
 		router.handle("daemon.status", {}),
@@ -148,7 +246,7 @@ async function handleStatus(router: RpcRouter, res: http.ServerResponse): Promis
 		? nidraResult.value as Record<string, unknown>
 		: null;
 
-	jsonResponse(res, 200, {
+	return {
 		daemon: {
 			alive: true,
 			pid: health?.pid ?? process.pid,
@@ -159,59 +257,41 @@ async function handleStatus(router: RpcRouter, res: http.ServerResponse): Promis
 		},
 		nidra,
 		db: db ? (db as Record<string, unknown>).counts ?? db : null,
-		timestamp: Date.now(),
-	});
+		links: {
+			statusJson: "/status?format=json",
+			statusUi: "/status/ui",
+			telemetryInstances: "/telemetry/instances",
+			telemetryWatch: "/telemetry/watch",
+			telemetryTimeline: "/telemetry/timeline?limit=100",
+		},
+			active: {
+				instanceCount: instances.length,
+				openSessionCount: openSessions.length,
+				activeConversationCount: activeConversations.length,
+				activeNowCount: activeConversations.length,
+				attentionCount: attentionInstances.length,
+				fingerprint,
+				cleanup: {
+					removedStale: telemetry.removedStale,
+					removedCorrupt: telemetry.removedCorrupt,
+					removedOrphan: telemetry.removedOrphan,
+				},
+				attention: attentionInstances.map((inst) => ({
+					pid: inst.pid,
+					workspace: inst.workspace,
+					provider: inst.provider,
+					reasons: inst.attentionReasons,
+				})),
+				users,
+				byWorkspace,
+				byProvider,
+				instances,
+			},
+			timestamp: Date.now(),
+		};
 }
 
 // ─── Telemetry Handlers ─────────────────────────────────────────────────────
-
-/** Get the telemetry instances directory path. */
-function getTelemetryDir(): string {
-	return path.join(getChitraguptaHome(), "telemetry", "instances");
-}
-
-/**
- * Scan heartbeat files from the telemetry directory.
- * Inline implementation — avoids circular dependency on @chitragupta/cli.
- *
- * @param dir - Directory to scan.
- * @param staleMs - Max age in ms to consider alive. Default: 10000.
- * @returns Array of parsed heartbeat records.
- */
-function scanHeartbeatFiles(dir: string, staleMs = 10_000): Record<string, unknown>[] {
-	if (!fs.existsSync(dir)) return [];
-	const now = Date.now();
-	const results: Record<string, unknown>[] = [];
-	try {
-		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-			if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name.startsWith(".tmp-")) continue;
-			try {
-				const fp = path.join(dir, entry.name);
-				const stat = fs.statSync(fp);
-				if (now - stat.mtimeMs > staleMs) continue;
-				results.push(JSON.parse(fs.readFileSync(fp, "utf-8")) as Record<string, unknown>);
-			} catch { /* skip corrupt */ }
-		}
-	} catch { /* dir unreadable */ }
-	return results;
-}
-
-/**
- * Compute FNV-1a 32-bit fingerprint of heartbeat state.
- * Used for long-polling: only return data when state changes.
- *
- * @param instances - Array of heartbeat records.
- * @returns 8-character hex hash.
- */
-function computeHeartbeatFingerprint(instances: Record<string, unknown>[]): string {
-	const parts = instances.map(i => `${i.pid}:${i.heartbeatSeq}:${i.state}`).join("|");
-	let hash = 0x811c9dc5;
-	for (let i = 0; i < parts.length; i++) {
-		hash ^= parts.charCodeAt(i);
-		hash = (Math.imul(hash, 0x01000193)) >>> 0;
-	}
-	return hash.toString(16).padStart(8, "0");
-}
 
 /**
  * Return all live MCP instances from heartbeat files.
@@ -219,10 +299,25 @@ function computeHeartbeatFingerprint(instances: Record<string, unknown>[]): stri
  */
 function handleTelemetryInstances(res: http.ServerResponse): void {
 	try {
-		const dir = getTelemetryDir();
-		const instances = scanHeartbeatFiles(dir);
-		const fingerprint = computeHeartbeatFingerprint(instances);
-		jsonResponse(res, 200, { instances, fingerprint, count: instances.length, timestamp: Date.now() });
+		const telemetry = scanTelemetryInstances({
+			staleMs: 15_000,
+			cleanupStale: true,
+			cleanupCorrupt: true,
+			cleanupOrphan: true,
+		});
+		const instances = telemetry.instances;
+		const fingerprint = computeTelemetryFingerprint(instances);
+		jsonResponse(res, 200, {
+			instances,
+			fingerprint,
+			count: instances.length,
+			cleanup: {
+				removedStale: telemetry.removedStale,
+				removedCorrupt: telemetry.removedCorrupt,
+				removedOrphan: telemetry.removedOrphan,
+			},
+			timestamp: Date.now(),
+		});
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		jsonResponse(res, 500, { error: `Telemetry scan failed: ${msg}` });
@@ -240,19 +335,29 @@ function handleTelemetryWatch(url: string, res: http.ServerResponse): void {
 	const maxWaitMs = Math.min(30_000, parseInt(params.get("timeout") ?? "30000", 10) || 30_000);
 
 	try {
-		const dir = getTelemetryDir();
 		const deadline = Date.now() + maxWaitMs;
 		const pollIntervalMs = 1000;
 
 		const poll = (): void => {
-			const instances = scanHeartbeatFiles(dir);
-			const fingerprint = computeHeartbeatFingerprint(instances);
+			const telemetry = scanTelemetryInstances({
+				staleMs: 15_000,
+				cleanupStale: true,
+				cleanupCorrupt: true,
+				cleanupOrphan: true,
+			});
+			const instances = telemetry.instances;
+			const fingerprint = computeTelemetryFingerprint(instances);
 
 			if (fingerprint !== clientFingerprint || Date.now() >= deadline) {
 				jsonResponse(res, 200, {
 					instances,
 					fingerprint,
 					count: instances.length,
+					cleanup: {
+						removedStale: telemetry.removedStale,
+						removedCorrupt: telemetry.removedCorrupt,
+						removedOrphan: telemetry.removedOrphan,
+					},
 					timestamp: Date.now(),
 					changed: fingerprint !== clientFingerprint,
 				});
@@ -269,12 +374,54 @@ function handleTelemetryWatch(url: string, res: http.ServerResponse): void {
 	}
 }
 
+/**
+ * Return recent telemetry cleanup timeline events.
+ * Query: ?limit=100 (1..1000)
+ */
+function handleTelemetryTimeline(url: string, res: http.ServerResponse): void {
+	try {
+		const params = new URL(url, "http://localhost").searchParams;
+		const rawLimitParam = params.get("limit");
+		const parsedLimit = Number(rawLimitParam ?? 100);
+		let warning: string | null = null;
+		let limit = 100;
+		if (Number.isFinite(parsedLimit)) {
+			limit = Math.max(1, Math.min(1000, Math.trunc(parsedLimit)));
+			if (rawLimitParam !== null && String(limit) !== String(Math.trunc(parsedLimit))) {
+				warning = "limit out of range; clamped to 1..1000";
+			}
+		} else if (rawLimitParam !== null && rawLimitParam.trim().length > 0) {
+			warning = "invalid limit query param; defaulted to 100";
+		}
+		const events = readTelemetryTimeline(limit);
+		jsonResponse(res, 200, {
+			events,
+			count: events.length,
+			limit,
+			param: {
+				limit: rawLimitParam,
+				warning,
+			},
+			timestamp: Date.now(),
+		});
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		jsonResponse(res, 500, { error: `Telemetry timeline failed: ${msg}` });
+	}
+}
+
 // ─── Utilities ──────────────────────────────────────────────────────────────
 
 /** Write a JSON response. */
 function jsonResponse(res: http.ServerResponse, status: number, body: unknown): void {
-	res.writeHead(status);
+	res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
 	res.end(JSON.stringify(body));
+}
+
+/** Write an HTML response. */
+function htmlResponse(res: http.ServerResponse, status: number, body: string): void {
+	res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+	res.end(body);
 }
 
 /** Bind server and resolve with actual port. */

@@ -232,6 +232,7 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 
 	const finalTools = applyToolTiers(mcpTools);
 	const heartbeat = startHeartbeat({ workspace: projectPath, transport });
+	heartbeat.update({ model: "mcp" });
 	let toolCallCount = 0;
 
 	const server = new McpServer({

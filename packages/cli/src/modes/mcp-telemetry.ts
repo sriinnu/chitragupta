@@ -51,6 +51,18 @@ export interface HeartbeatData {
 	transport: "stdio" | "sse";
 	/** Mesh WebSocket port (for P2P auto-discovery). Null if mesh not active. */
 	meshPort: number | null;
+	/** Best-effort provider name for the hosting CLI. */
+	provider: "codex" | "claude" | "gemini" | "copilot" | "unknown";
+	/** Provider-native session/thread identifier when available. */
+	providerSessionId: string | null;
+	/** Stable per-client key (tab/window/thread) when available. */
+	clientKey: string | null;
+	/** Optional subagent nickname from the hosting provider. */
+	agentNickname: string | null;
+	/** Optional subagent role from the hosting provider. */
+	agentRole: string | null;
+	/** Optional parent thread/session ID (for subagent lineage). */
+	parentThreadId: string | null;
 }
 
 /** Options for the heartbeat writer. */
@@ -76,12 +88,69 @@ export interface HeartbeatHandle {
 /** Fields that can be updated after start. */
 type MutableHeartbeatFields = Pick<
 	HeartbeatData,
-	"sessionId" | "model" | "contextPressure" | "state" | "toolCallCount" | "turnCount" | "lastToolCallAt" | "meshPort"
+	| "sessionId"
+	| "model"
+	| "contextPressure"
+	| "state"
+	| "toolCallCount"
+	| "turnCount"
+	| "lastToolCallAt"
+	| "meshPort"
+	| "provider"
+	| "providerSessionId"
+	| "clientKey"
+	| "agentNickname"
+	| "agentRole"
+	| "parentThreadId"
 >;
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const DEFAULT_INTERVAL_MS = 2000;
+
+type ProviderName = HeartbeatData["provider"];
+
+function deriveClientKey(): string | null {
+	for (const key of ["CHITRAGUPTA_CLIENT_KEY", "CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"]) {
+		const value = process.env[key];
+		if (typeof value === "string" && value.trim().length > 0) return value.trim();
+	}
+	const pathHead = (process.env.PATH ?? "").split(":")[0] ?? "";
+	const match = pathHead.match(/\/tmp\/arg0\/([^/:]+)$/);
+	return match?.[1] ?? null;
+}
+
+function deriveProviderName(): ProviderName {
+	if (typeof process.env.CODEX_THREAD_ID === "string" && process.env.CODEX_THREAD_ID.trim()) return "codex";
+	if (
+		(typeof process.env.CLAUDE_CODE_SESSION_ID === "string" && process.env.CLAUDE_CODE_SESSION_ID.trim())
+		|| (typeof process.env.CLAUDE_SESSION_ID === "string" && process.env.CLAUDE_SESSION_ID.trim())
+	) return "claude";
+	if (typeof process.env.GEMINI_SESSION_ID === "string" && process.env.GEMINI_SESSION_ID.trim()) return "gemini";
+	if (typeof process.env.COPILOT_SESSION_ID === "string" && process.env.COPILOT_SESSION_ID.trim()) return "copilot";
+
+	const pathLower = (process.env.PATH ?? "").toLowerCase();
+	if (pathLower.includes("/.gemini/")) return "gemini";
+	if (pathLower.includes("/.copilot/")) return "copilot";
+	if (pathLower.includes("/.claude/")) return "claude";
+	if (pathLower.includes("/.codex/")) return "codex";
+	return "unknown";
+}
+
+function deriveProviderSessionId(provider: ProviderName, clientKey: string | null): string | null {
+	switch (provider) {
+		case "codex":
+			return process.env.CODEX_THREAD_ID?.trim() || clientKey;
+		case "claude":
+			return process.env.CLAUDE_CODE_SESSION_ID?.trim() || process.env.CLAUDE_SESSION_ID?.trim() || clientKey;
+		case "gemini":
+			return process.env.GEMINI_SESSION_ID?.trim() || clientKey;
+		case "copilot":
+			return process.env.COPILOT_SESSION_ID?.trim() || clientKey;
+		default:
+			return clientKey;
+	}
+}
 
 // ─── Path helpers ───────────────────────────────────────────────────────────
 
@@ -118,6 +187,8 @@ export function startHeartbeat(options: HeartbeatOptions): HeartbeatHandle {
 
 	let seq = 0;
 	let stopped = false;
+	const provider = deriveProviderName();
+	const clientKey = deriveClientKey();
 
 	const mutable: MutableHeartbeatFields = {
 		sessionId: null,
@@ -128,6 +199,27 @@ export function startHeartbeat(options: HeartbeatOptions): HeartbeatHandle {
 		turnCount: 0,
 		lastToolCallAt: null,
 		meshPort: null,
+		provider,
+		providerSessionId: deriveProviderSessionId(provider, clientKey),
+		clientKey,
+		agentNickname: (
+			process.env.CODEX_AGENT_NICKNAME
+			|| process.env.CLAUDE_AGENT_NICKNAME
+			|| process.env.AGENT_NICKNAME
+			|| ""
+		).trim() || null,
+		agentRole: (
+			process.env.CODEX_AGENT_ROLE
+			|| process.env.CLAUDE_AGENT_ROLE
+			|| process.env.AGENT_ROLE
+			|| ""
+		).trim() || null,
+		parentThreadId: (
+			process.env.CODEX_PARENT_THREAD_ID
+			|| process.env.CLAUDE_PARENT_SESSION_ID
+			|| process.env.PARENT_THREAD_ID
+			|| ""
+		).trim() || null,
 	};
 
 	function buildSnapshot(): HeartbeatData {
@@ -148,6 +240,12 @@ export function startHeartbeat(options: HeartbeatOptions): HeartbeatHandle {
 			lastToolCallAt: mutable.lastToolCallAt,
 			transport,
 			meshPort: mutable.meshPort,
+			provider: mutable.provider,
+			providerSessionId: mutable.providerSessionId,
+			clientKey: mutable.clientKey,
+			agentNickname: mutable.agentNickname,
+			agentRole: mutable.agentRole,
+			parentThreadId: mutable.parentThreadId,
 		};
 	}
 
