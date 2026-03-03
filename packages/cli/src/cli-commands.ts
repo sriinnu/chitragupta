@@ -69,6 +69,9 @@ export async function handleSubcommand(
 		case "skill":
 			await handleSkill(subcommand, rest);
 			break;
+		case "extension":
+			await handleExtension(subcommand, rest);
+			break;
 		case "code":
 			await handleCode(subcommand, rest);
 			break;
@@ -405,6 +408,11 @@ async function handleRun(subcommand: string | undefined, rest: string[]): Promis
 async function handleDaemon(subcommand: string | undefined, _rest: string[]): Promise<void> {
 	const { runDaemonCommand } = await import("./modes/daemon-cmd.js");
 	await runDaemonCommand(subcommand);
+}
+
+async function handleExtension(subcommand: string | undefined, rest: string[]): Promise<void> {
+	const { handleExtensionCommand } = await import("./commands/extension.js");
+	await handleExtensionCommand(subcommand, rest);
 }
 
 // ─── Utility Helpers ─────────────────────────────────────────────────────────
