@@ -284,3 +284,17 @@ export type {
 	TurnObservation,
 	LokapalaConfig,
 } from "./lokapala/index.js";
+
+// ── Conditional Context Loading (Anukula — अनुकूल) ──────────────────────────
+export { classifyTask, isCodeTask, ALL_TASK_TYPES } from "./task-classifier.js";
+export type { TaskType, TaskClassification } from "./task-classifier.js";
+
+export {
+	parseContextSections, selectContext,
+	getSelectionSummary, estimateTokens,
+	headingToId, tagSection,
+} from "./context-selector.js";
+export type { ContextSection, ContextSelectionConfig } from "./context-selector.js";
+
+export { buildConditionalContext, filterContext } from "./conditional-context.js";
+export type { ConditionalContextConfig, ConditionalContextResult } from "./conditional-context.js";
