@@ -3,8 +3,8 @@
  *
  * Standalone CLI task runner that makes chitragupta usable as an
  * independent agentic system without Vaayu. Parses a task from CLI args,
- * loads project + memory context, creates a session, runs an agent loop,
- * records turns, and outputs results to the terminal.
+ * loads project + memory context, creates a session, runs a multi-turn
+ * agent loop with steering support, records turns, and outputs results.
  *
  * Usage:
  *   chitragupta run "fix the login bug"
@@ -12,11 +12,13 @@
  *   chitragupta run --dry-run "refactor the auth module"
  *   chitragupta run --model claude-opus-4-20250918 "add tests"
  *   chitragupta run --project /path/to/project "update docs"
+ *   chitragupta run --max-turns 5 "small fix"
  */
 
 import path from "path";
 
 import { loadGlobalSettings, ChitraguptaError } from "@chitragupta/core";
+import { SteeringManager } from "@chitragupta/anina";
 import type { RunOptions, RunConfig, RunResult } from "./run-types.js";
 
 import {
@@ -42,6 +44,14 @@ import {
 	loadSessionHistory,
 } from "./run-context.js";
 
+import {
+	streamSingleTurn,
+	renderTurnHeader,
+	renderSteeringNotice,
+	shouldContinue,
+	buildNextMessage,
+} from "./run-loop.js";
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const DEFAULT_MAX_TURNS = 20;
@@ -57,7 +67,7 @@ const DEFAULT_MAX_TURNS = 20;
  *   --model <model>     Override model
  *   --provider <prov>   Override provider
  *   --project <path>    Override project path
- *   --max-turns <n>     Max agent loop iterations
+ *   --max-turns <n>     Max agent loop iterations (default: 20)
  *
  * All remaining non-flag arguments are joined as the task description.
  *
@@ -174,14 +184,16 @@ function resumeSession(sessionId: string, projectPath: string): Session {
 	}
 }
 
-// ─── Agent Loop ──────────────────────────────────────────────────────────────
+// ─── Multi-Turn Agent Loop ───────────────────────────────────────────────────
 
 /**
- * Run the agent loop: send task + context to the API, process responses,
- * record turns to the session.
+ * Run the multi-turn agent loop: send task + context to the API,
+ * process responses, check for steering/follow-ups, and iterate.
  *
- * Uses `createChitragupta` from the API module for full provider wiring.
- * Supports graceful shutdown via AbortController on SIGINT/SIGTERM.
+ * The loop continues until:
+ *   - maxTurns is reached
+ *   - The assistant produces a final answer (no pending steering)
+ *   - The abort signal fires
  *
  * @param config - Resolved run configuration.
  * @param session - The active session to record turns in.
@@ -195,6 +207,7 @@ async function runAgentLoop(
 ): Promise<RunResult> {
 	const startTime = Date.now();
 	const abortController = new AbortController();
+	const steering = new SteeringManager();
 	let turnsExecuted = 0;
 	let lastOutput = "";
 	let totalCost = 0;
@@ -216,54 +229,55 @@ async function runAgentLoop(
 			sessionId: config.resumeId,
 		});
 
-		// Compose the prompt with context
-		const fullPrompt = context
+		// Build the initial prompt with context
+		let currentMessage = context
 			? `${context}\n\n## Task\n${config.task}`
 			: config.task;
 
-		process.stdout.write(bold("  Running task...") + "\n\n");
-
-		// Stream the response
-		let currentText = "";
-		for await (const chunk of instance.stream(fullPrompt)) {
+		// ─── Multi-turn loop ──────────────────────────────────────────
+		while (turnsExecuted < config.maxTurns) {
 			if (abortController.signal.aborted) break;
 
-			if (chunk.type === "text") {
-				const text = chunk.data as string;
-				currentText += text;
-				process.stdout.write(text);
-			} else if (chunk.type === "tool_start") {
-				const toolData = chunk.data as { name: string };
-				process.stdout.write(
-					"\n" + dim(`  [tool: ${toolData.name}]`) + "\n",
-				);
-			} else if (chunk.type === "usage") {
-				const usage = chunk.data as { cost?: { total?: number } };
-				if (usage.cost?.total) {
-					totalCost += usage.cost.total;
-				}
-			}
+			turnsExecuted++;
+			renderTurnHeader(turnsExecuted, config.maxTurns);
+
+			// Stream the response for this turn
+			const turnResult = await streamSingleTurn(
+				instance.stream(currentMessage),
+				abortController.signal,
+			);
+
+			totalCost += turnResult.cost;
+			lastOutput = turnResult.text;
+
+			// Record the user turn
+			const userTurn: SessionTurn = {
+				turnNumber: session.turns.length + 1,
+				role: "user",
+				content: currentMessage,
+			};
+			await addTurn(session.meta.id, config.projectPath, userTurn);
+
+			// Record the assistant turn
+			const assistantTurn: SessionTurn = {
+				turnNumber: session.turns.length + 2,
+				role: "assistant",
+				content: turnResult.text,
+				model: config.model,
+			};
+			await addTurn(session.meta.id, config.projectPath, assistantTurn);
+
+			// Check abort after turn
+			if (turnResult.aborted || abortController.signal.aborted) break;
+
+			// Check steering for the next iteration
+			const next = steering.getNext();
+			if (!shouldContinue(turnResult, next)) break;
+
+			// There is a steering instruction — render and continue
+			renderSteeringNotice(next!);
+			currentMessage = buildNextMessage(next!);
 		}
-
-		turnsExecuted = 1;
-		lastOutput = currentText;
-
-		// Record the user turn
-		const userTurn: SessionTurn = {
-			turnNumber: session.turns.length + 1,
-			role: "user",
-			content: config.task,
-		};
-		await addTurn(session.meta.id, config.projectPath, userTurn);
-
-		// Record the assistant turn
-		const assistantTurn: SessionTurn = {
-			turnNumber: session.turns.length + 2,
-			role: "assistant",
-			content: currentText,
-			model: config.model,
-		};
-		await addTurn(session.meta.id, config.projectPath, assistantTurn);
 
 		process.stdout.write("\n\n");
 		await instance.destroy();
@@ -292,6 +306,7 @@ async function runAgentLoop(
 	} finally {
 		process.removeListener("SIGINT", shutdown);
 		process.removeListener("SIGTERM", shutdown);
+		steering.clear();
 	}
 }
 
@@ -401,7 +416,7 @@ export async function runRunCommand(
 		);
 	}
 
-	// Run the agent loop
+	// Run the multi-turn agent loop
 	const result = await runAgentLoop(config, session, context);
 	renderResult(result);
 
