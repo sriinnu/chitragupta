@@ -3,9 +3,9 @@
 /**
  * @chitragupta/cli — Coding Agent Entry Point.
  *
- * Standalone binary for running Chitragupta's coding agent (Kartru)
- * directly from the terminal. Delegates to the CodingOrchestrator
- * for a full Plan → Branch → Execute → Validate → Review → Commit pipeline.
+ * Standalone binary for running Chitragupta's coding agent
+ * directly from the terminal. Routes coding tasks to the best
+ * available CLI on PATH (takumi, claude, codex, aider, gemini).
  *
  * Usage:
  *   chitragupta-code "fix the bug in login.ts"
