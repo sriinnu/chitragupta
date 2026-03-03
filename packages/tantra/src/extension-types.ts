@@ -36,7 +36,8 @@ export type ExtensionHookName =
 	| "onModelSelect"
 	| "onCompact"
 	| "onSessionSwitch"
-	| "onResourcesDiscover";
+	| "onResourcesDiscover"
+	| "onBashSpawn";
 
 /** Context passed to session lifecycle hooks. */
 export interface SessionContext {
@@ -130,6 +131,24 @@ export interface ResourcesDiscoverContext {
 	existingResources: string[];
 }
 
+/** Context passed to onBashSpawn hook before shell command execution. */
+export interface BashSpawnContext {
+	/** The command to execute. */
+	command: string;
+	/** Working directory for the command. */
+	cwd: string;
+	/** Environment variables (sanitized subset, no credentials). */
+	env: Record<string, string>;
+	/** Set to true to cancel execution. */
+	cancel?: boolean;
+	/** Reason for cancellation (shown to user). */
+	cancelReason?: string;
+	/** Modified command (if extension wants to rewrite). */
+	modifiedCommand?: string;
+	/** Modified working directory. */
+	modifiedCwd?: string;
+}
+
 /** Hook handler function signatures — 13 lifecycle hooks. */
 export interface ExtensionHooks {
 	onSessionStart?: (ctx: SessionContext) => void | Promise<void>;
@@ -145,6 +164,7 @@ export interface ExtensionHooks {
 	onCompact?: (ctx: CompactContext) => void | Promise<void>;
 	onSessionSwitch?: (ctx: SessionSwitchContext) => void | Promise<void>;
 	onResourcesDiscover?: (ctx: ResourcesDiscoverContext) => void | Promise<void>;
+	onBashSpawn?: (ctx: BashSpawnContext) => void | Promise<void>;
 }
 
 /** Command registration for extensions (pi-inspired). */

@@ -29,6 +29,43 @@ export function configureBash(config: BashConfig): void {
 	_bashConfig = { ...DEFAULT_BASH_CONFIG, ...config };
 }
 
+// ─── Bash Spawn Hook ───────────────────────────────────────────────────────
+
+/**
+ * Context passed to the onBashSpawn hook before shell execution.
+ * Mirrors BashSpawnContext in @chitragupta/tantra to avoid circular deps.
+ */
+export interface BashSpawnHookContext {
+	command: string;
+	cwd: string;
+	env: Record<string, string>;
+	cancel?: boolean;
+	cancelReason?: string;
+	modifiedCommand?: string;
+	modifiedCwd?: string;
+}
+
+/** Callback type for the bash spawn hook dispatcher. */
+type BashSpawnHookDispatcher = (ctx: BashSpawnHookContext) => Promise<BashSpawnHookContext>;
+
+let _bashSpawnHook: BashSpawnHookDispatcher | null = null;
+
+/**
+ * Set the bash spawn hook dispatcher.
+ *
+ * Called during MCP server startup to wire the HookRegistry's
+ * dispatchBashSpawn into the yantra bash tool. Extensions can
+ * then intercept, modify, or cancel shell commands.
+ */
+export function setBashSpawnHook(dispatcher: BashSpawnHookDispatcher): void {
+	_bashSpawnHook = dispatcher;
+}
+
+/** Clear the bash spawn hook (for testing or shutdown). */
+export function clearBashSpawnHook(): void {
+	_bashSpawnHook = null;
+}
+
 function resolveCwd(cwd: string | undefined, context: ToolContext): string | ToolResult {
 	if (!cwd) return context.workingDirectory;
 	const resolved = path.isAbsolute(cwd) ? cwd : path.resolve(context.workingDirectory, cwd);
@@ -154,8 +191,40 @@ export const bashTool: ToolHandler = {
 
 		const cwdResult = resolveCwd(args.cwd as string | undefined, context);
 		if (typeof cwdResult === "object") return cwdResult; // ToolResult error
-		const cwd = cwdResult;
+		let cwd = cwdResult;
+		let finalCommand = command;
 		const timeout = (args.timeout as number) || _bashConfig.defaultTimeout;
+
+		// ── Extension hook: onBashSpawn ─────────────────────────────────
+		// If a hook dispatcher is wired, let extensions inspect/modify/cancel.
+		if (_bashSpawnHook) {
+			try {
+				const safeEnv = buildSafeEnv();
+				const envRecord: Record<string, string> = {};
+				for (const [k, v] of Object.entries(safeEnv)) {
+					if (v !== undefined) envRecord[k] = v;
+				}
+				const hookCtx = await _bashSpawnHook({
+					command: finalCommand,
+					cwd,
+					env: envRecord,
+				});
+				if (hookCtx.cancel) {
+					return {
+						content: `Command cancelled by extension: ${hookCtx.cancelReason ?? "no reason given"}`,
+						isError: true,
+						metadata: { cancelled: true, reason: hookCtx.cancelReason },
+					};
+				}
+				if (hookCtx.modifiedCommand) finalCommand = hookCtx.modifiedCommand;
+				if (hookCtx.modifiedCwd) cwd = hookCtx.modifiedCwd;
+			} catch (err) {
+				// Hook errors are non-fatal — log and continue with original command
+				process.stderr.write(
+					`[bash:hook] onBashSpawn failed: ${err instanceof Error ? err.message : String(err)}\n`,
+				);
+			}
+		}
 
 		return new Promise<ToolResult>((resolve) => {
 			const chunks: Buffer[] = [];
@@ -164,7 +233,7 @@ export const bashTool: ToolHandler = {
 			let killed = false;
 			let timedOut = false;
 
-			const proc = spawn(command, [], {
+			const proc = spawn(finalCommand, [], {
 				shell: true,
 				cwd,
 				detached: true,
