@@ -1,59 +1,52 @@
 /**
- * Wire 5: Mesh Bootstrap — auto-spawn system actors + default soul on MCP server start.
+ * Wire 5: Mesh Bootstrap — auto-spawn functional system actors + default soul.
  *
  * Ensures `mesh_status` returns non-zero actors and `atman_report` has identity
  * from the moment the MCP server starts. Uses the shared singletons from
  * mcp-subsystems.ts (same instances the mesh/soul tools use).
+ *
+ * Actors are now functional (not stubs): sys:memory handles search/recall/store,
+ * sys:skills handles find/recommend/list, sys:session handles list/show/handover.
+ * See mesh-actors.ts for the full behavior implementations.
  *
  * @module
  */
 
 import type { McpServer } from "@chitragupta/tantra";
 import { getActorSystem } from "./mcp-subsystems.js";
-
-// ─── Actor Behaviors ─────────────────────────────────────────────────────────
-
-/** System actor behavior: responds to ping/status, acks everything else. */
-function createSystemBehavior(actorName: string) {
-	return {
-		capabilities: [`${actorName}-query`, `${actorName}-status`],
-		expertise: [actorName],
-		handle: async (
-			msg: { type: string; payload?: unknown },
-			ctx: { self: string; reply: (payload: unknown) => void },
-		): Promise<void> => {
-			if (msg.type === "ping") {
-				ctx.reply({ type: "pong", actor: ctx.self, name: actorName });
-			} else if (msg.type === "status") {
-				ctx.reply({ type: "status", actor: ctx.self, name: actorName, alive: true });
-			} else {
-				ctx.reply({ type: "ack", actor: ctx.self, received: msg.type });
-			}
-		},
-	};
-}
+import {
+	createMemoryActorBehavior,
+	createSkillsActorBehavior,
+	createSessionActorBehavior,
+} from "./mesh-actors.js";
+import type { ActorBehaviorSpec } from "./mesh-actors.js";
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
 /**
  * Bootstrap built-in mesh actors and ensure a default soul exists.
  * Idempotent: existing actors/souls are not duplicated.
+ *
+ * System actors spawned:
+ * - sys:memory  — memory search, recall, store via daemon-bridge
+ * - sys:skills  — skill find, recommend, list via SkillRegistry + TVM
+ * - sys:session — session list, show, handover via daemon-bridge
  */
 export async function bootstrapMeshAndSoul(_server: McpServer): Promise<void> {
 	let actorsSpawned = 0;
 	let soulCreated = false;
 
-	// ─── 1. Spawn system actors via shared singleton ─────────────────
+	// ─── 1. Spawn functional system actors ─────────────────────────
 	try {
 		const sys = await getActorSystem();
-		const actors = [
-			{ id: "sys:memory", name: "memory-agent" },
-			{ id: "sys:skills", name: "skill-agent" },
-			{ id: "sys:session", name: "session-agent" },
+		const actors: Array<{ id: string; behavior: ActorBehaviorSpec }> = [
+			{ id: "sys:memory", behavior: createMemoryActorBehavior() },
+			{ id: "sys:skills", behavior: createSkillsActorBehavior() },
+			{ id: "sys:session", behavior: createSessionActorBehavior() },
 		];
-		for (const { id, name } of actors) {
+		for (const { id, behavior } of actors) {
 			try {
-				sys.spawn(id, createSystemBehavior(name));
+				sys.spawn(id, behavior);
 				actorsSpawned++;
 			} catch { /* actor already exists — idempotent */ }
 		}
