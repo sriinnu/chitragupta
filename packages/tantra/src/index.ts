@@ -183,6 +183,7 @@ export type {
 	ModelSelectContext,
 	CompactContext,
 	SessionSwitchContext,
+	ResourcesDiscoverContext,
 } from "./extension-types.js";
 /** Hook registry for dispatching extension lifecycle hooks. */
 export { HookRegistry } from "./extension-hooks.js";

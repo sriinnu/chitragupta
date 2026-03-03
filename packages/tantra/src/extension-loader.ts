@@ -21,7 +21,11 @@ import type {
 	ExtensionManifest,
 	LoadedExtension,
 	ExtensionLoaderConfig,
+	ExtensionAPI,
+	ExtensionCommand,
+	ExtensionShortcut,
 } from "./extension-types.js";
+import type { ToolRegistry } from "./tool-registry.js";
 import { HookRegistry } from "./extension-hooks.js";
 
 const MAX_EXTENSIONS = 50;
@@ -41,6 +45,10 @@ export class ExtensionLoader {
 	private hookRegistry: HookRegistry;
 	private watchers: fs.FSWatcher[] = [];
 	private registeredTools: McpToolHandler[] = [];
+	private registeredCommands = new Map<string, ExtensionCommand>();
+	private registeredShortcuts: ExtensionShortcut[] = [];
+	private toolRegistry: ToolRegistry | null = null;
+	private sessionCtx: { sessionId: string; model: string } = { sessionId: "unknown", model: "unknown" };
 
 	constructor(config: ExtensionLoaderConfig = {}, hookRegistry?: HookRegistry) {
 		const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
@@ -56,6 +64,32 @@ export class ExtensionLoader {
 	/** Get the hook registry for dispatching hooks. */
 	getHookRegistry(): HookRegistry {
 		return this.hookRegistry;
+	}
+
+	/**
+	 * Inject runtime session context so extensions can read session/model.
+	 * Called by the MCP bridge after startup.
+	 */
+	setSessionContext(ctx: { sessionId: string; model: string }): void {
+		this.sessionCtx = ctx;
+	}
+
+	/**
+	 * Attach a ToolRegistry so runtime-registered tools flow into the server.
+	 * Called by the MCP bridge during wiring.
+	 */
+	setToolRegistry(registry: ToolRegistry): void {
+		this.toolRegistry = registry;
+	}
+
+	/** Get all registered commands from loaded extensions. */
+	getRegisteredCommands(): Map<string, ExtensionCommand> {
+		return new Map(this.registeredCommands);
+	}
+
+	/** Get all registered shortcuts from loaded extensions. */
+	getRegisteredShortcuts(): ExtensionShortcut[] {
+		return [...this.registeredShortcuts];
 	}
 
 	/** Get all registered tools from loaded extensions. */
@@ -179,10 +213,11 @@ export class ExtensionLoader {
 			}
 		}
 
-		// Call activate
+		// Build ExtensionAPI and call activate with it
 		if (typeof manifest.activate === "function") {
 			try {
-				await manifest.activate();
+				const api = this.buildExtensionAPI(manifest.name);
+				await manifest.activate(api);
 			} catch (err) {
 				loaded.errors.push(`activate() failed: ${err instanceof Error ? err.message : String(err)}`);
 			}
@@ -246,6 +281,39 @@ export class ExtensionLoader {
 		} catch {
 			return [];
 		}
+	}
+
+	/**
+	 * Build a concrete ExtensionAPI for a specific extension.
+	 * Implements runtime tool/command/shortcut registration.
+	 */
+	private buildExtensionAPI(extensionName: string): ExtensionAPI {
+		const prefix = `ext_${extensionName}_`;
+		return {
+			registerTool: (handler: McpToolHandler) => {
+				const namespacedTool: McpToolHandler = {
+					definition: {
+						...handler.definition,
+						name: `${prefix}${handler.definition.name}`,
+						description: `[${extensionName}] ${handler.definition.description}`,
+					},
+					execute: handler.execute.bind(handler),
+				};
+				this.registeredTools.push(namespacedTool);
+				if (this.toolRegistry) {
+					try { this.toolRegistry.registerTool(namespacedTool); } catch { /* collision — skip */ }
+				}
+			},
+			registerCommand: (cmd: ExtensionCommand) => {
+				this.registeredCommands.set(`${extensionName}:${cmd.name}`, cmd);
+			},
+			registerShortcut: (shortcut: ExtensionShortcut) => {
+				this.registeredShortcuts.push(shortcut);
+			},
+			cwd: () => this.config.projectDir ? path.dirname(this.config.projectDir) : process.cwd(),
+			sessionId: () => this.sessionCtx.sessionId,
+			model: () => this.sessionCtx.model,
+		};
 	}
 
 	/** Start file watchers for hot-reload. */

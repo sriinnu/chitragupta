@@ -17,8 +17,7 @@ import { getBuiltinTools } from "../bootstrap.js";
 import { CLI_PACKAGE_VERSION } from "../version.js";
 import { startHeartbeat } from "./mcp-telemetry.js";
 import { applyToolTiers, isCompactMode, getTierStats } from "./mcp-tool-tiers.js";
-
-// ─── Extracted modules ───────────────────────────────────────────────────────
+import { wireExtensionsToMcp } from "./mcp-extension-bridge.js";
 
 import { resetMcpStartedAt, writeChitraguptaState, clearChitraguptaState } from "./mcp-state.js";
 import {
@@ -273,10 +272,7 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			`  Agent: ${enableAgent ? "enabled" : "disabled"}  Telemetry: pid=${process.pid}\n`,
 	);
 
-	// ─── 4. Post-start initialization ────────────────────────────────
-	//
-	// Everything below runs AFTER the transport is ready. The initialize
-	// handshake can proceed while these non-critical subsystems spin up.
+	// ─── 4. Post-start initialization (runs AFTER transport is ready) ───
 
 	// 4a. Register OS integration surface resources (need server reference)
 	server.registerResource(
@@ -321,10 +317,14 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	server.attachRegistry(registry);
 	(server as unknown as Record<string, unknown>)._toolRegistry = registry;
 
+	// 4c.1 Wire extension system into MCP (tools, hooks, hot-reload)
+	wireExtensionsToMcp({ projectPath, toolRegistry: registry, onToolCall: (info) => {
+		heartbeat.update({ lastToolCallAt: Date.now(), state: "busy" });
+	} }).catch((err: unknown) => {
+		process.stderr.write(`[extensions] Wire failed: ${err instanceof Error ? err.message : String(err)}\n`);
+	});
+
 	// 4d. EventBridge + MCP notification sink (fire-and-forget)
-	//
-	// Wire realtime events so agent subsystems can push notifications
-	// to MCP clients via JSON-RPC notifications.
 	try {
 		const { EventBridge, McpNotificationSink } = await import("@chitragupta/sutra");
 		const eventBridge = new EventBridge();

@@ -35,7 +35,8 @@ export type ExtensionHookName =
 	| "onBeforeAgentStart"
 	| "onModelSelect"
 	| "onCompact"
-	| "onSessionSwitch";
+	| "onSessionSwitch"
+	| "onResourcesDiscover";
 
 /** Context passed to session lifecycle hooks. */
 export interface SessionContext {
@@ -119,7 +120,17 @@ export interface SessionSwitchContext {
 	projectPath: string;
 }
 
-/** Hook handler function signatures — 12 lifecycle hooks. */
+/** Context for onResourcesDiscover — triggered during resource/tool discovery. */
+export interface ResourcesDiscoverContext {
+	/** Root project path for the discovery scope. */
+	projectPath: string;
+	/** Names of currently registered tools. */
+	tools: string[];
+	/** URIs of already-known resources. */
+	existingResources: string[];
+}
+
+/** Hook handler function signatures — 13 lifecycle hooks. */
 export interface ExtensionHooks {
 	onSessionStart?: (ctx: SessionContext) => void | Promise<void>;
 	onSessionEnd?: (ctx: SessionContext) => void | Promise<void>;
@@ -133,6 +144,7 @@ export interface ExtensionHooks {
 	onModelSelect?: (ctx: ModelSelectContext) => void | Promise<void>;
 	onCompact?: (ctx: CompactContext) => void | Promise<void>;
 	onSessionSwitch?: (ctx: SessionSwitchContext) => void | Promise<void>;
+	onResourcesDiscover?: (ctx: ResourcesDiscoverContext) => void | Promise<void>;
 }
 
 /** Command registration for extensions (pi-inspired). */
