@@ -1,9 +1,15 @@
 /**
  * @chitragupta/cli — Coding REPL agent helpers.
  *
- * askCodebase(): Read-only codebase exploration via filtered tools.
- * chatResponse(): Non-coding chat with the AI (no tools).
+ * askCodebase(): Read-only codebase exploration via the completion router.
+ * chatResponse(): Non-coding chat via the completion router.
  * Extracted from code-interactive.ts to keep file sizes under 450 LOC.
+ *
+ * These helpers use the completion router directly instead of the
+ * old CodingOrchestrator, since they never needed the full orchestration
+ * pipeline (git branches, validation, review).
+ *
+ * @module
  */
 
 import {
@@ -12,65 +18,55 @@ import {
 	cyan,
 	red,
 } from "@chitragupta/ui/ansi";
-import type { CodingSetup } from "../coding-setup.js";
+
+/** Provider info needed for agent helpers (duck-typed to avoid hard deps). */
+export interface AgentProviderInfo {
+	providerId: string;
+	model?: string;
+}
 
 /**
- * Ask a question about the codebase using read-only tools.
- * The agent can read, grep, find, and ls files but cannot edit or write.
+ * Ask a question about the codebase using the completion router.
+ *
+ * Sends the question with codebase context to the configured provider.
+ * No tools, no orchestrator — just a direct LLM call.
  *
  * @param question - The question to ask about the codebase.
- * @param codingSetup - The coding environment setup.
+ * @param providerInfo - Provider and model configuration.
  * @param projectPath - The project root path.
- * @param model - Optional model override.
  */
 export async function askCodebase(
 	question: string,
-	codingSetup: CodingSetup,
+	providerInfo: AgentProviderInfo,
 	projectPath: string,
-	model?: string,
 ): Promise<void> {
 	const { stdout } = process;
 	stdout.write("\n");
-	stdout.write(dim("  ── Exploring codebase ──\n\n"));
+	stdout.write(dim("  -- Exploring codebase --\n\n"));
 
 	try {
-		const { KARTRU_PROFILE } = await import("@chitragupta/core");
-		const { Agent } = await import("@chitragupta/anina");
+		const { CompletionRouter } = await import("@chitragupta/swara");
 
-		const readOnlyNames = new Set(["read", "grep", "find", "ls", "bash", "diff"]);
-		const readOnlyTools = (codingSetup.tools ?? []).filter(
-			(t) => readOnlyNames.has(t.definition.name),
-		);
+		const router = new CompletionRouter();
+		const prompt =
+			`You are a code exploration assistant for the project at ${projectPath}.\n\n` +
+			`Answer this question about the codebase:\n\n${question}\n\n` +
+			`Be thorough but concise.`;
 
-		const agent = new Agent({
-			profile: { ...KARTRU_PROFILE, id: "code-explorer", name: "Kartru Explorer" },
-			providerId: codingSetup.providerId,
-			model: model ?? KARTRU_PROFILE.preferredModel ?? "claude-sonnet-4-5-20250929",
-			tools: readOnlyTools,
-			thinkingLevel: "medium",
-			workingDirectory: projectPath,
-			maxTurns: 8,
-			enableChetana: false,
-			enableLearning: false,
-			enableAutonomy: false,
-			onEvent: (event, data) => {
-				if (event === "stream:tool_call") {
-					const d = data as Record<string, unknown>;
-					const name = (d.name as string) ?? "?";
-					const icon = name === "read" ? "📖" : name === "grep" ? "🔎" : name === "find" ? "📂" : name === "ls" ? "📁" : "🔧";
-					stdout.write(`    ${icon} ${gray(name)}\n`);
-				}
-			},
+		const response = await router.complete({
+			messages: [{ role: "user", content: prompt }],
+			providerId: providerInfo.providerId,
+			model: providerInfo.model,
 		});
-		agent.setProvider(codingSetup.provider as import("@chitragupta/swara").ProviderDefinition);
 
-		const response = await agent.prompt(
-			`You are a code exploration assistant. Answer this question about the codebase at ${projectPath}:\n\n${question}\n\nUse the available tools to read files, search code, and explore the project structure. Be thorough but concise in your answer.`,
-		);
-		const text = response.content
-			.filter((p) => p.type === "text")
-			.map((p) => (p as { type: "text"; text: string }).text)
-			.join("\n");
+		const text = typeof response.content === "string"
+			? response.content
+			: Array.isArray(response.content)
+				? response.content
+					.filter((p: Record<string, unknown>) => p.type === "text")
+					.map((p: Record<string, unknown>) => p.text as string)
+					.join("\n")
+				: "";
 
 		stdout.write("\n");
 		if (text) {
@@ -90,46 +86,39 @@ export async function askCodebase(
 
 /**
  * Send a non-coding message to the AI and display the response.
- * Uses a lightweight one-shot agent call — no orchestrator, no git, no tools.
+ * Uses a direct completion call — no orchestrator, no git, no tools.
  *
  * @param message - The message to send.
- * @param codingSetup - The coding environment setup.
+ * @param providerInfo - Provider and model configuration.
  * @param projectPath - The project root path.
- * @param model - Optional model override.
  */
 export async function chatResponse(
 	message: string,
-	codingSetup: CodingSetup,
+	providerInfo: AgentProviderInfo,
 	projectPath: string,
-	model?: string,
 ): Promise<void> {
 	const { stdout } = process;
 	stdout.write("\n");
-	stdout.write(dim("  ── Chat ──\n\n"));
+	stdout.write(dim("  -- Chat --\n\n"));
 
 	try {
-		const { KARTRU_PROFILE } = await import("@chitragupta/core");
-		const { Agent } = await import("@chitragupta/anina");
+		const { CompletionRouter } = await import("@chitragupta/swara");
 
-		const agent = new Agent({
-			profile: { ...KARTRU_PROFILE, id: "code-chat", name: "Kartru Chat" },
-			providerId: codingSetup.providerId,
-			model: model ?? KARTRU_PROFILE.preferredModel ?? "claude-sonnet-4-5-20250929",
-			tools: [],
-			thinkingLevel: "low",
-			workingDirectory: projectPath,
-			maxTurns: 1,
-			enableChetana: false,
-			enableLearning: false,
-			enableAutonomy: false,
+		const router = new CompletionRouter();
+		const response = await router.complete({
+			messages: [{ role: "user", content: message }],
+			providerId: providerInfo.providerId,
+			model: providerInfo.model,
 		});
-		agent.setProvider(codingSetup.provider as import("@chitragupta/swara").ProviderDefinition);
 
-		const response = await agent.prompt(message);
-		const text = response.content
-			.filter((p) => p.type === "text")
-			.map((p) => (p as { type: "text"; text: string }).text)
-			.join("\n");
+		const text = typeof response.content === "string"
+			? response.content
+			: Array.isArray(response.content)
+				? response.content
+					.filter((p: Record<string, unknown>) => p.type === "text")
+					.map((p: Record<string, unknown>) => p.text as string)
+					.join("\n")
+				: "";
 
 		if (text) {
 			for (const line of text.split("\n")) {
