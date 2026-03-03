@@ -43,6 +43,7 @@
 		"benchmark:consolidation": "tsx scripts/benchmark-consolidation.ts",
 		"benchmark:marga": "tsx scripts/benchmark-marga-routing.ts",
 		"benchmark:mesh-soak": "tsx scripts/soak-sutra-mesh.ts",
+		"release:verify": "bash scripts/release-verify.sh",
 		"chitragupta": "tsx packages/cli/src/cli.ts",
 		"daemon": "pnpm --filter @chitragupta/daemon build && tsx packages/cli/src/cli.ts daemon start",
 		"daemon:stop": "tsx packages/cli/src/cli.ts daemon stop",

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { runAgentPromptWithFallback, type SmartPromptDeps } from "../src/modes/mcp-agent-prompt.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -10,6 +10,7 @@ function makeDeps(overrides: Partial<SmartPromptDeps> = {}): SmartPromptDeps {
 		executeCLI: async () => ({ stdout: "", stderr: "", exitCode: 1, killed: false }),
 		loadProjectMemory: () => undefined,
 		getCompletionRouter: async () => null,
+		localComplete: async () => null,
 		margaDecide: () => null,
 		...overrides,
 	};
@@ -62,17 +63,19 @@ describe("runAgentPromptWithFallback", () => {
 
 	it("falls back to API when all CLIs fail", async () => {
 		const deps = makeDeps({
-			detectCLIs: async () => [
-				{ command: "claude", available: true },
-			],
+			detectCLIs: async () => [{ command: "claude", available: true }],
 			executeCLI: async () => ({
-				stdout: "", stderr: "crash", exitCode: 1, killed: false,
+				stdout: "",
+				stderr: "crash",
+				exitCode: 1,
+				killed: false,
 			}),
 			getCompletionRouter: async () => ({
 				complete: async () => ({
 					content: [{ type: "text", text: "api response" }],
 				}),
 			}),
+			localComplete: async () => null,
 			margaDecide: () => ({ providerId: "anthropic", modelId: "claude-sonnet-4-5-20250929" }),
 		});
 
@@ -80,37 +83,65 @@ describe("runAgentPromptWithFallback", () => {
 
 		expect(result.response).toBe("api response");
 		expect(result.providerId).toContain("api:");
-		expect(result.attempts).toBeGreaterThanOrEqual(2);
+		expect(result.attempts).toBe(3);
+	});
+
+	it("uses local model between CLI and API", async () => {
+		const order: string[] = [];
+		const deps = makeDeps({
+			detectCLIs: async () => [{ command: "claude", available: true }],
+			executeCLI: async () => {
+				order.push("cli");
+				return { stdout: "", stderr: "cli failed", exitCode: 1, killed: false };
+			},
+			localComplete: async () => {
+				order.push("local");
+				return { text: "local response", providerId: "ollama:qwen3:8b" };
+			},
+			getCompletionRouter: async () => {
+				order.push("api");
+				return {
+					complete: async () => ({ content: [{ type: "text", text: "api response" }] }),
+				};
+			},
+		});
+
+		const result = await runAgentPromptWithFallback({ message: "test" }, deps);
+
+		expect(result.response).toBe("local response");
+		expect(result.providerId).toBe("ollama:qwen3:8b");
+		expect(result.attempts).toBe(2);
+		expect(order).toEqual(["cli", "local"]);
 	});
 
 	it("throws when all providers fail (CLI + API)", async () => {
 		const deps = makeDeps({
 			detectCLIs: async () => [{ command: "claude", available: true }],
 			executeCLI: async () => ({
-				stdout: "", stderr: "fail", exitCode: 1, killed: false,
+				stdout: "",
+				stderr: "fail",
+				exitCode: 1,
+				killed: false,
 			}),
 			getCompletionRouter: async () => null,
 		});
 
-		await expect(
-			runAgentPromptWithFallback({ message: "test" }, deps),
-		).rejects.toThrow(/All attempts failed/i);
+		await expect(runAgentPromptWithFallback({ message: "test" }, deps)).rejects.toThrow(/All attempts failed/i);
 	});
 
 	it("detects auth errors and reports re-auth hints", async () => {
 		const deps = makeDeps({
-			detectCLIs: async () => [
-				{ command: "claude", available: true },
-			],
+			detectCLIs: async () => [{ command: "claude", available: true }],
 			executeCLI: async () => ({
-				stdout: "", stderr: "Error: not logged in. Please authenticate.", exitCode: 1, killed: false,
+				stdout: "",
+				stderr: "Error: not logged in. Please authenticate.",
+				exitCode: 1,
+				killed: false,
 			}),
 			getCompletionRouter: async () => null,
 		});
 
-		await expect(
-			runAgentPromptWithFallback({ message: "test" }, deps),
-		).rejects.toThrow(/auth/i);
+		await expect(runAgentPromptWithFallback({ message: "test" }, deps)).rejects.toThrow(/auth/i);
 	});
 
 	it("skips timed-out CLIs and continues", async () => {
@@ -138,14 +169,20 @@ describe("runAgentPromptWithFallback", () => {
 		const deps = makeDeps({
 			detectCLIs: async () => [{ command: "gemini", available: true }],
 			executeCLI: async () => ({
-				stdout: "ok", stderr: "", exitCode: 0, killed: false,
+				stdout: "ok",
+				stderr: "",
+				exitCode: 0,
+				killed: false,
 			}),
 		});
 
-		await runAgentPromptWithFallback({
-			message: "hb-test",
-			onHeartbeat: (info) => heartbeats.push(info.activity),
-		}, deps);
+		await runAgentPromptWithFallback(
+			{
+				message: "hb-test",
+				onHeartbeat: (info) => heartbeats.push(info.activity),
+			},
+			deps,
+		);
 
 		expect(heartbeats.length).toBeGreaterThanOrEqual(1);
 		expect(heartbeats).toContain("trying gemini");
@@ -173,14 +210,10 @@ describe("runAgentPromptWithFallback", () => {
 
 	it("skips CLIs without an arg builder", async () => {
 		const deps = makeDeps({
-			detectCLIs: async () => [
-				{ command: "unknown-cli", available: true },
-			],
+			detectCLIs: async () => [{ command: "unknown-cli", available: true }],
 			getCompletionRouter: async () => null,
 		});
 
-		await expect(
-			runAgentPromptWithFallback({ message: "test" }, deps),
-		).rejects.toThrow(/All attempts failed/i);
+		await expect(runAgentPromptWithFallback({ message: "test" }, deps)).rejects.toThrow(/All attempts failed/i);
 	});
 });

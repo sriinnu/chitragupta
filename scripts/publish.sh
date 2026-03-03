@@ -84,6 +84,9 @@ if [[ "$DRY_RUN" == false ]]; then
 		fail "Not logged in to npm. Run 'npm login' first."
 	fi
 	ok "Logged in as $(npm whoami)"
+	if [[ "$SKIP_TESTS" == true && "${ALLOW_UNSAFE_SKIP_TESTS:-0}" != "1" ]]; then
+		fail "--skip-tests is blocked for real publishes. Set ALLOW_UNSAFE_SKIP_TESTS=1 to override explicitly."
+	fi
 else
 	warn "Dry-run mode — skipping npm auth check"
 fi
@@ -195,6 +198,15 @@ else
 			fail "Cannot publish with failing tests. Fix tests or use --skip-tests."
 		fi
 	fi
+fi
+
+# ── Release verification gates ────────────────────────────────────────
+if [[ "$DRY_RUN" == false ]]; then
+	info "Running release verification gates..."
+	pnpm run release:verify
+	ok "Release verification gates passed"
+else
+	warn "Dry-run mode — skipping release verification gates"
 fi
 
 # ── Publish ───────────────────────────────────────────────────────────
