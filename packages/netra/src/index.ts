@@ -35,3 +35,20 @@ export type {
 	RepoMapResult,
 	RepoMapOptions,
 } from "./repo-map.js";
+export {
+	buildImportGraph,
+	extractImports,
+	reverseGraph,
+} from "./import-graph.js";
+export type {
+	ImportGraph,
+	ImportGraphOptions,
+} from "./import-graph.js";
+export {
+	computePageRank,
+	normalizeScores,
+} from "./page-rank.js";
+export type {
+	PageRankOptions,
+	PageRankResult,
+} from "./page-rank.js";
