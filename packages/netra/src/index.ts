@@ -52,3 +52,9 @@ export type {
 	PageRankOptions,
 	PageRankResult,
 } from "./page-rank.js";
+export {
+	SemanticGraph,
+	buildSemanticGraph,
+	extractSymbols,
+} from "./semantic-graph.js";
+export * from "./semantic-graph-types.js";
