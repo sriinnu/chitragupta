@@ -24,7 +24,10 @@ const syncToolsSource = readSource("../src/modes/mcp-tools-sync.ts");
 const mcpServerSource = readSource("../src/modes/mcp-server.ts");
 const mcpDaemonWiringSource = (() => { try { return readSource("../src/modes/mcp-daemon-wiring.ts"); } catch { return ""; } })();
 const mcpSessionSource = readSource("../src/modes/mcp-session.ts");
+const mcpSessionHelpersSource = readSource("../src/modes/mcp-session-helpers.ts");
 const servicesSource = readSource("../../daemon/src/services.ts");
+const servicesReadSource = readSource("../../daemon/src/services-read.ts");
+const allServicesSource = servicesSource + servicesReadSource;
 const servicesHelpersSource = readSource("../../daemon/src/services-helpers.ts");
 const fallbackSource = readSource("../src/modes/daemon-bridge-fallback.ts");
 const bridgeSource = readSource("../src/modes/daemon-bridge.ts");
@@ -166,7 +169,7 @@ describe("Issue 2: Conversation capture wiring", () => {
 	});
 
 	it("ANSI stripping is applied to results", () => {
-		expect(mcpSessionSource).toContain("function stripAnsi(text: string)");
+		expect(mcpSessionHelpersSource).toContain("function stripAnsi(text: string)");
 	});
 
 	it("autoExtractEvents persists coding_agent results to project memory", () => {
@@ -253,16 +256,16 @@ describe("Issue 4: Numeric parameter validation", () => {
 		});
 
 		it("memory.unified_recall uses parseLimit", () => {
-			const methodIdx = servicesSource.indexOf('"memory.unified_recall"');
-			const nextMethodIdx = servicesSource.indexOf("router.register", methodIdx + 1);
-			const methodBody = servicesSource.slice(methodIdx, nextMethodIdx);
+			const methodIdx = allServicesSource.indexOf('"memory.unified_recall"');
+			const nextMethodIdx = allServicesSource.indexOf("router.register", methodIdx + 1);
+			const methodBody = allServicesSource.slice(methodIdx, nextMethodIdx);
 			expect(methodBody).toContain("parseLimit(params.limit");
 		});
 
 		it("day.search uses parseLimit", () => {
-			const methodIdx = servicesSource.indexOf('"day.search"');
-			const nextMethodIdx = servicesSource.indexOf("router.register", methodIdx + 1);
-			const methodBody = servicesSource.slice(methodIdx, nextMethodIdx);
+			const methodIdx = allServicesSource.indexOf('"day.search"');
+			const nextMethodIdx = allServicesSource.indexOf("router.register", methodIdx + 1);
+			const methodBody = allServicesSource.slice(methodIdx, nextMethodIdx);
 			expect(methodBody).toContain("parseLimit(params.limit");
 		});
 

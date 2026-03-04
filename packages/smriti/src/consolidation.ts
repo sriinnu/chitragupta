@@ -242,6 +242,7 @@ export class ConsolidationEngine {
 		const msPerDay = 86_400_000;
 
 		for (const rule of this.rules.values()) {
+			if (rule.evergreen) continue; // Evergreen rules are exempt from decay
 			const lastReinforced = new Date(rule.lastReinforcedAt).getTime();
 			const daysSinceReinforced = (now - lastReinforced) / msPerDay;
 
@@ -264,6 +265,7 @@ export class ConsolidationEngine {
 		const threshold = minConfidence ?? this.config.pruneThreshold;
 		const before = this.rules.size;
 		for (const [id, rule] of this.rules) {
+			if (rule.evergreen) continue; // Evergreen rules are never pruned
 			if (rule.confidence < threshold) {
 				this.rules.delete(id);
 			}

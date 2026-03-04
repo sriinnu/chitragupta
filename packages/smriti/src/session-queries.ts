@@ -13,6 +13,7 @@
 
 import fs from "fs";
 import path from "path";
+import { createRequire } from "module";
 
 import { SessionError } from "@chitragupta/core";
 import type { SessionMeta, SessionTurn } from "./types.js";
@@ -23,6 +24,8 @@ import {
 	getSessionsRoot,
 	getProjectSessionDir,
 } from "./session-db.js";
+
+const esmRequire = createRequire(import.meta.url);
 
 // Re-export getMaxTurnNumber from session-db so the public API stays on session-store.
 export { getMaxTurnNumber } from "./session-db.js";
@@ -292,9 +295,9 @@ export function listTurnsWithTimestamps(
 
 	// Fallback: load from markdown and synthesize timestamps
 	try {
-		// Lazy import to avoid circular dependency at module load time
-		// eslint-disable-next-line @typescript-eslint/no-require-imports
-		const { loadSession } = require("./session-store.js") as typeof import("./session-store.js");
+		// Lazy require to avoid circular dependency at module load time.
+		// Use createRequire so this works in ESM builds too.
+		const { loadSession } = esmRequire("./session-store.js") as typeof import("./session-store.js");
 		const session = loadSession(sessionId, project);
 		const baseTime = new Date(session.meta.created).getTime();
 		return session.turns.map((turn, i) => ({

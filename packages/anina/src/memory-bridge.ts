@@ -82,7 +82,17 @@ export class MemoryBridge {
 	/** Create a new session for this agent. Returns the session ID. */
 	async initSession(agentId: string, profile: string, model: string, project: string): Promise<string> {
 		if (!this.config.enabled) return "";
-		const session = createSession({ title: `Agent session: ${profile}`, project, agent: agentId, model });
+		const session = createSession({
+			title: `Agent session: ${profile}`,
+			project,
+			agent: agentId,
+			model,
+			metadata: {
+				agentLabel: profile,
+				actorId: agentId,
+				source: "anina.memory-bridge.initSession",
+			},
+		});
 		this.session = session;
 		this.sessionId = session.meta.id;
 		this.turnCounter = 0;
@@ -189,7 +199,19 @@ export class MemoryBridge {
 	/** Create a sub-agent session linked to parent. */
 	async createSubSession(parentSessionId: string, purpose: string, agentId: string, model: string, project: string): Promise<string> {
 		if (!this.config.enabled) return "";
-		const session = createSession({ title: `Sub-agent: ${purpose}`, project, agent: agentId, model, parentSessionId });
+		const session = createSession({
+			title: `Sub-agent: ${purpose}`,
+			project,
+			agent: agentId,
+			model,
+			parentSessionId,
+			metadata: {
+				agentLabel: purpose,
+				actorId: agentId,
+				parentSessionId,
+				source: "anina.memory-bridge.createSubSession",
+			},
+		});
 		return session.meta.id;
 	}
 

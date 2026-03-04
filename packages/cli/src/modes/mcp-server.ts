@@ -97,7 +97,7 @@ import {
 	createRecentToolCallsResource,
 } from "./mcp-resources.js";
 import { McpSessionRecorder } from "./mcp-session.js";
-import { triggerSvapnaConsolidation } from "../main-session.js";
+import { triggerSwapnaConsolidation } from "../main-session.js";
 
 // ─── Re-exports (backward compatibility) ─────────────────────────────────────
 
@@ -118,6 +118,16 @@ export interface McpServerModeOptions {
 	enableAgent?: boolean;
 }
 
+function normalizeMcpProjectPath(input: string): string {
+	const resolved = path.resolve(input);
+	try {
+		const real = fs.realpathSync.native(resolved);
+		return path.normalize(real);
+	} catch {
+		return path.normalize(resolved);
+	}
+}
+
 // ─── Main Entry Point ───────────────────────────────────────────────────────
 
 /**
@@ -131,10 +141,11 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	const {
 		transport = "stdio",
 		port = 3001,
-		projectPath = process.cwd(),
+		projectPath: rawProjectPath = process.cwd(),
 		name = "chitragupta",
 		enableAgent = false,
 	} = options;
+	const projectPath = normalizeMcpProjectPath(rawProjectPath);
 
 	const t0 = performance.now();
 
@@ -372,11 +383,11 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		// EventBridge is optional — MCP server works without it
 	}
 
-	// 4e. Graceful shutdown — trigger Svapna dream-cycle before exit
+	// 4e. Graceful shutdown — trigger Swapna dream-cycle before exit
 	const shutdown = async () => {
 		heartbeat.update({ state: "shutting_down" });
 		heartbeat.stop();
-		triggerSvapnaConsolidation(projectPath);
+		triggerSwapnaConsolidation(projectPath);
 		clearChitraguptaState();
 		try { const { disconnectDaemon } = await import("./daemon-bridge.js"); disconnectDaemon(); } catch { /* best-effort */ }
 		await server.stop();

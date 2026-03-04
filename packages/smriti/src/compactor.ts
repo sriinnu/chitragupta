@@ -48,6 +48,10 @@ function getDeltaDir(): string {
   return path.join(getChitraguptaHome(), "smriti", "deltas");
 }
 
+function getFlushDir(): string {
+  return path.join(getChitraguptaHome(), "smriti", "flush-checkpoints");
+}
+
 // ─── Stream Update Logic ─────────────────────────────────────────────────────
 
 function updateIdentityStream(streamManager: StreamManager, signals: StreamSignals): void {
@@ -159,9 +163,13 @@ export class SessionCompactor {
 
   /**
    * Compact a session into the memory streams.
+   * Performs a pre-compaction flush (durable checkpoint) before modifying streams.
    */
   async compact(session: Session, deviceId?: string): Promise<CompactionResult> {
     const device = deviceId ?? "default";
+
+    // Pre-compaction flush: save durable checkpoint of current stream state
+    this.flushBeforeCompaction(session.meta.id, device);
 
     const signals = await this.extractSignals(session);
     const affinityMatrix = buildAffinityMatrix(signals);
@@ -247,6 +255,70 @@ export class SessionCompactor {
     }
 
     return keywordExtractSignals(session);
+  }
+
+  // ─── Pre-Compaction Flush ────────────────────────────────────────
+
+  /**
+   * Save a durable checkpoint of all stream contents before compaction.
+   * Enables safe rollback if compaction fails mid-way.
+   */
+  private flushBeforeCompaction(sessionId: string, deviceId: string): void {
+    try {
+      const dir = getFlushDir();
+      fs.mkdirSync(dir, { recursive: true });
+
+      const checkpoint: Record<string, string | null> = {};
+      for (const streamType of STREAM_ORDER) {
+        const content = streamType === "flow"
+          ? this.streamManager.readContent(streamType, deviceId)
+          : this.streamManager.readContent(streamType);
+        checkpoint[streamType] = content;
+      }
+
+      const flushPath = path.join(dir, `${sessionId}.json`);
+      fs.writeFileSync(flushPath, JSON.stringify({
+        sessionId,
+        deviceId,
+        timestamp: new Date().toISOString(),
+        streams: checkpoint,
+      }, null, "\t"), "utf-8");
+    } catch (err: unknown) {
+      process.stderr.write(`[smriti:compactor] pre-compaction flush failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  }
+
+  /**
+   * Rollback streams to a pre-compaction checkpoint.
+   * Call this if compaction fails and you need to restore stream state.
+   */
+  rollback(sessionId: string): boolean {
+    try {
+      const flushPath = path.join(getFlushDir(), `${sessionId}.json`);
+      if (!fs.existsSync(flushPath)) return false;
+
+      const data = JSON.parse(fs.readFileSync(flushPath, "utf-8")) as {
+        deviceId: string;
+        streams: Record<string, string | null>;
+      };
+
+      for (const streamType of STREAM_ORDER) {
+        const content = data.streams[streamType];
+        if (content === null || content === undefined) continue;
+        if (streamType === "flow") {
+          this.streamManager.write(streamType, content, data.deviceId);
+        } else {
+          this.streamManager.write(streamType, content);
+        }
+      }
+
+      // Clean up the checkpoint after successful rollback
+      fs.unlinkSync(flushPath);
+      return true;
+    } catch (err: unknown) {
+      process.stderr.write(`[smriti:compactor] rollback failed: ${err instanceof Error ? err.message : String(err)}\n`);
+      return false;
+    }
   }
 
   // ─── Persistence ─────────────────────────────────────────────────

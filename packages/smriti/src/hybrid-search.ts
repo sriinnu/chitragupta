@@ -13,7 +13,7 @@ import type { SessionMeta, RecallResult, GraphNode, PramanaType } from "./types.
 import { searchSessions } from "./search.js";
 import { RecallEngine } from "./recall.js";
 import { GraphRAGEngine } from "./graphrag.js";
-import type { KalaChakra } from "./kala-chakra.js";
+import { KalaChakra } from "./kala-chakra.js";
 import { HybridWeightLearner } from "./hybrid-search-learner.js";
 
 // Re-export learner class and state type so consumers keep importing from this file
@@ -78,6 +78,17 @@ export interface HybridSearchConfig {
 	project?: string;
 	/** Minimum RRF score threshold (default 0). */
 	minScore: number;
+	/**
+	 * User-configurable weight priors for each signal.
+	 * When set, these are blended with Thompson-sampled weights:
+	 *   effective_w = (1 - priorBlend) * sampled + priorBlend * prior
+	 * Values should be in [0, 1]. Missing keys use the sampled value as-is.
+	 */
+	weightPriors?: Partial<Record<HybridSignal, number>>;
+	/** Blend factor for weight priors vs Thompson Sampling [0, 1]. Default: 0.3. */
+	priorBlend?: number;
+	/** Disable KalaChakra temporal boosting (default false — temporal boost is ON). */
+	disableTemporalBoost?: boolean;
 }
 
 const DEFAULT_CONFIG: HybridSearchConfig = {
@@ -147,7 +158,10 @@ export class HybridSearchEngine {
 	private weightLearner: HybridWeightLearner | null;
 	private kalaChakra: KalaChakra | null;
 
-	/** Create a new hybrid search engine with optional engines and learner. */
+	/**
+	 * Create a new hybrid search engine with optional engines and learner.
+	 * KalaChakra temporal boosting is enabled by default unless `disableTemporalBoost` is set.
+	 */
 	constructor(
 		config?: Partial<HybridSearchConfig>,
 		recallEngine?: RecallEngine,
@@ -158,7 +172,8 @@ export class HybridSearchEngine {
 		this.recallEngine = recallEngine ?? null;
 		this.graphEngine = graphEngine ?? null;
 		this.weightLearner = weightLearner ?? null;
-		this.kalaChakra = null;
+		// Auto-initialize KalaChakra for temporal decay unless explicitly disabled
+		this.kalaChakra = config?.disableTemporalBoost ? null : new KalaChakra();
 	}
 
 	/** Set or replace the RecallEngine instance. */
@@ -204,9 +219,21 @@ export class HybridSearchEngine {
 		const cfg = { ...this.config, ...configOverride };
 
 		// Sample weights from Thompson posteriors (or use uniform)
-		const weights = this.weightLearner
+		let weights = this.weightLearner
 			? this.weightLearner.sample()
 			: { bm25: 1, vector: 1, graphrag: 1, pramana: 1 };
+
+		// Blend with user-configurable weight priors if provided
+		if (cfg.weightPriors) {
+			const blend = cfg.priorBlend ?? 0.3;
+			const priors = cfg.weightPriors;
+			weights = {
+				bm25: priors.bm25 !== undefined ? (1 - blend) * weights.bm25 + blend * priors.bm25 : weights.bm25,
+				vector: priors.vector !== undefined ? (1 - blend) * weights.vector + blend * priors.vector : weights.vector,
+				graphrag: priors.graphrag !== undefined ? (1 - blend) * weights.graphrag + blend * priors.graphrag : weights.graphrag,
+				pramana: priors.pramana !== undefined ? (1 - blend) * weights.pramana + blend * priors.pramana : weights.pramana,
+			};
+		}
 
 		// Collect rankings from each enabled source
 		const rankings: Array<{

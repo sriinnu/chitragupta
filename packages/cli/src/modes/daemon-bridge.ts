@@ -298,9 +298,10 @@ export async function memoryRecall(
 /** Search memory markdown files via daemon. */
 export async function searchMemoryFiles(
 	query: string,
+	project?: string,
 ): Promise<Array<Record<string, unknown>>> {
 	const result = await daemonCall<{ results: Array<Record<string, unknown>> }>(
-		"memory.file_search", { query },
+		"memory.file_search", project ? { query, project } : { query },
 	);
 	return result.results;
 }

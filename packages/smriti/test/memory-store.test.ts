@@ -179,6 +179,28 @@ describe("MemoryStore", () => {
       expect(appendCall[1]).toContain("---"); // separator
       expect(appendCall[1]).toContain("My new entry");
     });
+
+    it("should skip low-signal tool-status noise entries", async () => {
+      const scope: MemoryScope = { type: "global" };
+      await appendMemory(scope, "Checked chitragupta_day_show");
+
+      // Sanitizer should drop this entry completely.
+      expect(fsModule.default.writeFileSync).not.toHaveBeenCalled();
+      expect(fsModule.default.appendFileSync).not.toHaveBeenCalled();
+      expect(getMemory(scope)).toBe("");
+    });
+
+    it("should dedupe duplicate entries by default", async () => {
+      const scope: MemoryScope = { type: "global" };
+      await updateMemory(scope, "# Global Memory");
+
+      await appendMemory(scope, "Stable preference: always show project context");
+      await appendMemory(scope, "Stable preference: always show project context");
+
+      const content = getMemory(scope);
+      const matches = content.match(/Stable preference: always show project context/g) ?? [];
+      expect(matches.length).toBe(1);
+    });
   });
 
   describe("deleteMemory", () => {

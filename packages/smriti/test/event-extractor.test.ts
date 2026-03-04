@@ -299,7 +299,7 @@ describe("extractEventChain — user turns", () => {
 
 	it("should extract decision event for short user statements", () => {
 		const meta = makeMeta();
-		const turns = [makeTurn("user", "Use SQLite for persistence")];
+		const turns = [makeTurn("user", "We should use SQLite for persistence")];
 		const chain = extractEventChain(meta, turns);
 		const decisions = chain.events.filter((e) => e.type === "decision");
 		expect(decisions.length).toBeGreaterThanOrEqual(1);
@@ -342,6 +342,20 @@ describe("extractEventChain — user turns", () => {
 		const chain = extractEventChain(meta, turns);
 		const matching = chain.topics.filter((t) => t.includes("Refactor the auth module"));
 		expect(matching.length).toBe(1);
+	});
+
+	it("should ignore tool-status lines as topics", () => {
+		const meta = makeMeta();
+		const turns = [makeTurn("user", "Checked chitragupta_day_show")];
+		const chain = extractEventChain(meta, turns);
+		expect(chain.topics.length).toBe(0);
+	});
+
+	it("should ignore compressed markers as topics", () => {
+		const meta = makeMeta();
+		const turns = [makeTurn("user", "[compressed] [compressed] long system payload")];
+		const chain = extractEventChain(meta, turns);
+		expect(chain.topics.length).toBe(0);
 	});
 
 	it("should return early for [tool:xxx] turns without extracting other event types", () => {
@@ -478,7 +492,7 @@ describe("extractEventChain — coding assistant turns", () => {
 		expect(commits[0].summary).toContain("def5678");
 	});
 
-	it("should extract decision event for short assistant content with no other match", () => {
+	it("should extract action event for short assistant content with no other match", () => {
 		const meta = makeMeta();
 		const turns = [
 			makeTurn("user", "What should we do?"),
@@ -486,10 +500,10 @@ describe("extractEventChain — coding assistant turns", () => {
 			makeTurn("assistant", "Let's use the adapter pattern here."),
 		];
 		const chain = extractEventChain(meta, turns);
-		const decisions = chain.events.filter(
-			(e) => e.type === "decision" && e.summary.includes("adapter pattern"),
+		const actions = chain.events.filter(
+			(e) => e.type === "action" && e.summary.includes("adapter pattern"),
 		);
-		expect(decisions.length).toBeGreaterThanOrEqual(1);
+		expect(actions.length).toBeGreaterThanOrEqual(1);
 	});
 
 	it("should NOT extract decision for very short assistant content (<= 10 chars)", () => {
@@ -719,9 +733,9 @@ describe("event deduplication", () => {
 		const meta = makeMeta();
 		// Two identical user turns produce identical events
 		const turns = [
-			makeTurn("user", "Use SQLite for persistence", { createdAt: 1000 }),
+			makeTurn("user", "We should use SQLite for persistence", { createdAt: 1000 }),
 			makeTurn("assistant", "Ok, noted.", { createdAt: 2000 }),
-			makeTurn("user", "Use SQLite for persistence", { createdAt: 3000 }),
+			makeTurn("user", "We should use SQLite for persistence", { createdAt: 3000 }),
 		];
 		const chain = extractEventChain(meta, turns);
 		const sqliteDecisions = chain.events.filter(
@@ -745,9 +759,9 @@ describe("event deduplication", () => {
 	it("should normalize punctuation when deduplicating", () => {
 		const meta = makeMeta();
 		const turns = [
-			makeTurn("user", "Use SQLite!", { createdAt: 1000 }),
+			makeTurn("user", "We should use SQLite!", { createdAt: 1000 }),
 			makeTurn("assistant", "Sure.", { createdAt: 2000 }),
-			makeTurn("user", "Use SQLite.", { createdAt: 3000 }),
+			makeTurn("user", "We should use SQLite.", { createdAt: 3000 }),
 		];
 		const chain = extractEventChain(meta, turns);
 		// "Use SQLite!" and "Use SQLite." should deduplicate (punctuation removed)
@@ -1038,7 +1052,7 @@ describe("edge cases", () => {
 	it("should handle provider fallback chain: provider -> metadata.provider -> agent -> 'unknown'", () => {
 		// Test 1: explicit provider
 		const meta1 = makeMeta({ provider: "explicit-provider" });
-		const chain1 = extractEventChain(meta1, [makeTurn("user", "hi")]);
+		const chain1 = extractEventChain(meta1, [makeTurn("user", "what should we do?")]);
 		expect(chain1.events[0].provider).toBe("explicit-provider");
 
 		// Test 2: metadata.provider fallback
@@ -1047,7 +1061,7 @@ describe("edge cases", () => {
 			agent: "fallback-agent",
 			metadata: { provider: "metadata-provider" },
 		});
-		const chain2 = extractEventChain(meta2, [makeTurn("user", "hi")]);
+		const chain2 = extractEventChain(meta2, [makeTurn("user", "what should we do?")]);
 		expect(chain2.events[0].provider).toBe("metadata-provider");
 
 		// Test 3: agent fallback
@@ -1056,7 +1070,7 @@ describe("edge cases", () => {
 			agent: "my-agent",
 			metadata: undefined,
 		});
-		const chain3 = extractEventChain(meta3, [makeTurn("user", "hi")]);
+		const chain3 = extractEventChain(meta3, [makeTurn("user", "what should we do?")]);
 		expect(chain3.events[0].provider).toBe("my-agent");
 	});
 });

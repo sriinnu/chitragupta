@@ -8,6 +8,7 @@ import { renameSync as nodeRenameSync } from "node:fs";
 import path from "path";
 import { SessionError } from "@chitragupta/core";
 import type { Session, SessionMeta, SessionOpts, SessionTurn } from "./types.js";
+import { stripAnsi } from "./provider-labels.js";
 import { parseSessionMarkdown } from "./markdown-parser.js";
 import { writeSessionMarkdown, writeTurnMarkdown } from "./markdown-writer.js";
 import {
@@ -197,6 +198,34 @@ function patchFrontmatterUpdated(content: string, updatedIso: string): string {
 }
 
 /**
+ * Normalize a turn before writing to markdown/SQLite.
+ * Keeps transcript fidelity while removing terminal artifacts and null bytes.
+ */
+function sanitizeTurnForPersistence(turn: SessionTurn): SessionTurn {
+	const cleanedContent = stripAnsi(turn.content)
+		.replace(/\r\n/g, "\n")
+		.replace(/\u0000/g, "")
+		.replace(/[ \t]+$/gm, "")
+		.trim();
+
+	if (!cleanedContent) {
+		throw new SessionError("Turn content is empty after normalization.");
+	}
+
+	const cleanedToolCalls = turn.toolCalls?.map((tc) => ({
+		...tc,
+		input: stripAnsi(tc.input).replace(/\u0000/g, "").trim(),
+		result: stripAnsi(tc.result).replace(/\u0000/g, "").trim(),
+	}));
+
+	return {
+		...turn,
+		content: cleanedContent,
+		toolCalls: cleanedToolCalls,
+	};
+}
+
+/**
  * Create a new session with date-based naming: session-YYYY-MM-DD.md
  *
  * Directory structure: ~/.chitragupta/sessions/<project-hash>/YYYY/MM/
@@ -366,6 +395,7 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 	const prev = sessionWriteQueues.get(key) ?? Promise.resolve();
 	const next = prev.then(() => {
 		const filePath = resolveSessionPath(sessionId, project);
+		const sanitizedTurn = sanitizeTurnForPersistence(turn);
 
 		if (!fs.existsSync(filePath)) {
 			throw new SessionError(`Session not found: ${sessionId} (project: ${project})`);
@@ -375,12 +405,12 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 
 		// Read current turn count from file to assign turn number.
 		// Fall back to SQLite if markdown is corrupted (prevents permanently stuck sessions).
-		if (!turn.turnNumber) {
+		if (!sanitizedTurn.turnNumber) {
 			try {
 				const session = parseSessionMarkdown(fileContent);
-				turn.turnNumber = session.turns.length + 1;
+				sanitizedTurn.turnNumber = session.turns.length + 1;
 			} catch {
-				turn.turnNumber = getMaxTurnNumberDb(sessionId) + 1;
+				sanitizedTurn.turnNumber = getMaxTurnNumberDb(sessionId) + 1;
 			}
 		}
 
@@ -392,14 +422,14 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 		}
 
 		// Append turn to .md file (no full rewrite!)
-		const turnMd = writeTurnMarkdown(turn);
+		const turnMd = writeTurnMarkdown(sanitizedTurn);
 		fs.appendFileSync(filePath, `\n${turnMd}\n`, "utf-8");
 
 		// Invalidate L1 cache — file content changed
 		cacheInvalidate(sessionId, project);
 
 		// Write-through to SQLite (self-heals missing session rows in SQLite).
-		insertTurnToDb(sessionId, turn, { project, filePath });
+		insertTurnToDb(sessionId, sanitizedTurn, { project, filePath });
 	}).catch((err: unknown) => {
 		throw err;
 	}).finally(() => {
