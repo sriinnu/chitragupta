@@ -2,13 +2,13 @@
 
 ![Logo](../../assets/logos/smriti.svg)
 
-**स्मृति (smriti) -- Memory**
+**smriti -- Memory**
 
-**Sessions, 4-stream memory model, GraphRAG knowledge graphs, hybrid search, consolidation, procedural memory, behavioral crystallization, dream-cycle consolidation, temporal awareness, shared knowledge fields, and SQLite persistence.**
+**Sessions, 4-stream memory model, GraphRAG knowledge graphs, hybrid search, consolidation, procedural memory, behavioral crystallization, dream-cycle consolidation, temporal awareness, shared knowledge fields, provider bridge, and SQLite persistence.**
 
 Smriti is Chitragupta's memory system. It persists everything -- sessions as Markdown files (backed by SQLite for indexing and FTS5), memory across four streams (identity, projects, tasks, flow), and a knowledge graph that links sessions, concepts, files, and decisions. Sessions can be branched like git branches, letting you explore alternative conversation paths. The Sinkhorn-Knopp compaction algorithm optimally allocates token budgets across memory streams based on signal affinity.
 
-The Phase 1 Self-Evolution Engine adds six new subsystems: the **Vasana Engine** crystallizes stable behavioral tendencies from raw samskaras using Bayesian change-point detection, the **Svapna Consolidation** pipeline runs a 5-phase dream cycle mirroring neuroscience sleep consolidation, the **Vidhi Engine** extracts parameterized procedural memories from repeated tool sequences, **Periodic Consolidation** generates monthly/yearly Markdown reports, **Akasha** implements stigmergic traces for indirect agent-to-agent knowledge sharing, and **Kala Chakra** provides 7-scale temporal awareness from the current turn to yearly patterns.
+The Phase 1 Self-Evolution Engine adds six new subsystems: the **Vasana Engine** crystallizes stable behavioral tendencies from raw samskaras using Bayesian change-point detection, the **Swapna Consolidation** pipeline runs a 5-phase dream cycle mirroring neuroscience sleep consolidation, the **Vidhi Engine** extracts parameterized procedural memories from repeated tool sequences, **Periodic Consolidation** generates monthly/yearly Markdown reports, **Akasha** implements stigmergic traces for indirect agent-to-agent knowledge sharing, and **Kala Chakra** provides 7-scale temporal awareness from the current turn to yearly patterns.
 
 ---
 
@@ -16,23 +16,24 @@ The Phase 1 Self-Evolution Engine adds six new subsystems: the **Vasana Engine**
 
 - **Session management** -- Create, save, load, list, delete, and search sessions stored as Markdown + SQLite
 - **4-stream memory model** -- Identity (95% preservation), projects (80%), tasks (70%), flow (30%)
-- **GraphRAG engine** -- Knowledge graph with typed nodes (session, memory, concept, file, decision) and weighted edges
-- **Hybrid search (Samshodhana)** -- RRF fusion: BM25 + Vector + GraphRAG + Pramana epistemological weighting + Kala Chakra temporal boost
+- **GraphRAG engine** -- Knowledge graph with typed nodes (session, memory, concept, file, decision) and weighted edges; bi-temporal edge filtering via `queryEdgesAtTime()` before PageRank
+- **Hybrid search (Samshodhana)** -- RRF fusion: BM25 + Vector + GraphRAG + Pramana epistemological weighting + Kala Chakra temporal boost; user-configurable weight priors blended with Thompson Sampling
 - **Session branching** -- Branch sessions like git branches and build a session tree
 - **Markdown storage** -- Sessions stored as human-readable Markdown with YAML frontmatter metadata
 - **Scoped memory** -- Global, project, agent, and session-level memory scopes
-- **Sinkhorn-Knopp compaction** -- Nesterov-accelerated doubly stochastic mixing matrix for optimal token budget allocation
+- **Sinkhorn-Knopp compaction** -- Nesterov-accelerated doubly stochastic mixing matrix for optimal token budget allocation; pre-compaction flush with `rollback()` support
 - **Bi-temporal edges (Dvikala)** -- Every graph edge carries valid-time and record-time axes, enabling time-travel queries and correction without data loss
-- **Memory consolidation (Samskaara)** -- Post-session pattern detection transforms raw experience into lasting knowledge rules with confidence tracking
+- **Memory consolidation (Samskaara)** -- Post-session pattern detection transforms raw experience into lasting knowledge rules with confidence tracking; evergreen rules exempt from temporal decay and pruning
 - **Multi-round retrieval (Anveshana)** -- Heuristic query decomposition with iterative search, weighted result fusion, and adaptive termination
 - **Pramana epistemology** -- 6 types of knowledge (Pratyaksha, Anumana, Shabda, Upamana, Arthapatti, Anupalabdhi) with reliability weighting
 - **SQLite database layer** -- 3-database architecture (agent.db, graph.db, vectors.db) with prepared statements and schema versioning
 - **Vasana Engine** -- Bayesian Online Change-Point Detection (BOCPD) for crystallizing stable behavioral tendencies
-- **Svapna Consolidation** -- 5-phase dream cycle: REPLAY, RECOMBINE, CRYSTALLIZE, PROCEDURALIZE, COMPRESS
+- **Swapna Consolidation** -- 5-phase dream cycle: REPLAY, RECOMBINE, CRYSTALLIZE, PROCEDURALIZE, COMPRESS
 - **Vidhi Engine** -- Procedural memory: n-gram extraction, anti-unification, Thompson Sampling for selection
 - **Periodic Consolidation** -- Monthly and yearly Markdown reports with FTS5 indexing
 - **Akasha** -- Stigmergic traces for indirect knowledge sharing between agents (ant colony optimization inspired)
-- **Kala Chakra** -- 7-scale temporal awareness (turn, session, day, week, month, quarter, year) with multi-scale decay
+- **Kala Chakra** -- 7-scale temporal awareness (turn, session, day, week, month, quarter, year) with multi-scale decay; auto-initialized by default in HybridSearchEngine (disable with `disableTemporalBoost`)
+- **Provider Bridge** -- Adaptive context budget scaling with provider's context window; interrupted session detection for cross-device pickup
 
 ## Architecture
 
@@ -59,10 +60,17 @@ The Phase 1 Self-Evolution Engine adds six new subsystems: the **Vasana Engine**
 ├── graphrag-adaptive-scoring.ts     Thompson Sampling weight learning + MMR diversity
 ├── graphrag-pagerank.ts             Standard PageRank
 ├── graphrag-pagerank-personalized.ts  Topic-biased teleportation + Gauss-Seidel + incremental push
+├── graphrag-pagerank-incremental.ts   Push-based incremental PageRank updates
+├── graphrag-persistence.ts          SQLite persistence for graph nodes/edges
+├── graphrag-leiden.ts               Leiden community detection
+├── graphrag-leiden-phases.ts        Leiden phase decomposition
 │
 ├── hybrid-search.ts                 Samshodhana — RRF fusion (BM25 + Vector + GraphRAG + Pramana + Kala)
+├── hybrid-search-learner.ts         Thompson Sampling weight learning with Beta posteriors
 ├── recall.ts                        RecallEngine — vector search across sessions & streams
 ├── recall-scoring.ts                Recall scoring configuration
+├── recall-storage.ts                Recall persistence layer
+├── unified-recall.ts                UnifiedRecall — layered fallback (Hybrid → BM25 → keyword)
 ├── embedding-service.ts             EmbeddingService — unified embedding abstraction
 ├── ner-extractor.ts                 NERExtractor — Named Entity Recognition
 │
@@ -70,23 +78,68 @@ The Phase 1 Self-Evolution Engine adds six new subsystems: the **Vasana Engine**
 ├── stream-extractor.ts              Signal classification for streams
 ├── sinkhorn-knopp.ts                Vanilla Sinkhorn-Knopp (doubly stochastic)
 ├── sinkhorn-accelerated.ts          Nesterov-accelerated Sinkhorn-Knopp (log-domain + adaptive eps)
-├── compactor.ts                     SessionCompactor
+├── sinkhorn-budget.ts               Budget allocation from mixing matrices
+├── compactor.ts                     SessionCompactor — pre-compaction flush + rollback
 ├── compactor-signals.ts             Compaction signal configuration
 ├── checkpoint.ts                    CheckpointManager (Sthiti)
 │
 ├── bitemporal.ts                    Dvikala — bi-temporal edge operations, time-travel, decay
 ├── consolidation.ts                 Samskaara — post-session pattern detection + knowledge rules
+├── consolidation-types.ts           KnowledgeRule (with evergreen flag), DetectedPattern types
+├── consolidation-phases.ts          Consolidation phase decomposition
+├── consolidation-scoring.ts         Consolidation scoring logic
+├── consolidation-indexer.ts         FTS5 indexing for consolidation output
 ├── multi-round-retrieval.ts         Anveshana — query decomposition + multi-round fusion
+├── query-decomposition.ts           Heuristic query splitting for Anveshana
 ├── smaran.ts                        SmaranStore — explicit memory (structured, categorical, BM25)
+├── smaran-store.ts                  Smaran persistence layer
 ├── memory-nlu.ts                    Detect "remember"/"forget"/"recall" commands
 ├── identity-context.ts              Load SOUL.md, IDENTITY.md, personality files
 │
-├── vasana-engine.ts                 ★ NEW — BOCPD behavioral crystallization
-├── svapna-consolidation.ts          ★ NEW — 5-phase dream-cycle consolidation
-├── vidhi-engine.ts                  ★ NEW — Procedural memory (n-gram + anti-unification)
-├── periodic-consolidation.ts        ★ NEW — Monthly/yearly Markdown reports
-├── akasha.ts                        ★ NEW — Stigmergic shared knowledge field
-└── kala-chakra.ts                   ★ NEW — Multi-scale temporal awareness (7 scales)
+├── provider-bridge.ts               Provider Bridge — adaptive budget + interrupted session detection
+├── provider-labels.ts               Provider label utilities
+│
+├── vasana-engine.ts                 BOCPD behavioral crystallization
+├── vasana-bocpd.ts                  BOCPD algorithm (Normal-Gamma conjugate prior)
+├── swapna-consolidation.ts          5-phase dream-cycle consolidation
+├── swapna-types.ts                  Swapna type definitions
+├── swapna-extraction.ts             Swapna feature extraction
+├── swapna-rules.ts                  Swapna rule generation
+├── swapna-vidhi.ts                  Swapna procedural extraction phase
+├── swapna-samskara.ts               Swapna crystallization phase
+├── vidhi-engine.ts                  Procedural memory (n-gram + anti-unification)
+├── vidhi-extraction.ts              Vidhi n-gram extraction
+├── vidhi-matching.ts                Vidhi trigger matching + Thompson Sampling
+├── periodic-consolidation.ts        Monthly/yearly Markdown reports
+├── periodic-monthly.ts              Monthly report generation
+├── periodic-yearly.ts               Yearly report generation
+├── akasha.ts                        Stigmergic shared knowledge field
+├── akasha-integration.ts            Akasha integration utilities
+├── kala-chakra.ts                   Multi-scale temporal awareness (7 scales)
+├── temporal-context.ts              Temporal context utilities (ISO weeks, etc.)
+│
+├── episodic-store.ts                Episodic memory store
+├── episodic-types.ts                Episodic memory types
+├── event-extractor.ts               Session event extraction
+├── event-extractor-strategies.ts    Event extraction strategy patterns
+├── day-consolidation.ts             Daily consolidation pipeline
+├── day-consolidation-renderer.ts    Day consolidation Markdown renderer
+├── day-consolidation-query.ts       Day consolidation query interface
+├── session-queries.ts               Session query helpers
+├── session-db.ts                    Session database operations
+├── session-store-cache.ts           Session store LRU cache
+├── session-store-migration.ts       Session store schema migrations
+├── fact-extractor.ts                Fact extraction from session content
+├── handover-types.ts                Handover type definitions
+├── cross-machine-sync.ts            Cross-machine sync utilities
+├── critique-store.ts                Self-critique persistence
+├── orchestrator-checkpoint.ts       Sanchaalaka-Sthiti — durable orchestrator checkpoint/resume
+├── orchestrator-checkpoint-types.ts Orchestrator checkpoint types
+├── pancha-vritti.ts                 Five mental modification patterns
+├── pancha-vritti-patterns.ts        Pancha Vritti pattern definitions
+├── hierarchical-temporal-search.ts  Hierarchical temporal search
+├── leiden-algorithm.ts              Leiden algorithm core
+└── sync-import.ts                   Sync import utilities
 ```
 
 ## API
@@ -189,7 +242,7 @@ await appendMemory(
 
 ### Hybrid Search (Samshodhana)
 
-RRF fusion combining BM25, vector similarity, GraphRAG, Pramana epistemological weighting, and Kala Chakra temporal boosting.
+RRF fusion combining BM25, vector similarity, GraphRAG, Pramana epistemological weighting, and Kala Chakra temporal boosting. KalaChakra is auto-initialized by default (disable with `disableTemporalBoost`). User-configurable weight priors can be blended with Thompson-sampled weights via `weightPriors` and `priorBlend`.
 
 ```typescript
 import { HybridSearchEngine, PRAMANA_RELIABILITY } from "@chitragupta/smriti";
@@ -198,7 +251,7 @@ import type { HybridSearchConfig, HybridSearchResult } from "@chitragupta/smriti
 const search = new HybridSearchEngine({
   graphrag: graphEngine,
   recall: recallEngine,
-  kalaChakra: kalaChakra,
+  // KalaChakra auto-initialized — no need to pass explicitly
   weights: {
     bm25: 0.25,
     vector: 0.35,
@@ -206,6 +259,10 @@ const search = new HybridSearchEngine({
     pramana: 0.10,
     temporal: 0.05,
   },
+  // User-configurable weight priors blended with Thompson Sampling
+  weightPriors: { bm25: 0.3, vector: 0.4, graphrag: 0.2 },
+  priorBlend: 0.3,  // 30% user priors, 70% Thompson-sampled
+  // disableTemporalBoost: true,  // uncomment to disable KalaChakra
 });
 
 const results: HybridSearchResult[] = await search.search("authentication flow");
@@ -221,16 +278,16 @@ console.log(PRAMANA_RELIABILITY);
 
 ### Pramana Epistemology
 
-The six Pramanas (प्रमाण -- means of valid knowledge) from Indian epistemology classify the source of every knowledge edge in the graph:
+The six Pramanas -- means of valid knowledge from Indian epistemology -- classify the source of every knowledge edge in the graph:
 
 | Pramana | Sanskrit | Meaning | Reliability | Example |
 |---------|----------|---------|-------------|---------|
-| Pratyaksha | प्रत्यक्ष | Direct perception | 1.00 | Tool output, file content, test results |
-| Anumana | अनुमान | Inference | 0.85 | Deduced from patterns, logical reasoning |
-| Shabda | शब्द | Testimony | 0.75 | Documentation, user statements, README |
-| Upamana | उपमान | Analogy | 0.60 | Structural similarity to known patterns |
-| Arthapatti | अर्थापत्ति | Postulation | 0.50 | Hypothesized to explain an observation |
-| Anupalabdhi | अनुपलब्धि | Non-apprehension | 0.35 | Knowledge from absence (missing file, no test) |
+| Pratyaksha | Direct perception | 1.00 | Tool output, file content, test results |
+| Anumana | Inference | 0.85 | Deduced from patterns, logical reasoning |
+| Shabda | Testimony | 0.75 | Documentation, user statements, README |
+| Upamana | Analogy | 0.60 | Structural similarity to known patterns |
+| Arthapatti | Postulation | 0.50 | Hypothesized to explain an observation |
+| Anupalabdhi | Non-apprehension | 0.35 | Knowledge from absence (missing file, no test) |
 
 ```typescript
 import type { PramanaType } from "@chitragupta/smriti";
@@ -239,6 +296,8 @@ const source: PramanaType = "pratyaksha"; // Direct observation (tool output)
 ```
 
 ### GraphRAG
+
+Search now filters expired and superseded edges via `queryEdgesAtTime()` before running PageRank, ensuring only currently-valid bi-temporal edges contribute to scoring.
 
 ```typescript
 import { GraphRAGEngine } from "@chitragupta/smriti";
@@ -261,6 +320,7 @@ await engine.addNode({
 });
 
 // Query the knowledge graph
+// Internally: edges filtered by queryEdgesAtTime() -> PageRank on valid edges only
 const results = await engine.query("How does the parser work?");
 ```
 
@@ -373,7 +433,7 @@ const currentRanks = incremental.getRanks();
 
 ### Bi-Temporal Edges (Dvikala)
 
-Two independent time axes: valid-time (when true in reality) and record-time (when recorded in graph).
+Two independent time axes: valid-time (when true in reality) and record-time (when recorded in graph). GraphRAG search calls `queryEdgesAtTime()` to filter expired/superseded edges before PageRank computation.
 
 ```typescript
 import {
@@ -400,10 +460,11 @@ const decayed = temporalDecay(newEdge, Date.now(), 7 * 86_400_000);
 
 ### Memory Consolidation (Samskaara)
 
-Post-session pattern detection with 5 detectors, 8 rule categories, and confidence model with reinforcement/decay.
+Post-session pattern detection with 5 detectors, 8 rule categories, and confidence model with reinforcement/decay. Rules can be marked `evergreen: true` to exempt them from temporal decay and pruning -- useful for permanent preferences and invariants.
 
 ```typescript
 import { ConsolidationEngine } from "@chitragupta/smriti";
+import type { KnowledgeRule } from "@chitragupta/smriti";
 
 const engine = new ConsolidationEngine({
   minObservations: 2,
@@ -417,7 +478,14 @@ const result = engine.consolidate(recentSessions);
 console.log(`New rules: ${result.newRules.length}`);
 console.log(`Reinforced: ${result.reinforcedRules.length}`);
 
-engine.decayRules();
+// Evergreen rules: exempt from decay and pruning
+const evergreenRule: Partial<KnowledgeRule> = {
+  rule: "Always use TypeScript strict mode",
+  category: "convention",
+  evergreen: true,  // Never decays, never pruned
+};
+
+engine.decayRules();  // Skips evergreen rules
 engine.save();
 ```
 
@@ -449,9 +517,58 @@ for (const result of results) {
 
 ---
 
-### Vasana Engine (वासना) -- Behavioral Crystallization
+### Provider Bridge -- Adaptive Context for Any Provider
 
-**File:** `vasana-engine.ts` | **NEW in Phase 1**
+**File:** `provider-bridge.ts`
+
+The Provider Bridge loads relevant memory context when a provider starts a session. This is what makes switching between Claude, Codex, and Vaayu seamless -- every provider gets the same memory context.
+
+#### Adaptive Context Budget
+
+The budget scales with the provider's context window size using a 2% allocation rule (~4 chars/token). Three tiers:
+
+| Tier | Context Window | Budget | Sessions | Vasanas | Lookback |
+|------|---------------|--------|----------|---------|----------|
+| Small | < 32K tokens | 2K--2.6K chars | 2 | 3 | 4 hours |
+| Medium | 32K--100K tokens | 2.6K--8K chars | 3 | 5 | 6 hours |
+| Large | > 100K tokens | 8K--50K chars | 5 | 8 | 8 hours |
+
+Budget is allocated proportionally across sections (global facts, project memory, recent context, interrupted session, vasanas) based on actual content availability -- no wasted budget on empty sections.
+
+#### Interrupted Session Detection
+
+The bridge detects recently abandoned conversations for cross-device pickup. A session is considered "interrupted" if:
+
+- The last turn was from the user (no assistant response)
+- The assistant's last message was cut short (< 100 chars, suggesting mid-thought interruption)
+- The session ended within the tier's lookback window
+
+Interrupted sessions surface at the top of the assembled context, enabling seamless conversation resumption across devices.
+
+```typescript
+import { loadProviderContext } from "@chitragupta/smriti";
+import type { ProviderContext, ContextOptions } from "@chitragupta/smriti";
+
+const ctx: ProviderContext = await loadProviderContext(
+  deps,
+  "/my/project",
+  {
+    providerContextWindow: 200_000,  // Claude 200K -> large tier
+    deviceId: "macbook-pro",
+    userId: "user-123",
+  },
+);
+
+console.log(ctx.assembled);           // Full context string for injection
+console.log(ctx.interruptedSession);   // Interrupted session handover (if any)
+console.log(ctx.itemCount);            // Number of memory items loaded
+```
+
+---
+
+### Vasana Engine -- Behavioral Crystallization
+
+**File:** `vasana-engine.ts`
 
 *Vasana* in Vedic philosophy means a latent impression or tendency that shapes behavior. The Vasana Engine crystallizes stable behavioral patterns (samskaras) into durable tendencies using **Bayesian Online Change-Point Detection** (Adams & MacKay 2007, arxiv 0710.3742).
 
@@ -502,11 +619,11 @@ const vasanas = engine.getVasanas("my-project");
 
 ---
 
-### Svapna Consolidation (स्वप्न) -- Dream Cycle
+### Swapna Consolidation -- Dream Cycle
 
-**File:** `svapna-consolidation.ts` | **NEW in Phase 1**
+**File:** `swapna-consolidation.ts`
 
-In Yoga Nidra, *Svapna* is the dream state where the mind reorganizes experience into lasting knowledge. This module implements the **5-phase consolidation cycle** that runs during the Nidra daemon's DREAMING state.
+In Yoga Nidra, *Swapna* is the dream state where the mind reorganizes experience into lasting knowledge. This module implements the **5-phase consolidation cycle** that runs during the Nidra daemon's DREAMING state.
 
 The 5 phases mirror stages of sleep consolidation in neuroscience:
 
@@ -521,10 +638,10 @@ The 5 phases mirror stages of sleep consolidation in neuroscience:
 Performance target: full cycle < 20 seconds for 50 sessions.
 
 ```typescript
-import { SvapnaConsolidation } from "@chitragupta/smriti";
-import type { SvapnaConfig, SvapnaResult } from "@chitragupta/smriti";
+import { SwapnaConsolidation } from "@chitragupta/smriti";
+import type { SwapnaConfig, SwapnaResult } from "@chitragupta/smriti";
 
-const svapna = new SvapnaConsolidation(databaseManager, {
+const swapna = new SwapnaConsolidation(databaseManager, {
   maxSessionsPerCycle: 50,
   surpriseThreshold: 0.7,
   minPatternFrequency: 3,
@@ -534,7 +651,7 @@ const svapna = new SvapnaConsolidation(databaseManager, {
 });
 
 // Run the full 5-phase dream cycle
-const result: SvapnaResult = await svapna.consolidate((phase, pct) => {
+const result: SwapnaResult = await swapna.consolidate((phase, pct) => {
   console.log(`${phase}: ${(pct * 100).toFixed(0)}%`);
 });
 
@@ -548,9 +665,9 @@ console.log(result.durationMs);                 // Total wall-clock time
 
 ---
 
-### Vidhi Engine (विधि) -- Procedural Memory
+### Vidhi Engine -- Procedural Memory
 
-**File:** `vidhi-engine.ts` | **NEW in Phase 1**
+**File:** `vidhi-engine.ts`
 
 *Vidhi* means "method, procedure, rule" in Sanskrit. The engine extracts repeated, successful tool sequences from session data and crystallizes them into reusable, parameterized procedures.
 
@@ -595,9 +712,34 @@ if (matches.length > 0) {
 
 ---
 
+### Session Compaction -- Pre-Compaction Flush & Rollback
+
+**File:** `compactor.ts`
+
+The SessionCompactor orchestrates session compaction into the 4 memory streams. Before modifying any stream, it saves a **durable checkpoint** (pre-compaction flush) of all current stream contents. If compaction fails mid-way, call `rollback()` to restore the previous state.
+
+```typescript
+import { SessionCompactor } from "@chitragupta/smriti";
+
+const compactor = new SessionCompactor();
+
+// Compact a session — automatically flushes a durable checkpoint first
+const result = await compactor.compact(session, "device-id");
+
+// If something goes wrong downstream, restore streams to pre-compaction state
+const restored = compactor.rollback(session.meta.id);
+if (restored) {
+  console.log("Streams restored to pre-compaction checkpoint");
+}
+```
+
+Flush checkpoints are stored under `<chitraguptaHome>/smriti/flush-checkpoints/` as JSON files keyed by session ID. They are cleaned up automatically on successful rollback.
+
+---
+
 ### Periodic Consolidation -- Monthly & Yearly Reports
 
-**File:** `periodic-consolidation.ts` | **NEW in Phase 1**
+**File:** `periodic-consolidation.ts`
 
 Generates human-readable **Markdown reports** aggregating session data, vasanas, vidhis, and samskaras over calendar periods. Reports are stored under `<chitraguptaHome>/consolidated/` and indexed into FTS5 for full-text searchability.
 
@@ -630,9 +772,9 @@ const hits = periodic.searchReports("authentication refactoring");
 
 ---
 
-### Akasha (आकाश) -- Shared Knowledge Field
+### Akasha -- Shared Knowledge Field
 
-**File:** `akasha.ts` | **NEW in Phase 1**
+**File:** `akasha.ts`
 
 In Vedic cosmology, *Akasha* is the all-pervading ether through which all information flows. In Chitragupta, Akasha implements **stigmergy**: indirect communication through the environment, inspired by ant colony optimization.
 
@@ -690,11 +832,13 @@ console.log(stats.byType);
 
 ---
 
-### Kala Chakra (काल चक्र) -- Multi-Scale Temporal Awareness
+### Kala Chakra -- Multi-Scale Temporal Awareness
 
-**File:** `kala-chakra.ts` | **NEW in Phase 1**
+**File:** `kala-chakra.ts`
 
 In Vedic cosmology, *Kala Chakra* is the great wheel of time that governs all existence across scales. Chitragupta's Kala Chakra provides temporal context across **7 scales** -- from the immediate (current turn) to the historical (yearly).
+
+KalaChakra is **auto-initialized by default** in `HybridSearchEngine`. To disable, pass `disableTemporalBoost: true` in the search config.
 
 #### The 7 Temporal Scales
 
@@ -722,7 +866,7 @@ Recent documents retain up to 100% of their score; ancient documents decay to at
 import { KalaChakra, TEMPORAL_SCALES } from "@chitragupta/smriti";
 import type { KalaContext, CurrentState, TemporalScale } from "@chitragupta/smriti";
 
-const kala = new KalaChakra(databaseManager, {
+const kala = new KalaChakra({
   project: "/my/project",
 });
 
@@ -764,7 +908,7 @@ const decay = kala.decay(timestamp, "week"); // Decay using week half-life
 | Sinkhorn & compaction | 3 | Vanilla, accelerated, session compactor |
 | Bi-temporal & consolidation | 3 | Dvikala edges, Samskaara rules, knowledge base |
 | Vasana Engine | 2 | BOCPD crystallization, promotion, decay |
-| Svapna Consolidation | 2 | 5-phase cycle, replay, recombine, crystallize |
+| Swapna Consolidation | 2 | 5-phase cycle, replay, recombine, crystallize |
 | Vidhi Engine | 2 | N-gram extraction, anti-unification, matching |
 | Periodic Consolidation | 2 | Monthly/yearly reports, FTS5 indexing |
 | Akasha | 2 | Stigmergic traces, Jaccard matching, evaporation |
