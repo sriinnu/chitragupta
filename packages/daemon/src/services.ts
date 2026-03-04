@@ -155,13 +155,36 @@ function registerTurnMethods(
 	const resolveWithStore = (project: string): string =>
 		resolveProjectAgainstKnown(project, knownProjectsFromStore(store));
 
+	/**
+	 * CPH4 Catalyst — tool_calls persistence fix
+	 * Normalize nested turn object to ensure toolCalls survives snake_case
+	 * clients (e.g. Takumi, HTTP) and camelCase clients (MCP). Without this,
+	 * tool_calls sent as snake_case are silently dropped, starving the
+	 * Swapna consolidation pipeline of tool usage data.
+	 */
 	router.register("turn.add", async (rawParams) => {
 		const params = normalizeParams(rawParams);
 		const sessionId = String(params.sessionId ?? "");
 		const project = resolveWithStore(String(params.project ?? ""));
-		const turn = params.turn as Parameters<typeof store.addTurn>[2];
+		const turn = params.turn as Record<string, unknown> | undefined;
 		if (!sessionId || !project || !turn) throw new Error("Missing sessionId, project, or turn");
-		await store.addTurn(sessionId, project, turn);
+
+		// Normalize snake_case tool_calls / turn_number / content_parts to camelCase
+		// so session-store always receives a canonical SessionTurn shape.
+		if (turn.tool_calls !== undefined && turn.toolCalls === undefined) {
+			turn.toolCalls = turn.tool_calls;
+			delete turn.tool_calls;
+		}
+		if (turn.turn_number !== undefined && turn.turnNumber === undefined) {
+			turn.turnNumber = turn.turn_number;
+			delete turn.turn_number;
+		}
+		if (turn.content_parts !== undefined && turn.contentParts === undefined) {
+			turn.contentParts = turn.content_parts;
+			delete turn.content_parts;
+		}
+
+		await store.addTurn(sessionId, project, turn as Parameters<typeof store.addTurn>[2]);
 		return { added: true };
 	}, "Add a turn to a session");
 
