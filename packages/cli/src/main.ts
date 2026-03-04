@@ -285,21 +285,17 @@ export async function main(args: ParsedArgs): Promise<void> {
 		for (const pluginTool of pluginRegistry.tools) { agent.registerTool(pluginTool); }
 	} catch { /* best-effort */ }
 
-	// ─── 10a-ii. Register coding_agent tool ─────────────────────────────
+	// ─── 10a-ii. Register coding_agent tool (CLI router) ────────────────
 	agent.registerTool({
 		definition: {
 			name: "coding_agent",
 			description:
-				"Delegate a coding task to the CodingOrchestrator (Kartru). " +
-				"Runs a full autonomous pipeline: Plan → Branch → Execute → Validate → Review → Commit.",
+				"Delegate a coding task to the best available coding CLI on PATH " +
+				"(takumi, claude, codex, aider, gemini). Detects available tools automatically.",
 			inputSchema: {
 				type: "object",
 				properties: {
 					task: { type: "string", description: "The coding task to accomplish." },
-					mode: { type: "string", enum: ["full", "execute", "plan-only"], description: "Execution mode. Default: full" },
-					createBranch: { type: "boolean", description: "Create a git feature branch. Default: true" },
-					autoCommit: { type: "boolean", description: "Auto-commit on success. Default: true" },
-					selfReview: { type: "boolean", description: "Run self-review after coding. Default: true" },
 				},
 				required: ["task"],
 			},
@@ -308,19 +304,10 @@ export async function main(args: ParsedArgs): Promise<void> {
 			const task = String(execArgs.task ?? "");
 			if (!task) return { content: "Error: task is required", isError: true };
 			try {
-				const { setupFromAgent, createCodingOrchestrator } = await import("./coding-setup.js");
-				const setup = await setupFromAgent(agent, projectPath);
-				if (!setup) return { content: "Error: No provider available", isError: true };
-				const orchestrator = await createCodingOrchestrator({
-					setup, projectPath, mode: (execArgs.mode as "full" | "execute" | "plan-only") ?? "full",
-					modelId: agent.getState().model,
-					createBranch: execArgs.createBranch != null ? Boolean(execArgs.createBranch) : undefined,
-					autoCommit: execArgs.autoCommit != null ? Boolean(execArgs.autoCommit) : undefined,
-					selfReview: execArgs.selfReview != null ? Boolean(execArgs.selfReview) : undefined,
-				});
-				const result = await orchestrator.run(task);
-				const { formatOrchestratorResult } = await import("./modes/mcp-server.js");
-				return { content: formatOrchestratorResult(result) };
+				const { routeCodingTask } = await import("./modes/coding-router.js");
+				const result = await routeCodingTask({ task, cwd: projectPath });
+				const text = `[${result.cli}] exit=${result.exitCode}\n${result.output}`;
+				return { content: text, isError: result.exitCode !== 0 };
 			} catch (err) {
 				return { content: `coding_agent failed: ${err instanceof Error ? err.message : String(err)}`, isError: true };
 			}

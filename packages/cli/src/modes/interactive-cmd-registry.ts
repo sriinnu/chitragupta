@@ -25,7 +25,7 @@ export const SLASH_COMMANDS: Array<{ name: string; description: string }> = [
 	{ name: "/agents", description: "Show agent tree" },
 	{ name: "/delegate", description: "Spawn a sub-agent with a task" },
 	{ name: "/cost", description: "Show cost breakdown" },
-	{ name: "/code", description: "Spawn a coding agent for a task" },
+	{ name: "/code", description: "Route coding task to best available CLI" },
 	{ name: "/review", description: "Spawn a review agent on files or changes" },
 	{ name: "/debug", description: "Spawn a debug agent to investigate errors" },
 	{ name: "/research", description: "Spawn a research agent for codebase questions" },

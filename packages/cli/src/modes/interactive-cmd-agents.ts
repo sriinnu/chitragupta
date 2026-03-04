@@ -2,7 +2,8 @@
  * Interactive commands — Agent commands.
  *
  * Handles: /code, /review, /debug, /research, /refactor, /docs.
- * These commands spawn specialized agents (Kartru, Parikshaka, Anveshi,
+ * The /code command routes to the best available coding CLI on PATH.
+ * Other commands spawn specialized agents (Parikshaka, Anveshi,
  * Shodhaka, Parikartru, Lekhaka) for focused tasks.
  *
  * @module
@@ -24,154 +25,49 @@ export async function handleAgentCommand(
 	switch (cmd) {
 		case "/code": {
 			const rest = parts.slice(1).join(" ").trim();
-			let codeTask = "";
-			let codeMode: "full" | "execute" | "plan-only" = "full";
-			let codeBranch: boolean | undefined;
-			let codeCommit: boolean | undefined;
-			let codeReview: boolean | undefined;
 
-			if (rest) {
-				const codeParts = rest.split(/\s+/);
-				const taskParts: string[] = [];
-				for (const cp of codeParts) {
-					if (cp === "--plan") codeMode = "plan-only";
-					else if (cp === "--execute") codeMode = "execute";
-					else if (cp === "--no-branch") codeBranch = false;
-					else if (cp === "--no-commit") codeCommit = false;
-					else if (cp === "--no-review") codeReview = false;
-					else taskParts.push(cp);
-				}
-				codeTask = taskParts.join(" ");
-			}
-
-			if (!codeTask) {
-				stdout.write(yellow("\n  Usage: /code <task description> [--plan] [--no-branch] [--no-commit] [--no-review]\n"));
-				stdout.write(dim("  Runs the full coding pipeline: Plan → Branch → Execute → Validate → Review → Commit\n"));
-				stdout.write(dim("  Shows token usage, tool usage, cost breakdown, and timing.\n\n"));
+			if (!rest) {
+				stdout.write(yellow("\n  Usage: /code <task description>\n"));
+				stdout.write(dim("  Routes the task to the best available coding CLI on PATH.\n"));
+				stdout.write(dim("  Priority: takumi > claude > codex > aider > gemini > zai\n\n"));
 				return { handled: true };
 			}
 
-			stdout.write(dim(`\n  ═══ Coding Agent (Kartru) ═══════════════════\n`));
-			stdout.write(dim(`  Task: ${codeTask}\n`));
-			stdout.write(dim(`  Mode: ${codeMode}\n`));
+			stdout.write(dim(`\n  --- Coding Task ---\n`));
+			stdout.write(dim(`  Task: ${rest}\n\n`));
 
 			try {
-				const { setupFromAgent, createCodingOrchestrator } = await import("../coding-setup.js");
+				const { routeCodingTask, detectCodingClis } = await import("./coding-router.js");
 				const projectPath = ctx.projectPath ?? process.cwd();
-				const setup = await setupFromAgent(agent, projectPath);
-				if (!setup) {
-					stdout.write(red("  Error: No provider available. Set a provider first.\n\n"));
+
+				const clis = await detectCodingClis();
+				if (clis.length === 0) {
+					stdout.write(red("  Error: No coding CLI available on PATH.\n"));
+					stdout.write(dim("  Install takumi, claude, codex, or aider.\n\n"));
 					return { handled: true };
 				}
 
-				const onProgress = (progress: { phase: string; message: string; elapsedMs: number }) => {
-					const mark = progress.phase === "error" ? red("✗") : progress.phase === "done" ? green("✓") : yellow("⧖");
-					const ms = progress.elapsedMs < 1000 ? `${progress.elapsedMs}ms` : `${(progress.elapsedMs / 1000).toFixed(1)}s`;
-					stdout.write(`  ${mark} ${bold(progress.phase.padEnd(12))} ${dim(ms.padStart(8))}\n`);
-				};
+				stdout.write(dim(`  Routing to: ${green(clis[0].name)}\n\n`));
 
-				const orchestrator = await createCodingOrchestrator({
-					setup, projectPath, mode: codeMode,
-					modelId: agent.getState().model,
-					createBranch: codeBranch, autoCommit: codeCommit, selfReview: codeReview, onProgress,
+				const t0 = performance.now();
+				const result = await routeCodingTask({
+					task: rest,
+					cwd: projectPath,
+					onOutput: (chunk) => {
+						stdout.write(`  ${chunk.replace(/\n/g, "\n  ")}`);
+					},
 				});
+				const elapsedMs = performance.now() - t0;
 
 				stdout.write("\n");
-				const result = await orchestrator.run(codeTask);
-				const { stats: codeStats } = result;
-				const totalCost = codeStats.totalCost;
-				const totalToolCalls = codeStats.totalToolCalls;
-				const toolCallMap = new Map(Object.entries(codeStats.toolCalls));
-				const turns = codeStats.turns;
+				const status = result.exitCode === 0
+					? green("Success")
+					: red(`Failed (exit ${result.exitCode})`);
+				const elapsed = elapsedMs < 1000 ? `${Math.round(elapsedMs)}ms`
+					: elapsedMs < 60000 ? `${(elapsedMs / 1000).toFixed(1)}s`
+						: `${Math.floor(elapsedMs / 60000)}m ${((elapsedMs % 60000) / 1000).toFixed(0)}s`;
 
-				stdout.write("\n");
-				const status = result.success ? green("✓ Success") : red("✗ Failed");
-				stdout.write(`  Status: ${status} | Complexity: ${result.plan?.complexity ?? "unknown"}\n`);
-
-				if (result.plan && result.plan.steps.length > 0) {
-					stdout.write(dim("\n  ── Plan ──\n"));
-					for (const step of result.plan.steps) {
-						const mark = step.completed ? green("✓") : dim("○");
-						stdout.write(`  ${step.index}. [${mark}] ${step.description}\n`);
-					}
-				}
-
-				if (result.filesModified.length > 0 || result.filesCreated.length > 0) {
-					stdout.write(dim("\n  ── Files ──\n"));
-					if (result.filesModified.length > 0) stdout.write(`  ${yellow("Modified:")} ${result.filesModified.join(", ")}\n`);
-					if (result.filesCreated.length > 0) stdout.write(`  ${green("Created:")}  ${result.filesCreated.join(", ")}\n`);
-				}
-
-				if (result.git.featureBranch || result.git.commits.length > 0) {
-					stdout.write(dim("\n  ── Git ──\n"));
-					if (result.git.featureBranch) stdout.write(`  Branch:  ${cyan(result.git.featureBranch)}\n`);
-					if (result.git.commits.length > 0) stdout.write(`  Commits: ${dim(result.git.commits.join(", "))}\n`);
-				}
-
-				stdout.write(dim("\n  ── Validation ──\n"));
-				stdout.write(`  Result: ${result.validationPassed ? green("✓ passed") : red("✗ failed")}\n`);
-
-				if (result.reviewIssues.length > 0) {
-					stdout.write(dim("\n  ── Review ──\n"));
-					stdout.write(`  ${result.reviewIssues.length} issue(s) found\n`);
-					for (const issue of result.reviewIssues.slice(0, 10)) {
-						const sev = issue.severity === "error" ? red(issue.severity) : yellow(issue.severity);
-						stdout.write(`    ${sev} ${issue.file}${issue.line ? `:${issue.line}` : ""} — ${issue.message}\n`);
-					}
-				}
-
-				if (result.diffPreview) {
-					stdout.write(dim("\n  ── Diff Preview ──\n"));
-					const diffLines = result.diffPreview.split("\n");
-					const show = diffLines.length > 30 ? diffLines.slice(0, 30) : diffLines;
-					for (const line of show) {
-						if (line.startsWith("+") && !line.startsWith("+++")) stdout.write(`  ${green(line)}\n`);
-						else if (line.startsWith("-") && !line.startsWith("---")) stdout.write(`  ${red(line)}\n`);
-						else if (line.startsWith("@@")) stdout.write(`  ${cyan(line)}\n`);
-						else stdout.write(`  ${dim(line)}\n`);
-					}
-					if (diffLines.length > 30) stdout.write(dim(`  ... (${diffLines.length - 30} more lines)\n`));
-				}
-
-				if (totalToolCalls > 0 || totalCost > 0) {
-					stdout.write(dim("\n  ══ Tool Usage ═════════════════════════\n"));
-					const sorted = [...toolCallMap.entries()].sort((a, b) => b[1] - a[1]);
-					for (const [name, count] of sorted) {
-						const pct = totalToolCalls > 0 ? ((count / totalToolCalls) * 100).toFixed(1) : "0.0";
-						stdout.write(`  ${magenta("▸")} ${dim(name.padEnd(10))}${String(count).padStart(4)} calls  ${dim(`(${pct}%)`.padStart(8))}\n`);
-					}
-					stdout.write(dim("  ─────────────────────────────────\n"));
-					stdout.write(`  ${bold("Total:")}  ${totalToolCalls} calls | ${turns} turns\n`);
-				}
-
-				if (totalCost > 0) {
-					stdout.write(dim("\n  ══ Cost ══════════════════════════════\n"));
-					stdout.write(`  ${yellow(`$${totalCost.toFixed(4)}`)}\n`);
-				}
-
-				if (result.phaseTimings && result.phaseTimings.length > 0) {
-					stdout.write(dim("\n  ── Phase Timings ──\n"));
-					for (const pt of result.phaseTimings) {
-						const dur = pt.durationMs < 1000 ? `${pt.durationMs}ms` : `${(pt.durationMs / 1000).toFixed(1)}s`;
-						stdout.write(`  ${dim(pt.phase.padEnd(12))} ${dur}\n`);
-					}
-				}
-
-				if (result.diffStats) {
-					stdout.write(`  ${green(`+${result.diffStats.insertions}`)} ${red(`-${result.diffStats.deletions}`)} in ${result.diffStats.filesChanged} file(s)\n`);
-				}
-
-				if (result.errors && result.errors.length > 0) {
-					stdout.write(dim("\n  ── Errors ──\n"));
-					for (const err of result.errors) {
-						stdout.write(`  ${red(`[${err.phase}]`)} ${err.message}${err.recoverable ? dim(" (recovered)") : ""}\n`);
-					}
-				}
-
-				const elapsed = result.elapsedMs < 1000 ? `${result.elapsedMs}ms`
-					: result.elapsedMs < 60000 ? `${(result.elapsedMs / 1000).toFixed(1)}s`
-					: `${Math.floor(result.elapsedMs / 60000)}m ${((result.elapsedMs % 60000) / 1000).toFixed(0)}s`;
-				stdout.write(`\n  ${bold(dim(`⏱ ${elapsed}`))}\n\n`);
+				stdout.write(`  ${dim("CLI:")} ${result.cli} | ${dim("Status:")} ${status} | ${dim("Time:")} ${elapsed}\n\n`);
 			} catch (err) {
 				stdout.write(red(`  Error: ${err instanceof Error ? err.message : String(err)}\n\n`));
 			}
@@ -198,7 +94,7 @@ export async function handleAgentCommand(
 						const sev = issue.severity.toUpperCase();
 						const sevColor = sev === "ERROR" ? red : sev === "WARNING" ? yellow : dim;
 						stdout.write(`    ${sevColor(`[${sev}]`)} ${bold(issue.category)}: ${loc} — ${issue.message}\n`);
-						if (issue.suggestion) stdout.write(dim(`      → ${issue.suggestion}\n`));
+						if (issue.suggestion) stdout.write(dim(`      -> ${issue.suggestion}\n`));
 					}
 				}
 				stdout.write(`\n  ${bold("Summary:")} ${result.summary}\n\n`);
