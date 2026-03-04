@@ -10,6 +10,8 @@
 
 import { execFile, spawn } from "node:child_process";
 import { platform } from "node:os";
+import { TakumiBridge } from "./takumi-bridge.js";
+import type { TakumiContext, TakumiResponse } from "./takumi-bridge-types.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -45,6 +47,20 @@ export interface RouteCodingTaskOptions {
 	signal?: AbortSignal;
 	/** Streaming callback for stdout/stderr chunks. */
 	onOutput?: (chunk: string) => void;
+}
+
+/** Options for bridge-first routing via {@link routeViaBridge}. */
+export interface BridgeRouteOptions {
+	/** The coding task description / prompt. */
+	task: string;
+	/** Working directory. */
+	cwd: string;
+	/** Optional context to inject into Takumi. */
+	context?: TakumiContext;
+	/** Streaming callback for stdout/stderr chunks. */
+	onOutput?: (chunk: string) => void;
+	/** Optional abort signal. */
+	signal?: AbortSignal;
 }
 
 // ─── CLI Definitions (priority order) ────────────────────────────────────
@@ -138,6 +154,57 @@ export async function detectCodingClis(): Promise<CodingCli[]> {
 /** Reset the detection cache (useful for testing). */
 export function resetDetectionCache(): void {
 	_cachedClis = null;
+}
+
+// ─── Bridge-First Routing ──────────────────────────────────────────────
+
+/**
+ * Route a coding task through the Takumi bridge first.
+ *
+ * If Takumi is available (RPC or CLI mode), uses structured communication
+ * and returns a rich result with filesModified, testsRun, diffSummary.
+ * If Takumi is unavailable, falls back to {@link routeCodingTask}.
+ *
+ * @returns The coding route result, enriched with bridge metadata when available.
+ */
+export async function routeViaBridge(
+	options: BridgeRouteOptions,
+): Promise<CodingRouteResult & { bridgeResult?: TakumiResponse }> {
+	const bridge = new TakumiBridge({ cwd: options.cwd });
+
+	try {
+		const status = await bridge.detect();
+
+		if (status.mode === "unavailable") {
+			// Fall back to generic CLI routing
+			return routeCodingTask({
+				task: options.task,
+				cwd: options.cwd,
+				signal: options.signal,
+				onOutput: options.onOutput,
+			});
+		}
+
+		if (options.context) {
+			bridge.injectContext(options.context);
+		}
+
+		const result = await bridge.execute(
+			{ type: "task", task: options.task, context: options.context },
+			(event) => {
+				if (options.onOutput) options.onOutput(event.data);
+			},
+		);
+
+		return {
+			cli: `takumi (${status.mode})`,
+			output: result.output,
+			exitCode: result.exitCode,
+			bridgeResult: result,
+		};
+	} finally {
+		bridge.dispose();
+	}
 }
 
 // ─── Task Routing ───────────────────────────────────────────────────────
