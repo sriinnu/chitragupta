@@ -13,7 +13,7 @@
 import type { DatabaseManager } from "./database.js";
 
 // Current schema versions — bump when adding migrations
-const AGENT_SCHEMA_VERSION = 5;
+const AGENT_SCHEMA_VERSION = 6;
 const GRAPH_SCHEMA_VERSION = 1;
 const VECTORS_SCHEMA_VERSION = 1;
 
@@ -304,6 +304,15 @@ export function initAgentSchema(dbm: DatabaseManager): void {
 
 			CREATE INDEX IF NOT EXISTS idx_akasha_topic ON akasha_traces(topic);
 			CREATE INDEX IF NOT EXISTS idx_akasha_strength ON akasha_traces(strength DESC);
+		`);
+	}
+
+	// ─── Phase 6 migration: Rename svapna → swapna in consolidation_log ──
+	if (currentVersion < 6) {
+		db.exec(`
+			UPDATE consolidation_log SET cycle_type = 'swapna' WHERE cycle_type = 'svapna';
+			UPDATE consolidation_log SET cycle_id = REPLACE(cycle_id, 'svapna-', 'swapna-')
+				WHERE cycle_id LIKE 'svapna-%';
 		`);
 	}
 

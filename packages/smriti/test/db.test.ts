@@ -357,7 +357,7 @@ describe("Schema initialization", () => {
 			initAgentSchema(dbm);
 			const db = dbm.get("agent");
 			const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-			expect(row.version).toBe(5);
+			expect(row.version).toBe(6);
 		});
 
 		it("should skip re-initialization when version matches", () => {
@@ -366,7 +366,7 @@ describe("Schema initialization", () => {
 			initAgentSchema(dbm);
 			const db = dbm.get("agent");
 			const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-			expect(row.version).toBe(5);
+			expect(row.version).toBe(6);
 		});
 	});
 });

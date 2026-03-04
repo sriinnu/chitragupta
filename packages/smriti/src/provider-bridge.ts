@@ -13,7 +13,7 @@
  * into the provider's system prompt or first message.
  */
 
-import type { MemoryScope, SessionMeta, Session } from "./types.js";
+import type { Session } from "./types.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -202,7 +202,7 @@ async function detectInterruptedSession(
 // ─── Truncation Helper ──────────────────────────────────────────────────────
 
 /** Truncate text to budget, preferring to break at line boundaries. */
-function truncateTobudget(text: string, budget: number): string {
+function truncateToBudget(text: string, budget: number): string {
 	if (text.length <= budget) return text;
 	// Try to break at last newline within budget
 	const truncated = text.slice(0, budget);
@@ -326,11 +326,11 @@ export async function loadProviderContext(
 	const allocated = allocateBudget(rawSections, maxLen);
 
 	// Apply budget to each section
-	globalFacts = truncateTobudget(globalFacts, allocated.get("globalFacts") ?? 0);
-	projectMemory = truncateTobudget(projectMemory, allocated.get("projectMemory") ?? 0);
-	recentContext = truncateTobudget(recentContext, allocated.get("recentContext") ?? 0);
-	vasanaContext = truncateTobudget(vasanaContext, allocated.get("vasanaContext") ?? 0);
-	interruptedSession = truncateTobudget(interruptedSession, allocated.get("interruptedSession") ?? 0);
+	globalFacts = truncateToBudget(globalFacts, allocated.get("globalFacts") ?? 0);
+	projectMemory = truncateToBudget(projectMemory, allocated.get("projectMemory") ?? 0);
+	recentContext = truncateToBudget(recentContext, allocated.get("recentContext") ?? 0);
+	vasanaContext = truncateToBudget(vasanaContext, allocated.get("vasanaContext") ?? 0);
+	interruptedSession = truncateToBudget(interruptedSession, allocated.get("interruptedSession") ?? 0);
 
 	// ─── Assemble Context ────────────────────────────────────────────────
 	const parts: string[] = [];
