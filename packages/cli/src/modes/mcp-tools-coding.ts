@@ -1,38 +1,34 @@
 /**
- * MCP Tools — Coding Agent.
+ * MCP Tools — Coding Agent (CLI Router).
  *
- * Factory for the `coding_agent` tool that delegates coding tasks to
- * Chitragupta's CodingOrchestrator (Sanyojaka). Plans, codes, validates,
- * reviews, and commits autonomously.
+ * Factory for the `coding_agent` tool that routes coding tasks to the
+ * best available CLI on PATH (takumi, claude, codex, aider, gemini, zai).
+ * Replaces the old CodingOrchestrator-based implementation.
  *
  * @module
  */
 
 import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
-import { getSamiti } from "./mcp-subsystems.js";
-import { formatOrchestratorResult } from "./mcp-tools-introspection.js";
+import { routeCodingTask, detectCodingClis } from "./coding-router.js";
 
 /**
- * Create the `coding_agent` tool — delegate a coding task to
- * Chitragupta's CodingOrchestrator (Sanyojaka).
+ * Create the `coding_agent` tool — route a coding task to the best
+ * available CLI on PATH.
+ *
+ * @param projectPath - The project root directory to use as cwd.
  */
 export function createCodingAgentTool(projectPath: string): McpToolHandler {
 	return {
 		definition: {
 			name: "coding_agent",
 			description:
-				"Delegate a coding task to Chitragupta's coding agent (Kartru). " +
-				"Plans, codes, validates, reviews, and commits autonomously.",
+				"Delegate a coding task to the best available coding CLI " +
+				"(takumi, claude, codex, aider, gemini). " +
+				"Detects available tools automatically and routes to the highest-priority one.",
 			inputSchema: {
 				type: "object",
 				properties: {
 					task: { type: "string", description: "The coding task to accomplish." },
-					mode: { type: "string", enum: ["full", "execute", "plan-only"], description: "Execution mode. Default: full" },
-					provider: { type: "string", description: "AI provider ID. Default: from config" },
-					model: { type: "string", description: "Model ID. Default: from config" },
-					createBranch: { type: "boolean", description: "Create a git feature branch. Default: true" },
-					autoCommit: { type: "boolean", description: "Auto-commit on success. Default: true" },
-					selfReview: { type: "boolean", description: "Run self-review after coding. Default: true" },
 				},
 				required: ["task"],
 			},
@@ -40,56 +36,42 @@ export function createCodingAgentTool(projectPath: string): McpToolHandler {
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const task = String(args.task ?? "");
 			if (!task) {
-				return { content: [{ type: "text", text: "Error: task is required" }], isError: true };
+				return {
+					content: [{ type: "text", text: "Error: task is required" }],
+					isError: true,
+				};
 			}
 
 			try {
-				const { setupCodingEnvironment, createCodingOrchestrator } = await import("../coding-setup.js");
+				const result = await routeCodingTask({ task, cwd: projectPath });
 
-				// Share the MCP server's Samiti singleton with the coding agent.
-				// The duck-typed SamitiLike is structurally compatible with the concrete Samiti.
-				const mcpSamiti = await getSamiti();
+				const clis = await detectCodingClis();
+				const availableNames = clis.map((c) => c.name).join(", ") || "none";
 
-				type SetupOpts = Parameters<typeof setupCodingEnvironment>[0];
-				const setup = await setupCodingEnvironment({
-					projectPath,
-					explicitProvider: args.provider ? String(args.provider) : undefined,
-					sessionId: "coding-mcp",
-					samiti: mcpSamiti as unknown as SetupOpts["samiti"],
-				});
-				if (!setup) {
-					return {
-						content: [{ type: "text", text: "Error: No AI provider available. Set an API key or install a CLI (claude, codex, gemini)." }],
-						isError: true,
-					};
-				}
+				const header = result.exitCode === 0
+					? `[${result.cli}] Task completed successfully.`
+					: `[${result.cli}] Task exited with code ${result.exitCode}.`;
 
-				const progressMessages: string[] = [];
-				const onProgress = (progress: { phase: string; message: string }) => {
-					progressMessages.push(`[${progress.phase}] ${progress.message}`);
+				const text =
+					`${header}\n` +
+					`Available CLIs: ${availableNames}\n\n` +
+					result.output;
+
+				return {
+					content: [{ type: "text", text }],
+					isError: result.exitCode !== 0,
+					_metadata: {
+						cli: result.cli,
+						exitCode: result.exitCode,
+						availableClis: availableNames,
+					},
 				};
-
-				const orchestrator = await createCodingOrchestrator({
-					setup,
-					projectPath,
-					mode: (args.mode as "full" | "execute" | "plan-only") ?? "full",
-					modelId: args.model ? String(args.model) : undefined,
-					createBranch: args.createBranch != null ? Boolean(args.createBranch) : undefined,
-					autoCommit: args.autoCommit != null ? Boolean(args.autoCommit) : undefined,
-					selfReview: args.selfReview != null ? Boolean(args.selfReview) : undefined,
-					onProgress,
-				});
-
-				const result = await orchestrator.run(task);
-				const text = formatOrchestratorResult(result);
-				const progressSuffix = progressMessages.length > 0
-					? `\n\n── Progress Log ──\n${progressMessages.join("\n")}`
-					: "";
-
-				return { content: [{ type: "text", text: text + progressSuffix }] };
 			} catch (err) {
 				return {
-					content: [{ type: "text", text: `coding_agent failed: ${err instanceof Error ? err.message : String(err)}` }],
+					content: [{
+						type: "text",
+						text: `coding_agent failed: ${err instanceof Error ? err.message : String(err)}`,
+					}],
 					isError: true,
 				};
 			}

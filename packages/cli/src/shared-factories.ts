@@ -2,7 +2,7 @@
  * @chitragupta/cli — Shared factory functions.
  *
  * Extracts heavily duplicated infrastructure creation code that was copy-pasted
- * across coding-setup.ts (setupCodingEnvironment + setupFromAgent) and main.ts
+ * across main.ts, interactive commands, and coding-router.ts
  * (serve mode + interactive mode).
  *
  * Three factory functions:
