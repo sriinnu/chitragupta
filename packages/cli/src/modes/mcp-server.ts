@@ -76,6 +76,7 @@ import { createRepoMapTool, createSemanticGraphQueryTool } from "./mcp-tools-net
 import { createAstQueryTool } from "./mcp-tools-ast.js";
 import { createEpisodicRecallTool, createEpisodicRecordTool } from "./mcp-tools-episodic.js";
 import { createUIExtensionsTool, createWidgetDataTool } from "./mcp-tools-plugins.js";
+import { CerebralExpansion, createCerebralExpansionTool, createCerebralHandler } from "./cerebral-expansion.js";
 import {
 	createMemoryResource,
 	createSavePrompt,
@@ -236,6 +237,14 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	mcpTools.push(createEpisodicRecallTool(projectPath));
 	mcpTools.push(createEpisodicRecordTool(projectPath));
 
+	// Cerebral Expansion (Wire 2 diagnostic tool)
+	const cerebralDiag = new CerebralExpansion();
+	mcpTools.push(createCerebralExpansionTool(
+		cerebralDiag,
+		() => import("./mcp-subsystems.js").then((m) => m.getAkasha()),
+		() => import("./mcp-subsystems.js").then((m) => m.getSkillRegistry()),
+	));
+
 	// ─── 2. Session recording ───────────────────────────────────────
 
 	const recorder = new McpSessionRecorder(projectPath);
@@ -252,15 +261,20 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	heartbeat.update({ model: "mcp" });
 	let toolCallCount = 0;
 
-	// ─── 2b. Wire 2 + Wire 4: Tool-not-found resolver + learning persist ───
-	//
-	// In interactive mode these live on AgentConfig. In MCP server mode we wire
-	// them directly into McpServerConfig.onToolNotFound and ensure the
-	// learning persistence directory exists for future Agent sessions.
+	// ─── 2b. Wire 2 (Cerebral Expansion) + Wire 4 (Learning Persist) ───
+	// Basic resolver runs first; if it fails, CerebralExpansion searches
+	// Akasha cache + local skill registry (TVM) + Suraksha security scan.
 
 	const learningPersistPath = path.join(os.homedir(), ".chitragupta", "learning", "session-state.json");
 	const learningDir = path.dirname(learningPersistPath);
 	fs.mkdirSync(learningDir, { recursive: true });
+
+	const cerebralExpansion = new CerebralExpansion();
+	const cerebralHandler = createCerebralHandler(
+		cerebralExpansion,
+		() => import("./mcp-subsystems.js").then((m) => m.getAkasha()),
+		() => import("./mcp-subsystems.js").then((m) => m.getSkillRegistry()),
+	);
 
 	const toolNotFoundResolver = createToolNotFoundResolver({
 		tools: builtinTools,
@@ -295,10 +309,28 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			createSessionPrompt(),
 		],
 		onToolNotFound: async (toolName, _args) => {
+			// Phase 1: Try basic fuzzy/Vidya resolution
 			const resolved = await toolNotFoundResolver(toolName);
-			if (!resolved) return undefined;
-			// Convert core ToolHandler → MCP McpToolHandler via bridge
-			return chitraguptaToolToMcp(resolved as unknown as ChitraguptaToolHandler);
+			if (resolved) {
+				return chitraguptaToolToMcp(resolved as unknown as ChitraguptaToolHandler);
+			}
+
+			// Phase 2: Cerebral Expansion — autonomous skill discovery
+			try {
+				const expansion = await cerebralHandler(toolName);
+				if (expansion.resolved && expansion.skillName) {
+					process.stderr.write(
+						`[cerebral] Resolved ${toolName} → ${expansion.skillName} ` +
+						`(${expansion.source}, confidence=${expansion.confidence.toFixed(3)})\n`,
+					);
+				}
+			} catch (err) {
+				process.stderr.write(
+					`[cerebral] Expansion failed for ${toolName}: ${err instanceof Error ? err.message : String(err)}\n`,
+				);
+			}
+
+			return undefined;
 		},
 		/**
 		 * CPH4 Catalyst — tool_calls persistence fix
