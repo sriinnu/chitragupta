@@ -7,6 +7,9 @@
  * @module
  */
 
+import fs from "node:fs";
+import path from "node:path";
+
 /** Default limit for list queries. */
 export const DEFAULT_LIMIT = 10;
 
@@ -62,4 +65,78 @@ export function parseLimit(value: unknown, fallback = DEFAULT_LIMIT, max = MAX_L
 		throw new Error("Invalid limit");
 	}
 	return Math.min(max, Math.trunc(parsed));
+}
+
+/**
+ * Normalize a project path into a stable key.
+ *
+ * Best-effort canonicalization:
+ * - trim + resolve relative segments
+ * - resolve symlinks if path exists
+ * - normalize separators and strip trailing slash
+ * - normalize Windows drive-letter case
+ */
+export function normalizeProjectPath(project: string): string {
+	const trimmed = project.trim();
+	if (!trimmed) return "";
+
+	let normalized = path.resolve(trimmed);
+	try {
+		normalized = fs.realpathSync.native(normalized);
+	} catch {
+		// Keep resolved path when realpath fails (e.g. moved/non-existent path).
+	}
+
+	normalized = path.normalize(normalized);
+	if (normalized.length > 1) normalized = normalized.replace(/[\\/]+$/, "");
+	if (/^[A-Z]:/.test(normalized)) normalized = normalized[0].toLowerCase() + normalized.slice(1);
+	return normalized;
+}
+
+function suffix(project: string, segments = 2): string {
+	const parts = normalizeProjectPath(project).split(/[\\/]+/).filter(Boolean);
+	return parts.slice(-segments).join("/").toLowerCase();
+}
+
+/**
+ * Resolve a requested project path against known stored project keys.
+ *
+ * Resolution order:
+ * 1) exact normalized match
+ * 2) unique basename match (repo moved, same folder name)
+ * 3) unique 2-segment suffix match
+ * 4) fall back to normalized requested path
+ */
+export function resolveProjectKey(
+	requestedProject: string,
+	knownProjects: readonly string[],
+): string {
+	const requested = normalizeProjectPath(requestedProject);
+	if (!requested) return "";
+	if (knownProjects.length === 0) return requested;
+
+	const normalizedToStored = new Map<string, string>();
+	for (const candidate of knownProjects) {
+		const normalized = normalizeProjectPath(candidate);
+		if (normalized && !normalizedToStored.has(normalized)) {
+			normalizedToStored.set(normalized, candidate);
+		}
+	}
+
+	const exact = normalizedToStored.get(requested);
+	if (exact) return exact;
+
+	const requestedBase = path.basename(requested).toLowerCase();
+	const baseMatches = [...normalizedToStored.entries()].filter(
+		([normalized]) => path.basename(normalized).toLowerCase() === requestedBase,
+	);
+	if (baseMatches.length === 1) return baseMatches[0][1];
+
+	if (baseMatches.length > 1) {
+		const wantedSuffix = suffix(requested, 2);
+		const suffixMatches = baseMatches.filter(([normalized]) => suffix(normalized, 2) === wantedSuffix);
+		if (suffixMatches.length === 1) return suffixMatches[0][1];
+	}
+
+	return requested;
 }

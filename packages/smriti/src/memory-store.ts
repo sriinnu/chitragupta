@@ -14,6 +14,7 @@ import path from "path";
 import crypto from "crypto";
 import { getChitraguptaHome, MemoryError } from "@chitragupta/core";
 import type { MemoryScope } from "./types.js";
+import { stripAnsi } from "./provider-labels.js";
 
 /**
  * Hash a project path to a short hex string.
@@ -58,6 +59,27 @@ function resolveMemoryPath(scope: MemoryScope): string | null {
 function ensureDir(filePath: string): void {
 	const dir = path.dirname(filePath);
 	fs.mkdirSync(dir, { recursive: true });
+}
+
+/**
+ * Normalize and validate a memory entry before persistence.
+ * Returns null for low-signal/noise entries that should not be stored.
+ */
+function sanitizeMemoryEntry(entry: string): string | null {
+	const cleaned = stripAnsi(entry)
+		.replace(/\r\n/g, "\n")
+		.replace(/\u0000/g, "")
+		.replace(/[ \t]+$/gm, "")
+		.trim();
+
+	if (!cleaned || cleaned.length < 4) return null;
+	if (/^\[compressed\]/i.test(cleaned)) return null;
+	if (/^(?:ok|okay|sure|thanks|thank you|done|yep|yes)\.?$/i.test(cleaned)) return null;
+	if (/^(?:checked|used|read|ran|executed|called|invoked|loaded|opened)\s+(?:chitragupta_[\w-]+|mcp__[\w-]+)/i.test(cleaned)) {
+		return null;
+	}
+	if (/^(?:[-*`~_#=|:.()\[\]{}\s])+$/.test(cleaned)) return null;
+	return cleaned;
 }
 
 /* ------------------------------------------------------------------ */
@@ -204,9 +226,13 @@ export function appendMemory(scope: MemoryScope, entry: string, options?: Append
 	const next = prev
 		.then(() => {
 			try {
+				const sanitizedEntry = sanitizeMemoryEntry(entry);
+				if (!sanitizedEntry) return;
+
 				ensureDir(filePath);
 				const timestamp = new Date().toISOString();
-				const formatted = `\n---\n\n*${timestamp}*\n\n${entry}\n`;
+				const formatted = `\n---\n\n*${timestamp}*\n\n${sanitizedEntry}\n`;
+				const dedupeEnabled = options?.dedupe ?? true;
 
 				// Read existing content atomically (no TOCTOU: single readFileSync + ENOENT catch)
 				let existing: string | null = null;
@@ -220,7 +246,7 @@ export function appendMemory(scope: MemoryScope, entry: string, options?: Append
 				}
 
 				if (existing !== null) {
-					if (options?.dedupe && hasDuplicateEntry(existing, entry)) {
+					if (dedupeEnabled && hasDuplicateEntry(existing, sanitizedEntry)) {
 						return;
 					}
 					const totalSize = Buffer.byteLength(existing, "utf-8") + Buffer.byteLength(formatted, "utf-8");

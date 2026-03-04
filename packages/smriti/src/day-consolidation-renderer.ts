@@ -9,6 +9,10 @@
 import type { SessionTurn } from "./types.js";
 import type { EventChain, SessionEvent } from "./event-extractor.js";
 import type { SessionMeta } from "./types.js";
+import { resolveSessionProvider } from "./provider-labels.js";
+
+/** Increment when day-file markdown schema/semantics change. */
+export const DAY_CONSOLIDATION_FORMAT_VERSION = 2;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -69,7 +73,7 @@ export function generateDayMarkdown(
 
 	// Footer
 	lines.push("---");
-	lines.push(`*Consolidated by Chitragupta at ${new Date().toISOString()}*`);
+	lines.push(`*Consolidated by Chitragupta at ${new Date().toISOString()} | format v${DAY_CONSOLIDATION_FORMAT_VERSION}*`);
 	lines.push("");
 
 	return lines.join("\n");
@@ -127,7 +131,7 @@ function renderSessionSection(
 	activity: ProjectDayActivity,
 ): void {
 	const time = new Date(session.created).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
-	const provider = (session.metadata?.provider as string) ?? session.agent ?? "unknown";
+	const provider = resolveSessionProvider(session);
 	const turnCount = activity.turns.filter((t) => t.sessionId === session.id).length;
 
 	lines.push(`### Session: ${session.id}`);

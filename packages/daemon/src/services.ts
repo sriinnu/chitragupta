@@ -11,7 +11,17 @@ import { createLogger } from "@chitragupta/core";
 import type { RpcRouter } from "./rpc-router.js";
 import { registerTelemetryMethods } from "./services-telemetry.js";
 import {
-	normalizeParams, parseNonNegativeInt, parseLimit, DAEMON_START_MS,
+	registerReadMethods,
+	registerDaemonMethods,
+	registerWriteMethods,
+	knownProjectsFromStore,
+} from "./services-read.js";
+import {
+	normalizeParams,
+	parseNonNegativeInt,
+	parseLimit,
+	normalizeProjectPath,
+	resolveProjectKey
 } from "./services-helpers.js";
 
 const log = createLogger("daemon:services");
@@ -38,6 +48,27 @@ export async function registerServices(router: RpcRouter): Promise<void> {
 	log.info("Services registered", { methods: router.listMethods().length });
 }
 
+function knownProjectsFromDb(
+	agentDb: { prepare: (sql: string) => { all: () => Array<Record<string, unknown>> } },
+): string[] {
+	try {
+		const rows = agentDb
+			.prepare("SELECT DISTINCT project FROM sessions WHERE project IS NOT NULL AND project != ''")
+			.all();
+		return rows
+			.map((row) => (typeof row.project === "string" ? row.project : ""))
+			.filter((project) => project.length > 0);
+	} catch {
+		return [];
+	}
+}
+
+function resolveProjectAgainstKnown(project: string, knownProjects: readonly string[]): string {
+	const normalized = normalizeProjectPath(project);
+	if (!normalized) return "";
+	return resolveProjectKey(normalized, knownProjects);
+}
+
 /** Session CRUD methods. */
 function registerSessionMethods(
 	router: RpcRouter,
@@ -45,13 +76,16 @@ function registerSessionMethods(
 	_db: typeof import("@chitragupta/smriti/session-db"),
 ): void {
 	router.register("session.list", async (params) => {
-		const project = typeof params.project === "string" ? params.project : undefined;
+		const projectInput = typeof params.project === "string" ? params.project : undefined;
+		const project = projectInput
+			? resolveProjectAgainstKnown(projectInput, knownProjectsFromStore(store))
+			: undefined;
 		return { sessions: store.listSessions(project) };
 	}, "List sessions, optionally filtered by project");
 
 	router.register("session.show", async (params) => {
 		const id = String(params.id ?? "");
-		const project = String(params.project ?? "");
+		const project = resolveProjectAgainstKnown(String(params.project ?? ""), knownProjectsFromStore(store));
 		if (!id || !project) throw new Error("Missing id or project");
 		return store.loadSession(id, project);
 	}, "Load a session by ID and project");
@@ -70,6 +104,7 @@ function registerSessionMethods(
 				? params.metadata as Record<string, unknown>
 				: undefined,
 		};
+		opts.project = resolveProjectAgainstKnown(opts.project, knownProjectsFromStore(store));
 		if (!opts.project) throw new Error("Missing project");
 		const session = store.createSession(opts);
 		return { id: session.meta.id, created: true };
@@ -77,14 +112,17 @@ function registerSessionMethods(
 
 	router.register("session.delete", async (params) => {
 		const id = String(params.id ?? "");
-		const project = String(params.project ?? "");
+		const project = resolveProjectAgainstKnown(String(params.project ?? ""), knownProjectsFromStore(store));
 		if (!id || !project) throw new Error("Missing id or project");
 		store.deleteSession(id, project);
 		return { deleted: true };
 	}, "Delete a session");
 
 	router.register("session.dates", async (params) => {
-		const project = typeof params.project === "string" ? params.project : undefined;
+		const projectInput = typeof params.project === "string" ? params.project : undefined;
+		const project = projectInput
+			? resolveProjectAgainstKnown(projectInput, knownProjectsFromStore(store))
+			: undefined;
 		return { dates: store.listSessionDates(project) };
 	}, "List available session dates");
 
@@ -94,7 +132,7 @@ function registerSessionMethods(
 
 	router.register("session.modified_since", async (rawParams) => {
 		const params = normalizeParams(rawParams);
-		const project = String(params.project ?? "");
+		const project = resolveProjectAgainstKnown(String(params.project ?? ""), knownProjectsFromStore(store));
 		const sinceMs = parseNonNegativeInt(params.sinceMs, "sinceMs");
 		if (!project) throw new Error("Missing project");
 		return { sessions: store.getSessionsModifiedSince(project, sinceMs) };
@@ -114,10 +152,13 @@ function registerTurnMethods(
 	router: RpcRouter,
 	store: typeof import("@chitragupta/smriti/session-store"),
 ): void {
+	const resolveWithStore = (project: string): string =>
+		resolveProjectAgainstKnown(project, knownProjectsFromStore(store));
+
 	router.register("turn.add", async (rawParams) => {
 		const params = normalizeParams(rawParams);
 		const sessionId = String(params.sessionId ?? "");
-		const project = String(params.project ?? "");
+		const project = resolveWithStore(String(params.project ?? ""));
 		const turn = params.turn as Parameters<typeof store.addTurn>[2];
 		if (!sessionId || !project || !turn) throw new Error("Missing sessionId, project, or turn");
 		await store.addTurn(sessionId, project, turn);
@@ -135,6 +176,8 @@ function registerTurnMethods(
 			const sessions = store.listSessions();
 			const match = sessions.find((s) => String(s.id) === sessionId);
 			project = match ? String(match.project ?? "") : "";
+		} else {
+			project = resolveWithStore(project);
 		}
 		if (!project) throw new Error(`Cannot resolve project for session ${sessionId}`);
 
@@ -184,25 +227,31 @@ function registerMemoryMethods(
 
 	router.register("memory.append", async (params) => {
 		const scopeType = String(params.scopeType ?? "project");
-		const scopePath = typeof params.scopePath === "string" ? params.scopePath : undefined;
-		const entry = String(params.entry ?? "");
+		const agentDb = db.getAgentDb();
+		const scopePathRaw = typeof params.scopePath === "string" ? params.scopePath : undefined;
+		const scopePath = scopeType === "project" && scopePathRaw
+			? resolveProjectAgainstKnown(scopePathRaw, knownProjectsFromDb(agentDb))
+			: scopePathRaw;
+		const entry = String(params.entry ?? "").trim();
 		if (!entry) throw new Error("Missing entry");
 
 		const memStore = await import("@chitragupta/smriti/memory-store");
 		const scope = scopeType === "global"
 			? { type: "global" as const }
 			: { type: "project" as const, path: scopePath ?? "" };
-		await memStore.appendMemory(scope, entry);
+		await memStore.appendMemory(scope, entry, { dedupe: true });
 		return { appended: true };
 	}, "Append entry to memory (project or global scope)");
 
 	router.register("memory.recall", async (params) => {
 		const query = String(params.query ?? "");
-		const project = typeof params.project === "string" ? params.project : undefined;
+		const agentDb = db.getAgentDb();
+		const projectInput = typeof params.project === "string" ? params.project : undefined;
+		const project = projectInput
+			? resolveProjectAgainstKnown(projectInput, knownProjectsFromDb(agentDb))
+			: undefined;
 		const limit = parseLimit(params.limit, 5);
 		if (!query) throw new Error("Missing query");
-
-		const agentDb = db.getAgentDb();
 
 		// Search turns via FTS5
 		const whereClause = project
@@ -224,69 +273,16 @@ function registerMemoryMethods(
 	}, "Recall memories relevant to a query");
 }
 
-/** Read-through methods for memory files, day files, recall, and context. */
-function registerReadMethods(router: RpcRouter): void {
-	router.register("memory.unified_recall", async (params) => {
-		const query = String(params.query ?? "");
-		const project = typeof params.project === "string" ? params.project : undefined;
-		const limit = parseLimit(params.limit, 5);
-		if (!query) throw new Error("Missing query");
-		const { recall } = await import("@chitragupta/smriti/unified-recall");
-		const results = await recall(query, { limit, project });
-		return { results };
-	}, "Unified recall across all memory layers");
-
-	router.register("memory.file_search", async (params) => {
-		const query = String(params.query ?? "");
-		if (!query) throw new Error("Missing query");
-		const { searchMemory } = await import("@chitragupta/smriti/search");
-		const results = searchMemory(query);
-		return { results };
-	}, "Search memory markdown files");
-
-	router.register("memory.scopes", async () => {
-		const { listMemoryScopes } = await import("@chitragupta/smriti/memory-store");
-		return { scopes: listMemoryScopes() };
-	}, "List available memory scopes");
-
-	router.register("day.show", async (params) => {
-		const date = String(params.date ?? "");
-		if (!date) throw new Error("Missing date");
-		const { readDayFile } = await import("@chitragupta/smriti/day-consolidation");
-		const content = readDayFile(date);
-		return { date, content: content ?? null };
-	}, "Read a consolidated day file");
-
-	router.register("day.list", async () => {
-		const { listDayFiles } = await import("@chitragupta/smriti/day-consolidation");
-		return { dates: listDayFiles() };
-	}, "List available day files");
-
-	router.register("day.search", async (params) => {
-		const query = String(params.query ?? "");
-		const limit = parseLimit(params.limit);
-		if (!query) throw new Error("Missing query");
-		const { searchDayFiles } = await import("@chitragupta/smriti/day-consolidation");
-		const results = searchDayFiles(query, { limit });
-		return { results };
-	}, "Search across day files");
-
-	router.register("context.load", async (params) => {
-		const project = String(params.project ?? "");
-		if (!project) throw new Error("Missing project");
-		const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
-		const ctx = await loadProviderContext(project);
-		return { assembled: ctx.assembled, itemCount: ctx.itemCount };
-	}, "Load provider context for a project");
-}
-
 /** Knowledge lifecycle methods (Vidhis + consolidation) via single-writer daemon. */
 function registerKnowledgeMethods(
 	router: RpcRouter,
 	store: typeof import("@chitragupta/smriti/session-store"),
 ): void {
+	const resolveWithStore = (project: string): string =>
+		resolveProjectAgainstKnown(project, knownProjectsFromStore(store));
+
 	router.register("vidhi.list", async (params) => {
-		const project = String(params.project ?? "");
+		const project = resolveWithStore(String(params.project ?? ""));
 		const limit = parseLimit(params.limit, 10, 100);
 		if (!project) throw new Error("Missing project");
 		const { VidhiEngine } = await import("@chitragupta/smriti");
@@ -295,7 +291,7 @@ function registerKnowledgeMethods(
 	}, "List learned procedures (vidhis) for a project");
 
 	router.register("vidhi.match", async (params) => {
-		const project = String(params.project ?? "");
+		const project = resolveWithStore(String(params.project ?? ""));
 		const query = String(params.query ?? "");
 		if (!project) throw new Error("Missing project");
 		if (!query) throw new Error("Missing query");
@@ -305,7 +301,7 @@ function registerKnowledgeMethods(
 	}, "Match a learned procedure (vidhi) for a query");
 
 	router.register("consolidation.run", async (params) => {
-		const project = String(params.project ?? "");
+		const project = resolveWithStore(String(params.project ?? ""));
 		const sessionCount = parseLimit(params.sessionCount, 10, 100);
 		if (!project) throw new Error("Missing project");
 
@@ -365,79 +361,6 @@ function registerKnowledgeMethods(
 			vidhisNewCount,
 			vidhisReinforcedCount,
 		};
-	}, "Run Svapna consolidation and Vidhi extraction for a project");
+	}, "Run Swapna consolidation and Vidhi extraction for a project");
 }
 
-/** Daemon introspection methods for observability. */
-function registerDaemonMethods(
-	router: RpcRouter,
-	db: typeof import("@chitragupta/smriti/session-db"),
-): void {
-	router.register("daemon.status", async () => {
-		const agentDb = db.getAgentDb();
-		const mem = process.memoryUsage();
-
-		/** Count rows in a table, returning 0 if the table doesn't exist. */
-		const count = (table: string): number => {
-			try {
-				const row = agentDb.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number } | undefined;
-				return row?.n ?? 0;
-			} catch {
-				return 0;
-			}
-		};
-
-		return {
-			version: "0.1.26",
-			pid: process.pid,
-			uptime: (Date.now() - DAEMON_START_MS) / 1000,
-			memory: {
-				rss: mem.rss,
-				heapUsed: mem.heapUsed,
-				heapTotal: mem.heapTotal,
-				external: mem.external,
-			},
-			methods: router.listMethods().length,
-				counts: {
-					turns: count("turns"),
-					sessions: count("sessions"),
-					rules: count("consolidation_rules"),
-					vidhis: count("vidhis"),
-					samskaras: count("samskaras"),
-					vasanas: count("vasanas"),
-					akashaTraces: count("akasha_traces"),
-			},
-			timestamp: Date.now(),
-		};
-	}, "Full daemon status: version, PID, uptime, memory, DB counts");
-
-	router.register("daemon.health", async () => {
-		const mem = process.memoryUsage();
-		return {
-			alive: true,
-			pid: process.pid,
-			uptime: (Date.now() - DAEMON_START_MS) / 1000,
-			memory: mem.rss,
-			methods: router.listMethods().length,
-			connections: null,
-		};
-	}, "Lightweight health check for monitoring");
-}
-
-/** Write methods that enforce single-writer through daemon. */
-function registerWriteMethods(router: RpcRouter): void {
-	router.register("fact.extract", async (params) => {
-		const text = String(params.text ?? "");
-		const projectPath = typeof params.projectPath === "string" ? params.projectPath : undefined;
-		if (!text) throw new Error("Missing text");
-
-		const { getFactExtractor } = await import("@chitragupta/smriti/fact-extractor");
-		const extractor = getFactExtractor();
-		const facts = await extractor.extractAndSave(
-			text,
-			{ type: "global" },
-			projectPath ? { type: "project", path: projectPath } : undefined,
-		);
-		return { extracted: facts.length, facts };
-	}, "Extract and save facts from text (single-writer)");
-}

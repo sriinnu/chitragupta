@@ -25,6 +25,7 @@
  */
 
 import type { SessionTurn, SessionMeta } from "./types.js";
+import { resolveSessionProvider } from "./provider-labels.js";
 import {
 	getExtractorStrategy,
 	extractFromUserTurn,
@@ -282,7 +283,7 @@ export function extractEventChain(
 	turns: Array<SessionTurn & { createdAt: number }>,
 ): EventChain {
 	const sessionType = detectSessionType(turns);
-	const provider = meta.provider ?? (meta.metadata?.provider as string) ?? meta.agent ?? "unknown";
+	const provider = resolveSessionProvider(meta);
 	const events: SessionEvent[] = [];
 	const topics: string[] = [];
 

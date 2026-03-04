@@ -52,6 +52,7 @@ export function createMemorySearchTool(projectPath: string): McpToolHandler {
 				properties: {
 					query: { type: "string", description: "The search query. Be specific for better results." },
 					limit: { type: "number", description: "Maximum results to return. Default: 10" },
+					project: { type: "string", description: "Optional project path override. Defaults to current MCP project." },
 				},
 				required: ["query"],
 			},
@@ -59,6 +60,7 @@ export function createMemorySearchTool(projectPath: string): McpToolHandler {
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const query = String(args.query ?? "");
 			const limit = Math.min(100, Math.max(1, Number(args.limit ?? 10) || 10));
+			const project = args.project != null ? String(args.project) : projectPath;
 
 			if (!query) {
 				return { content: [{ type: "text", text: "Error: query is required" }], isError: true };
@@ -66,14 +68,14 @@ export function createMemorySearchTool(projectPath: string): McpToolHandler {
 
 			try {
 				const bridge = await import("./daemon-bridge.js");
-				const results = await bridge.searchMemoryFiles(query);
+				const results = await bridge.searchMemoryFiles(query, project);
 				const limited = results.slice(0, limit);
 
 				if (limited.length === 0) {
 					const scopes = await bridge.listMemoryScopesViaDaemon();
 					const hint = scopes.length === 0
 						? " No memory files exist yet — use the `memory` tool with action 'write' or 'append' to create memory."
-						: ` Searched ${scopes.length} memory scope(s).`;
+						: ` Searched ${scopes.length} memory scope(s) for project ${project}.`;
 					return { content: [{ type: "text", text: `No memory entries found for query "${query}".${hint}` }] };
 				}
 
@@ -91,7 +93,7 @@ export function createMemorySearchTool(projectPath: string): McpToolHandler {
 
 				return {
 					content: [{ type: "text", text: truncateOutput(formatted) }],
-					_metadata: { typed: { query, results: limited.map((r) => ({ text: String(r.content).slice(0, 200), score: (r.relevance as number) ?? 0, source: ((r.scope ?? {}) as Record<string, unknown>).type })) } },
+					_metadata: { typed: { query, project, results: limited.map((r) => ({ text: String(r.content).slice(0, 200), score: (r.relevance as number) ?? 0, source: ((r.scope ?? {}) as Record<string, unknown>).type })) } },
 				};
 			} catch (err) {
 				return {

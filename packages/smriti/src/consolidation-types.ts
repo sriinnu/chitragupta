@@ -43,6 +43,8 @@ export interface KnowledgeRule {
 	lastReinforcedAt: string;
 	/** Tags for searchability. */
 	tags: string[];
+	/** When true, this rule is exempt from temporal decay and pruning. */
+	evergreen?: boolean;
 }
 
 /** A detected pattern in session data. */

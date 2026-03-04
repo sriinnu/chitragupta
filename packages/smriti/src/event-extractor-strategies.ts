@@ -40,6 +40,72 @@ export function getExtractorStrategy(sessionType: SessionType): "coding" | "disc
 	return DOMAIN_EXTRACTOR_MAP[sessionType];
 }
 
+// ─── Noise Filtering / Signal Guards ────────────────────────────────────────
+
+const TIMESTAMP_RE = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\b/;
+const DATE_ONLY_RE = /\b\d{4}-\d{2}-\d{2}\b/;
+const TOOL_MARKER_RE = /\b(?:chitragupta_[a-z0-9_]+|mcp__|tool[_:])\b/i;
+const TOOL_STATUS_PREFIX_RE = /^(?:checked|used|read|ran|executed|called|invoked|loaded|opened)\b/i;
+const DECISION_INTENT_RE = /\b(?:let'?s|we should|we will|i'?ll|i will|decid(?:e|ed|ing)|choose|chosen|go with|ship(?: it)?|defer|prioriti[sz]e|drop|rollback|approve|reject)\b/i;
+const NOISE_ONLY_RE = /^(?:[-*`~_#=|:.()\[\]{}\s])+$/;
+const TOPIC_COMPRESSED_RE = /^\[compressed\]/i;
+const TOPIC_ACK_RE = /^(?:ok|okay|sure|thanks|thank you|got it|done|yep|yes)\b/i;
+const TOPIC_REPLY_OK_RE = /^reply with ok only\.?$/i;
+
+function normalizeEventText(line: string): string {
+	return line
+		.replace(/^[-*+]\s+/, "")
+		.replace(/^\d+\.\s+/, "")
+		.replace(/^#+\s*/, "")
+		.replace(/\*\*/g, "")
+		.replace(/`/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+function isLowSignalSummary(summary: string): boolean {
+	const normalized = normalizeEventText(summary);
+	if (!normalized || normalized.length < 4) return true;
+	if (NOISE_ONLY_RE.test(normalized)) return true;
+	if (TIMESTAMP_RE.test(normalized)) return true;
+	if (/^\[\d+\]\s*\(\d+% match/i.test(normalized)) return true;
+	if (/^\d{4}-\d{2}-\d{2}\s*\(/.test(normalized)) return true;
+	if (/^options:/i.test(normalized) && (
+		DATE_ONLY_RE.test(normalized) ||
+		/\b\d+% match\b/i.test(normalized) ||
+		/\bMCP session\b/i.test(normalized) ||
+		/\bturns\):/i.test(normalized)
+	)) return true;
+	if (/^\[?compressed\]?$/i.test(normalized)) return true;
+	if (/^error$/i.test(normalized)) return true;
+	if (/^options:\s*(?:---|[-*]|\s*)$/i.test(normalized)) return true;
+	if (/^options:\s*(?:---|[-*])/i.test(normalized)) return true;
+	if (TOOL_STATUS_PREFIX_RE.test(normalized) && TOOL_MARKER_RE.test(normalized)) return true;
+	if (/^(?:chitragupta_[a-z0-9_]+|mcp__[a-z0-9_]+)/i.test(normalized)) return true;
+	return false;
+}
+
+function isDecisionIntent(text: string): boolean {
+	const normalized = normalizeEventText(text);
+	if (normalized.length < 12) return false;
+	if (isLowSignalSummary(normalized)) return false;
+	return DECISION_INTENT_RE.test(normalized);
+}
+
+function isMeaningfulOptionLine(line: string): boolean {
+	const trimmed = line.trim();
+	if (!/^(?:\d+\.|[-*]|\*\*Option|Option [A-Z])/i.test(trimmed)) return false;
+	const normalized = normalizeEventText(trimmed);
+	if (normalized.length < 10) return false;
+	if (!/[a-z]/i.test(normalized)) return false;
+	if (/^\[\d+\]\s*\(\d+% match/i.test(normalized)) return false;
+	if (/^\d{4}-\d{2}-\d{2}\s*\(/.test(normalized)) return false;
+	if (/\bMCP session\b/i.test(normalized)) return false;
+	if (/\bturns\):/i.test(normalized)) return false;
+	if (isLowSignalSummary(normalized)) return false;
+	return true;
+}
+
 // ─── User Turn Extraction ───────────────────────────────────────────────────
 
 /** Extract events from a user turn (facts, preferences, questions, decisions). */
@@ -102,15 +168,18 @@ export function extractFromUserTurn(
 		});
 	}
 	// Short statements that aren't questions — often decisions or directives
-	else if (content.length < 300 && !toolMatch) {
-		events.push({
-			type: "decision",
-			summary: content.split("\n")[0].slice(0, 200),
-			timestamp,
-			sessionId,
-			provider,
-			turnNumber: turn.turnNumber,
-		});
+	else if (content.length < 300 && !toolMatch && isDecisionIntent(content)) {
+		const summary = normalizeEventText(content.split("\n")[0] ?? content);
+		if (summary && !isLowSignalSummary(summary)) {
+			events.push({
+				type: "decision",
+				summary: summary.slice(0, 200),
+				timestamp,
+				sessionId,
+				provider,
+				turnNumber: turn.turnNumber,
+			});
+		}
 	}
 
 	return events;
@@ -187,11 +256,13 @@ export function extractFromCodingAssistant(
 		});
 	}
 
-	// If nothing extracted but turn is short — it's likely a decision/summary
+	// If nothing extracted but turn is short — keep as generic action only when meaningful.
 	if (events.length === 0 && content.length < 300 && content.length > 10) {
+		const summary = normalizeEventText(content.split("\n")[0] ?? content);
+		if (!summary || isLowSignalSummary(summary)) return events;
 		events.push({
-			type: "decision",
-			summary: content.split("\n")[0].slice(0, 200),
+			type: "action",
+			summary: summary.slice(0, 200),
 			timestamp,
 			sessionId,
 			provider,
@@ -217,8 +288,8 @@ export function extractFromDiscussionAssistant(
 
 	// For discussions: first meaningful line is the opening (the "I'll do X" / thesis)
 	if (lines.length > 0) {
-		const firstLine = lines[0].replace(/^#+\s*/, "").trim();
-		if (firstLine.length > 10) {
+		const firstLine = normalizeEventText(lines[0]);
+		if (firstLine.length > 10 && !isLowSignalSummary(firstLine)) {
 			events.push({
 				type: "topic",
 				summary: firstLine.slice(0, 200),
@@ -231,29 +302,32 @@ export function extractFromDiscussionAssistant(
 	}
 
 	// Options/choices presented (numbered lists, Option A/B/C)
-	const optionLines = lines.filter((l) =>
-		/^(?:\d+\.|[-*]|\*\*Option|Option [A-C])/i.test(l.trim()),
-	);
-	if (optionLines.length >= 2) {
-		const summary = optionLines
+	const optionLines = lines
+		.filter(isMeaningfulOptionLine)
+		.map((l) => normalizeEventText(l));
+	const uniqueOptions = [...new Set(optionLines)];
+	if (uniqueOptions.length >= 2) {
+		const summary = uniqueOptions
 			.slice(0, 4)
-			.map((l) => l.trim().slice(0, 100))
+			.map((l) => l.slice(0, 100))
 			.join("; ");
-		events.push({
-			type: "decision",
-			summary: `Options: ${summary}`,
-			timestamp,
-			sessionId,
-			provider,
-			turnNumber: turn.turnNumber,
-		});
+		if (!isLowSignalSummary(summary)) {
+			events.push({
+				type: "decision",
+				summary: `Options: ${summary}`,
+				timestamp,
+				sessionId,
+				provider,
+				turnNumber: turn.turnNumber,
+			});
+		}
 	}
 
 	// Conclusions / summary lines (often at the end)
 	const lastLines = lines.slice(-3);
 	for (const line of lastLines) {
-		const trimmed = line.trim();
-		if (/^(?:So|In summary|The (?:key|main|bottom)|To summarize|Overall)/i.test(trimmed)) {
+		const trimmed = normalizeEventText(line.trim());
+		if (/^(?:So|In summary|The (?:key|main|bottom)|To summarize|Overall)/i.test(trimmed) && !isLowSignalSummary(trimmed)) {
 			events.push({
 				type: "decision",
 				summary: trimmed.slice(0, 200),
@@ -273,15 +347,25 @@ export function extractFromDiscussionAssistant(
 
 /** Extract a topic from user message content. */
 export function extractTopic(content: string): string | null {
-	const firstLine = content.split("\n")[0].trim();
+	const firstLineRaw = content.split("\n")[0] ?? "";
+	const firstLine = normalizeEventText(firstLineRaw);
 	if (firstLine.length < 5 || firstLine.length > 200) return null;
+	if (TOPIC_COMPRESSED_RE.test(firstLine)) return null;
+	if (TOPIC_REPLY_OK_RE.test(firstLine)) return null;
+	if (TOPIC_ACK_RE.test(firstLine)) return null;
+	if (TOOL_STATUS_PREFIX_RE.test(firstLine)) return null;
+	if (TOOL_MARKER_RE.test(firstLine)) return null;
 
 	// Remove common prefixes
 	const cleaned = firstLine
 		.replace(/^(?:hey|hi|hello|ok|okay|so|well|please|pls|can you|could you)\s+/i, "")
 		.trim();
 
-	return cleaned.length > 5 ? cleaned.slice(0, 100) : null;
+	if (cleaned.length <= 5) return null;
+	if (TOPIC_ACK_RE.test(cleaned)) return null;
+	if (TOOL_STATUS_PREFIX_RE.test(cleaned)) return null;
+	if (TOOL_MARKER_RE.test(cleaned)) return null;
+	return cleaned.slice(0, 100);
 }
 
 /** Deduplicate events with similar summaries. */

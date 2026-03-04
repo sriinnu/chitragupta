@@ -229,6 +229,19 @@ describe("SessionStore v2", () => {
 			expect(userTurn!.content).toBe("Hello!");
 		});
 
+		it("should normalize ANSI/null/trailing-whitespace in turn content on write", async () => {
+			const session = createSession({ project: "/test" });
+
+			await addTurn(session.meta.id, "/test", {
+				turnNumber: 0,
+				role: "user",
+				content: "Status: \u001b[31mFAIL\u001b[0m\u0000   \n",
+			});
+
+			const loaded = loadSession(session.meta.id, "/test");
+			expect(loaded.turns[0].content).toBe("Status: FAIL");
+		});
+
 		it("should auto-assign turn numbers", async () => {
 			const session = createSession({ project: "/test" });
 

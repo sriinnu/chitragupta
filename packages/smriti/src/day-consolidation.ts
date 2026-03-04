@@ -31,8 +31,9 @@ import path from "path";
 import { getChitraguptaHome, SessionError } from "@chitragupta/core";
 import type { SessionMeta, SessionTurn } from "./types.js";
 import { extractEventChain } from "./event-extractor.js";
+import { resolveSessionProvider } from "./provider-labels.js";
 import { FactExtractor } from "./fact-extractor.js";
-import { generateDayMarkdown } from "./day-consolidation-renderer.js";
+import { DAY_CONSOLIDATION_FORMAT_VERSION, generateDayMarkdown } from "./day-consolidation-renderer.js";
 import type { ProjectDayActivity } from "./day-consolidation-renderer.js";
 
 // ─── Re-exports ─────────────────────────────────────────────────────────────
@@ -84,6 +85,44 @@ export function getDayFilePath(date: string): string {
 	return path.join(getDaysRoot(), match[1], match[2], `${match[3]}.md`);
 }
 
+interface DayFileStats {
+	sessionCount: number;
+	projectCount: number;
+	formatVersion: number;
+}
+
+function parseDayFileStats(content: string): DayFileStats {
+	const versionMatch = content.match(/format v(\d+)/i);
+	return {
+		sessionCount: (content.match(/^### Session:/gm) || []).length,
+		projectCount: (content.match(/^## Project:/gm) || []).length,
+		formatVersion: versionMatch ? Number.parseInt(versionMatch[1] ?? "0", 10) || 0 : 0,
+	};
+}
+
+function latestSessionMetaTimestamp(metas: SessionMeta[]): number {
+	let latest = 0;
+	for (const meta of metas) {
+		const ts = Date.parse(meta.updated || meta.created);
+		if (Number.isFinite(ts) && ts > latest) latest = ts;
+	}
+	return latest;
+}
+
+function isDayFileFresh(dayPath: string, content: string, metas: SessionMeta[]): boolean {
+	const stats = parseDayFileStats(content);
+	if (stats.formatVersion < DAY_CONSOLIDATION_FORMAT_VERSION) return false;
+	if (stats.sessionCount !== metas.length) return false;
+	const latestMetaMs = latestSessionMetaTimestamp(metas);
+	if (latestMetaMs === 0) return true;
+	try {
+		const mtimeMs = fs.statSync(dayPath).mtimeMs;
+		return latestMetaMs <= mtimeMs;
+	} catch {
+		return false;
+	}
+}
+
 // ─── Core Consolidation ─────────────────────────────────────────────────────
 
 /**
@@ -105,20 +144,45 @@ export async function consolidateDay(
 	const t0 = performance.now();
 
 	const dayPath = getDayFilePath(date);
+	const dayFileExists = fs.existsSync(dayPath);
 
-	// Skip if already consolidated (unless forced)
-	if (!options?.force && fs.existsSync(dayPath)) {
+	// Test hook preserves old behavior: when custom loader is injected, do not
+	// run freshness checks that would require querying real session storage.
+	if (!options?.force && dayFileExists && options?.loadSessions) {
 		const content = fs.readFileSync(dayPath, "utf-8");
-		const sessionCount = (content.match(/^### Session:/gm) || []).length;
+		const stats = parseDayFileStats(content);
 		return {
 			date,
 			filePath: dayPath,
-			sessionsProcessed: sessionCount,
-			projectCount: (content.match(/^## Project:/gm) || []).length,
+			sessionsProcessed: stats.sessionCount,
+			projectCount: stats.projectCount,
 			totalTurns: 0,
 			extractedFacts: [],
 			durationMs: performance.now() - t0,
 		};
+	}
+
+	let preloadedMetas: SessionMeta[] | undefined;
+	if (!options?.force && dayFileExists && !options?.loadSessions) {
+		try {
+			const content = fs.readFileSync(dayPath, "utf-8");
+			const { listSessionsByDate } = await import("./session-store.js");
+			preloadedMetas = listSessionsByDate(date);
+			if (isDayFileFresh(dayPath, content, preloadedMetas)) {
+				const stats = parseDayFileStats(content);
+				return {
+					date,
+					filePath: dayPath,
+					sessionsProcessed: stats.sessionCount,
+					projectCount: stats.projectCount,
+					totalTurns: 0,
+					extractedFacts: [],
+					durationMs: performance.now() - t0,
+				};
+			}
+		} catch {
+			// Fall through to full re-consolidation.
+		}
 	}
 
 	// Load sessions for this date
@@ -128,7 +192,7 @@ export async function consolidateDay(
 		sessions = await options.loadSessions(date);
 	} else {
 		const { listSessionsByDate, listTurnsWithTimestamps, loadSession } = await import("./session-store.js");
-		const metas = listSessionsByDate(date);
+		const metas = preloadedMetas ?? listSessionsByDate(date);
 		sessions = metas.map((meta) => {
 			try {
 				const turns = listTurnsWithTimestamps(meta.id, meta.project);
@@ -184,8 +248,8 @@ export async function consolidateDay(
 		const activity = projectMap.get(key)!;
 		activity.sessions.push(meta);
 
-		// Extract provider from metadata or agent field
-		const provider = (meta.metadata?.provider as string) ?? meta.agent ?? "unknown";
+		// Extract a stable provider label for human-readable day files.
+		const provider = resolveSessionProvider(meta);
 		activity.providers.add(provider);
 
 		if (meta.branch) activity.branch = meta.branch;

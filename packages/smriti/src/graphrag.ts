@@ -19,6 +19,7 @@ import type {
   Session, MemoryResult, MemoryScope,
   GraphNode, GraphEdge, KnowledgeGraph, PramanaType,
 } from "./types.js";
+import { queryEdgesAtTime } from "./bitemporal.js";
 import { computePageRank as computePageRankAlgo } from "./graphrag-pagerank.js";
 import { IncrementalPageRank } from "./graphrag-pagerank-personalized.js";
 import { llmExtractEntities, keywordExtractEntities } from "./graphrag-extraction.js";
@@ -233,12 +234,21 @@ export class GraphRAGEngine {
 
   // ─── Hybrid Search ───────────────────────────────────────────────
 
-  /** Search the knowledge graph using hybrid scoring (cosine + PageRank + BM25). */
+  /**
+   * Search the knowledge graph using hybrid scoring (cosine + PageRank + BM25).
+   * Edges are filtered by bi-temporal validity — only currently-valid, non-superseded
+   * edges contribute to PageRank during search.
+   */
   async search(query: string, graph?: KnowledgeGraph, topK: number = 10): Promise<GraphNode[]> {
     const searchGraph = graph ?? this.graph;
     if (searchGraph.nodes.length === 0) return [];
     const queryEmbedding = await this.getEmbedding(query);
-    if (this.pageRankScores.size === 0) this.computePageRank(searchGraph);
+
+    // Filter edges to only currently-valid ones using bi-temporal query
+    const nowISO = new Date().toISOString();
+    const validEdges = queryEdgesAtTime(searchGraph.edges, nowISO);
+    const temporalGraph: KnowledgeGraph = { nodes: searchGraph.nodes, edges: validEdges };
+    if (this.pageRankScores.size === 0) this.computePageRank(temporalGraph);
 
     let maxPageRank = 0;
     for (const node of searchGraph.nodes) {

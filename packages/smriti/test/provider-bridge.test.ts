@@ -22,6 +22,12 @@ vi.mock("../src/session-store.js", () => ({
 	loadSession: (...args: unknown[]) => mockLoadSession(...args),
 }));
 
+vi.mock("../src/vasana-engine.js", () => ({
+	VasanaEngine: vi.fn().mockImplementation(() => ({
+		getVasanas: vi.fn().mockReturnValue([]),
+	})),
+}));
+
 import { loadProviderContext } from "../src/provider-bridge.js";
 import type { ProviderContext } from "../src/provider-bridge.js";
 
@@ -288,7 +294,7 @@ describe("loadProviderContext", () => {
 	// ── 5. Recent session limit ─────────────────────────────────────────
 
 	describe("recent session limit", () => {
-		it("should default to 3 recent sessions", async () => {
+		it("should default to 2 recent sessions for small context window", async () => {
 			const metas = Array.from({ length: 5 }, (_, i) =>
 				makeSessionMeta({
 					id: `session-2025-06-0${i + 1}-abcd1234`,
@@ -303,8 +309,8 @@ describe("loadProviderContext", () => {
 
 			const ctx = await loadProviderContext("/test/project");
 
-			// loadSession should be called 3 times (default limit)
-			expect(mockLoadSession).toHaveBeenCalledTimes(3);
+			// Default 8K token window => small tier => 2 sessions
+			expect(mockLoadSession).toHaveBeenCalledTimes(2);
 		});
 
 		it("should respect custom recentSessionLimit of 1", async () => {
@@ -366,20 +372,20 @@ describe("loadProviderContext", () => {
 	// ── 6. Context length truncation ────────────────────────────────────
 
 	describe("context length truncation", () => {
-		it("should truncate globalFacts when exceeding maxContextLength / 3", async () => {
+		it("should truncate globalFacts when exceeding proportional budget", async () => {
 			const longFacts = "A".repeat(2000);
 			mockGetMemory.mockReturnValue(longFacts);
 
 			const ctx = await loadProviderContext(undefined, {
-				maxContextLength: 4000,
+				maxContextLength: 800,
 			});
 
-			// maxLen / 3 = ~1333 chars
+			// Proportional budget gives ~800 to globalFacts (only section); 2000 > 800
 			expect(ctx.globalFacts.length).toBeLessThan(2000);
 			expect(ctx.globalFacts).toContain("...(truncated)");
 		});
 
-		it("should truncate projectMemory when exceeding maxContextLength / 3", async () => {
+		it("should truncate projectMemory when exceeding proportional budget", async () => {
 			const longMemory = "B".repeat(2000);
 			mockGetMemory.mockImplementation((scope: { type: string }) => {
 				if (scope.type === "project") return longMemory;
@@ -387,21 +393,23 @@ describe("loadProviderContext", () => {
 			});
 
 			const ctx = await loadProviderContext("/test/project", {
-				maxContextLength: 4000,
+				maxContextLength: 800,
 			});
 
+			// Proportional budget gives ~800 to projectMemory (only section); 2000 > 800
 			expect(ctx.projectMemory.length).toBeLessThan(2000);
 			expect(ctx.projectMemory).toContain("...(truncated)");
 		});
 
-		it("should use default maxContextLength of 4000", async () => {
+		it("should use adaptive maxContextLength based on provider context window", async () => {
 			const longFacts = "C".repeat(5000);
 			mockGetMemory.mockReturnValue(longFacts);
 
+			// Default 8K token window => budget = max(2000, floor(8192*4*0.02)) = 2000 chars
 			const ctx = await loadProviderContext();
 
-			// With default 4000, maxLen/3 ~ 1333
-			expect(ctx.globalFacts.length).toBeLessThanOrEqual(Math.floor(4000 / 3) + "...(truncated)".length + 1);
+			const adaptiveBudget = Math.max(2000, Math.floor(8192 * 4 * 0.02));
+			expect(ctx.globalFacts.length).toBeLessThanOrEqual(adaptiveBudget + "\n...(truncated)".length);
 			expect(ctx.globalFacts).toContain("...(truncated)");
 		});
 
@@ -443,8 +451,8 @@ describe("loadProviderContext", () => {
 				maxContextLength: 600,
 			});
 
-			// maxLen/3 = 200
-			expect(ctx.globalFacts.length).toBeLessThanOrEqual(200 + "\n...(truncated)".length);
+			// Proportional budget gives ~600 to globalFacts (only section); 1000 > 600
+			expect(ctx.globalFacts.length).toBeLessThanOrEqual(600 + "\n...(truncated)".length);
 			expect(ctx.globalFacts).toContain("...(truncated)");
 		});
 
@@ -519,7 +527,9 @@ describe("loadProviderContext", () => {
 				return makeSession([{ role: "user", content: `Topic for ${id}` }]);
 			});
 
-			const ctx = await loadProviderContext("/test/project");
+			const ctx = await loadProviderContext("/test/project", {
+				recentSessionLimit: 3,
+			});
 
 			expect(ctx.recentContext).toContain("session-good-1");
 			expect(ctx.recentContext).not.toContain("session-bad");
@@ -1094,7 +1104,7 @@ describe("loadProviderContext", () => {
 	// ── 19. Options defaults ────────────────────────────────────────────
 
 	describe("options defaults", () => {
-		it("should use default recentSessionLimit of 3 when options is undefined", async () => {
+		it("should use default recentSessionLimit of 2 when options is undefined (small tier)", async () => {
 			const metas = Array.from({ length: 5 }, (_, i) =>
 				makeSessionMeta({
 					id: `s${i}`,
@@ -1108,19 +1118,21 @@ describe("loadProviderContext", () => {
 
 			await loadProviderContext("/test/project");
 
-			expect(mockLoadSession).toHaveBeenCalledTimes(3);
+			// Default 8K token window => small tier => 2 sessions
+			expect(mockLoadSession).toHaveBeenCalledTimes(2);
 		});
 
-		it("should use default maxContextLength of 4000 when options is undefined", async () => {
-			// Content that would be truncated at 4000/3 ~ 1333
-			const longContent = "Z".repeat(2000);
+		it("should use adaptive maxContextLength when options is undefined", async () => {
+			// Content that exceeds adaptive budget (2000 chars min floor for 8K token window)
+			const longContent = "Z".repeat(5000);
 			mockGetMemory.mockReturnValue(longContent);
 
 			const ctx = await loadProviderContext();
 
-			const expectedSliceLen = Math.floor(4000 / 3);
+			// Default 8K token window => budget = max(2000, floor(8192*4*0.02)) = 2000 chars
+			const adaptiveBudget = Math.max(2000, Math.floor(8192 * 4 * 0.02));
 			expect(ctx.globalFacts).toContain("...(truncated)");
-			expect(ctx.globalFacts.startsWith("Z".repeat(expectedSliceLen))).toBe(true);
+			expect(ctx.globalFacts.length).toBeLessThanOrEqual(adaptiveBudget + "\n...(truncated)".length);
 		});
 
 		it("should handle options object with no properties set", async () => {
@@ -1137,8 +1149,8 @@ describe("loadProviderContext", () => {
 
 			await loadProviderContext("/test/project", {});
 
-			// Should still use defaults
-			expect(mockLoadSession).toHaveBeenCalledTimes(3);
+			// Empty options => default 8K token window => small tier => 2 sessions
+			expect(mockLoadSession).toHaveBeenCalledTimes(2);
 		});
 	});
 
