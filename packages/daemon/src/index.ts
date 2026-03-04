@@ -29,6 +29,9 @@ export {
 	ErrorCode,
 } from "./protocol.js";
 
+// Public API: watchdog (self-healing process supervisor)
+export { ScarlettWatchdog, startScarlett, stopScarlett, type ScarlettConfig, type ScarlettEvents } from "./scarlett-watchdog.js";
+
 // Server + router (for daemon entry point and tests)
 export { startServer, type DaemonServer, type DaemonServerConfig } from "./server.js";
 export { startHttpServer, DEFAULT_HTTP_PORT, type DaemonHttpServer, type DaemonHttpConfig } from "./http-server.js";
