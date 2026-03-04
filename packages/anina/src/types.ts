@@ -351,8 +351,8 @@ export interface AgentTree {
 /** The three consciousness states of the Nidra daemon. */
 export type NidraState = "LISTENING" | "DREAMING" | "DEEP_SLEEP";
 
-/** The five phases of the Svapna (dream) consolidation cycle. */
-export type SvapnaPhase = "REPLAY" | "RECOMBINE" | "CRYSTALLIZE" | "PROCEDURALIZE" | "COMPRESS";
+/** The five phases of the Swapna (dream) consolidation cycle. */
+export type SwapnaPhase = "REPLAY" | "RECOMBINE" | "CRYSTALLIZE" | "PROCEDURALIZE" | "COMPRESS";
 
 /** Configuration for the Nidra daemon. */
 export interface NidraConfig {
@@ -394,7 +394,7 @@ export interface NidraSnapshot {
 	lastHeartbeat: number;
 	lastConsolidationStart?: number;
 	lastConsolidationEnd?: number;
-	consolidationPhase?: SvapnaPhase;
+	consolidationPhase?: SwapnaPhase;
 	consolidationProgress: number;
 	uptime: number;
 }

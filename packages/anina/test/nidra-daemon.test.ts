@@ -13,7 +13,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { NidraDaemon } from "../src/nidra-daemon.js";
 import { DEFAULT_NIDRA_CONFIG } from "../src/types.js";
-import type { NidraConfig, NidraState, NidraSnapshot, SvapnaPhase } from "../src/types.js";
+import type { NidraConfig, NidraState, NidraSnapshot, SwapnaPhase } from "../src/types.js";
 import { createEventBus } from "@chitragupta/core";
 import type { EventBus } from "@chitragupta/core";
 
@@ -367,7 +367,7 @@ describe("NidraDaemon", () => {
 
 	describe("onDream() and onDeepSleep() hooks", () => {
 		it("should invoke the dream handler when entering DREAMING", () => {
-			const dreamFn = vi.fn(async (_progress: (phase: SvapnaPhase, pct: number) => void) => {});
+			const dreamFn = vi.fn(async (_progress: (phase: SwapnaPhase, pct: number) => void) => {});
 			daemon = createDaemon();
 			daemon.onDream(dreamFn);
 			daemon.start();
@@ -378,7 +378,7 @@ describe("NidraDaemon", () => {
 		});
 
 		it("should provide a progress callback to the dream handler", async () => {
-			const phases: Array<{ phase: SvapnaPhase; pct: number }> = [];
+			const phases: Array<{ phase: SwapnaPhase; pct: number }> = [];
 
 			daemon = createDaemon();
 			daemon.onDream(async (progress) => {
@@ -1310,7 +1310,7 @@ describe("NidraDaemon", () => {
 		});
 
 		it("should handle both handlers registered simultaneously", async () => {
-			const dreamFn = vi.fn(async (progress: (phase: SvapnaPhase, pct: number) => void) => {
+			const dreamFn = vi.fn(async (progress: (phase: SwapnaPhase, pct: number) => void) => {
 				progress("COMPRESS", 1.0);
 			});
 			const deepSleepFn = vi.fn(async () => {});

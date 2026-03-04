@@ -262,28 +262,28 @@ export class ChitraguptaDaemon extends EventEmitter {
 				return;
 			}
 
-			// Run Svapna consolidation per project
+			// Run Swapna consolidation per project
 			const { listSessionsByDate } = await import("@chitragupta/smriti/session-store");
 			const sessions = listSessionsByDate(date);
 			const projects = new Set(sessions.map((s: { project: string }) => s.project));
 
 			for (const project of projects) {
 				try {
-					const { SvapnaConsolidation } = await import("@chitragupta/smriti/svapna-consolidation");
-					const svapna = new SvapnaConsolidation({
+					const { SwapnaConsolidation } = await import("@chitragupta/smriti/swapna-consolidation");
+					const swapna = new SwapnaConsolidation({
 						project, maxSessionsPerCycle: 50,
 						surpriseThreshold: 0.7, minPatternFrequency: 3,
 						minSequenceLength: 2, minSuccessRate: 0.8,
 					});
-					await svapna.run((phase: string, progress: number) => {
+					await swapna.run((phase: string, progress: number) => {
 						this.emit("consolidation", {
-							type: "progress", date, phase: `svapna:${phase}`,
+							type: "progress", date, phase: `swapna:${phase}`,
 							detail: `${project} (${(progress * 100).toFixed(0)}%)`,
 						});
 					});
 				} catch (err) {
 					this.emit("consolidation", {
-						type: "error", date, phase: "svapna",
+						type: "error", date, phase: "swapna",
 						detail: `${project}: ${err instanceof Error ? err.message : String(err)}`,
 					});
 				}

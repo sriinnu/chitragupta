@@ -27,7 +27,7 @@ Chitragupta does not glue APIs together. It implements novel algorithms with mat
 | **Exponential Moving Average** | `anina/chetana/bhava.ts` | O(1) | Valence smoothing for emotional state tracking with configurable alpha |
 | **Salience Scoring** | `anina/chetana/dhyana.ts` | O(1) per item | Recency decay + error adjacency boost + correction boost for attention allocation |
 | **Markov Chain Tool Prediction** | `anina/learning-loop.ts` | O(1) per transition | Transition probability matrix for predicting next tool usage |
-| **Svapna 5-Phase Consolidation** | `anina/nidra.ts` | O(n * log n) | Replay (surprise), recombine (graph isomorphism), crystallize (BOCPD), proceduralize (anti-unification), compress (Sinkhorn-Knopp) |
+| **Swapna 5-Phase Consolidation** | `anina/nidra.ts` | O(n * log n) | Replay (surprise), recombine (graph isomorphism), crystallize (BOCPD), proceduralize (anti-unification), compress (Sinkhorn-Knopp) |
 | **Vasana Crystallization (BOCPD)** | `smriti/vasana.ts` | O(T) per series | Bayesian Online Change-Point Detection on behavioral time series. Holdout validation of predictive accuracy before crystallization |
 | **Guna Kalman Filter** | `anina/chetana/triguna.ts` | O(d^2) per update | Simplex-constrained Kalman filter tracking [sattva, rajas, tamas] from error rate, token velocity, loop count, latency, tool success |
 

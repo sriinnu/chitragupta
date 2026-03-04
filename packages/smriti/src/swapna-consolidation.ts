@@ -1,7 +1,7 @@
 /**
- * @chitragupta/smriti — Svapna Consolidation (Dream Cycle)
+ * @chitragupta/smriti — Swapna Consolidation (Dream Cycle)
  *
- * In Yoga Nidra, svapna is the dream state where the mind
+ * In Yoga Nidra, swapna is the dream state where the mind
  * reorganizes experience into lasting knowledge. This module orchestrates
  * the 5-phase consolidation cycle:
  *
@@ -11,7 +11,7 @@
  *   4. PROCEDURALIZE — Vidhi extraction: learn parameterized tool sequences
  *   5. COMPRESS     — Sushupti: Sinkhorn-Knopp weighted by epistemological source
  *
- * Types, defaults, and constants are in `svapna-types.ts`.
+ * Types, defaults, and constants are in `swapna-types.ts`.
  * Performance target: full cycle < 20 seconds for 50 sessions.
  */
 
@@ -20,25 +20,25 @@ import type { SessionToolCall, PramanaType, ConsolidationLogEntry } from "./type
 import { sinkhornAccelerated } from "./sinkhorn-accelerated.js";
 import type { SessionChunk } from "./sinkhorn-accelerated.js";
 import { estimateTokens } from "./graphrag-scoring.js";
-import { svapnaReplay, svapnaRecombine, parseToolCalls } from "./svapna-extraction.js";
-import { svapnaCrystallize } from "./svapna-rules.js";
-import { svapnaProceduralize } from "./svapna-vidhi.js";
-import { svapnaExtractSamskaras } from "./svapna-samskara.js";
-import { DEFAULT_CONFIG, PRAMANA_PRESERVATION } from "./svapna-types.js";
+import { swapnaReplay, swapnaRecombine, parseToolCalls } from "./swapna-extraction.js";
+import { swapnaCrystallize } from "./swapna-rules.js";
+import { swapnaProceduralize } from "./swapna-vidhi.js";
+import { swapnaExtractSamskaras } from "./swapna-samskara.js";
+import { DEFAULT_CONFIG, PRAMANA_PRESERVATION } from "./swapna-types.js";
 import type {
-	SvapnaConfig,
+	SwapnaConfig,
 	ScoredTurn,
 	ReplayResult,
 	RecombineResult,
 	CrystallizeResult,
 	ProceduralizeResult,
 	CompressResult,
-	SvapnaResult,
-} from "./svapna-types.js";
+	SwapnaResult,
+} from "./swapna-types.js";
 
 // Re-export for backward compatibility
 export type {
-	SvapnaConfig,
+	SwapnaConfig,
 	ScoredTurn,
 	ReplayResult,
 	CrossSessionAssociation,
@@ -46,38 +46,38 @@ export type {
 	CrystallizeResult,
 	ProceduralizeResult,
 	CompressResult,
-	SvapnaResult,
-} from "./svapna-types.js";
+	SwapnaResult,
+} from "./swapna-types.js";
 
-// ─── SvapnaConsolidation ────────────────────────────────────────────────────
+// ─── SwapnaConsolidation ────────────────────────────────────────────────────
 
 /**
- * Svapna Consolidation — the 5-phase dream cycle orchestrator.
+ * Swapna Consolidation — the 5-phase dream cycle orchestrator.
  *
  * @example
  * ```ts
- * const svapna = new SvapnaConsolidation({ project: '/home/user/my-project' });
- * const result = await svapna.run((phase, progress) => {
+ * const swapna = new SwapnaConsolidation({ project: '/home/user/my-project' });
+ * const result = await swapna.run((phase, progress) => {
  *   console.log(`${phase}: ${(progress * 100).toFixed(0)}%`);
  * });
  * ```
  */
-export class SvapnaConsolidation {
-	private config: SvapnaConfig;
+export class SwapnaConsolidation {
+	private config: SwapnaConfig;
 	private db: DatabaseManager;
 	private cycleId: string;
 	private lastSamskarasProcessed = 0;
 
 	/**
-	 * Create a new Svapna consolidation cycle.
+	 * Create a new Swapna consolidation cycle.
 	 *
 	 * @param config - Partial configuration; unset fields use defaults.
 	 * @param db - Optional DatabaseManager instance (uses singleton if omitted).
 	 */
-	constructor(config: Partial<SvapnaConfig> & { project: string }, db?: DatabaseManager) {
+	constructor(config: Partial<SwapnaConfig> & { project: string }, db?: DatabaseManager) {
 		this.config = { ...DEFAULT_CONFIG, ...config };
 		this.db = db ?? DatabaseManager.instance();
-		this.cycleId = `svapna-${new Date().toISOString()}`;
+		this.cycleId = `swapna-${new Date().toISOString()}`;
 	}
 
 	// ── Full Cycle ───────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ export class SvapnaConsolidation {
 	 * @param onProgress - Progress callback (phase, progress).
 	 * @returns The consolidated result with metrics for each phase.
 	 */
-	async run(onProgress?: (phase: string, progress: number) => void): Promise<SvapnaResult> {
+	async run(onProgress?: (phase: string, progress: number) => void): Promise<SwapnaResult> {
 		const cycleStart = performance.now();
 		const report = onProgress ?? (() => {});
 		this.lastSamskarasProcessed = 0;
@@ -118,7 +118,7 @@ export class SvapnaConsolidation {
 
 			const totalDurationMs = performance.now() - cycleStart;
 
-			const result: SvapnaResult = {
+			const result: SwapnaResult = {
 				phases: {
 					replay: { turnsScored: replayResult.turnsScored, highSurprise: replayResult.highSurprise, durationMs: replayResult.durationMs },
 					recombine: { associations: recombineResult.associations.length, crossSessions: recombineResult.crossSessions, durationMs: recombineResult.durationMs },
@@ -135,7 +135,7 @@ export class SvapnaConsolidation {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			this.logCycle("failed");
-			throw new Error(`Svapna cycle ${this.cycleId} failed: ${msg}`, { cause: err });
+			throw new Error(`Swapna cycle ${this.cycleId} failed: ${msg}`, { cause: err });
 		}
 	}
 
@@ -143,24 +143,24 @@ export class SvapnaConsolidation {
 
 	/** Phase 1: Hippocampal replay — score turns by surprise. */
 	async replay(): Promise<ReplayResult> {
-		return svapnaReplay(this.db, this.config);
+		return swapnaReplay(this.db, this.config);
 	}
 
 	/** Phase 2: Dream association — cross-session fingerprint matching. */
 	async recombine(highSurpriseTurns: ScoredTurn[]): Promise<RecombineResult> {
-		return svapnaRecombine(this.db, this.config, highSurpriseTurns);
+		return swapnaRecombine(this.db, this.config, highSurpriseTurns);
 	}
 
 	/** Phase 3: Vasana formation — aggregate samskaras into tendencies. */
 	async crystallize(): Promise<CrystallizeResult> {
-		const extraction = await svapnaExtractSamskaras(this.db, this.config);
+		const extraction = await swapnaExtractSamskaras(this.db, this.config);
 		this.lastSamskarasProcessed = extraction.samskarasProcessed;
-		return svapnaCrystallize(this.db, this.config);
+		return swapnaCrystallize(this.db, this.config);
 	}
 
 	/** Phase 4: Vidhi extraction — learn parameterized tool sequences. */
 	async proceduralize(): Promise<ProceduralizeResult> {
-		return svapnaProceduralize(this.db, this.config);
+		return swapnaProceduralize(this.db, this.config);
 	}
 
 	// ── Phase 5: COMPRESS (Sushupti) ─────────────────────────────────────
@@ -374,7 +374,7 @@ export class SvapnaConsolidation {
 	}
 
 	/** Write an entry to the consolidation_log table for audit trail. */
-	private logCycle(status: ConsolidationLogEntry["status"], result?: SvapnaResult): void {
+	private logCycle(status: ConsolidationLogEntry["status"], result?: SwapnaResult): void {
 		const agentDb = this.db.get("agent");
 
 		agentDb
@@ -383,7 +383,7 @@ export class SvapnaConsolidation {
 				 (project, cycle_type, cycle_id, phase, phase_duration_ms,
 				  vasanas_created, vidhis_created, samskaras_processed,
 				  sessions_processed, status, created_at)
-				 VALUES (?, 'svapna', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				 VALUES (?, 'swapna', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				this.config.project, this.cycleId,

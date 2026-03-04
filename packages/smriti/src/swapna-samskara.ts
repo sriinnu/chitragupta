@@ -1,17 +1,17 @@
 /**
- * @chitragupta/smriti — Svapna Samskara Extraction
+ * @chitragupta/smriti — Swapna Samskara Extraction
  *
  * Extracts session-local behavioral impressions (samskaras) from:
  *   1) assistant tool-call sequences
  *   2) user intent language (preference/decision/correction/convention)
  *
  * Rows are keyed by session + normalized pattern to avoid re-counting the
- * same historical turns on every Svapna cycle.
+ * same historical turns on every Swapna cycle.
  */
 
 import { DatabaseManager } from "./db/index.js";
-import { parseToolCalls } from "./svapna-extraction.js";
-import type { SvapnaConfig } from "./svapna-types.js";
+import { parseToolCalls } from "./swapna-extraction.js";
+import type { SwapnaConfig } from "./swapna-types.js";
 import type { PramanaType, SessionToolCall } from "./types.js";
 
 const FNV_OFFSET = 0x811c9dc5;
@@ -172,11 +172,11 @@ function extractSessionPatterns(turns: TurnRow[]): Map<string, PatternCandidate>
  * Extract and upsert samskaras for recent sessions in project scope.
  *
  * Upsert key includes session id to prevent duplicate counting across repeated
- * Svapna cycles over the same immutable history.
+ * Swapna cycles over the same immutable history.
  */
-export async function svapnaExtractSamskaras(
+export async function swapnaExtractSamskaras(
 	db: DatabaseManager,
-	config: SvapnaConfig,
+	config: SwapnaConfig,
 ): Promise<SamskaraExtractionResult> {
 	const start = performance.now();
 	const agentDb = db.get("agent");

@@ -272,7 +272,7 @@ export async function launchPrintMode(params: LaunchPrintParams): Promise<void> 
 
 /**
  * Run post-session hooks: Turiya state persistence, Samskaara consolidation,
- * and Svapna dream-cycle consolidation (fire-and-forget).
+ * and Swapna dream-cycle consolidation (fire-and-forget).
  */
 export async function runPostSessionHooks(
 	turiyaRouter: TuriyaRouter | undefined,
@@ -313,14 +313,14 @@ export async function runPostSessionHooks(
 		await Promise.race([consolidationWork(), new Promise<void>((resolve) => setTimeout(resolve, CONSOLIDATION_TIMEOUT_MS))]);
 	} catch { /* best-effort */ }
 
-	// Svapna dream-cycle consolidation (fire-and-forget, non-blocking).
+	// Swapna dream-cycle consolidation (fire-and-forget, non-blocking).
 	// Runs the 5-phase cycle (replay, recombine, crystallize, proceduralize, compress)
 	// in the background so session exit is never delayed.
-	triggerSvapnaConsolidation(projectPath);
+	triggerSwapnaConsolidation(projectPath);
 }
 
 /**
- * Fire-and-forget Svapna (dream-cycle) consolidation.
+ * Fire-and-forget Swapna (dream-cycle) consolidation.
  *
  * Spawns the 5-phase consolidation asynchronously via setImmediate so it
  * does not block the caller. The returned timer is unref'd so Node can
@@ -328,21 +328,21 @@ export async function runPostSessionHooks(
  *
  * @param projectPath - The project directory to consolidate sessions for.
  */
-export function triggerSvapnaConsolidation(projectPath: string): void {
+export function triggerSwapnaConsolidation(projectPath: string): void {
 	const timer = setTimeout(() => {
 		(async () => {
 			try {
-				const { SvapnaConsolidation } = await import("@chitragupta/smriti");
-				const svapna = new SvapnaConsolidation({ project: projectPath });
-				const result = await svapna.run();
-				log.info("Svapna consolidation complete", {
+				const { SwapnaConsolidation } = await import("@chitragupta/smriti");
+				const swapna = new SwapnaConsolidation({ project: projectPath });
+				const result = await swapna.run();
+				log.info("Swapna consolidation complete", {
 					cycleId: result.cycleId,
 					durationMs: Math.round(result.totalDurationMs),
 					vasanas: result.phases.crystallize.vasanasCreated,
 					vidhis: result.phases.proceduralize.vidhisCreated,
 				});
 			} catch (err) {
-				log.debug("Svapna consolidation failed (best-effort)", {
+				log.debug("Swapna consolidation failed (best-effort)", {
 					error: err instanceof Error ? err.message : String(err),
 				});
 			}

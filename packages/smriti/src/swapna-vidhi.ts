@@ -1,5 +1,5 @@
 /**
- * @chitragupta/smriti — Svapna Vidhi (Phase 4: PROCEDURALIZE)
+ * @chitragupta/smriti — Swapna Vidhi (Phase 4: PROCEDURALIZE)
  *
  * Extract common tool sequences as parameterized procedures (Vidhis).
  * Uses n-gram extraction + anti-unification for argument parameterization.
@@ -7,9 +7,9 @@
 
 import { DatabaseManager } from "./db/index.js";
 import type { SessionToolCall, Vidhi, VidhiStep, VidhiParam } from "./types.js";
-import type { SvapnaConfig, ProceduralizeResult } from "./svapna-consolidation.js";
-import { parseToolCalls } from "./svapna-extraction.js";
-import { slugify } from "./svapna-rules.js";
+import type { SwapnaConfig, ProceduralizeResult } from "./swapna-consolidation.js";
+import { parseToolCalls } from "./swapna-extraction.js";
+import { slugify } from "./swapna-rules.js";
 
 // ─── FNV-1a Hash ────────────────────────────────────────────────────────────
 
@@ -163,9 +163,9 @@ function generateTriggers(tools: string[]): string[] {
  *   3. Find n-grams in >= 3 sessions with success rate > minSuccessRate.
  *   4. Anti-unify arguments to produce parameterized templates.
  */
-export async function svapnaProceduralize(
+export async function swapnaProceduralize(
 	db: DatabaseManager,
-	config: SvapnaConfig,
+	config: SwapnaConfig,
 ): Promise<ProceduralizeResult> {
 	const start = performance.now();
 	const agentDb = db.get("agent");

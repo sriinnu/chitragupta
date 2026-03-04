@@ -9,7 +9,7 @@ Every major module is backed by published research. 30+ papers from 2024-2026.
 | Paper | Year | Key Insight | Module |
 |-------|------|-------------|--------|
 | MemEvolve (2512.18746) | 2025 | Dynamic memory evolution with self-reflection | Vasana Engine |
-| MemGAS (2505.19549) | 2025 | Generalization-aware memory selection | Svapna Recombination |
+| MemGAS (2505.19549) | 2025 | Generalization-aware memory selection | Swapna Recombination |
 | Self-Evolving Agents (2409.00872) | 2024 | Continuous self-improvement from experience | Karma-Samskara-Vasana loop |
 | AI Hippocampus (2601.09113) | 2026 | Comprehensive memory taxonomy | 3-type memory separation |
 | Memory in Age of AI Agents (2512.13564) | 2025 | Survey: implicit/explicit/agentic memory | Architecture validation |
@@ -78,9 +78,9 @@ Every major module is backed by published research. 30+ papers from 2024-2026.
 
 | Paper | Year | Key Insight | Module |
 |-------|------|-------------|--------|
-| Hippocampal pattern separation (2504.10739) | 2025 | Pattern separation + completion | Svapna replay |
+| Hippocampal pattern separation (2504.10739) | 2025 | Pattern separation + completion | Swapna replay |
 | Multi-timescale memory (2508.10824) | 2025 | Surprise-gated updates | Surprise scoring (Phase 1) |
-| Compressed replay (1910.02509) | 2019 | Prevent catastrophic forgetting | Svapna compress |
+| Compressed replay (1910.02509) | 2019 | Prevent catastrophic forgetting | Swapna compress |
 | Dual-speed learning (2011.05438) | 2020 | Fast trace + slow integration | Session buffer -> long-term graph |
 
 ---

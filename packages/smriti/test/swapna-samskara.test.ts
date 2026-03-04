@@ -4,12 +4,12 @@ import os from "os";
 import path from "path";
 import { DatabaseManager } from "@chitragupta/smriti/db/database";
 import { initAgentSchema } from "@chitragupta/smriti/db/schema";
-import type { SvapnaConfig } from "../src/svapna-types.js";
-import { svapnaExtractSamskaras } from "../src/svapna-samskara.js";
+import type { SwapnaConfig } from "../src/swapna-types.js";
+import { swapnaExtractSamskaras } from "../src/swapna-samskara.js";
 
-const PROJECT = "/test/svapna-samskara-project";
+const PROJECT = "/test/swapna-samskara-project";
 
-function config(overrides: Partial<SvapnaConfig> = {}): SvapnaConfig {
+function config(overrides: Partial<SwapnaConfig> = {}): SwapnaConfig {
 	return {
 		maxSessionsPerCycle: 50,
 		surpriseThreshold: 0.7,
@@ -21,12 +21,12 @@ function config(overrides: Partial<SvapnaConfig> = {}): SvapnaConfig {
 	};
 }
 
-describe("svapnaExtractSamskaras", () => {
+describe("swapnaExtractSamskaras", () => {
 	let tmpDir: string;
 	let dbm: DatabaseManager;
 
 	beforeEach(() => {
-		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "svapna-samskara-test-"));
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "swapna-samskara-test-"));
 		DatabaseManager.reset();
 		dbm = DatabaseManager.instance(tmpDir);
 		initAgentSchema(dbm);
@@ -78,7 +78,7 @@ describe("svapnaExtractSamskaras", () => {
 			{ name: "edit", input: "{\"path\":\"b.ts\"}", result: "ok" },
 		]);
 
-		const first = await svapnaExtractSamskaras(dbm, config());
+		const first = await swapnaExtractSamskaras(dbm, config());
 		expect(first.samskarasProcessed).toBeGreaterThanOrEqual(1);
 		expect(first.sessionsProcessed).toBe(1);
 
@@ -89,7 +89,7 @@ describe("svapnaExtractSamskaras", () => {
 		).get("s1") as { observation_count: number };
 		expect(row1.observation_count).toBe(2);
 
-		const second = await svapnaExtractSamskaras(dbm, config());
+		const second = await swapnaExtractSamskaras(dbm, config());
 		expect(second.samskarasProcessed).toBeGreaterThanOrEqual(1);
 
 		const row2 = db.prepare(
@@ -104,7 +104,7 @@ describe("svapnaExtractSamskaras", () => {
 		insertTurn("s2", 1, "user", "We prefer pnpm and always use strict typing in this repo.");
 		insertTurn("s2", 2, "user", "That is wrong, use absolute file refs instead.");
 
-		const result = await svapnaExtractSamskaras(dbm, config());
+		const result = await swapnaExtractSamskaras(dbm, config());
 		expect(result.samskarasProcessed).toBeGreaterThanOrEqual(2);
 
 		const db = dbm.get("agent");
@@ -120,7 +120,7 @@ describe("svapnaExtractSamskaras", () => {
 	});
 
 	it("returns zero when no project sessions exist", async () => {
-		const result = await svapnaExtractSamskaras(dbm, config());
+		const result = await swapnaExtractSamskaras(dbm, config());
 		expect(result.samskarasProcessed).toBe(0);
 		expect(result.sessionsProcessed).toBe(0);
 	});

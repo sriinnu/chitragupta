@@ -11,7 +11,7 @@ import fs from "fs";
 import path from "path";
 import type { McpSessionRecorder } from "./mcp-session.js";
 import { clearChitraguptaState } from "./mcp-state.js";
-import { triggerSvapnaConsolidation } from "../main-session.js";
+import { triggerSwapnaConsolidation } from "../main-session.js";
 
 /** Dependencies injected from the MCP server startup. */
 export interface DaemonWiringDeps {
@@ -99,7 +99,7 @@ export async function wireDaemon(deps: DaemonWiringDeps): Promise<void> {
 	const shutdownWithDaemon = async () => {
 		heartbeat.update({ state: "shutting_down" });
 		heartbeat.stop();
-		triggerSvapnaConsolidation(projectPath);
+		triggerSwapnaConsolidation(projectPath);
 		try { await daemonManager.stop(); } catch { /* best-effort */ }
 		clearChitraguptaState();
 		await server.stop();

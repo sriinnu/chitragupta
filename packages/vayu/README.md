@@ -45,7 +45,7 @@ Vayu is Chitragupta's wind -- it drives multi-step workflows forward. Define wor
 |---------|-----------|---------|
 | `nidra-wake` / `nidra-sleep` | Lifecycle | Wake/sleep the Nidra daemon |
 | `vasana-scan` / `vasana-top-n` | Memory | Scan/retrieve behavioral tendencies |
-| `svapna-consolidate` | Memory | Run memory consolidation (pattern detection + compression) |
+| `swapna-consolidate` | Memory | Run memory consolidation (pattern detection + compression) |
 | `akasha-deposit` | Memory | Deposit consolidated data into long-term GraphRAG |
 | `kala-chakra-context` | Context | Gather temporal/context window state |
 | `chetana-state` | Consciousness | Gather Chetana consciousness state |

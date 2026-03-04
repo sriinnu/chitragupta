@@ -141,7 +141,7 @@ addTurn(turn)
 │                                                 │
 │  DREAMING triggers:                             │
 │  ┌─────────────────────────────────────────┐    │
-│  │ Svapna 5-Phase Consolidation            │    │
+│  │ Swapna 5-Phase Consolidation            │    │
 │  │ 1. REPLAY    — re-traverse, surprise    │    │
 │  │ 2. RECOMBINE — cross-session patterns   │    │
 │  │ 3. CRYSTALLIZE — BOCPD, samskaras→vasana│    │
@@ -255,7 +255,7 @@ Sessions are scoped by project via `project TEXT NOT NULL` in the sessions table
 | Manas classification | <5ms | Regex + keywords |
 | Triguna update | <1ms | Kalman filter step |
 | Pratyabhijna warm-up | <30ms | Top-K vasanas + samskaras |
-| Svapna full cycle | <20s | Worker thread |
+| Swapna full cycle | <20s | Worker thread |
 | Hybrid search (FTS+vec+graph) | <30ms | Parallel + merge |
 
 ---
@@ -346,7 +346,7 @@ stateDiagram-v2
     LISTENING: Lightweight — no CPU work
 
     DREAMING: Heartbeat every 2min
-    DREAMING: Runs Svapna 5-phase consolidation
+    DREAMING: Runs Swapna 5-phase consolidation
     DREAMING: Updates vasanas, vidhis, samskaras
     DREAMING: Graph enrichment + re-ranking
 
@@ -363,7 +363,7 @@ stateDiagram-v2
     DEEP_SLEEP --> DREAMING: scheduled consolidation (monthly/weekly trigger)
 ```
 
-### Svapna 5-Phase Consolidation — Flowchart
+### Swapna 5-Phase Consolidation — Flowchart
 
 ```mermaid
 flowchart TD

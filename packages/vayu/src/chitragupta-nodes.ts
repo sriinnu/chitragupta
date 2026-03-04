@@ -62,7 +62,7 @@ export async function dynamicImport(specifier: string): Promise<any> {
 
 // Re-export adapters from extracted modules
 export {
-	nidraWake, nidraSleep, vasanaScan, svapnaConsolidate,
+	nidraWake, nidraSleep, vasanaScan, swapnaConsolidate,
 	akashaDeposit, kalaChakraContext, chetanaState, trigunaHealth,
 } from "./chitragupta-nodes-lifecycle.js";
 export {
@@ -78,7 +78,7 @@ export {
 
 // Import adapters for the registry
 import {
-	nidraWake, nidraSleep, vasanaScan, svapnaConsolidate,
+	nidraWake, nidraSleep, vasanaScan, swapnaConsolidate,
 	akashaDeposit, kalaChakraContext, chetanaState, trigunaHealth,
 } from "./chitragupta-nodes-lifecycle.js";
 import {
@@ -98,7 +98,7 @@ export const NODE_ADAPTERS: Record<string, (ctx: NodeContext) => Promise<NodeRes
 	"nidra-wake": nidraWake,
 	"nidra-sleep": nidraSleep,
 	"vasana-scan": vasanaScan,
-	"svapna-consolidate": svapnaConsolidate,
+	"swapna-consolidate": swapnaConsolidate,
 	"akasha-deposit": akashaDeposit,
 	"kala-chakra-context": kalaChakraContext,
 	"chetana-state": chetanaState,

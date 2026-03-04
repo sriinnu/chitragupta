@@ -1,7 +1,7 @@
 /**
  * @chitragupta/vayu — Lifecycle node adapters.
  *
- * Nidra (sleep), Vasana (tendencies), Svapna (consolidation),
+ * Nidra (sleep), Vasana (tendencies), Swapna (consolidation),
  * Akasha (memory), Kala Chakra (context), Chetana (consciousness),
  * and Triguna (health) adapters.
  * Extracted from chitragupta-nodes.ts to keep files under 450 LOC.
@@ -94,10 +94,10 @@ export async function vasanaScan(ctx: NodeContext): Promise<NodeResult> {
 	}
 }
 
-// ─── Svapna / Samskaara (Consolidation) ──────────────────────────────────────
+// ─── Swapna / Samskaara (Consolidation) ──────────────────────────────────────
 
 /** Run memory consolidation (pattern detection + compression). */
-export async function svapnaConsolidate(ctx: NodeContext): Promise<NodeResult> {
+export async function swapnaConsolidate(ctx: NodeContext): Promise<NodeResult> {
 	try {
 		const { result: data, durationMs } = await timed(async () => {
 			const { ConsolidationEngine } = await dynamicImport("@chitragupta/smriti");
@@ -122,10 +122,10 @@ export async function svapnaConsolidate(ctx: NodeContext): Promise<NodeResult> {
 export async function akashaDeposit(ctx: NodeContext): Promise<NodeResult> {
 	try {
 		const { result: data, durationMs } = await timed(async () => {
-			const consolidationResult = ctx.stepOutputs["svapna-consolidate"] as Record<string, unknown> | undefined;
+			const consolidationResult = ctx.stepOutputs["swapna-consolidate"] as Record<string, unknown> | undefined;
 			return {
 				deposited: true,
-				source: consolidationResult ? "svapna" : "none",
+				source: consolidationResult ? "swapna" : "none",
 				timestamp: Date.now(),
 			};
 		});

@@ -8,14 +8,14 @@
 
 import { createLogger } from "@chitragupta/core";
 import { DatabaseManager } from "@chitragupta/smriti";
-import type { NidraState, NidraSnapshot, SvapnaPhase } from "./types.js";
+import type { NidraState, NidraSnapshot, SwapnaPhase } from "./types.js";
 
 const log = createLogger("nidra");
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 /** Progress callback supplied to the dream handler. */
-export type DreamProgressFn = (phase: SvapnaPhase, pct: number) => void;
+export type DreamProgressFn = (phase: SwapnaPhase, pct: number) => void;
 
 /** Async handler invoked when entering the DREAMING state. */
 export type DreamHandler = (progress: DreamProgressFn) => Promise<void>;
@@ -30,7 +30,7 @@ export interface NidraDaemonState {
 	lastHeartbeat: number;
 	lastConsolidationStart: number | undefined;
 	lastConsolidationEnd: number | undefined;
-	consolidationPhase: SvapnaPhase | undefined;
+	consolidationPhase: SwapnaPhase | undefined;
 	consolidationProgress: number;
 	startedAt: number;
 	running: boolean;
@@ -93,7 +93,7 @@ export function restoreNidraState(s: NidraDaemonState): void {
 			s.lastHeartbeat = row.last_heartbeat;
 			s.lastConsolidationStart = row.last_consolidation_start ?? undefined;
 			s.lastConsolidationEnd = row.last_consolidation_end ?? undefined;
-			s.consolidationPhase = row.consolidation_phase as SvapnaPhase | undefined;
+			s.consolidationPhase = row.consolidation_phase as SwapnaPhase | undefined;
 			s.consolidationProgress = row.consolidation_progress;
 			log.debug(`Restored nidra state: ${s.state}`);
 		}
