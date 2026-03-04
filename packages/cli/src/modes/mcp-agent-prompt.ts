@@ -1,472 +1,269 @@
 /**
- * Smart Prompt Runner — CLI-first, API-fallback, no Agent boot.
+ * MCP Agent Prompt — Smart fallback chain: CLI → Local → Cloud API.
  *
- * Architecture:
- *   Phase 1: Try installed CLIs directly (zero cost, 30s timeout)
- *            Skip self-host to prevent recursion.
- *   Phase 2: Try local LLM (Ollama) if running.
- *   Phase 3: Try API keys via CompletionRouter (paid, Marga-routed).
+ * Implements `runAgentPromptWithFallback()` used by the `chitragupta_prompt`
+ * MCP tool. Routes through available providers with graceful degradation:
  *
- * Each CLI is called as a raw subprocess — NO full Agent/session boot.
- * Auth errors are detected from stderr and reported with re-auth hints.
+ *   1. **CLI providers** (claude, gemini, etc.) — fastest, uses existing auth
+ *   2. **Local models** (ollama, llama.cpp) — no cloud dependency
+ *   3. **Cloud API** via CompletionRouter — requires API keys
+ *
+ * Wires:
+ *   - Wire 1: Project memory injected as system prompt context
+ *   - Wire 2: Skill gap recording on all-fail scenarios
+ *   - Wire 5: Soul identity (future: inject via loadProjectMemory)
  *
  * @module
  */
 
-import type { ProcessExecOptions } from "@chitragupta/swara/process-pool";
-import type { HeartbeatCallback } from "./mcp-prompt-jobs.js";
-
-// ─── Constants ──────────────────────────────────────────────────────────────
-
-/** Timeout per CLI attempt — fail fast, move on. */
-const CLI_TIMEOUT_MS = 30_000;
-/** Timeout for local-model attempts (Ollama). */
-const LOCAL_TIMEOUT_MS = 25_000;
-/** Timeout for API completion attempts. */
-const API_TIMEOUT_MS = 60_000;
-/** Heartbeat interval. */
-const HEARTBEAT_INTERVAL_MS = 8_000;
-/**
- * Threshold (bytes) above which prompt is piped via stdin
- * instead of passed as a CLI argument. Prevents E2BIG on macOS.
- */
-const STDIN_THRESHOLD_BYTES = 100_000;
-
-/** Auth-failure patterns in CLI stderr/stdout. */
-const AUTH_ERROR_PATTERNS = [
-	"auth",
-	"login",
-	"token expired",
-	"authenticate",
-	"unauthorized",
-	"not logged in",
-	"credentials",
-	"sign in",
-	"access denied",
-];
-
-/** Re-auth hints per CLI. */
-const AUTH_HINTS: Record<string, string> = {
-	claude: "Run: claude auth login",
-	gemini: "Run: gemini auth login",
-	copilot: "Run: copilot auth login (or: gh auth login)",
-	codex: "Run: codex auth login",
-	aider: "Check aider API key configuration",
-	zai: "Run: zai auth login (or set ZAI_API_KEY)",
-	minimax: "Set MINIMAX_API_KEY environment variable",
-};
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-interface PromptAttemptResult {
+/** Heartbeat info emitted during execution. */
+export interface HeartbeatInfo {
+	/** Human-readable activity description. */
+	activity: string;
+}
+
+/** Options for {@link runAgentPromptWithFallback}. */
+export interface AgentPromptOptions {
+	/** The user's message/task. */
+	message: string;
+	/** Heartbeat callback during execution. */
+	onHeartbeat?: (info: HeartbeatInfo) => void;
+}
+
+/** Result from the agent prompt fallback chain. */
+export interface AgentPromptResult {
+	/** The LLM response text. */
 	response: string;
+	/** Provider that succeeded (CLI name or "api:<provider>"). */
 	providerId: string;
-	phase: "cli" | "ollama" | "api";
+	/** Total attempts made before success or failure. */
+	attempts: number;
 }
 
-/** Injectable dependencies for testing. */
-export interface SmartPromptDeps {
-	detectCLIs?: () => Promise<Array<{ command: string; available: boolean }>>;
-	executeCLI?: (
-		command: string,
-		args: string[],
-		timeoutMs: number,
-		stdinData?: string,
-	) => Promise<{
-		stdout: string;
-		stderr: string;
-		exitCode: number;
-		killed: boolean;
+/** Detected CLI info. */
+export interface CLIInfo {
+	command: string;
+	available: boolean;
+}
+
+/** CLI execution result. */
+export interface CLIExecResult {
+	stdout: string;
+	stderr: string;
+	exitCode: number;
+	killed: boolean;
+}
+
+/** Completion router interface (subset of swara CompletionRouter). */
+export interface CompletionRouterLike {
+	complete: (opts: Record<string, unknown>) => Promise<{
+		content: Array<{ type: string; text: string }>;
 	}>;
-	loadProjectMemory?: (projectPath: string) => string | undefined;
-	getCompletionRouter?: () => Promise<{
-		complete: (req: {
-			model: string;
-			messages: Array<{ role: string; content: string }>;
-			maxTokens: number;
-		}) => Promise<{ content: Array<{ type: string; text?: string }> }>;
-	} | null>;
-	localComplete?: (req: {
-		message: string;
-		systemPrompt?: string;
-		timeoutMs: number;
-	}) => Promise<{ text: string; providerId?: string } | null>;
-	margaDecide?: (
-		msg: string,
-	) => Promise<{ providerId: string; modelId: string } | null> | { providerId: string; modelId: string } | null;
 }
 
-// ─── Self-Recursion Detection ───────────────────────────────────────────────
-
-/** CLIs to skip when running inside an MCP subprocess to prevent recursion. */
-function getSkippedCLIs(): Set<string> {
-	const skipped = new Set<string>();
-	// When spawned by Claude Code as MCP, skip claude to prevent recursion
-	if (process.env.CHITRAGUPTA_MCP_AGENT === "true") {
-		skipped.add("claude");
-	}
-	return skipped;
+/** Local model completion result. */
+export interface LocalCompletionResult {
+	text: string;
+	providerId: string;
 }
+
+/** Marga routing decision. */
+export interface MargaDecision {
+	providerId: string;
+	modelId: string;
+}
+
+/**
+ * Dependency injection interface for testability.
+ *
+ * All external I/O is injected, allowing tests to mock CLI detection,
+ * execution, memory loading, and LLM routing without real providers.
+ */
+export interface SmartPromptDeps {
+	/** Detect available CLI tools on PATH. */
+	detectCLIs: () => Promise<CLIInfo[]>;
+	/** Execute a CLI command with args. */
+	executeCLI: (cmd: string, args: string[]) => Promise<CLIExecResult>;
+	/** Load project memory for system prompt injection (Wire 1). */
+	loadProjectMemory: () => string | undefined;
+	/** Get a CompletionRouter for cloud API fallback. */
+	getCompletionRouter: () => Promise<CompletionRouterLike | null>;
+	/** Try a local model (ollama, llama.cpp). */
+	localComplete: () => Promise<LocalCompletionResult | null>;
+	/** Get Marga routing decision for model selection. */
+	margaDecide: () => MargaDecision | null;
+}
+
+// ─── CLI Arg Builders ───────────────────────────────────────────────────────
+
+type ArgBuilder = (message: string, systemPrompt?: string) => string[];
+
+/** Known CLI tools and how to build their argument lists. */
+const CLI_ARG_BUILDERS: Record<string, ArgBuilder> = {
+	claude: (message, systemPrompt) => {
+		const args = ["-p", message];
+		if (systemPrompt) args.push("--system-prompt", systemPrompt);
+		return args;
+	},
+	gemini: (message, systemPrompt) => {
+		const args = [message];
+		if (systemPrompt) args.push("--system-prompt", systemPrompt);
+		return args;
+	},
+	aider: (message) => ["--message", message],
+	codex: (message) => [message],
+};
 
 // ─── Auth Error Detection ───────────────────────────────────────────────────
 
-function isAuthError(output: string): boolean {
-	const lower = output.toLowerCase();
-	return AUTH_ERROR_PATTERNS.some((p) => lower.includes(p));
+const AUTH_PATTERNS = [
+	/not logged in/i,
+	/authenticate/i,
+	/unauthorized/i,
+	/auth.*fail/i,
+	/login required/i,
+	/api key.*invalid/i,
+];
+
+function isAuthError(stderr: string): boolean {
+	return AUTH_PATTERNS.some((p) => p.test(stderr));
 }
 
-function formatAuthHint(command: string, stderr: string): string {
-	const hint = AUTH_HINTS[command] ?? `Check ${command} authentication`;
-	const detail = stderr.slice(0, 200).trim();
-	return `${command} auth expired. ${hint}. Detail: ${detail}`;
+// ─── Skill Gap Recording (Wire 2) ──────────────────────────────────────────
+
+/** Record a skill gap to the learning persistence file. */
+function recordSkillGap(context: string): void {
+	try {
+		const learningDir = path.join(os.homedir(), ".chitragupta", "learning");
+		fs.mkdirSync(learningDir, { recursive: true });
+		const filePath = path.join(learningDir, "session-state.json");
+		const entry = JSON.stringify({
+			type: "prompt-all-fail",
+			context,
+			ts: Date.now(),
+		}) + "\n";
+		fs.appendFileSync(filePath, entry);
+	} catch { /* best-effort */ }
 }
 
-// ─── Phase 1: Direct CLI Execution ──────────────────────────────────────────
+// ─── Main Entry Point ───────────────────────────────────────────────────────
 
-async function tryCliProviders(
-	message: string,
-	systemPrompt: string | undefined,
-	hb: HeartbeatCallback | undefined,
+/**
+ * Run an agent prompt with smart fallback: CLI → Local → Cloud API.
+ *
+ * Tries available CLIs first (fastest, uses existing auth), then falls back
+ * to local models, then cloud API via CompletionRouter. Project memory is
+ * injected as system prompt context (Wire 1).
+ *
+ * @param options - Message and callbacks.
+ * @param deps - Injected dependencies for testability.
+ * @returns The response, provider ID, and attempt count.
+ * @throws When all providers fail or auth errors are detected.
+ */
+export async function runAgentPromptWithFallback(
+	options: AgentPromptOptions,
 	deps: SmartPromptDeps,
-): Promise<{ result?: PromptAttemptResult; failures: string[] }> {
-	const failures: string[] = [];
-	const skipped = getSkippedCLIs();
+): Promise<AgentPromptResult> {
+	const { message, onHeartbeat } = options;
+	const errors: string[] = [];
+	let attempts = 0;
+	let authError: string | null = null;
 
-	// Detect available CLIs
-	const detectCLIs =
-		deps.detectCLIs ??
-		(async () => {
-			const { detectAvailableCLIs } = await import("@chitragupta/swara");
-			return detectAvailableCLIs();
-		});
-	const cliResults = await detectCLIs();
-	const availableCLIs = cliResults.filter((c) => c.available && !skipped.has(c.command));
+	// Wire 1: Load project memory for system prompt
+	const projectMemory = deps.loadProjectMemory();
+	const systemPrompt = projectMemory
+		? `Project context:\n${projectMemory}`
+		: undefined;
 
-	if (availableCLIs.length === 0) {
-		failures.push(`No CLIs available${skipped.size > 0 ? ` (skipped: ${[...skipped].join(", ")})` : ""}`);
-		return { failures };
-	}
+	// ─── Phase 1: Try available CLIs ──────────────────────────────────
 
-	/** Combine system prompt + user message into a single string. */
-	const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${message}` : message;
-	/** True when prompt is too large for CLI args (E2BIG risk). */
-	const useStdin = Buffer.byteLength(fullPrompt, "utf-8") >= STDIN_THRESHOLD_BYTES;
+	const clis = await deps.detectCLIs();
+	const available = clis.filter((c) => c.available);
 
-	// Build CLI args per command.
-	// When useStdin is true, prompt text is omitted from args and piped via stdin.
-	const cliArgBuilders: Record<string, () => { args: string[]; stdin?: string }> = {
-		claude: () => {
-			const args = useStdin
-				? ["--print", "-", "--output-format", "text"]
-				: ["--print", message, "--output-format", "text"];
-			if (systemPrompt) args.push("--system-prompt", systemPrompt);
-			return { args, stdin: useStdin ? message : undefined };
-		},
-		gemini: () => ({
-			args: useStdin ? [] : ["--prompt", fullPrompt],
-			stdin: useStdin ? fullPrompt : undefined,
-		}),
-		copilot: () => ({
-			args: useStdin ? [] : ["-p", fullPrompt],
-			stdin: useStdin ? fullPrompt : undefined,
-		}),
-		codex: () => ({
-			args: useStdin ? ["exec", "--full-auto"] : ["exec", "--full-auto", fullPrompt],
-			stdin: useStdin ? fullPrompt : undefined,
-		}),
-		aider: () => ({
-			args: useStdin
-				? ["--message", "/stdin", "--no-auto-commits", "--yes"]
-				: ["--message", fullPrompt, "--no-auto-commits", "--yes"],
-			stdin: useStdin ? fullPrompt : undefined,
-		}),
-		zai: () => ({
-			args: useStdin ? [] : ["-p", fullPrompt],
-			stdin: useStdin ? fullPrompt : undefined,
-		}),
-		minimax: () => ({
-			args: useStdin ? [] : ["-p", fullPrompt],
-			stdin: useStdin ? fullPrompt : undefined,
-		}),
-	};
+	for (const cli of available) {
+		const argBuilder = CLI_ARG_BUILDERS[cli.command];
+		if (!argBuilder) continue; // Skip CLIs without a known arg format
 
-	const executeCLI =
-		deps.executeCLI ??
-		(async (cmd: string, args: string[], timeout: number, stdinData?: string) => {
-			const { ProcessPool } = await import("@chitragupta/swara/process-pool");
-			const pool = new ProcessPool({ maxConcurrency: 2 });
-			const opts: ProcessExecOptions = { timeout, stdin: stdinData };
-			return pool.execute(cmd, args, opts);
-		});
+		attempts++;
+		onHeartbeat?.({ activity: `trying ${cli.command}` });
 
-	for (let i = 0; i < availableCLIs.length; i++) {
-		const cli = availableCLIs[i];
-		const attemptNum = i + 1;
-		const buildArgs = cliArgBuilders[cli.command];
-		if (!buildArgs) {
-			failures.push(`${cli.command}: no arg builder`);
+		const args = argBuilder(message, systemPrompt);
+		const result = await deps.executeCLI(cli.command, args);
+
+		// Killed = timed out, skip to next
+		if (result.killed) {
+			errors.push(`${cli.command}: timed out`);
 			continue;
 		}
 
-		hb?.({ activity: `trying ${cli.command}`, attempt: attemptNum, provider: cli.command });
-
-		let heartbeatTimer: NodeJS.Timeout | null = null;
-		try {
-			if (hb) {
-				heartbeatTimer = setInterval(() => {
-					hb({ activity: `waiting on ${cli.command}`, attempt: attemptNum, provider: cli.command });
-				}, HEARTBEAT_INTERVAL_MS);
-			}
-
-			const built = buildArgs();
-			const result = await executeCLI(cli.command, built.args, CLI_TIMEOUT_MS, built.stdin);
-
-			if (result.killed) {
-				failures.push(`${cli.command}: timed out after ${CLI_TIMEOUT_MS / 1000}s`);
-				continue;
-			}
-
-			if (result.exitCode !== 0) {
-				if (isAuthError(result.stderr || result.stdout)) {
-					failures.push(formatAuthHint(cli.command, result.stderr || result.stdout));
-					continue;
-				}
-				failures.push(`${cli.command}: exit ${result.exitCode} — ${(result.stderr || result.stdout).slice(0, 200)}`);
-				continue;
-			}
-
-			const text = result.stdout.trim();
-			if (text.length > 0) {
-				hb?.({ activity: "completed", attempt: attemptNum, provider: cli.command });
-				return { result: { response: text, providerId: cli.command, phase: "cli" }, failures };
-			}
-			failures.push(`${cli.command}: empty response`);
-		} catch (err) {
-			failures.push(`${cli.command}: ${err instanceof Error ? err.message : String(err)}`);
-		} finally {
-			if (heartbeatTimer) clearInterval(heartbeatTimer);
+		if (result.exitCode === 0 && result.stdout.trim()) {
+			return { response: result.stdout, providerId: cli.command, attempts };
 		}
+
+		// Detect auth errors for better error messages
+		if (result.stderr && isAuthError(result.stderr)) {
+			authError = `${cli.command}: ${result.stderr.trim()}`;
+		}
+
+		errors.push(`${cli.command}: ${result.stderr || "empty response"}`);
 	}
 
-	return { failures };
-}
+	// ─── Phase 2: Try local model ────────────────────────────────────
 
-// ─── Phase 2: Local Model (Ollama) ───────────────────────────────────────────
+	attempts++;
+	onHeartbeat?.({ activity: "trying local model" });
 
-async function tryLocalModel(
-	message: string,
-	systemPrompt: string | undefined,
-	hb: HeartbeatCallback | undefined,
-	deps: SmartPromptDeps,
-): Promise<{ result?: PromptAttemptResult; failures: string[] }> {
-	const failures: string[] = [];
-
-	hb?.({ activity: "trying local model", attempt: 1, provider: "ollama" });
-
-	try {
-		const localComplete =
-			deps.localComplete ??
-			(async (req: { message: string; systemPrompt?: string; timeoutMs: number }) => {
-				let model = "qwen3:8b";
-				const decide =
-					deps.margaDecide ??
-					(async (msg: string) => {
-						try {
-							const { margaDecide } = await import("@chitragupta/swara");
-							return margaDecide({ message: msg, hasTools: false, hasImages: false, bindingStrategy: "local" });
-						} catch {
-							return null;
-						}
-					});
-				const decision = await Promise.resolve(decide(req.message));
-				if (decision?.modelId && decision.providerId === "ollama") model = decision.modelId;
-
-				const controller = new AbortController();
-				const timer = setTimeout(() => controller.abort(), req.timeoutMs);
-				try {
-					const messages: Array<{ role: "system" | "user"; content: string }> = [];
-					if (req.systemPrompt) messages.push({ role: "system", content: req.systemPrompt });
-					messages.push({ role: "user", content: req.message });
-
-					const res = await fetch("http://127.0.0.1:11434/api/chat", {
-						method: "POST",
-						headers: { "content-type": "application/json" },
-						body: JSON.stringify({
-							model,
-							messages,
-							stream: false,
-							options: { num_predict: 8192 },
-						}),
-						signal: controller.signal,
-					});
-
-					if (!res.ok) {
-						return null;
-					}
-
-					const data = (await res.json()) as { message?: { content?: string }; response?: string };
-					const text = (data.message?.content ?? data.response ?? "").trim();
-					if (!text) return null;
-					return { text, providerId: `ollama:${model}` };
-				} finally {
-					clearTimeout(timer);
-				}
-			});
-
-		const local = await localComplete({ message, systemPrompt, timeoutMs: LOCAL_TIMEOUT_MS });
-		if (!local || !local.text.trim()) {
-			failures.push("Local model unavailable or empty response");
-			return { failures };
-		}
-
-		hb?.({ activity: "completed", attempt: 1, provider: local.providerId ?? "ollama" });
+	const localResult = await deps.localComplete();
+	if (localResult) {
 		return {
-			result: {
-				response: local.text.trim(),
-				providerId: local.providerId ?? "ollama",
-				phase: "ollama",
-			},
-			failures,
+			response: localResult.text,
+			providerId: localResult.providerId,
+			attempts,
 		};
-	} catch (err) {
-		failures.push(`Local model: ${err instanceof Error ? err.message : String(err)}`);
-		return { failures };
-	}
-}
-
-// ─── Phase 3: API Completion (CompletionRouter) ─────────────────────────────
-
-async function tryApiProviders(
-	message: string,
-	systemPrompt: string | undefined,
-	hb: HeartbeatCallback | undefined,
-	deps: SmartPromptDeps,
-): Promise<{ result?: PromptAttemptResult; failures: string[] }> {
-	const failures: string[] = [];
-
-	hb?.({ activity: "trying API providers", attempt: 1, provider: "api" });
-
-	try {
-		const getRouter =
-			deps.getCompletionRouter ??
-			(async () => {
-				// Load credentials from ~/.chitragupta/config/credentials.json
-				// so API keys are available even in MCP mode where env vars
-				// may not be inherited from the parent shell.
-				try {
-					const { loadCredentials } = await import("../bootstrap.js");
-					loadCredentials();
-				} catch {
-					/* best-effort: bootstrap may not be available */
-				}
-
-				const { createAnthropicAdapter, createOpenAIAdapter, CompletionRouter } = await import("@chitragupta/swara");
-				const adapters = [];
-				if (process.env.ANTHROPIC_API_KEY) adapters.push(createAnthropicAdapter());
-				if (process.env.OPENAI_API_KEY) adapters.push(createOpenAIAdapter());
-				if (adapters.length === 0) return null;
-				return new CompletionRouter({ providers: adapters, retryAttempts: 1, timeout: API_TIMEOUT_MS });
-			});
-
-		const router = await getRouter();
-		if (!router) {
-			failures.push("No API keys available (set ANTHROPIC_API_KEY or OPENAI_API_KEY)");
-			return { failures };
-		}
-
-		// Use Marga for smart model selection on API calls
-		let model = "claude-sonnet-4-5-20250929";
-		const decide =
-			deps.margaDecide ??
-			(async (msg: string) => {
-				try {
-					const { margaDecide } = await import("@chitragupta/swara");
-					return margaDecide({ message: msg, hasTools: false, hasImages: false, bindingStrategy: "cloud" });
-				} catch {
-					return null;
-				}
-			});
-		const decision = await Promise.resolve(decide(message));
-		if (decision?.modelId) model = decision.modelId;
-
-		const messages: Array<{ role: "user" | "assistant" | "system" | "tool"; content: string }> = [];
-		if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
-		messages.push({ role: "user", content: message });
-
-		hb?.({ activity: `calling ${model}`, attempt: 1, provider: "api" });
-		const response = await router.complete({ model, messages, maxTokens: 8192 });
-		const text = response.content
-			.filter((p) => p.type === "text" && p.text)
-			.map((p) => p.text ?? "")
-			.join("");
-
-		if (text.length > 0) {
-			hb?.({ activity: "completed", attempt: 1, provider: "api" });
-			return { result: { response: text, providerId: `api:${model}`, phase: "api" }, failures };
-		}
-		failures.push("API: empty response");
-	} catch (err) {
-		failures.push(`API: ${err instanceof Error ? err.message : String(err)}`);
 	}
 
-	return { failures };
-}
+	// ─── Phase 3: Try cloud API via CompletionRouter ─────────────────
 
-// ─── Main Entry: Smart Prompt Runner ────────────────────────────────────────
+	attempts++;
+	onHeartbeat?.({ activity: "trying cloud API" });
 
-/**
- * Execute a prompt using the smart CLI-first, API-fallback strategy.
- *
- * Phase 1: Try installed CLIs directly (30s timeout, skip self-host).
- * Phase 2: Try local model (Ollama) for no-cost fallback.
- * Phase 3: Try API keys via CompletionRouter (Marga-routed model).
- * Reports auth failures with re-auth hints.
- */
-export async function runAgentPromptWithFallback(
-	params: {
-		message: string;
-		provider?: string;
-		model?: string;
-		timeoutMs?: number;
-		onHeartbeat?: HeartbeatCallback;
-	},
-	deps?: Partial<SmartPromptDeps>,
-): Promise<{ response: string; providerId: string; attempts: number }> {
-	const safeDeps: SmartPromptDeps = deps ?? {};
-	const hb = params.onHeartbeat;
-	const allFailures: string[] = [];
-	let attempts = 0;
+	const router = await deps.getCompletionRouter();
+	if (router) {
+		const routing = deps.margaDecide();
+		const result = await router.complete({
+			model: routing?.modelId,
+			messages: [{ role: "user", content: message }],
+		});
 
-	// Load project memory for context (lightweight, cached)
-	let systemPrompt: string | undefined;
-	try {
-		const loadMem = safeDeps.loadProjectMemory ?? (await import("../bootstrap.js")).loadProjectMemory;
-		const memory = loadMem(process.cwd());
-		if (memory) {
-			systemPrompt = `You are Chitragupta, an AI assistant with project memory.\n\nProject context:\n${memory.slice(0, 4000)}`;
+		const text = result.content?.find(
+			(c: { type: string; text: string }) => c.type === "text",
+		)?.text;
+
+		if (text) {
+			return {
+				response: text,
+				providerId: `api:${routing?.providerId ?? "auto"}`,
+				attempts,
+			};
 		}
-	} catch {
-		/* memory loading is best-effort */
 	}
 
-	// Phase 1: CLI providers (zero cost)
-	attempts += 1;
-	const cliResult = await tryCliProviders(params.message, systemPrompt, hb, safeDeps);
-	if (cliResult.result) return { ...cliResult.result, attempts };
-	allFailures.push(...cliResult.failures);
+	// ─── All failed ──────────────────────────────────────────────────
 
-	// Phase 2: local model (Ollama, zero cost)
-	attempts += 1;
-	const localResult = await tryLocalModel(params.message, systemPrompt, hb, safeDeps);
-	if (localResult.result) return { ...localResult.result, attempts };
-	allFailures.push(...localResult.failures);
+	// Wire 2: Record this as a skill gap
+	recordSkillGap(message.slice(0, 200));
 
-	// Phase 3: API providers (paid, Marga-routed)
-	attempts += 1;
-	const apiResult = await tryApiProviders(params.message, systemPrompt, hb, safeDeps);
-	if (apiResult.result) return { ...apiResult.result, attempts };
-	allFailures.push(...apiResult.failures);
+	if (authError) {
+		throw new Error(`Auth error: ${authError}. Re-authenticate and try again.`);
+	}
 
-	const summary = allFailures.slice(0, 6).join(" | ");
-	throw new Error(`All attempts failed. ${summary}`);
+	throw new Error(
+		`All attempts failed (${attempts}): ${errors.join("; ")}`,
+	);
 }
