@@ -58,3 +58,32 @@ export {
 	extractSymbols,
 } from "./semantic-graph.js";
 export * from "./semantic-graph-types.js";
+export {
+	AstIndex,
+} from "./ast-index.js";
+export {
+	parseFileContent,
+	fnToSymbol,
+	clsToSymbol,
+	symbolSignature,
+	rebuildStub,
+	extractImportStatements,
+	extractFunctionDecls,
+	extractClassDecls,
+	extractVariableDecls,
+	extractInterfaceDecls,
+	extractTypeDecls,
+	extractEnumDecls,
+	collectExportedSymbols,
+} from "./ast-parse.js";
+export type {
+	FileAst,
+	SymbolLocation,
+	ImportInfo,
+	ClassInfo,
+	FunctionInfo,
+	MethodInfo,
+	AstDiff,
+	DiffEntry,
+	IndexOptions,
+} from "./ast-index-types.js";

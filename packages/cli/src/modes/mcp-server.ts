@@ -73,6 +73,7 @@ import {
 } from "./mcp-tools-skills.js";
 import { createCompletionTool } from "./mcp-tools-completion.js";
 import { createRepoMapTool, createSemanticGraphQueryTool } from "./mcp-tools-netra.js";
+import { createAstQueryTool } from "./mcp-tools-ast.js";
 import { createEpisodicRecallTool, createEpisodicRecordTool } from "./mcp-tools-episodic.js";
 import { createUIExtensionsTool, createWidgetDataTool } from "./mcp-tools-plugins.js";
 import {
@@ -215,9 +216,10 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	mcpTools.push(createUIExtensionsTool());
 	mcpTools.push(createWidgetDataTool());
 
-	// Netra — Repo Map + Semantic Graph Query
+	// Netra — Repo Map + Semantic Graph + AST Query
 	mcpTools.push(createRepoMapTool(projectPath));
 	mcpTools.push(createSemanticGraphQueryTool(projectPath));
+	mcpTools.push(createAstQueryTool(projectPath));
 
 	// Episodic Developer Memory
 	mcpTools.push(createEpisodicRecallTool(projectPath));
