@@ -52,6 +52,14 @@ package-lock.json
 # Work-in-progress docs (local only — not pushed)
 work-in-progress/
 
+# Audit/review/health reports (local only)
+HEALTH.md
+*-AUDIT.md
+REVIEW-*.md
+docs/REVIEW-*.md
+TASK.md
+TASK-COMPLETE*.md
+
 # Backup files
 *.bak
 

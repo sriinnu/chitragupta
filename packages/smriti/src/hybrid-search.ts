@@ -225,7 +225,7 @@ export class HybridSearchEngine {
 
 		// Blend with user-configurable weight priors if provided
 		if (cfg.weightPriors) {
-			const blend = cfg.priorBlend ?? 0.3;
+			const blend = Math.max(0, Math.min(1, cfg.priorBlend ?? 0.3));
 			const priors = cfg.weightPriors;
 			weights = {
 				bm25: priors.bm25 !== undefined ? (1 - blend) * weights.bm25 + blend * priors.bm25 : weights.bm25,
