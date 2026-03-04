@@ -72,7 +72,7 @@ import {
 	createSkillsRecommendTool,
 } from "./mcp-tools-skills.js";
 import { createCompletionTool } from "./mcp-tools-completion.js";
-import { createRepoMapTool } from "./mcp-tools-netra.js";
+import { createRepoMapTool, createAstQueryTool } from "./mcp-tools-netra.js";
 import { createUIExtensionsTool, createWidgetDataTool } from "./mcp-tools-plugins.js";
 import {
 	createMemoryResource,
@@ -214,8 +214,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	mcpTools.push(createUIExtensionsTool());
 	mcpTools.push(createWidgetDataTool());
 
-	// Netra — Repo Map
+	// Netra — Repo Map + AST Query
 	mcpTools.push(createRepoMapTool(projectPath));
+	mcpTools.push(createAstQueryTool(projectPath));
 
 	// ─── 2. Session recording ───────────────────────────────────────
 
