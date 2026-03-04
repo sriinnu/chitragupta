@@ -30,6 +30,10 @@ const ALIAS_MAP: Record<string, string> = {
 	project_path: "projectPath",
 	max_results: "maxResults",
 	hub_url: "hubUrl",
+	// CPH4 Catalyst: ensure tool_calls and content_parts survive snake_case clients
+	tool_calls: "toolCalls",
+	content_parts: "contentParts",
+	session_count: "sessionCount",
 };
 
 /**
