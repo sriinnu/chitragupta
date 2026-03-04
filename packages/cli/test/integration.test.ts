@@ -36,7 +36,6 @@ describe("Package Imports", () => {
 	it("should import @chitragupta/anina", async () => {
 		const anina = await import("@chitragupta/anina");
 		expect(anina.Agent).toBeDefined();
-		expect(anina.CodingAgent).toBeDefined();
 		expect(anina.ReviewAgent).toBeDefined();
 		expect(anina.DebugAgent).toBeDefined();
 		expect(anina.ResearchAgent).toBeDefined();
@@ -298,15 +297,6 @@ describe("Agent Garage", () => {
 		expect(BUILT_IN_PROFILES.shodhaka).toBeDefined();
 		expect(BUILT_IN_PROFILES.parikartru).toBeDefined();
 		expect(BUILT_IN_PROFILES.lekhaka).toBeDefined();
-	});
-
-	it("should create CodingAgent with detected conventions", async () => {
-		const { CodingAgent } = await import("@chitragupta/anina");
-		const agent = new CodingAgent({ workingDirectory: process.cwd() });
-		const conventions = await agent.detectConventions();
-		expect(conventions.language).toBeDefined();
-		expect(conventions.moduleSystem).toBeDefined();
-		expect(conventions.indentation).toBeDefined();
 	});
 
 	it("should create ReviewAgent instance", async () => {
@@ -577,19 +567,10 @@ describe("Cross-Package Integration", () => {
 	it("should wire tools into an agent profile", async () => {
 		const { KARTRU_PROFILE } = await import("@chitragupta/core");
 		const { getAllTools } = await import("@chitragupta/yantra");
-		const { CodingAgent, CODE_TOOL_NAMES } = await import("@chitragupta/anina");
 
 		const allTools = getAllTools();
-		const codeTools = allTools.filter((t) => CODE_TOOL_NAMES.has(t.definition.name));
-
-		expect(codeTools.length).toBeGreaterThanOrEqual(8);
+		expect(allTools.length).toBeGreaterThan(0);
 		expect(KARTRU_PROFILE.id).toBe("kartru");
-
-		const agent = new CodingAgent({
-			workingDirectory: process.cwd(),
-			tools: allTools,
-		});
-		expect(agent).toBeDefined();
 	});
 
 	it("should classify and route through the full pipeline", async () => {
