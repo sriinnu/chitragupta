@@ -354,3 +354,7 @@ export type {
 	StepDefinition,
 	JobListFilter,
 } from "./orchestrator-checkpoint.js";
+
+/** Durable episodic developer memory for error pattern recall and experience tagging. */
+export { EpisodicMemoryStore } from "./episodic-store.js";
+export type { Episode, EpisodeInput, EpisodicQuery } from "./episodic-types.js";

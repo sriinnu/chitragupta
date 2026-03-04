@@ -73,6 +73,7 @@ import {
 } from "./mcp-tools-skills.js";
 import { createCompletionTool } from "./mcp-tools-completion.js";
 import { createRepoMapTool, createSemanticGraphQueryTool } from "./mcp-tools-netra.js";
+import { createEpisodicRecallTool, createEpisodicRecordTool } from "./mcp-tools-episodic.js";
 import { createUIExtensionsTool, createWidgetDataTool } from "./mcp-tools-plugins.js";
 import {
 	createMemoryResource,
@@ -217,6 +218,10 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	// Netra — Repo Map + Semantic Graph Query
 	mcpTools.push(createRepoMapTool(projectPath));
 	mcpTools.push(createSemanticGraphQueryTool(projectPath));
+
+	// Episodic Developer Memory
+	mcpTools.push(createEpisodicRecallTool(projectPath));
+	mcpTools.push(createEpisodicRecordTool(projectPath));
 
 	// ─── 2. Session recording ───────────────────────────────────────
 
