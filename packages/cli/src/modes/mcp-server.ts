@@ -300,8 +300,17 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			// Convert core ToolHandler → MCP McpToolHandler via bridge
 			return chitraguptaToolToMcp(resolved as unknown as ChitraguptaToolHandler);
 		},
-		onToolCall: (info) => {
-			recorder.recordToolCall(info);
+		/**
+		 * CPH4 Catalyst — tool_calls persistence fix
+		 * Named after the synthetic molecule in Lucy (2014) that triggers
+		 * neural expansion. This fix catalyzes downstream learning by ensuring
+		 * tool usage data reaches the Swapna consolidation pipeline.
+		 *
+		 * Previously returned void (fire-and-forget), causing tool_calls
+		 * to be lost when the recording promise was orphaned.
+		 */
+		onToolCall: async (info) => {
+			await recorder.recordToolCall(info);
 			heartbeat.update({ toolCallCount: ++toolCallCount, lastToolCallAt: Date.now(), state: "busy" });
 		},
 	});
