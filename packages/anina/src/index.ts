@@ -118,27 +118,6 @@ export type { AgentSoul, AgentArchetype } from "./agent-soul.js";
 export { AgentReflector } from "./agent-reflector.js";
 export type { ReflectionResult, PeerReview, ReflectorConfig } from "./agent-reflector.js";
 
-// ─── Coding Agent (Kartru) ──────────────────────────────────────────────────
-export { CodingAgent, CODE_TOOL_NAMES } from "./coding-agent.js";
-export type { CodingAgentConfig, CodingAgentEvent, CodingResult, ProjectConventions } from "./coding-agent.js";
-export { detectProjectConventions, findSampleSourceFile } from "./coding-agent-conventions.js";
-
-// ─── Coding Orchestrator (Sanyojaka) ────────────────────────────────────────
-export { CodingOrchestrator } from "./coding-orchestrator.js";
-export type {
-	CodingOrchestratorConfig,
-	OrchestratorResult,
-	OrchestratorProgress,
-	OrchestratorMode,
-	OrchestratorStats,
-	PhaseTiming,
-	DiffStats,
-	TaskPlan,
-	TaskStep,
-	GitState,
-	ReviewIssueCompact,
-} from "./coding-orchestrator.js";
-
 // ─── Agent Response Parsing Utilities ────────────────────────────────────────
 export { parseField, extractText } from "./agent-response-parser.js";
 
