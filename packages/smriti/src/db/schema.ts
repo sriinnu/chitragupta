@@ -208,7 +208,7 @@ export function initAgentSchema(dbm: DatabaseManager): void {
 				last_heartbeat INTEGER NOT NULL,
 				last_consolidation_start INTEGER,
 				last_consolidation_end INTEGER,
-				consolidation_phase TEXT,       -- Current Svapna phase if DREAMING
+				consolidation_phase TEXT,       -- Current Swapna phase if DREAMING
 				consolidation_progress REAL DEFAULT 0.0,  -- [0, 1]
 				updated_at  INTEGER NOT NULL
 			);
@@ -221,8 +221,8 @@ export function initAgentSchema(dbm: DatabaseManager): void {
 			CREATE TABLE IF NOT EXISTS consolidation_log (
 				id          INTEGER PRIMARY KEY AUTOINCREMENT,
 				project     TEXT NOT NULL,
-				cycle_type  TEXT NOT NULL CHECK(cycle_type IN ('svapna', 'monthly', 'yearly')),
-				cycle_id    TEXT,               -- e.g. 'svapna-2026-02-09T14:30:00Z'
+				cycle_type  TEXT NOT NULL CHECK(cycle_type IN ('swapna', 'monthly', 'yearly')),
+				cycle_id    TEXT,               -- e.g. 'swapna-2026-02-09T14:30:00Z'
 				phase       TEXT,               -- REPLAY, RECOMBINE, CRYSTALLIZE, PROCEDURALIZE, COMPRESS
 				phase_duration_ms INTEGER,
 				vasanas_created INTEGER DEFAULT 0,

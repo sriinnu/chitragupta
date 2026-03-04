@@ -1,7 +1,7 @@
 /**
- * @chitragupta/smriti — Svapna Consolidation types.
+ * @chitragupta/smriti — Swapna Consolidation types.
  *
- * Extracted from svapna-consolidation.ts to stay within 450 LOC limit.
+ * Extracted from swapna-consolidation.ts to stay within 450 LOC limit.
  * Contains all type definitions, default configuration, and constants
  * for the 5-phase dream consolidation cycle.
  *
@@ -12,8 +12,8 @@ import type { SessionToolCall, PramanaType } from "./types.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-/** Configuration for the Svapna consolidation cycle. */
-export interface SvapnaConfig {
+/** Configuration for the Swapna consolidation cycle. */
+export interface SwapnaConfig {
 	/** Maximum sessions to process per cycle. Default: 50. */
 	maxSessionsPerCycle: number;
 	/** Surprise threshold in [0, 1]. Turns above this are "high surprise". Default: 0.7. */
@@ -90,8 +90,8 @@ export interface CompressResult {
 	durationMs: number;
 }
 
-/** Full result of a Svapna consolidation cycle. */
-export interface SvapnaResult {
+/** Full result of a Swapna consolidation cycle. */
+export interface SwapnaResult {
 	phases: {
 		replay: { turnsScored: number; highSurprise: number; durationMs: number };
 		recombine: { associations: number; crossSessions: number; durationMs: number };
@@ -106,7 +106,7 @@ export interface SvapnaResult {
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 /** Default configuration values. */
-export const DEFAULT_CONFIG: SvapnaConfig = {
+export const DEFAULT_CONFIG: SwapnaConfig = {
 	maxSessionsPerCycle: 50,
 	surpriseThreshold: 0.7,
 	minPatternFrequency: 3,

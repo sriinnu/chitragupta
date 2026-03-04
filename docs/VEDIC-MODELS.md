@@ -10,7 +10,7 @@ Chitragupta maps 17 Vedic cognitive models to computational modules. The interna
 |---|-------|---------------|-----------------|--------|
 | I | **Antahkarana Chatushthaya** | Vivekachudamani, Gita 3.42 | Complete cognitive pipeline: Indriyas -> Manas -> Buddhi -> Ahamkara + Chitta | Yantra -> pre-classifier -> Buddhi -> Atma-Darshana + Smriti |
 | II | **Vasana-Samskara-Karma** | Yoga Sutras 2.12-15 | Infinite self-evolution loop: action -> result -> impression -> tendency -> action | Chetana + Samskaara + Vasana Engine |
-| III | **Chaturavastha** | Mandukya Upanishad 3-7 | Four states of consciousness: waking, dream, deep sleep, witness | Jagrat (active) / Svapna (consolidation) / Sushupti (archive) / Turiya (meta-observer) |
+| III | **Chaturavastha** | Mandukya Upanishad 3-7 | Four states of consciousness: waking, dream, deep sleep, witness | Jagrat (active) / Swapna (consolidation) / Sushupti (archive) / Turiya (meta-observer) |
 | IV | **Pancha Pramana** | Nyaya Sutras 1.1.3-7 | Epistemological confidence: how knowledge was acquired | 6-type Pramana classification on graph edges |
 | V | **Pancha Vritti** | Yoga Sutras 1.5-11 | Data classification: valid / error / hypothetical / absence / memory | Vritti tagging on knowledge nodes |
 | VI | **Triguna** | Bhagavad Gita Ch. 14 | System health as 3-vector: clarity, agitation, stagnation | Kalman filter tracking [sattva, rajas, tamas] |

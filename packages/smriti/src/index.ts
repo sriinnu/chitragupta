@@ -236,10 +236,10 @@ export { VasanaEngine } from "./vasana-engine.js";
 export type { VasanaConfig, CrystallizationResult, PromotionResult, DeviationType } from "./vasana-engine.js";
 
 /** Five-phase dream-cycle consolidation: score, replay, associate, recombine, compress. */
-export { SvapnaConsolidation } from "./svapna-consolidation.js";
+export { SwapnaConsolidation } from "./swapna-consolidation.js";
 export type {
-	SvapnaConfig,
-	SvapnaResult,
+	SwapnaConfig,
+	SwapnaResult,
 	ScoredTurn,
 	ReplayResult,
 	CrossSessionAssociation,
@@ -247,7 +247,7 @@ export type {
 	CrystallizeResult,
 	ProceduralizeResult,
 	CompressResult,
-} from "./svapna-consolidation.js";
+} from "./swapna-consolidation.js";
 
 /** Procedural memory engine that learns and recalls tool-call sequences from past sessions. */
 export { VidhiEngine } from "./vidhi-engine.js";

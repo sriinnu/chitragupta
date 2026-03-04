@@ -22,7 +22,7 @@ Beyond the runtime, Anina houses the agent's **inner life**: the Chetana conscio
 - **Consciousness layer (Chetana)** -- Six cognitive subsystems: affect (Bhava), attention (Dhyana), self-model (Atma-Darshana), intention (Sankalpa), health (Triguna), and emotional awareness (Nava Rasa)
 - **Zero-cost input pre-processor (Manas)** -- 10 intent categories, 4-tier routing, feature extraction, ambiguity scoring -- all in <5ms with zero LLM calls
 - **Decision framework (Buddhi)** -- Formal Nyaya syllogism logging with SQLite persistence, outcome tracking, and pattern analysis
-- **Background sleep daemon (Nidra)** -- 3-state machine (LISTENING / DREAMING / DEEP_SLEEP) with drift-correcting heartbeat and Svapna consolidation integration
+- **Background sleep daemon (Nidra)** -- 3-state machine (LISTENING / DREAMING / DEEP_SLEEP) with drift-correcting heartbeat and Swapna consolidation integration
 - **Self-recognition (Pratyabhijna)** -- Session-start identity reconstruction from vasanas, samskaras, tool mastery, and cross-project insights
 - **Guardian system (Lokapala)** -- Autonomous security (Rakshaka), performance (Gati), and correctness (Satya) monitoring with findings, auto-fix, and configurable thresholds
 - **Configurable limits** -- `MAX_SUB_AGENTS` and `MAX_AGENT_DEPTH` prevent runaway agent spawning
@@ -655,7 +655,7 @@ DEEP_SLEEP -> maintenance   -> LISTENING
 ANY        -> user activity -> LISTENING (interrupt)
 ```
 
-Each state runs at a different heartbeat cadence. DREAMING invokes the Svapna consolidation pipeline. DEEP_SLEEP triggers maintenance (VACUUM, GC, index rebuilds). Timer drift is corrected using the same setTimeout-chain technique as KaalaBrahma.
+Each state runs at a different heartbeat cadence. DREAMING invokes the Swapna consolidation pipeline. DEEP_SLEEP triggers maintenance (VACUUM, GC, index rebuilds). Timer drift is corrected using the same setTimeout-chain technique as KaalaBrahma.
 
 ```typescript
 import { NidraDaemon } from "@chitragupta/anina";
@@ -663,7 +663,7 @@ import type { NidraConfig, NidraSnapshot } from "@chitragupta/anina";
 
 const nidra = new NidraDaemon({
   idleTimeoutMs: 120_000,       // 2 min idle before dreaming
-  dreamDurationMs: 30_000,      // 30s max for Svapna consolidation
+  dreamDurationMs: 30_000,      // 30s max for Swapna consolidation
   deepSleepDurationMs: 60_000,  // 60s for maintenance
   heartbeatIntervalMs: 5_000,   // 5s heartbeat cadence
 }, eventBus);
@@ -671,7 +671,7 @@ const nidra = new NidraDaemon({
 // Register handlers for each sleep state
 nidra.onDream(async (progress) => {
   progress("REPLAY", 0.2);
-  // ... run Svapna consolidation pipeline
+  // ... run Swapna consolidation pipeline
   progress("COMPRESS", 0.9);
 });
 

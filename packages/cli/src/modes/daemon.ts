@@ -3,7 +3,7 @@
  *
  * Runs the Chitragupta background daemon for calendar-aware session
  * consolidation. Wraps the Nidra sleep-cycle daemon with scheduling
- * so that day files, Svapna consolidation, and Vasana extraction
+ * so that day files, Swapna consolidation, and Vasana extraction
  * happen automatically on idle, on a cron schedule, and on startup
  * backfill.
  *

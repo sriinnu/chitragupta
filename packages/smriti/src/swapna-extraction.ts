@@ -1,13 +1,13 @@
 /**
- * @chitragupta/smriti — Svapna Extraction (Phases 1 & 2)
+ * @chitragupta/smriti — Swapna Extraction (Phases 1 & 2)
  *
  * REPLAY (hippocampal replay) and RECOMBINE (dream association) phases
- * of the Svapna consolidation cycle.
+ * of the Swapna consolidation cycle.
  */
 
 import { DatabaseManager } from "./db/index.js";
 import type { SessionToolCall } from "./types.js";
-import type { SvapnaConfig, ScoredTurn, ReplayResult, CrossSessionAssociation, RecombineResult } from "./svapna-consolidation.js";
+import type { SwapnaConfig, ScoredTurn, ReplayResult, CrossSessionAssociation, RecombineResult } from "./swapna-consolidation.js";
 
 // ─── FNV-1a Hash ────────────────────────────────────────────────────────────
 
@@ -83,9 +83,9 @@ export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
  * Surprise = -log P(outcome | context), estimated from historical frequency
  * of tool-result patterns. High-surprise turns get boosted retention weight.
  */
-export async function svapnaReplay(
+export async function swapnaReplay(
 	db: DatabaseManager,
-	config: SvapnaConfig,
+	config: SwapnaConfig,
 ): Promise<ReplayResult> {
 	const start = performance.now();
 	const agentDb = db.get("agent");
@@ -194,9 +194,9 @@ export async function svapnaReplay(
  * Cross-session structural similarity via Jaccard fingerprint matching
  * on tool call sequences. Identifies analogous patterns across sessions.
  */
-export async function svapnaRecombine(
+export async function swapnaRecombine(
 	db: DatabaseManager,
-	config: SvapnaConfig,
+	config: SwapnaConfig,
 	highSurpriseTurns: ScoredTurn[],
 ): Promise<RecombineResult> {
 	const start = performance.now();

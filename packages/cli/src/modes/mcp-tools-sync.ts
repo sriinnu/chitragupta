@@ -2,7 +2,7 @@
  * MCP Tools — Sync, Recall, Vidhis & Consolidation.
  *
  * Tool factories for cross-machine sync (export/import), unified recall,
- * learned procedures (Vidhis), and on-demand Svapna consolidation.
+ * learned procedures (Vidhis), and on-demand Swapna consolidation.
  *
  * @module
  */
@@ -229,7 +229,7 @@ export function createVidhisTool(projectPath: string): McpToolHandler {
 		definition: {
 			name: "chitragupta_vidhis",
 			description:
-				"List or search learned procedures (Vidhis) from Svapna consolidation. " +
+				"List or search learned procedures (Vidhis) from Swapna consolidation. " +
 				"Vidhis are parameterized tool sequences that were extracted from repeated " +
 				"successful patterns across sessions. Returns procedure name, tool steps, " +
 				"trigger phrases, confidence, and success rate.",
@@ -277,7 +277,7 @@ export function createVidhisTool(projectPath: string): McpToolHandler {
 					parameterSchema: Record<string, { name: string; description: string }>;
 				}>;
 				if (vidhis.length === 0) {
-					return { content: [{ type: "text", text: "No learned procedures (vidhis) found. Procedures are extracted during Svapna consolidation from repeated successful tool sequences." }], _metadata: { action: "vidhis_list", count: 0 } };
+					return { content: [{ type: "text", text: "No learned procedures (vidhis) found. Procedures are extracted during Swapna consolidation from repeated successful tool sequences." }], _metadata: { action: "vidhis_list", count: 0 } };
 				}
 				const lines = vidhis.map((v, i) => `${i + 1}. ${formatVidhi(v)}`);
 				return { content: [{ type: "text", text: `Learned Procedures (${vidhis.length}):\n\n${lines.join("\n\n")}` }], _metadata: { action: "vidhis_list", count: vidhis.length } };
@@ -290,7 +290,7 @@ export function createVidhisTool(projectPath: string): McpToolHandler {
 
 // ─── Consolidation ──────────────────────────────────────────────────────────
 
-/** Create the `chitragupta_consolidate` tool — on-demand Svapna memory consolidation. */
+/** Create the `chitragupta_consolidate` tool — on-demand Swapna memory consolidation. */
 export function createConsolidateTool(projectPath: string): McpToolHandler {
 	return {
 		definition: {

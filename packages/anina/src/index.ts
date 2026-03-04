@@ -28,7 +28,7 @@ export type {
 	ToolResult,
 	// Phase 1: Nidra + Pratyabhijna types
 	NidraState,
-	SvapnaPhase,
+	SwapnaPhase,
 	NidraConfig,
 	NidraSnapshot,
 	PratyabhijnaContext,

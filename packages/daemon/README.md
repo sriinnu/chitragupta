@@ -68,7 +68,7 @@ The daemon is Chitragupta's centralized process — a long-lived background serv
 | `fact.extract` | Write | Extract facts from text |
 | `vidhi.list` | Read | List learned procedures |
 | `vidhi.match` | Read | Match procedure by query |
-| `consolidation.run` | Write | Run Svapna consolidation |
+| `consolidation.run` | Write | Run Swapna consolidation |
 
 ## Usage
 

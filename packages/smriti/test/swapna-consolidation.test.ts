@@ -1,5 +1,5 @@
 /**
- * Tests for SvapnaConsolidation — the 5-phase dream consolidation cycle.
+ * Tests for SwapnaConsolidation — the 5-phase dream consolidation cycle.
  *
  * Covers: construction, REPLAY (TF-IDF surprise scoring), RECOMBINE (Jaccard
  * fingerprint matching), CRYSTALLIZE (vasana formation), PROCEDURALIZE (anti-
@@ -14,23 +14,23 @@ import path from "path";
 import { DatabaseManager } from "@chitragupta/smriti/db/database";
 import { initAgentSchema } from "@chitragupta/smriti/db/schema";
 import {
-	SvapnaConsolidation,
-	type SvapnaConfig,
+	SwapnaConsolidation,
+	type SwapnaConfig,
 	type ScoredTurn,
 	type ReplayResult,
 	type RecombineResult,
 	type CrystallizeResult,
 	type ProceduralizeResult,
 	type CompressResult,
-	type SvapnaResult,
-} from "../src/svapna-consolidation.js";
+	type SwapnaResult,
+} from "../src/swapna-consolidation.js";
 
 // ─── Test Helpers ───────────────────────────────────────────────────────────
 
 let tmpDir: string;
 let dbm: DatabaseManager;
 
-const PROJECT = "/test/svapna-project";
+const PROJECT = "/test/swapna-project";
 
 /**
  * Insert a session row into sessions table.
@@ -111,7 +111,7 @@ function tc(
 // ─── Setup / Teardown ───────────────────────────────────────────────────────
 
 beforeEach(() => {
-	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "svapna-test-"));
+	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "swapna-test-"));
 	DatabaseManager.reset();
 	dbm = DatabaseManager.instance(tmpDir);
 	initAgentSchema(dbm);
@@ -124,15 +124,15 @@ afterEach(() => {
 
 // ─── Construction ───────────────────────────────────────────────────────────
 
-describe("SvapnaConsolidation — construction", () => {
+describe("SwapnaConsolidation — construction", () => {
 	it("should use default config values when only project is provided", () => {
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		expect(svapna).toBeDefined();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		expect(swapna).toBeDefined();
 		// Validate it can be used (no crash)
 	});
 
 	it("should merge custom config with defaults", () => {
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{
 				project: PROJECT,
 				maxSessionsPerCycle: 10,
@@ -143,16 +143,16 @@ describe("SvapnaConsolidation — construction", () => {
 			},
 			dbm,
 		);
-		expect(svapna).toBeDefined();
+		expect(swapna).toBeDefined();
 	});
 });
 
 // ─── Phase 1: REPLAY ───────────────────────────────────────────────────────
 
-describe("SvapnaConsolidation — Phase 1: REPLAY", () => {
+describe("SwapnaConsolidation — Phase 1: REPLAY", () => {
 	it("should return empty result when no sessions exist", async () => {
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.replay();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.replay();
 
 		expect(result.allTurns).toHaveLength(0);
 		expect(result.highSurpriseTurns).toHaveLength(0);
@@ -183,8 +183,8 @@ describe("SvapnaConsolidation — Phase 1: REPLAY", () => {
 			tc("bash", '{"cmd":"deploy"}', "deployed!"),
 		]);
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.replay();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.replay();
 
 		expect(result.turnsScored).toBe(5); // 3 turns in s1 + 2 turns in s2
 		expect(result.allTurns.length).toBe(5);
@@ -220,11 +220,11 @@ describe("SvapnaConsolidation — Phase 1: REPLAY", () => {
 			tc("dangerous_tool", '{"arg":"x"}', "FAILED", true),
 		]);
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, surpriseThreshold: 0.5 },
 			dbm,
 		);
-		const result = await svapna.replay();
+		const result = await swapna.replay();
 
 		expect(result.turnsScored).toBeGreaterThan(0);
 		// The rare error pattern should generate higher surprise
@@ -242,8 +242,8 @@ describe("SvapnaConsolidation — Phase 1: REPLAY", () => {
 		// Very long turn (high deviation = moderate surprise)
 		insertTurn("s1", 2, "user", "A".repeat(1000));
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.replay();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.replay();
 
 		expect(result.turnsScored).toBe(3);
 
@@ -266,8 +266,8 @@ describe("SvapnaConsolidation — Phase 1: REPLAY", () => {
 			tc("rare_tool_xyz", '{}', "error", true),
 		]);
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.replay();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.replay();
 
 		// Maximum surprise should be exactly 1.0 after normalization
 		const maxSurprise = Math.max(...result.allTurns.map((t) => t.surprise));
@@ -284,11 +284,11 @@ describe("SvapnaConsolidation — Phase 1: REPLAY", () => {
 			insertTurn(`s${i}`, 1, "assistant", `Reply ${i}`);
 		}
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, maxSessionsPerCycle: 2 },
 			dbm,
 		);
-		const result = await svapna.replay();
+		const result = await swapna.replay();
 
 		// Should only process turns from 2 sessions = 4 turns
 		expect(result.turnsScored).toBe(4);
@@ -297,10 +297,10 @@ describe("SvapnaConsolidation — Phase 1: REPLAY", () => {
 
 // ─── Phase 2: RECOMBINE ────────────────────────────────────────────────────
 
-describe("SvapnaConsolidation — Phase 2: RECOMBINE", () => {
+describe("SwapnaConsolidation — Phase 2: RECOMBINE", () => {
 	it("should return empty result when no high-surprise turns provided", async () => {
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.recombine([]);
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.recombine([]);
 
 		expect(result.associations).toHaveLength(0);
 		expect(result.crossSessions).toBe(0);
@@ -353,8 +353,8 @@ describe("SvapnaConsolidation — Phase 2: RECOMBINE", () => {
 			},
 		];
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.recombine(highSurpriseTurns);
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.recombine(highSurpriseTurns);
 
 		// s1's pattern should match s2 (similar tools), but not s3 much
 		expect(result.associations.length).toBeGreaterThanOrEqual(1);
@@ -393,8 +393,8 @@ describe("SvapnaConsolidation — Phase 2: RECOMBINE", () => {
 			},
 		];
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.recombine(highSurpriseTurns);
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.recombine(highSurpriseTurns);
 
 		// No self-session match
 		const selfMatch = result.associations.find(
@@ -426,8 +426,8 @@ describe("SvapnaConsolidation — Phase 2: RECOMBINE", () => {
 			},
 		];
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.recombine(highSurpriseTurns);
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.recombine(highSurpriseTurns);
 
 		// Should produce no associations (no tool fingerprints to compare)
 		expect(result.associations).toHaveLength(0);
@@ -457,8 +457,8 @@ describe("SvapnaConsolidation — Phase 2: RECOMBINE", () => {
 			},
 		];
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.recombine(highSurpriseTurns);
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.recombine(highSurpriseTurns);
 
 		// crossSessions counts unique pairs, not total associations
 		expect(result.crossSessions).toBeGreaterThanOrEqual(0);
@@ -467,10 +467,10 @@ describe("SvapnaConsolidation — Phase 2: RECOMBINE", () => {
 
 // ─── Phase 3: CRYSTALLIZE ──────────────────────────────────────────────────
 
-describe("SvapnaConsolidation — Phase 3: CRYSTALLIZE", () => {
+describe("SwapnaConsolidation — Phase 3: CRYSTALLIZE", () => {
 	it("should return zero counts when no qualifying samskaras exist", async () => {
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.crystallize();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.crystallize();
 
 		expect(result.vasanasCreated).toBe(0);
 		expect(result.vasanasReinforced).toBe(0);
@@ -484,11 +484,11 @@ describe("SvapnaConsolidation — Phase 3: CRYSTALLIZE", () => {
 		// Samskara with only 1 observation (below default threshold of 3)
 		insertSamskara("sam1", "s1", "preference", "prefers tabs", 1, 0.8);
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minPatternFrequency: 3 },
 			dbm,
 		);
-		const result = await svapna.crystallize();
+		const result = await swapna.crystallize();
 
 		expect(result.vasanasCreated).toBe(0);
 	});
@@ -500,11 +500,11 @@ describe("SvapnaConsolidation — Phase 3: CRYSTALLIZE", () => {
 		// Low confidence samskara with enough observations
 		insertSamskara("sam1", "s1", "preference", "prefers tabs", 5, 0.3);
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minPatternFrequency: 3 },
 			dbm,
 		);
-		const result = await svapna.crystallize();
+		const result = await swapna.crystallize();
 
 		expect(result.vasanasCreated).toBe(0);
 	});
@@ -516,11 +516,11 @@ describe("SvapnaConsolidation — Phase 3: CRYSTALLIZE", () => {
 		// High-quality samskara but only from 1 session
 		insertSamskara("sam1", "s1", "preference", "prefers tabs over spaces", 5, 0.9);
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minPatternFrequency: 3 },
 			dbm,
 		);
-		const result = await svapna.crystallize();
+		const result = await swapna.crystallize();
 
 		// Even though it qualifies on count and confidence, it only comes
 		// from 1 session, so it should not crystallize
@@ -535,11 +535,11 @@ describe("SvapnaConsolidation — Phase 3: CRYSTALLIZE", () => {
 		insertSamskara("sam1", "s1", "preference", "prefers tabs over spaces", 5, 0.9);
 		insertSamskara("sam2", "s2", "preference", "prefers tabs over spaces", 4, 0.85);
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minPatternFrequency: 3 },
 			dbm,
 		);
-		const result = await svapna.crystallize();
+		const result = await swapna.crystallize();
 
 		expect(result.vasanasCreated).toBe(1);
 		expect(result.vasanasReinforced).toBe(0);
@@ -584,11 +584,11 @@ describe("SvapnaConsolidation — Phase 3: CRYSTALLIZE", () => {
 		insertSamskara("sam1", "s1", "preference", "prefers tabs over spaces", 5, 0.9);
 		insertSamskara("sam2", "s2", "preference", "prefers tabs over spaces", 4, 0.85);
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minPatternFrequency: 3 },
 			dbm,
 		);
-		const result = await svapna.crystallize();
+		const result = await swapna.crystallize();
 
 		expect(result.vasanasReinforced).toBe(1);
 		expect(result.vasanasCreated).toBe(0);
@@ -609,11 +609,11 @@ describe("SvapnaConsolidation — Phase 3: CRYSTALLIZE", () => {
 		insertSamskara("sam1", "s1", "correction", "user corrects wrong import paths", 5, 0.8);
 		insertSamskara("sam2", "s2", "correction", "user corrects wrong import paths", 4, 0.75);
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minPatternFrequency: 3 },
 			dbm,
 		);
-		await svapna.crystallize();
+		await swapna.crystallize();
 
 		const agentDb = dbm.get("agent");
 		const vasanas = agentDb
@@ -631,11 +631,11 @@ describe("SvapnaConsolidation — Phase 3: CRYSTALLIZE", () => {
 		insertSamskara("sam1", "s1", "tool-sequence", "read then edit", 5, 0.9);
 		insertSamskara("sam2", "s2", "tool-sequence", "read then edit", 4, 0.85);
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minPatternFrequency: 3 },
 			dbm,
 		);
-		await svapna.crystallize();
+		await swapna.crystallize();
 
 		const agentDb = dbm.get("agent");
 		const vasanas = agentDb
@@ -652,11 +652,11 @@ describe("SvapnaConsolidation — Phase 3: CRYSTALLIZE", () => {
 		insertSamskara("sam1", "s1", "convention", "always runs tests before committing", 5, 0.9);
 		insertSamskara("sam2", "s2", "convention", "always runs tests before committing", 4, 0.85);
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minPatternFrequency: 3 },
 			dbm,
 		);
-		await svapna.crystallize();
+		await swapna.crystallize();
 
 		const agentDb = dbm.get("agent");
 		const vasanas = agentDb
@@ -669,13 +669,13 @@ describe("SvapnaConsolidation — Phase 3: CRYSTALLIZE", () => {
 
 // ─── Phase 4: PROCEDURALIZE ────────────────────────────────────────────────
 
-describe("SvapnaConsolidation — Phase 4: PROCEDURALIZE", () => {
+describe("SwapnaConsolidation — Phase 4: PROCEDURALIZE", () => {
 	it("should return empty when fewer than 3 sessions exist", async () => {
 		insertSession("s1");
 		insertSession("s2");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.proceduralize();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.proceduralize();
 
 		expect(result.vidhisCreated).toBe(0);
 		expect(result.vidhis).toHaveLength(0);
@@ -692,11 +692,11 @@ describe("SvapnaConsolidation — Phase 4: PROCEDURALIZE", () => {
 			]);
 		}
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minSequenceLength: 2, minSuccessRate: 0.8 },
 			dbm,
 		);
-		const result = await svapna.proceduralize();
+		const result = await swapna.proceduralize();
 
 		expect(result.vidhisCreated).toBeGreaterThanOrEqual(1);
 		expect(result.vidhis.length).toBeGreaterThanOrEqual(1);
@@ -722,11 +722,11 @@ describe("SvapnaConsolidation — Phase 4: PROCEDURALIZE", () => {
 			]);
 		}
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minSequenceLength: 2 },
 			dbm,
 		);
-		const result = await svapna.proceduralize();
+		const result = await swapna.proceduralize();
 
 		if (result.vidhisCreated > 0) {
 			const vidhi = result.vidhis[0];
@@ -754,11 +754,11 @@ describe("SvapnaConsolidation — Phase 4: PROCEDURALIZE", () => {
 			]);
 		}
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minSequenceLength: 2 },
 			dbm,
 		);
-		const result = await svapna.proceduralize();
+		const result = await swapna.proceduralize();
 
 		if (result.vidhisCreated > 0) {
 			const vidhi = result.vidhis[0];
@@ -781,14 +781,14 @@ describe("SvapnaConsolidation — Phase 4: PROCEDURALIZE", () => {
 			]);
 		}
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minSequenceLength: 2 },
 			dbm,
 		);
 
 		// Run twice
-		const result1 = await svapna.proceduralize();
-		const result2 = await svapna.proceduralize();
+		const result1 = await swapna.proceduralize();
+		const result2 = await swapna.proceduralize();
 
 		// Second run should not create new vidhis (already exist)
 		expect(result2.vidhisCreated).toBe(0);
@@ -805,11 +805,11 @@ describe("SvapnaConsolidation — Phase 4: PROCEDURALIZE", () => {
 			]);
 		}
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minSequenceLength: 2, minSuccessRate: 0.9 },
 			dbm,
 		);
-		const result = await svapna.proceduralize();
+		const result = await swapna.proceduralize();
 
 		// The sequence has 50% error rate, which is below 0.9 threshold
 		// However, vidhis may still be created from the overall session success
@@ -827,11 +827,11 @@ describe("SvapnaConsolidation — Phase 4: PROCEDURALIZE", () => {
 			]);
 		}
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minSequenceLength: 2 },
 			dbm,
 		);
-		await svapna.proceduralize();
+		await swapna.proceduralize();
 
 		const agentDb = dbm.get("agent");
 		const vidhis = agentDb
@@ -843,10 +843,10 @@ describe("SvapnaConsolidation — Phase 4: PROCEDURALIZE", () => {
 
 // ─── Phase 5: COMPRESS ─────────────────────────────────────────────────────
 
-describe("SvapnaConsolidation — Phase 5: COMPRESS", () => {
+describe("SwapnaConsolidation — Phase 5: COMPRESS", () => {
 	it("should return ratio 1.0 when no sessions exist", async () => {
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.compress();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.compress();
 
 		expect(result.tokensCompressed).toBe(0);
 		expect(result.compressionRatio).toBe(1.0);
@@ -855,8 +855,8 @@ describe("SvapnaConsolidation — Phase 5: COMPRESS", () => {
 	it("should return ratio 1.0 when no turns exist", async () => {
 		insertSession("s1");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.compress();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.compress();
 
 		expect(result.tokensCompressed).toBe(0);
 		expect(result.compressionRatio).toBe(1.0);
@@ -866,8 +866,8 @@ describe("SvapnaConsolidation — Phase 5: COMPRESS", () => {
 		insertSession("s1");
 		insertTurn("s1", 0, "user", "Hello world this is some content");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.compress();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.compress();
 
 		expect(result.compressionRatio).toBe(1.0);
 	});
@@ -882,8 +882,8 @@ describe("SvapnaConsolidation — Phase 5: COMPRESS", () => {
 			]);
 		}
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.compress();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.compress();
 
 		expect(result.tokensCompressed).toBeGreaterThan(0);
 		// Compression ratio should be less than 1.0 (actual compression happened)
@@ -906,8 +906,8 @@ describe("SvapnaConsolidation — Phase 5: COMPRESS", () => {
 		// Turn with inference content (anumana = medium preservation)
 		insertTurn("s1", 2, "assistant", "Based on the analysis, the code follows standard patterns.");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.compress();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.compress();
 
 		expect(result.tokensCompressed).toBeGreaterThan(0);
 		expect(result.compressionRatio).toBeLessThanOrEqual(1.0);
@@ -926,8 +926,8 @@ describe("SvapnaConsolidation — Phase 5: COMPRESS", () => {
 			tc("bash", '{"c":"fail"}', "error output", true),
 		]);
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.compress();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.compress();
 
 		expect(result.tokensCompressed).toBeGreaterThan(0);
 		// Compression should still work; the error turn gets preserved more
@@ -937,7 +937,7 @@ describe("SvapnaConsolidation — Phase 5: COMPRESS", () => {
 
 // ─── Pramana Classification ────────────────────────────────────────────────
 
-describe("SvapnaConsolidation — Pramana classification", () => {
+describe("SwapnaConsolidation — Pramana classification", () => {
 	// We test the classification indirectly through compress() behavior,
 	// since classifyPramana is private.
 
@@ -948,8 +948,8 @@ describe("SvapnaConsolidation — Pramana classification", () => {
 		]);
 		insertTurn("s1", 1, "user", "Thanks");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.compress();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.compress();
 		// Should compress but with high preservation
 		expect(result.tokensCompressed).toBeGreaterThan(0);
 	});
@@ -959,8 +959,8 @@ describe("SvapnaConsolidation — Pramana classification", () => {
 		insertTurn("s1", 0, "assistant", "Maybe possibly might perhaps the issue could be somewhere");
 		insertTurn("s1", 1, "assistant", "Perhaps it could possibly be a problem, not sure");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.compress();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.compress();
 		expect(result.tokensCompressed).toBeGreaterThan(0);
 	});
 
@@ -969,8 +969,8 @@ describe("SvapnaConsolidation — Pramana classification", () => {
 		insertTurn("s1", 0, "assistant", "This must be the root cause, it likely implies a deeper issue");
 		insertTurn("s1", 1, "assistant", "It probably means the config is wrong, therefore we should fix it");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.compress();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.compress();
 		expect(result.tokensCompressed).toBeGreaterThan(0);
 	});
 
@@ -979,8 +979,8 @@ describe("SvapnaConsolidation — Pramana classification", () => {
 		insertTurn("s1", 0, "assistant", "This is similar to the React pattern, just as in Vue");
 		insertTurn("s1", 1, "assistant", "It is analogous to a factory, compared to the builder pattern");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.compress();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.compress();
 		expect(result.tokensCompressed).toBeGreaterThan(0);
 	});
 
@@ -989,8 +989,8 @@ describe("SvapnaConsolidation — Pramana classification", () => {
 		insertTurn("s1", 0, "assistant", "According to the documentation, the API specification says...");
 		insertTurn("s1", 1, "assistant", "The docs say that the reference implementation handles this");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.compress();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.compress();
 		expect(result.tokensCompressed).toBeGreaterThan(0);
 	});
 
@@ -999,15 +999,15 @@ describe("SvapnaConsolidation — Pramana classification", () => {
 		insertTurn("s1", 0, "assistant", "The code is well structured and follows good patterns");
 		insertTurn("s1", 1, "assistant", "We can see that the function handles edge cases properly");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.compress();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.compress();
 		expect(result.tokensCompressed).toBeGreaterThan(0);
 	});
 });
 
 // ─── Full Pipeline ─────────────────────────────────────────────────────────
 
-describe("SvapnaConsolidation — full run() pipeline", () => {
+describe("SwapnaConsolidation — full run() pipeline", () => {
 	it("should execute all 5 phases and return a complete result", async () => {
 		// Set up enough data for all phases to have something to work with
 		for (let i = 0; i < 4; i++) {
@@ -1023,13 +1023,13 @@ describe("SvapnaConsolidation — full run() pipeline", () => {
 		insertSamskara("sam1", "s0", "preference", "prefers functional style", 5, 0.9);
 		insertSamskara("sam2", "s1", "preference", "prefers functional style", 4, 0.85);
 
-		const svapna = new SvapnaConsolidation(
+		const swapna = new SwapnaConsolidation(
 			{ project: PROJECT, minSequenceLength: 2, minPatternFrequency: 3 },
 			dbm,
 		);
 
 		const phases: Array<{ phase: string; progress: number }> = [];
-		const result = await svapna.run((phase, progress) => {
+		const result = await swapna.run((phase, progress) => {
 			phases.push({ phase, progress });
 		});
 
@@ -1040,7 +1040,7 @@ describe("SvapnaConsolidation — full run() pipeline", () => {
 		expect(result.phases.proceduralize).toBeDefined();
 		expect(result.phases.compress).toBeDefined();
 		expect(result.totalDurationMs).toBeGreaterThanOrEqual(0);
-		expect(result.cycleId).toMatch(/^svapna-/);
+		expect(result.cycleId).toMatch(/^swapna-/);
 
 		// Verify progress callbacks: 2 per phase (start + end)
 		expect(phases.length).toBe(10);
@@ -1068,11 +1068,11 @@ describe("SvapnaConsolidation — full run() pipeline", () => {
 		insertTurn("s1", 0, "user", "Hello");
 		insertTurn("s1", 1, "assistant", "Hi");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.run();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.run();
 
 		expect(result).toBeDefined();
-		expect(result.cycleId).toMatch(/^svapna-/);
+		expect(result.cycleId).toMatch(/^swapna-/);
 	});
 
 	it("should write to the consolidation_log table", async () => {
@@ -1080,8 +1080,8 @@ describe("SvapnaConsolidation — full run() pipeline", () => {
 		insertTurn("s1", 0, "user", "Hello");
 		insertTurn("s1", 1, "assistant", "Hi");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		await svapna.run();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		await swapna.run();
 
 		const agentDb = dbm.get("agent");
 		const logs = agentDb
@@ -1100,8 +1100,8 @@ describe("SvapnaConsolidation — full run() pipeline", () => {
 		insertTurn("s1", 0, "user", "Hello");
 		insertTurn("s1", 1, "assistant", "Hi");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		await svapna.run();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		await swapna.run();
 
 		const agentDb = dbm.get("agent");
 		const state = agentDb
@@ -1115,12 +1115,12 @@ describe("SvapnaConsolidation — full run() pipeline", () => {
 
 // ─── Edge Cases ────────────────────────────────────────────────────────────
 
-describe("SvapnaConsolidation — edge cases", () => {
+describe("SwapnaConsolidation — edge cases", () => {
 	it("should handle empty sessions gracefully", async () => {
 		insertSession("s1"); // No turns
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.run();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.run();
 
 		expect(result.phases.replay.turnsScored).toBe(0);
 		expect(result.phases.recombine.associations).toBe(0);
@@ -1131,8 +1131,8 @@ describe("SvapnaConsolidation — edge cases", () => {
 		insertSession("s1");
 		insertTurn("s1", 0, "user", "Just one message");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.run();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.run();
 
 		expect(result.phases.replay.turnsScored).toBe(1);
 	});
@@ -1143,8 +1143,8 @@ describe("SvapnaConsolidation — edge cases", () => {
 		insertTurn("s1", 1, "user", "Question 2");
 		insertTurn("s1", 2, "user", "Question 3");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.replay();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.replay();
 
 		// All turns should still be scored (by content length deviation)
 		expect(result.turnsScored).toBe(3);
@@ -1158,8 +1158,8 @@ describe("SvapnaConsolidation — edge cases", () => {
 			VALUES (?, ?, ?, ?, ?, ?)
 		`).run("s1", 0, "assistant", "test", "NOT_VALID_JSON{{{", Date.now());
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.replay();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.replay();
 
 		// Should not crash, just treat as no tool calls
 		expect(result.turnsScored).toBe(1);
@@ -1170,8 +1170,8 @@ describe("SvapnaConsolidation — edge cases", () => {
 		insertSession("s1");
 		insertTurn("s1", 0, "assistant", "No tools used", undefined);
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.replay();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.replay();
 
 		expect(result.turnsScored).toBe(1);
 		expect(result.allTurns[0].toolCalls).toHaveLength(0);
@@ -1181,8 +1181,8 @@ describe("SvapnaConsolidation — edge cases", () => {
 		insertSession("s1", "/other/project");
 		insertTurn("s1", 0, "user", "Hello");
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
-		const result = await svapna.run();
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.run();
 
 		expect(result.phases.replay.turnsScored).toBe(0);
 	});
@@ -1201,9 +1201,9 @@ describe("SvapnaConsolidation — edge cases", () => {
 			);
 		}
 
-		const svapna = new SvapnaConsolidation({ project: PROJECT }, dbm);
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
 		const start = performance.now();
-		const result = await svapna.run();
+		const result = await swapna.run();
 		const elapsed = performance.now() - start;
 
 		expect(result.phases.replay.turnsScored).toBe(100);
@@ -1218,8 +1218,8 @@ describe("SvapnaConsolidation — edge cases", () => {
 		insertTurn("p1s1", 0, "user", "Project A work");
 		insertTurn("p2s1", 0, "user", "Project B work");
 
-		const svapnaA = new SvapnaConsolidation({ project: "/project-A" }, dbm);
-		const resultA = await svapnaA.replay();
+		const swapnaA = new SwapnaConsolidation({ project: "/project-A" }, dbm);
+		const resultA = await swapnaA.replay();
 
 		expect(resultA.turnsScored).toBe(1);
 		expect(resultA.allTurns[0].content).toBe("Project A work");

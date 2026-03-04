@@ -4,7 +4,7 @@
  * "Nidra" (निद्रा) means Sleep. The daemon orchestrates a 3-state machine:
  *   LISTENING -> idle timeout -> DREAMING -> dream done -> DEEP_SLEEP -> maintenance -> LISTENING
  *
- * Each state runs at a different heartbeat cadence. DREAMING invokes Svapna
+ * Each state runs at a different heartbeat cadence. DREAMING invokes Swapna
  * consolidation; DEEP_SLEEP triggers maintenance (VACUUM, GC, index rebuilds).
  *
  * Persistence, snapshot building, and timer utilities live in
@@ -36,7 +36,7 @@ const log = createLogger("nidra");
 
 /**
  * Background sleep-cycle daemon with a 3-state machine, drift-correcting
- * heartbeat, SQLite persistence, and integration hooks for Svapna
+ * heartbeat, SQLite persistence, and integration hooks for Swapna
  * consolidation and deep-sleep maintenance.
  */
 export class NidraDaemon {
@@ -48,7 +48,7 @@ export class NidraDaemon {
 	private lastHeartbeat: number = Date.now();
 	private lastConsolidationStart: number | undefined;
 	private lastConsolidationEnd: number | undefined;
-	private consolidationPhase: import("./types.js").SvapnaPhase | undefined;
+	private consolidationPhase: import("./types.js").SwapnaPhase | undefined;
 	private consolidationProgress: number = 0;
 	private startedAt: number = 0;
 
@@ -112,7 +112,7 @@ export class NidraDaemon {
 	/** Get a read-only snapshot of the daemon's current state. */
 	snapshot(): NidraSnapshot { return buildNidraSnapshot(this.getStateBag()); }
 
-	/** Register the dream handler (Svapna consolidation plug-in). */
+	/** Register the dream handler (Swapna consolidation plug-in). */
 	onDream(handler: DreamHandler): void { this.dreamHandler = handler; }
 
 	/** Register the deep sleep handler (maintenance plug-in). */

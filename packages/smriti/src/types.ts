@@ -389,7 +389,7 @@ export interface VidhiParam {
 export interface ConsolidationLogEntry {
 	id?: number;
 	project: string;
-	cycleType: "svapna" | "monthly" | "yearly";
+	cycleType: "swapna" | "monthly" | "yearly";
 	cycleId: string;
 	phase?: string;
 	phaseDurationMs?: number;

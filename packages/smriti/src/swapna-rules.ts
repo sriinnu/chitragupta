@@ -1,12 +1,12 @@
 /**
- * @chitragupta/smriti — Svapna Rules (Phase 3: CRYSTALLIZE)
+ * @chitragupta/smriti — Swapna Rules (Phase 3: CRYSTALLIZE)
  *
  * Vasana formation: aggregate samskaras by pattern type and content
  * similarity, crystallizing stable behavioral tendencies.
  */
 
 import { DatabaseManager } from "./db/index.js";
-import type { SvapnaConfig, CrystallizeResult } from "./svapna-consolidation.js";
+import type { SwapnaConfig, CrystallizeResult } from "./swapna-consolidation.js";
 
 // ─── FNV-1a Hash ────────────────────────────────────────────────────────────
 
@@ -79,9 +79,9 @@ export function slugify(text: string): string {
  *   2. confidence > 0.5
  *   3. Consistent across >= 2 sessions (stability heuristic)
  */
-export async function svapnaCrystallize(
+export async function swapnaCrystallize(
 	db: DatabaseManager,
-	config: SvapnaConfig,
+	config: SwapnaConfig,
 ): Promise<CrystallizeResult> {
 	const start = performance.now();
 	const agentDb = db.get("agent");

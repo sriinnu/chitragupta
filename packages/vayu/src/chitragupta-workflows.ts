@@ -16,7 +16,7 @@ import { WorkflowBuilder } from "./builder.js";
 //
 // Memory consolidation pipeline — the Nidra sleep cycle:
 //
-//   [Nidra Wake] → [Vasana Scan] → [Svapna Consolidation] → [Akasha Deposit] → [Nidra Sleep]
+//   [Nidra Wake] → [Vasana Scan] → [Swapna Consolidation] → [Akasha Deposit] → [Nidra Sleep]
 //                                ↗
 //   [Kala Chakra Context] ──────┘
 //
@@ -50,8 +50,8 @@ export const CONSOLIDATION_WORKFLOW: Workflow = new WorkflowBuilder(
 		.timeout(5000)
 		.done()
 
-	.step("svapna-consolidate", "Svapna Memory Consolidation")
-		.tool("chitragupta:svapna-consolidate", {})
+	.step("swapna-consolidate", "Swapna Memory Consolidation")
+		.tool("chitragupta:swapna-consolidate", {})
 		.dependsOn("vasana-scan", "kala-chakra-context")
 		.tag("memory", "consolidation")
 		.timeout(60000)
@@ -60,7 +60,7 @@ export const CONSOLIDATION_WORKFLOW: Workflow = new WorkflowBuilder(
 
 	.step("akasha-deposit", "Deposit to Akasha")
 		.tool("chitragupta:akasha-deposit", {})
-		.dependsOn("svapna-consolidate")
+		.dependsOn("swapna-consolidate")
 		.tag("memory", "akasha")
 		.timeout(30000)
 		.done()
