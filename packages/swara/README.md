@@ -10,6 +10,16 @@ Swara is the voice of Chitragupta. It provides a single `stream()` call that wor
 
 The new **Turiya** meta-observer brings intelligent model routing to the stack: a 7-dimensional context vector feeds a LinUCB contextual bandit that learns which tier (no-llm, haiku, sonnet, opus) is optimal for each request, slashing cost without sacrificing quality.
 
+## Installation
+
+```bash
+npm install @chitragupta/swara
+# or
+pnpm add @chitragupta/swara
+```
+
+**Requires Node.js >= 22.**
+
 ---
 
 ## Key Features
@@ -43,7 +53,7 @@ The new **Turiya** meta-observer brings intelligent model routing to the stack: 
 ├── request-queue.ts      RequestQueue for ordered request processing
 ├── error-recovery.ts     CircuitBreaker, resilientStream(), parseProviderError()
 ├── sse.ts                parseSSEStream() for raw SSE event parsing
-├── turiya.ts             ★ NEW — Turiya meta-observer (LinUCB contextual bandit)
+├── turiya.ts             Turiya meta-observer (LinUCB contextual bandit)
 ├── router.ts             ModelRouter — tier-based routing with auto-escalation
 ├── router-classifier.ts  classifyComplexity() — pattern-based complexity scoring
 ├── router-task-type.ts   classifyTaskType() — 15 task-type detection (Pravritti)
@@ -150,8 +160,6 @@ const usage = contextUsagePercent(messages, "claude-sonnet-4-5-20250929");
 ---
 
 ### Turiya (तुरीय) -- Meta-Observer & Contextual Model Router
-
-**File:** `turiya.ts` | **NEW in Phase 1**
 
 In Vedic philosophy, *Turiya* is the "fourth state" -- pure consciousness that witnesses waking, dreaming, and deep sleep without being affected. It is the sakshi (witness) that observes without being observed.
 

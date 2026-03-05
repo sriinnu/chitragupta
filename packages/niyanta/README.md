@@ -8,6 +8,16 @@
 
 Niyanta is Chitragupta's controller. When a task is too large or complex for a single agent, Niyanta decomposes it into subtasks, routes each subtask to the best-suited agent, and coordinates execution using one of several strategies -- round-robin, least-loaded, specialized, hierarchical, competitive racing, or swarm coordination. The `TaskRouter` uses Jaccard similarity to match tasks to agent capabilities. The `StrategyBandit` learns which orchestration strategy performs best through online experimentation using UCB1, Thompson Sampling, or LinUCB contextual bandits. The `AutonomousOrchestrator` wires everything together for fully autonomous strategy selection with self-healing, strategy banning, and state persistence. The `KartavyaEngine` provides behavioral auto-execution -- promoting observed patterns (vasanas) through rule proposals (niyamas) into automated duties (kartavyas) triggered by cron schedules, events, thresholds, or pattern matches. Preset plans for common workflows (code review, TDD, refactoring, bug hunting, documentation) are ready to use out of the box.
 
+## Installation
+
+```bash
+npm install @chitragupta/niyanta
+# or
+pnpm add @chitragupta/niyanta
+```
+
+**Requires Node.js >= 22.**
+
 ---
 
 ## Key Features

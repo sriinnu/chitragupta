@@ -37,6 +37,10 @@
 	},
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
+	"files": [
+		"dist",
+		"README.md"
+	],
 	"scripts": {
 		"build": "tsc",
 		"test": "sh -lc 'cd ../.. && pnpm exec vitest run --config vitest.config.ts packages/daemon/test/*.test.ts'"

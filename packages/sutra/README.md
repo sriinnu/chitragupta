@@ -8,6 +8,16 @@
 
 Sutra is Chitragupta's communication fabric. When multiple agents work together -- whether in a fan-out pattern, a pipeline, a map-reduce job, a distributed saga, or a gossip protocol -- Sutra provides the primitives. The `CommHub` manages channels, locks, semaphores, barriers, and shared memory regions. **Samiti** provides persistent, topic-based ambient channels for collective intelligence. **Sabha** implements a structured deliberation protocol based on Nyaya logic for multi-agent decision-making. Built-in patterns handle the most common multi-agent coordination scenarios, including deadlock detection, resolution, and prevention.
 
+## Installation
+
+```bash
+npm install @chitragupta/sutra
+# or
+pnpm add @chitragupta/sutra
+```
+
+**Requires Node.js >= 22.**
+
 ---
 
 ## Key Features
@@ -33,8 +43,8 @@ Sutra is Chitragupta's communication fabric. When multiple agents work together 
 | `deadlock-prevention.ts` | `BankersAlgorithm` -- proactive deadlock prevention via safe-state analysis |
 | `patterns.ts` | `fanOut`, `pipeline`, `mapReduce`, `saga`, `election`, `gossip` |
 | `sandesha.ts` | `SandeshaRouter` -- sub-agent input routing with FIFO queue and timeouts |
-| `samiti.ts` | **NEW** -- `Samiti` -- ambient communication channels with ring buffers, TTL, real-time listeners |
-| `sabha.ts` | **NEW** -- `SabhaEngine` -- multi-agent deliberation with Nyaya logic, fallacy detection, weighted voting |
+| `samiti.ts` | `Samiti` -- ambient communication channels with ring buffers, TTL, real-time listeners |
+| `sabha.ts` | `SabhaEngine` -- multi-agent deliberation with Nyaya logic, fallacy detection, weighted voting |
 
 ## Samiti -- Ambient Communication Channels
 

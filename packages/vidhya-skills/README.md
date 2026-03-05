@@ -8,6 +8,16 @@
 
 "Vidhya" means knowledge or wisdom in Sanskrit, from the root "vid" (to know) -- the same root that gives us "Veda." In the Vedic tradition, knowledge is not merely information but structured, discoverable, and transmissible wisdom. This package embodies that principle: every capability in the system is described by a compact, self-describing manifest (like a Vedic sutra), fingerprinted into a 128-dimensional trait vector (inspired by Shiksha, the Vedic science of phonetics), and matched against natural language queries without requiring an LLM or external embeddings. The Vidya-Tantra ecosystem extends this with five-sheath quality assessment, lifecycle state machines, trust provenance, usage-driven mastery tracking, skill composition discovery, evolutionary lineage tracking, and crystallization of procedural memory into polished skills.
 
+## Installation
+
+```bash
+npm install @chitragupta/vidhya-skills
+# or
+pnpm add @chitragupta/vidhya-skills
+```
+
+**Requires Node.js >= 22.**
+
 ---
 
 ## Key Features

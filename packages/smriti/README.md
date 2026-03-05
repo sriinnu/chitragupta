@@ -4,11 +4,13 @@
 
 **smriti -- Memory**
 
-**Sessions, 4-stream memory model, GraphRAG knowledge graphs, hybrid search, consolidation, procedural memory, behavioral crystallization, dream-cycle consolidation, temporal awareness, shared knowledge fields, provider bridge, and SQLite persistence.**
+**Sessions, 4-stream memory model, GraphRAG knowledge graphs, hybrid search, consolidation, procedural memory, behavioral crystallization, dream-cycle consolidation, temporal awareness, shared knowledge fields, provider bridge, Natasha temporal trending, Transcendence predictive pre-fetching, episodic developer memory, and SQLite persistence.**
 
 Smriti is Chitragupta's memory system. It persists everything -- sessions as Markdown files (backed by SQLite for indexing and FTS5), memory across four streams (identity, projects, tasks, flow), and a knowledge graph that links sessions, concepts, files, and decisions. Sessions can be branched like git branches, letting you explore alternative conversation paths. The Sinkhorn-Knopp compaction algorithm optimally allocates token budgets across memory streams based on signal affinity.
 
 The Phase 1 Self-Evolution Engine adds six new subsystems: the **Vasana Engine** crystallizes stable behavioral tendencies from raw samskaras using Bayesian change-point detection, the **Swapna Consolidation** pipeline runs a 5-phase dream cycle mirroring neuroscience sleep consolidation, the **Vidhi Engine** extracts parameterized procedural memories from repeated tool sequences, **Periodic Consolidation** generates monthly/yearly Markdown reports, **Akasha** implements stigmergic traces for indirect agent-to-agent knowledge sharing, and **Kala Chakra** provides 7-scale temporal awareness from the current turn to yearly patterns.
+
+The Lucy neural capacity expansion system (named after the 2014 film) adds three more subsystems: **Natasha Observer** is a temporal trending engine that detects entity trends, error regressions, and coding velocity across time windows. **Transcendence Engine** is a predictive context pre-fetcher that fuses 5 signal sources (trends, temporal patterns, continuations, regressions, co-occurrence) to anticipate what memory context will be needed before it is requested. **Episodic Memory** provides durable developer experience recall -- errors, fixes, and discoveries tagged with error signatures, tool names, and file paths for automatic recall when similar situations recur.
 
 ---
 
@@ -34,6 +36,9 @@ The Phase 1 Self-Evolution Engine adds six new subsystems: the **Vasana Engine**
 - **Akasha** -- Stigmergic traces for indirect knowledge sharing between agents (ant colony optimization inspired)
 - **Kala Chakra** -- 7-scale temporal awareness (turn, session, day, week, month, quarter, year) with multi-scale decay; auto-initialized by default in HybridSearchEngine (disable with `disableTemporalBoost`)
 - **Provider Bridge** -- Adaptive context budget scaling with provider's context window; interrupted session detection for cross-device pickup
+- **Natasha Observer** -- Temporal trending engine: entity trend detection, error regression alerts, coding velocity tracking across hour/day/week/month windows; based on Zep/Graphiti bitemporal KG and TG-RAG hierarchical time summaries
+- **Transcendence Engine** -- Predictive context pre-fetcher: 5-source signal fusion (trends, temporal patterns, continuations, regressions, co-occurrence), LRU cache with TTL eviction, fuzzy Jaccard lookup; based on Neural Paging and MEM1 anticipatory staging
+- **Episodic Memory** -- Durable developer experience store: error signature normalization, multi-dimensional recall (error, tool, file, text), BM25 full-text search, recall frequency tracking
 
 ## Architecture
 
@@ -118,8 +123,14 @@ The Phase 1 Self-Evolution Engine adds six new subsystems: the **Vasana Engine**
 ├── kala-chakra.ts                   Multi-scale temporal awareness (7 scales)
 ├── temporal-context.ts              Temporal context utilities (ISO weeks, etc.)
 │
-├── episodic-store.ts                Episodic memory store
-├── episodic-types.ts                Episodic memory types
+├── natasha-observer.ts              Natasha — temporal trending engine (trends, regressions, velocity)
+├── natasha-types.ts                 Natasha type definitions (TrendSignal, RegressionAlert, VelocityMetrics)
+├── transcendence.ts                 Transcendence — predictive context pre-fetcher (5-source fusion)
+├── transcendence-types.ts           Transcendence type definitions (ContextPrediction, CachedContext, CacheStats)
+├── transcendence-helpers.ts         Transcendence pure helpers (clamp, dedup, Jaccard, DB queries)
+│
+├── episodic-store.ts                Episodic developer memory store (BM25 search, signature normalization)
+├── episodic-types.ts                Episodic memory types (Episode, EpisodeInput, EpisodicQuery)
 ├── event-extractor.ts               Session event extraction
 ├── event-extractor-strategies.ts    Event extraction strategy patterns
 ├── day-consolidation.ts             Daily consolidation pipeline
@@ -897,6 +908,198 @@ const decay = kala.decay(timestamp, "week"); // Decay using week half-life
 
 ---
 
+### Natasha Observer -- Temporal Trending Engine
+
+**File:** `natasha-observer.ts`
+
+*Named after Natasha Romanoff (Black Widow), played by Scarlett Johansson -- the master spy who observes everything from the shadows, sees patterns others miss, and never lets a regression slip past.* Natasha watches the temporal pulse of the system, detecting trending entities, error regressions, and coding velocity changes across four time windows (hour, day, week, month).
+
+#### Research Basis
+
+- **Zep/Graphiti** (ArXiv 2501.13956): Bitemporal knowledge graphs, 18.5% accuracy gain
+- **TG-RAG** (ArXiv 2510.13590): Hierarchical time summaries
+- **MemoTime** (ArXiv 2510.13614): Operator-aware temporal reasoning
+- **MemWeaver** (ArXiv 2601.18204): Three-tier memory, 95% context reduction
+
+#### Three Capabilities
+
+| Capability | Description |
+|-----------|-------------|
+| **Trending Detection** | Track entity mention frequency across time windows. Compare current vs. previous period, surface entities with significant frequency changes. |
+| **Regression Detection** | Compare error signature frequency between periods. If a fixed error recurs, emit a severity-ranked alert with the known fix (if recorded). |
+| **Velocity Tracking** | Measure coding velocity (sessions, turns, tool calls) per window. Composite delta: 40% session weight + 60% turn weight. |
+
+```typescript
+import { NatashaObserver } from "@chitragupta/smriti";
+import type { NatashaConfig, NatashaSummary, TrendSignal, RegressionAlert, VelocityMetrics } from "@chitragupta/smriti";
+
+const natasha = new NatashaObserver(db, {
+  minCountThreshold: 2,             // Min mentions to flag a trend
+  minChangePercent: 25,             // Min % change to flag as rising/falling
+  criticalRegressionThreshold: 3,   // Recurrences before critical severity
+  maxTrendsPerWindow: 10,           // Cap on trends per window
+});
+
+// Detect trends in a single window
+const trends: TrendSignal[] = natasha.detectTrends("day");
+for (const t of trends) {
+  console.log(`${t.entity}: ${t.direction} ${t.changePercent}% (confidence: ${t.confidence.toFixed(2)})`);
+}
+
+// Detect trends across all windows simultaneously
+const allTrends = natasha.detectAllTrends(); // Map<TrendWindow, TrendSignal[]>
+
+// Detect error regressions — previously fixed errors recurring
+const regressions: RegressionAlert[] = natasha.detectRegressions("week");
+for (const r of regressions) {
+  console.log(`[${r.severity}] ${r.errorSignature}: ${r.currentOccurrences}x this period`);
+  if (r.knownFix) console.log(`  Fix: ${r.knownFix}`);
+}
+
+// Measure coding velocity with delta comparison
+const velocity: VelocityMetrics = natasha.measureVelocity("day");
+console.log(`Sessions: ${velocity.sessionCount}, Turns: ${velocity.totalTurns}`);
+console.log(`Velocity delta: ${velocity.velocityDelta}`); // -1 to 1 (0 = same as last period)
+
+// Full temporal summary (trends + regressions + velocity)
+const summary: NatashaSummary = natasha.observe();
+```
+
+---
+
+### Transcendence Engine -- Predictive Context Pre-Fetcher
+
+**File:** `transcendence.ts`
+
+*Named after Lucy's 100% cerebral capacity -- the ability to perceive all of time simultaneously, predict what context will be needed before it is requested, and transcend reactive cognition.* Transcendence converts the system from reactive (load context when asked) to predictive (pre-stage context before it is needed). It fuses signals from Natasha (trends), temporal patterns, session continuations, regressions, and entity co-occurrence into a ranked prediction model of future context needs.
+
+#### Research Basis
+
+- **Neural Paging** (ArXiv 2603.02228): Predictive memory pre-loading
+- **MEM1** (ArXiv 2506.15841): Anticipatory context staging
+- **Codified Context** (ArXiv 2602.20478): Context quality > quantity
+- **MemWeaver** (ArXiv 2601.18204): Three-tier memory with prefetch
+
+#### Five Signal Sources
+
+| Source | Weight | Description |
+|--------|--------|-------------|
+| `trend` | 0.35 | Rising entities from NatashaObserver |
+| `temporal` | 0.25 | Time-of-day / day-of-week entity relevance patterns |
+| `continuation` | 0.25 | Recent/interrupted session topics likely to continue |
+| `regression` | -- | Error signatures from Natasha regression alerts (severity-weighted) |
+| `cooccurrence` | 0.15 | Entity pairs that frequently appear together in sessions |
+
+```typescript
+import { TranscendenceEngine } from "@chitragupta/smriti";
+import type { TranscendenceConfig, PrefetchResult, CachedContext, CacheStats } from "@chitragupta/smriti";
+
+const engine = new TranscendenceEngine(db, {
+  maxPredictions: 10,        // Max predictions per cycle
+  minCacheConfidence: 0.4,   // Min confidence to cache a prediction
+  cacheTtlMs: 300_000,       // Cache TTL: 5 minutes
+  maxCacheEntries: 50,       // LRU eviction beyond this limit
+  trendWeight: 0.35,         // Weight for trend-based predictions
+  temporalWeight: 0.25,      // Weight for temporal pattern signals
+  continuationWeight: 0.25,  // Weight for session continuation signals
+  behavioralWeight: 0.15,    // Weight for co-occurrence / behavioral signals
+});
+
+// Ingest signals from NatashaObserver
+engine.ingestTrends(natasha.detectTrends("day"));
+engine.ingestRegressions(natasha.detectRegressions("day"));
+
+// Run a full prediction cycle — generate predictions and cache context
+const result: PrefetchResult = engine.prefetch();
+console.log(`Predictions: ${result.predictions.length}`);
+console.log(`Cached: ${result.cachedCount}, Evicted: ${result.evictedCount}`);
+console.log(`Cache size: ${result.cacheSize}, Duration: ${result.durationMs}ms`);
+
+// Exact lookup — O(1) cache hit
+const cached: CachedContext | null = engine.lookup("typescript");
+if (cached) {
+  console.log(`Hit: ${cached.entity} (source: ${cached.source})`);
+  console.log(`Content: ${cached.content}`);
+}
+
+// Fuzzy lookup — substring + Jaccard matching across all cache entries
+const fuzzy: CachedContext | null = engine.fuzzyLookup("ts config");
+
+// Cache hit/miss statistics
+const stats: CacheStats = engine.getStats();
+console.log(`Hit rate: ${(stats.hitRate * 100).toFixed(1)}%`);
+console.log(`Cycles: ${stats.cyclesRun}, Avg predictions: ${stats.avgPredictions}`);
+```
+
+---
+
+### Episodic Memory -- Developer Experience Recall
+
+**File:** `episodic-store.ts`
+
+Durable episodic developer memory that records experiences (errors, fixes, discoveries) tagged with error signatures, tool names, and file paths. When a similar error recurs, the system automatically recalls the relevant episode and its solution. Storage is backed by the `episodes` table in `agent.db`.
+
+Error signatures are normalized by stripping volatile parts (file paths, line numbers, timestamps, UUIDs, hex hashes) so the same class of error always produces the same signature regardless of where it occurred.
+
+#### Key Methods
+
+| Method | Description |
+|--------|-------------|
+| `record(episode)` | Store a new episodic memory, returns UUID |
+| `recall(query)` | Multi-dimensional recall: filter by error, tool, file, project, text |
+| `recallByError(sig)` | Find episodes matching a normalized error signature |
+| `recallByFile(path)` | Find episodes related to a specific file |
+| `recallByTool(name)` | Find episodes involving a specific tool |
+| `search(text)` | Full-text BM25 search across description and solution fields |
+| `bumpRecallCount(id)` | Increment recall counter (tracks "hot" knowledge) |
+| `getFrequentErrors()` | Get most frequently recalled episodes |
+| `normalizeErrorSignature(err)` | Static: normalize error string into stable signature |
+
+```typescript
+import { EpisodicMemoryStore } from "@chitragupta/smriti";
+import type { Episode, EpisodeInput, EpisodicQuery } from "@chitragupta/smriti";
+
+const episodic = new EpisodicMemoryStore();
+
+// Record a developer experience
+const id = episodic.record({
+  project: "/my/project",
+  errorSignature: EpisodicMemoryStore.normalizeErrorSignature(
+    "ERR_MODULE_NOT_FOUND: Cannot find module './parser' from '/src/index.ts:42:5'"
+  ),
+  toolName: "vitest",
+  filePath: "src/index.ts",
+  description: "Vitest fails with ESM module resolution error on .ts imports",
+  solution: "Set moduleResolution: 'NodeNext' in tsconfig.json and use .js extensions in imports",
+  tags: ["esm", "vitest", "typescript"],
+});
+
+// Recall by error signature — "Have we seen this before?"
+const matches: Episode[] = episodic.recallByError(
+  EpisodicMemoryStore.normalizeErrorSignature("ERR_MODULE_NOT_FOUND: Cannot find module './utils'")
+);
+if (matches.length > 0) {
+  console.log(`Yes! Fixed on ${matches[0].createdAt}: ${matches[0].solution}`);
+  episodic.bumpRecallCount(matches[0].id); // Track recall frequency
+}
+
+// Multi-dimensional recall
+const results = episodic.recall({
+  project: "/my/project",
+  toolName: "vitest",
+  text: "module resolution",
+  limit: 5,
+});
+
+// Full-text BM25 search
+const searched = episodic.search("authentication JWT validation");
+
+// Get most frequently recalled ("hot") knowledge
+const hotKnowledge = episodic.getFrequentErrors(10);
+```
+
+---
+
 ## Test Coverage
 
 | Module | Test Files | Key Tests |
@@ -913,8 +1116,11 @@ const decay = kala.decay(timestamp, "week"); // Decay using week half-life
 | Periodic Consolidation | 2 | Monthly/yearly reports, FTS5 indexing |
 | Akasha | 2 | Stigmergic traces, Jaccard matching, evaporation |
 | Kala Chakra | 2 | 7-scale context, multi-scale decay, boosting |
+| Natasha Observer | 1 | Trend detection, regression alerts, velocity tracking, all-window summary |
+| Transcendence Engine | 1 | 5-source prediction, cache hit/miss, fuzzy lookup, eviction, stats |
+| Episodic Memory | 1 | Record, recall, BM25 search, error normalization, recall tracking |
 | Smaran, NLU, Identity | 4 | Explicit memory, intent detection, identity files |
-| **Total** | **44 test files, 0 failures** | |
+| **Total** | **47 test files, 0 failures** | |
 
 ---
 

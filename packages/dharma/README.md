@@ -8,6 +8,16 @@
 
 Dharma is Chitragupta's law. It enforces rules before every action the agent takes -- blocking destructive commands, preventing secret leakage, enforcing cost budgets, maintaining coding conventions, and restricting scope. The architecture is layered: the **Rta** invariant engine runs first (cosmic law -- inviolable), then the **PolicyEngine** evaluates configurable rules (societal law -- adjustable). The **AuditLogger** records every decision for accountability. **Punya** tracks agent karma and reputation over time. Five presets (strict, standard, permissive, readonly, review) let you dial the guardrails to your comfort level.
 
+## Installation
+
+```bash
+npm install @chitragupta/dharma
+# or
+pnpm add @chitragupta/dharma
+```
+
+**Requires Node.js >= 22.**
+
 ---
 
 ## Key Features
@@ -26,7 +36,7 @@ Dharma is Chitragupta's law. It enforces rules before every action the agent tak
 
 | Module | Purpose |
 |--------|---------|
-| `rta.ts` | **NEW** -- `RtaEngine`, 5 invariant rules: no credential leak, no destructive overwrite, no unbounded recursion, no cost explosion, no data exfiltration |
+| `rta.ts` | `RtaEngine`, 5 invariant rules: no credential leak, no destructive overwrite, no unbounded recursion, no cost explosion, no data exfiltration |
 | `types.ts` | `Rule`, `Verdict`, `PolicyContext`, `RuleCategory` |
 | `engine.ts` | `PolicyEngine` -- rule evaluation engine |
 | `audit.ts` | `AuditLogger` -- persistent audit trail with `AuditQueryFilters` |

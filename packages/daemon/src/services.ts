@@ -184,7 +184,7 @@ function registerTurnMethods(
 			delete turn.content_parts;
 		}
 
-		await store.addTurn(sessionId, project, turn as Parameters<typeof store.addTurn>[2]);
+		await store.addTurn(sessionId, project, turn as unknown as Parameters<typeof store.addTurn>[2]);
 		return { added: true };
 	}, "Add a turn to a session");
 

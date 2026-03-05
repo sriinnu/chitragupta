@@ -1,433 +1,507 @@
-# @yugenlab/chitragupta
+# @chitragupta/cli
 
-## Orchestrator Contract
+**CLI and MCP server for the Chitragupta AI agent platform.**
 
-The CLI provider/runtime layer follows these rules:
+Chitragupta is a persistent memory and observability layer for AI coding agents. The CLI package is the unified entry point: it runs as a standalone interactive agent, a single-shot task runner, an MCP server for Claude Code / Cursor / any MCP client, or a full HTTP API server.
 
-- Provider and model resolution is owned by the core runtime, not the entrypoint.
-- Follow policy-first resolution: allow/deny lists and routing policy are authoritative.
-- Always attempt recovery paths before surfacing user-visible failures (fallback providers, retries, cooldown-aware retries).
-- Keep continuity: emit clear routing/audit traces for every selection, retry, and fallback.
-- Ensure consistent behavior across interactive mode, print mode, API mode, MCP mode, and WebSocket mode.
-
-![Logo](../../assets/logos/cli.svg)
-
-**CLI entry point for Chitragupta -- the front door to the entire system.**
-
-> **npm**: `@yugenlab/chitragupta` · **monorepo workspace**: `@chitragupta/cli`
-
-`@yugenlab/chitragupta` is the unified entry point that wires together every other package into a coherent developer experience. It parses command-line arguments, detects the current project, loads context files, builds the system prompt with personality, and launches either interactive mode (the full terminal UI experience) or print mode (single-shot, pipe-friendly output). Beyond the interactive agent loop, it provides a full-featured HTTP server (Dvaara) with REST API, WebSocket support (Sandhana), OpenAPI 3.0 spec generation, an MCP server mode for Claude Code integration, a job queue (Karya) for async task execution, 12 subcommands, 13+ slash commands, and comprehensive route groups spanning skills, evolution, intelligence, collaboration, autonomy, and workflow management.
+> **npm**: `@chitragupta/cli` | **Node**: >=22 | **License**: MIT
 
 ---
 
-## Key Features
+## Installation
 
-- **Argument parsing** -- `parseArgs()` handles flags, modes, model selection, and provider overrides
-- **Project detection** -- `detectProject()` identifies the project type, language, framework, and root directory
-- **Context files** -- `loadContextFiles()` and `buildContextString()` gather project-level context (`.chitragupta/context.md`, `package.json`, etc.)
-- **System prompt** -- `buildSystemPrompt()` assembles the full system prompt from profile, project context, memory, and guardrails
-- **Welcome message** -- `buildWelcomeMessage()` generates the personality-driven greeting
-- **Interactive mode** -- `runInteractiveMode()` launches the full terminal UI with editor, message list, status bar, and agent loop
-- **Print mode** -- `runPrintMode()` runs a single prompt and prints the response (pipe-friendly)
-- **HTTP server (Dvaara)** -- Full REST API with JWT auth, RBAC, rate limiting, CORS (localhost-only), Prometheus metrics, and health checks
-- **WebSocket server (Sandhana)** -- Real-time bidirectional communication for Vaayu and other clients
-- **OpenAPI 3.0 specification** -- Programmatically generated spec covering all registered endpoints
-- **MCP server mode** -- Expose Chitragupta tools to Claude Code and other MCP clients via stdio or SSE transport
-- **Self-independent agent runtime** -- Chitragupta runs as a self-independent agent with self-healing provider fallback
-- **Prompt liveness heartbeats** -- Long-running `chitragupta_prompt` jobs emit periodic heartbeat updates so polling clients can detect real progress
-- **Job queue (Karya)** -- Async task execution with priority, status tracking, and result retrieval
-- **12 subcommands** -- session, memory, config, provider, agent, mcp, skills, skill-porter, orchestrate, vidya, workflow, stats
-- **13+ slash commands** -- /code, /review, /debug, /research, /refactor, /docs, /skills, /learn, /chetana, /vidya, /stats, /samiti, /sabha, /lokapala, /akasha, /kartavya, /kala, /atman
-- **6 REST route groups** -- skills, evolution, intelligence, collaboration, autonomy, workflow
-- **Plugin system** -- Extensible via providers, tools, commands, themes, and agent profiles
-- **Onboarding** -- First-run setup wizard for API keys and preferences
-- **Budget tracking** -- Per-session cost monitoring and limits
+```bash
+# Global install (recommended)
+npm install -g @chitragupta/cli
+
+# Or run directly without installing
+npx @chitragupta/cli
+
+# Verify
+chitragupta --version
+```
+
+---
+
+## Quick Start
+
+```bash
+# Interactive mode — full terminal UI with agent loop
+chitragupta
+
+# Single-shot print mode — pipe-friendly
+chitragupta -p "Explain this codebase"
+
+# Multi-turn agent task runner
+chitragupta run "fix the login bug"
+
+# MCP server for Claude Code
+chitragupta mcp-server
+```
+
+---
+
+## CLI Commands
+
+### Interactive Mode (default)
+
+Launch the full terminal UI with editor, message list, status bar, and agent loop.
+
+```bash
+chitragupta
+chitragupta --model claude-sonnet-4-5-20250929
+chitragupta --provider openai --model gpt-4o
+```
+
+### Print Mode
+
+Run a single prompt and print the response. Useful for scripts and pipelines.
+
+```bash
+chitragupta -p "Summarize package.json"
+chitragupta -p "What does this function do?" --model gpt-4o
+```
+
+### `chitragupta run` -- Multi-Turn Agent Loop
+
+A standalone agentic task runner. Loads project context and memory, creates a session, and runs a multi-turn loop with steering support.
+
+```bash
+# Run a task (up to 20 turns by default)
+chitragupta run "fix the login bug"
+
+# Limit turns
+chitragupta run --max-turns 5 "small fix"
+
+# Dry run — show context without calling the LLM
+chitragupta run --dry-run "refactor the auth module"
+
+# Resume a previous session
+chitragupta run --resume <session-id>
+
+# Override model/provider/project
+chitragupta run --model claude-opus-4-20250918 --project /path/to/project "add tests"
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--max-turns <n>` | Max agent loop iterations (default: 20) |
+| `--dry-run` | Show plan without calling the LLM |
+| `--resume <id>` | Resume from a previous session checkpoint |
+| `--model <model>` | Override model (e.g. `claude-sonnet-4-5-20250929`) |
+| `--provider <id>` | Override provider (e.g. `openai`, `anthropic`) |
+| `--project <path>` | Override project path |
+
+### `chitragupta focus` -- Terminal Focus
+
+Jump to the terminal running a Chitragupta process. Uses a 5-tier fallback chain:
+
+1. **tmux** -- select-window + select-pane
+2. **screen** -- reattach session
+3. **iTerm2** -- AppleScript activation (macOS)
+4. **TTY** -- open device (macOS) or xdotool (Linux)
+5. **Notification** -- desktop notification fallback
+
+```bash
+# List running sessions
+chitragupta focus
+
+# Focus a specific process
+chitragupta focus <pid>
+
+# Focus the most recently started session
+chitragupta focus --latest
+```
+
+### `chitragupta extension` -- Extension Management
+
+Install, list, and remove extensions from npm, git, or local paths.
+
+```bash
+# Install from npm
+chitragupta extension install npm:@scope/my-extension
+chitragupta extension install npm:@scope/my-extension@1.2.0
+
+# Install from git
+chitragupta extension install git:github.com/user/chitragupta-ext
+
+# Install from local path
+chitragupta extension install ./my-local-extension
+
+# List installed extensions
+chitragupta extension list
+
+# Remove an extension
+chitragupta extension remove my-extension
+```
+
+Extensions are stored at `~/.chitragupta/extensions/` (global) and `.chitragupta/extensions/` (project-local). Extensions can contribute tools, hooks, UI widgets, keybinds, and panels.
+
+### `chitragupta code` -- Autonomous Coding Agent
+
+Delegate a coding task that plans, codes, validates, reviews, and optionally commits.
+
+```bash
+chitragupta code "add unit tests for the auth module"
+chitragupta code --plan "refactor the database layer"
+chitragupta code --no-commit --no-branch "quick fix"
+```
+
+### Other Subcommands
+
+| Command | Purpose |
+|---------|---------|
+| `chitragupta session list\|show\|search\|export\|import` | Session management |
+| `chitragupta memory show\|edit\|search` | Memory operations |
+| `chitragupta config [set <key> <value>]` | Configuration management |
+| `chitragupta provider list\|add\|test` | Provider management |
+| `chitragupta agent list\|create\|use` | Agent profile management |
+| `chitragupta mcp list\|add\|remove\|start\|stop` | MCP server management |
+| `chitragupta skill` | Cross-format skill conversion |
+| `chitragupta plugin list\|load\|install\|remove` | Plugin management |
+| `chitragupta orchestrate` | Multi-agent orchestration |
+| `chitragupta workflow list\|run\|status` | DAG workflow execution |
+| `chitragupta sync` | Cross-machine state sync |
+| `chitragupta serve` | HTTP API server mode |
+| `chitragupta daemon` | Background daemon management |
+| `chitragupta init` | Project initialization |
+
+---
+
+## MCP Server Mode
+
+Chitragupta exposes its full toolset as an MCP (Model Context Protocol) server. This lets Claude Code, Cursor, Windsurf, and any MCP-compatible IDE use Chitragupta's memory, knowledge graph, P2P mesh, skill system, and more.
+
+### Setup for Claude Code
+
+Add to your Claude Code MCP configuration (`.claude/mcp.json` or VS Code settings):
+
+```json
+{
+  "mcpServers": {
+    "chitragupta": {
+      "command": "chitragupta",
+      "args": ["mcp-server"],
+      "env": {}
+    }
+  }
+}
+```
+
+### Setup for Cursor
+
+Add to `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "chitragupta": {
+      "command": "npx",
+      "args": ["@chitragupta/cli", "mcp-server"]
+    }
+  }
+}
+```
+
+### Transport Options
+
+```bash
+# Stdio transport (default — for Claude Code, Cursor)
+chitragupta mcp-server
+
+# SSE transport (for HTTP-based MCP clients)
+chitragupta mcp-server --sse --port 3001
+
+# With project path override
+chitragupta mcp-server --project /path/to/project
+
+# With agent prompt tool enabled (requires provider config)
+chitragupta mcp-server --agent
+
+# With custom server name
+chitragupta mcp-server --name my-chitragupta
+```
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CHITRAGUPTA_MCP_TRANSPORT` | `"stdio"` or `"sse"` | `stdio` |
+| `CHITRAGUPTA_MCP_PORT` | SSE port | `3001` |
+| `CHITRAGUPTA_MCP_PROJECT` | Project path override | `process.cwd()` |
+| `CHITRAGUPTA_MCP_AGENT` | Agent profile override | -- |
+
+---
+
+## MCP Tools
+
+Chitragupta exposes 60+ MCP tools organized into categories. Below is the complete inventory.
+
+### Memory and Sessions
+
+| Tool | Description |
+|------|-------------|
+| `chitragupta_memory_search` | Search project memory (GraphRAG-backed) |
+| `chitragupta_session_list` | List recent sessions |
+| `chitragupta_session_show` | Show a specific session by ID |
+| `chitragupta_recall` | Unified search across ALL memory layers (sessions, KG, day files, Akasha) |
+| `chitragupta_context` | Load full memory context (global + project + recent sessions) |
+| `chitragupta_record_conversation` | Record conversation turns into the current session |
+
+### Handover and Day Files
+
+| Tool | Description |
+|------|-------------|
+| `chitragupta_handover` | Generate work-state handover for context continuity |
+| `chitragupta_handover_since` | Incremental handover (delta since last cursor) |
+| `chitragupta_memory_changes_since` | Detect memory changes since a timestamp |
+| `chitragupta_day_show` | Show consolidated day file for a date |
+| `chitragupta_day_list` | List available day files |
+| `chitragupta_day_search` | Search across all day files |
+
+### Collective Intelligence
+
+| Tool | Description |
+|------|-------------|
+| `samiti_channels` | List ambient communication channels and messages |
+| `samiti_broadcast` | Broadcast a message to a topic channel |
+| `sabha_deliberate` | Multi-agent structured deliberation on a proposal |
+| `akasha_traces` | Query stigmergic knowledge traces |
+| `akasha_deposit` | Deposit a solution, pattern, warning, or correction |
+
+### Introspection and Health
+
+| Tool | Description |
+|------|-------------|
+| `vasana_tendencies` | Get crystallized behavioral tendencies |
+| `health_status` | Triguna system health (Sattva/Rajas/Tamas) |
+| `atman_report` | Full self-report: consciousness, identity, health |
+
+### Cross-Machine Sync
+
+| Tool | Description |
+|------|-------------|
+| `chitragupta_sync_status` | Show sync status across machines |
+| `chitragupta_sync_export` | Export portable JSON snapshot |
+| `chitragupta_sync_import` | Import and apply a sync snapshot |
+
+### Learned Procedures and Consolidation
+
+| Tool | Description |
+|------|-------------|
+| `chitragupta_vidhis` | List/search learned tool-sequence procedures |
+| `chitragupta_consolidate` | Run Swapna memory consolidation on demand |
+
+### Coding Agent
+
+| Tool | Description |
+|------|-------------|
+| `coding_agent` | Delegate a coding task (plans, codes, validates, reviews, commits) |
+| `chitragupta_prompt` | Send a task to Chitragupta's AI agent (async with heartbeat) |
+| `chitragupta_prompt_status` | Check status of a long-running prompt job |
+| `chitragupta_completion` | Send a prompt to an LLM via the multi-provider completion router |
+
+### Model Routing
+
+| Tool | Description |
+|------|-------------|
+| `swara_marga_decide` | Stateless LLM routing decision (task type, complexity, provider selection) |
+
+### P2P Actor Mesh
+
+| Tool | Description |
+|------|-------------|
+| `mesh_status` | Get mesh system status |
+| `mesh_spawn` | Spawn an actor with capabilities |
+| `mesh_send` | Fire-and-forget message to an actor |
+| `mesh_ask` | Request-reply message with response |
+| `mesh_find_capability` | Find peers by capability (multi-factor scoring) |
+| `mesh_peers` | List all peers with health info |
+| `mesh_gossip` | Get gossip protocol state |
+| `mesh_topology` | Full mesh topology view |
+
+### Vidhya Skills Pipeline
+
+| Tool | Description |
+|------|-------------|
+| `skills_find` | Find skills by natural language (TVM, zero-latency) |
+| `skills_list` | List all registered skills |
+| `skills_health` | Score a skill's health (Pancha Kosha five-sheath model) |
+| `skills_learn` | Trigger autonomous skill learning pipeline |
+| `skills_scan` | Run security scan on skill content |
+| `skills_ecosystem` | Ecosystem-wide statistics |
+| `skills_recommend` | Smart skill recommendation with readiness assessment |
+
+### Code Intelligence (Netra)
+
+| Tool | Description |
+|------|-------------|
+| `netra_repo_map` | Repository map with file structure and relationships |
+| `netra_semantic_graph` | Semantic graph query for code understanding |
+| `netra_ast_query` | AST-level code query |
+
+### Episodic Memory
+
+| Tool | Description |
+|------|-------------|
+| `episodic_recall` | Recall episodic developer memories |
+| `episodic_record` | Record an episodic memory entry |
+
+### UI Extensions
+
+| Tool | Description |
+|------|-------------|
+| `chitragupta_ui_extensions` | List registered UI extensions from skills |
+| `chitragupta_widget_data` | Get latest data for a UI widget |
+
+### Cerebral Expansion
+
+| Tool | Description |
+|------|-------------|
+| `cerebral_expansion` | Autonomous skill discovery + learning when tools are not found |
+
+### File and Shell (Yantra)
+
+Standard file system and shell tools (read, write, edit, grep, find, ls, bash, diff, watch, project analysis) are also exposed as MCP tools.
+
+### MCP Resources
+
+| URI | Description |
+|-----|-------------|
+| `chitragupta://memory/project` | Project memory content (MEMORY.md) |
+| `chitragupta://system/metrics` | System metrics (tool count, uptime) |
+| `chitragupta://system/config` | System configuration |
+| `chitragupta://system/plugins` | Plugin ecosystem status |
+| `chitragupta://system/recent-calls` | Recent tool call history |
+
+### MCP Prompts
+
+Pre-built prompt templates: `save`, `last_session`, `recall`, `status`, `handover`, `code_review`, `debug`, `research`, `refactor`, `memory_search`, `session`.
+
+---
 
 ## Architecture
 
-| Module | Purpose |
-|--------|---------|
-| `cli.ts` | Binary entry point (`#!/usr/bin/env node`) |
-| `main.ts` | `main()` -- initialization, config loading, bootstrap, mode dispatch |
-| `args.ts` | `parseArgs()`, `printHelp()`, `ParsedArgs` type |
-| `project-detector.ts` | `detectProject()`, `ProjectInfo` type |
-| `context-files.ts` | `loadContextFiles()`, `buildContextString()`, `ContextFiles` type |
-| `personality.ts` | `buildSystemPrompt()`, `buildWelcomeMessage()`, `SystemPromptOptions` type |
-| `bootstrap.ts` | Shared initialization: config, providers, embedding, memory, tools, skills, dharma, chetana |
-| `http-server.ts` | `ChitraguptaServer` (Dvaara) -- REST API, WebSocket, auth, metrics, health checks |
-| `ws-handler.ts` | `WebSocketServer` (Sandhana) -- real-time bidirectional communication |
-| `openapi.ts` | `generateOpenAPISpec()` -- programmatic OpenAPI 3.0 spec for all endpoints |
-| `mcp-entry.ts` | MCP server entry point (`chitragupta-mcp` binary) |
-| `mcp-loader.ts` | MCP server setup: tool exposure, resources, prompts, transport selection |
-| `job-queue.ts` | `JobQueue` (Karya) -- async task execution with priority and status tracking |
-| `agent-api.ts` | Agent tree serialization, stats computation, agent lookup |
-| `memory-api.ts` | Memory CRUD utilities for REST endpoints |
-| `api.ts` | HTTP API mode initialization |
-| `budget-tracker.ts` | Per-session cost monitoring and budget enforcement |
-| `plugin-loader.ts` | Dynamic plugin discovery and loading |
-| `onboarding.ts` | First-run setup wizard |
-| `index.ts` | Package exports |
-| `modes/interactive.ts` | `runInteractiveMode()` -- full TUI experience |
-| `modes/print.ts` | `runPrintMode()` -- single-shot output |
-
-### Subcommands
-
-| Command | File | Purpose |
-|---------|------|---------|
-| `session` | `commands/session.ts` | Session management: list, show, delete, export |
-| `memory` | `commands/memory.ts` | Memory operations: search, get, update, delete |
-| `config` | `commands/config.ts` | Configuration: get, set, list, reset |
-| `provider` | `commands/provider.ts` | Provider management: list, test, select |
-| `agent` | `commands/agent.ts` | Agent profiles: list, show, use |
-| `mcp` | `commands/mcp.ts` | MCP server management: list, add, remove, start, stop |
-| `skills` | `commands/skills.ts` | Skill management: list, search, learn, approve, reject |
-| `skill-porter` | `commands/skill-porter.ts` | Cross-format skill conversion (Setu) |
-| `orchestrate` | `commands/orchestrate.ts` | Multi-agent orchestration: execute, status, history |
-| `vidya` | `commands/vidya.ts` | Vidya ecosystem: dashboard, lifecycle, stats |
-| `workflow` | `commands/workflow.ts` | Vayu DAG workflows: list, run, status, templates |
-| `stats` | `commands/stats.ts` | System statistics: packages, tests, lines, memory |
-
-### REST Route Groups
-
-| Group | File | Endpoints |
-|-------|------|-----------|
-| **Skills** | `routes/skills.ts` | Skill CRUD, search, Vidya orchestrator, lifecycle evaluation |
-| **Evolution** | `routes/evolution.ts` | Vasanas, Nidra daemon status, Vidhi procedural memory |
-| **Intelligence** | `routes/intelligence.ts` | Turiya model routing stats, Triguna health, Rta audit, Buddhi decisions |
-| **Collaboration** | `routes/collaboration.ts` | Samiti channels, Sabha deliberation, Lokapala guardians, Akasha knowledge |
-| **Autonomy** | `routes/autonomy.ts` | Kartavya auto-execution, Kala Chakra temporal awareness |
-| **Workflow** | `routes/workflow.ts` | Vayu DAG engine: workflow CRUD, execution, templates |
-
-## API
-
-### Running Chitragupta
-
-```bash
-# Interactive mode (default)
-chitragupta
-
-# Print mode (single prompt)
-chitragupta -p "Explain this codebase"
-
-# With a specific model
-chitragupta --model claude-sonnet-4-5-20250929
-
-# With a specific provider
-chitragupta --provider openai --model gpt-4o
-
-# API server mode
-chitragupta api --port 3000
-
-# MCP server mode (for Claude Code)
-chitragupta mcp-server
-
-# Show help
-chitragupta --help
+```
+chitragupta (CLI binary)
+  |
+  +-- Interactive Mode (full TUI with agent loop)
+  +-- Print Mode (single-shot, pipe-friendly)
+  +-- Run Mode (multi-turn agent task runner)
+  +-- Code Mode (autonomous coding agent)
+  +-- MCP Server Mode (stdio/SSE for IDE integration)
+  +-- HTTP Server Mode (Dvaara — REST API + WebSocket)
+  +-- Daemon Mode (background process for consolidation + sync)
+  |
+  +-- packages/core        — config, types, errors
+  +-- packages/smriti      — memory pipeline (sessions, day files, KG)
+  +-- packages/swara       — LLM completion router (multi-provider)
+  +-- packages/anina       — agent profiles, steering
+  +-- packages/tantra      — tool registry, MCP protocol
+  +-- packages/yantra      — file/shell tools
+  +-- packages/sutra       — event bridge, P2P mesh
+  +-- packages/vidhya-skills — skill discovery, learning, security
+  +-- packages/dharma      — auth, rate limiting, RBAC
+  +-- packages/niyanta     — job scheduler, worker pool
+  +-- packages/netra       — code intelligence (AST, repo map)
+  +-- packages/ui          — terminal UI components, ANSI helpers
+  +-- packages/daemon      — background daemon (consolidation, sync)
 ```
 
-### Programmatic Usage
+### Key Binaries
+
+| Binary | Purpose |
+|--------|---------|
+| `chitragupta` | Main CLI entry point |
+| `chitragupta-mcp` | Dedicated MCP server entry point |
+| `chitragupta-code` | Direct coding agent entry point |
+| `chitragupta-snapshot` | Memory snapshot utility |
+
+---
+
+## Configuration
+
+Chitragupta stores configuration at `~/.chitragupta/`:
+
+```
+~/.chitragupta/
+  config.json          — global settings (default model, provider, etc.)
+  extensions/          — installed extensions (npm/, git/, local/)
+  plugins/             — plugin modules (.js ESM)
+  learning/            — skill gap tracking, session state
+  memory/              — global memory files
+```
+
+Project-level configuration lives at `.chitragupta/` in the project root:
+
+```
+.chitragupta/
+  context.md           — project context for the agent
+  extensions/          — project-local extensions
+  memory/              — project-scoped memory
+```
+
+### Setting Defaults
+
+```bash
+# Set default model
+chitragupta config set defaultModel claude-sonnet-4-5-20250929
+
+# Set default provider
+chitragupta config set defaultProvider anthropic
+
+# View current config
+chitragupta config
+```
+
+### Provider Setup
+
+```bash
+# List available providers
+chitragupta provider list
+
+# Add a provider (prompts for API key)
+chitragupta provider add anthropic
+
+# Test a provider connection
+chitragupta provider test anthropic
+```
+
+---
+
+## Programmatic Usage
 
 ```typescript
-import { main } from "@yugenlab/chitragupta";
+import { main } from "@chitragupta/cli";
 
 // Launch Chitragupta programmatically
 await main();
 ```
 
-### Argument Parsing
-
 ```typescript
-import { parseArgs, printHelp } from "@yugenlab/chitragupta";
-import type { ParsedArgs } from "@yugenlab/chitragupta";
+import { parseArgs } from "@chitragupta/cli";
 
-const args: ParsedArgs = parseArgs(process.argv.slice(2));
-
-console.log(args.mode);     // "interactive" | "print"
-console.log(args.model);    // "claude-sonnet-4-5-20250929"
-console.log(args.provider); // "anthropic"
-console.log(args.prompt);   // The user's prompt (print mode)
-
-if (args.help) {
-  printHelp();
-}
+const args = parseArgs(["--model", "gpt-4o", "-p", "Hello"]);
+console.log(args.model);    // "gpt-4o"
+console.log(args.mode);     // "print"
 ```
 
-### Project Detection
-
 ```typescript
-import { detectProject } from "@yugenlab/chitragupta";
-import type { ProjectInfo } from "@yugenlab/chitragupta";
+// MCP server mode (programmatic)
+import { runMcpServerMode } from "@chitragupta/cli/mcp";
 
-const project: ProjectInfo = await detectProject("/path/to/project");
-
-console.log(project.root);       // "/path/to/project"
-console.log(project.type);       // "node" | "python" | "rust" | ...
-console.log(project.framework);  // "next" | "express" | ...
-console.log(project.language);   // "typescript" | "javascript" | ...
-```
-
-### Context Files
-
-```typescript
-import {
-  loadContextFiles,
-  buildContextString,
-} from "@yugenlab/chitragupta";
-import type { ContextFiles } from "@yugenlab/chitragupta";
-
-const ctx: ContextFiles = await loadContextFiles("/path/to/project");
-const contextStr = buildContextString(ctx);
-
-// contextStr includes contents of .chitragupta/context.md,
-// package.json summaries, and other project metadata
-```
-
-### System Prompt & Personality
-
-```typescript
-import {
-  buildSystemPrompt,
-  buildWelcomeMessage,
-} from "@yugenlab/chitragupta";
-import type { SystemPromptOptions } from "@yugenlab/chitragupta";
-
-const options: SystemPromptOptions = {
-  profile: chitraguptaProfile,
-  project: projectInfo,
-  context: contextString,
-  memory: memoryContent,
-};
-
-const systemPrompt = buildSystemPrompt(options);
-const welcome = buildWelcomeMessage(options);
-
-console.log(welcome);
-// "Chitragupta here. I see you're working on a TypeScript monorepo..."
-```
-
-### Modes
-
-```typescript
-import { runInteractiveMode } from "@yugenlab/chitragupta";
-import { runPrintMode } from "@yugenlab/chitragupta";
-import type {
-  InteractiveModeOptions,
-  PrintModeOptions,
-} from "@yugenlab/chitragupta";
-
-// Interactive: full TUI
-await runInteractiveMode({
-  model: "claude-sonnet-4-5-20250929",
-  provider: "anthropic",
-  profile: chitraguptaProfile,
-  project: projectInfo,
+await runMcpServerMode({
+  transport: "stdio",
+  projectPath: "/path/to/project",
 });
-
-// Print: single-shot
-await runPrintMode({
-  prompt: "Explain the architecture",
-  model: "claude-sonnet-4-5-20250929",
-  provider: "anthropic",
-});
-```
-
-## HTTP Server (Dvaara)
-
-The Dvaara (द्वार -- Gateway) HTTP server provides a REST API for external applications like Vaayu AI assistant. Built on Node.js `http` module -- no Express or other framework.
-
-**Features:**
-- JWT authentication with token exchange and refresh
-- RBAC with 4 roles and 16 permissions
-- Rate limiting per endpoint
-- CORS restricted to localhost
-- Prometheus-format metrics at `/metrics`
-- Health checks at `/health` (memory, event loop, disk)
-- OpenAPI 3.0 spec at `/api/openapi.json`
-
-```typescript
-import { ChitraguptaServer } from "@yugenlab/chitragupta";
-
-const server = new ChitraguptaServer({
-  port: 3000,
-  auth: { secret: process.env.JWT_SECRET, issuer: "chitragupta" },
-  rateLimit: { windowMs: 60_000, maxRequests: 100 },
-});
-
-await server.start();
-```
-
-### Core Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/chat` | Send a message to the agent |
-| `GET` | `/api/sessions` | List sessions |
-| `GET` | `/api/sessions/:id` | Get session details |
-| `DELETE` | `/api/sessions/:id` | Delete a session |
-| `GET` | `/api/memory` | Search memory |
-| `POST` | `/api/memory` | Create/update memory |
-| `GET` | `/api/agents` | List agents in the tree |
-| `GET` | `/api/agents/:id` | Get agent details |
-| `POST` | `/api/jobs` | Submit an async job |
-| `GET` | `/api/jobs/:id` | Check job status |
-
-### Collaboration Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/samiti/channels` | List Samiti ambient channels |
-| `POST` | `/api/samiti/broadcast` | Broadcast to a Samiti channel |
-| `GET` | `/api/samiti/listen/:channel` | Listen to a channel |
-| `POST` | `/api/sabha/convene` | Convene a Sabha deliberation |
-| `POST` | `/api/sabha/:id/propose` | Submit a proposal |
-| `POST` | `/api/sabha/:id/vote` | Cast a vote |
-| `GET` | `/api/lokapala/sweep` | Trigger a guardian sweep |
-| `GET` | `/api/akasha/query` | Query the Akasha knowledge field |
-
-### Autonomy Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/kartavya` | List kartavyas (active duties) |
-| `POST` | `/api/kartavya/propose` | Propose a niyama |
-| `POST` | `/api/kartavya/:id/approve` | Approve a niyama |
-| `POST` | `/api/kartavya/:id/evaluate` | Evaluate triggers |
-| `GET` | `/api/kala` | Get Kala Chakra temporal state |
-
-### Intelligence Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/turiya/stats` | Turiya model router statistics |
-| `GET` | `/api/triguna/health` | Triguna system health |
-| `GET` | `/api/rta/audit` | Rta invariant audit log |
-| `GET` | `/api/buddhi/decisions` | Buddhi decision history |
-
-### Evolution Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/vasanas` | List crystallized tendencies |
-| `GET` | `/api/nidra/status` | Nidra daemon status |
-| `GET` | `/api/vidhi` | List Vidhi procedures |
-
-### Workflow Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/workflows` | List workflows |
-| `POST` | `/api/workflows` | Create a workflow |
-| `POST` | `/api/workflows/:id/execute` | Execute a workflow |
-| `GET` | `/api/workflows/:id/status` | Get execution status |
-| `GET` | `/api/workflow-templates` | List built-in templates |
-
-## MCP Server Mode
-
-Expose Chitragupta as an MCP server for Claude Code and other MCP clients.
-
-```bash
-# Stdio transport (for Claude Code)
-chitragupta mcp-server
-
-# SSE transport (for HTTP clients)
-CHITRAGUPTA_MCP_TRANSPORT=sse CHITRAGUPTA_MCP_PORT=3001 chitragupta mcp-server
-```
-
-**Exposed MCP tools:** 32 tools — 12 file/shell (yantra) + 20 Chitragupta-specific (memory, recall, day files, collective, self-awareness, coding agent, model routing).
-
-**MCP resource:** `chitragupta://memory/project` -- project memory content.
-
-**MCP prompt:** `code_review` -- structured review template.
-
-**Environment variables:**
-- `CHITRAGUPTA_MCP_TRANSPORT` -- `"stdio"` (default) or `"sse"`
-- `CHITRAGUPTA_MCP_PORT` -- SSE port (default 3001)
-- `CHITRAGUPTA_MCP_PROJECT` -- project path override
-- `CHITRAGUPTA_MCP_AGENT` -- agent profile override
-
-### MCP Prompt Liveness + Self-Healing
-
-- `chitragupta_prompt` supports long-running async execution with heartbeat-backed status polling.
-- While waiting on provider responses, the prompt runner emits periodic heartbeat updates (during `prompting ...`) to reduce false stale alerts.
-- The agent runtime is self-independent and self-healing: if one provider attempt fails or times out, fallback providers are tried in priority order.
-- `chitragupta_prompt` accepts `timeout` (milliseconds) to control per-attempt timeout behavior in MCP mode.
-
-## Slash Commands
-
-Slash commands switch the agent's personality and toolset mid-session.
-
-| Command | Agent Profile | Purpose |
-|---------|--------------|---------|
-| `/code` | Kartru (कर्तृ -- Maker) | Coding agent with convention detection and self-validation |
-| `/review` | Parikshaka (परीक्षक -- Reviewer) | Read-only structured code review |
-| `/debug` | Anveshi (अन्वेषी -- Debugger) | Full tools, 5-step investigation protocol |
-| `/research` | Shodhaka (शोधक -- Researcher) | Read-only architecture and codebase research |
-| `/refactor` | Parikartru (परिकर्तृ -- Refactorer) | Plan-before-execute refactoring with validation |
-| `/docs` | Lekhaka (लेखक -- Documenter) | README, JSDoc, changelog, architecture docs |
-| `/skills` | -- | Skill ecosystem dashboard |
-| `/learn` | -- | Trigger Shiksha autonomous skill learning |
-| `/chetana` | -- | Consciousness state visualization (affect, attention, goals, mastery) |
-| `/vidya` | -- | Vidya-Tantra ecosystem dashboard with lifecycle evaluation |
-| `/stats` | -- | System statistics: packages, tests, lines, memory usage |
-| `/samiti` | -- | Samiti ambient channel viewer |
-| `/sabha` | -- | Sabha deliberation interface |
-| `/lokapala` | -- | Lokapala guardian sweep trigger |
-| `/akasha` | -- | Akasha shared knowledge query |
-| `/kartavya` | -- | Kartavya auto-execution management |
-| `/kala` | -- | Kala Chakra temporal awareness |
-| `/atman` | -- | Atman self-recognition and identity state |
-
-## OpenAPI Specification
-
-A comprehensive OpenAPI 3.0 spec is programmatically generated covering all registered API endpoints.
-
-```typescript
-import { generateOpenAPISpec } from "@yugenlab/chitragupta";
-
-const spec = generateOpenAPISpec();
-// Covers: core, sessions, memory, agents, auth, jobs, skills,
-// evolution, intelligence, collaboration, autonomy, workflow
-```
-
-The spec is served at `GET /api/openapi.json` when the HTTP server is running.
-
-## WebSocket Server (Sandhana)
-
-Real-time bidirectional communication channel for Vaayu and other connected clients.
-
-```typescript
-import { WebSocketServer } from "@yugenlab/chitragupta";
-
-const ws = new WebSocketServer({
-  port: 3001,
-  path: "/ws",
-  heartbeatInterval: 30_000,
-});
-
-ws.onMessage((client, message) => {
-  console.log(`${client.id}: ${message.type}`);
-});
-```
-
-## Job Queue (Karya)
-
-Async task execution with priority, status tracking, and result retrieval.
-
-```typescript
-import { JobQueue } from "@yugenlab/chitragupta";
-
-const queue = new JobQueue({ maxConcurrency: 3, maxQueueSize: 100 });
-
-const jobId = queue.submit({
-  type: "code-review",
-  payload: { files: ["src/parser.ts"] },
-  priority: 1,
-});
-
-const status = queue.getStatus(jobId);
-console.log(status.state); // "pending" | "running" | "completed" | "failed"
 ```
 
 ---
 
-[Back to Chitragupta root](../../README.md)
+## Links
+
+- [GitHub Repository](https://github.com/sriinnu/chitragupta)
+- [Issues](https://github.com/sriinnu/chitragupta/issues)
+- [Chitragupta Monorepo Root](../../README.md)
