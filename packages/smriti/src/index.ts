@@ -343,6 +343,12 @@ export type {
 /** Real-time personal fact extractor that detects preferences, names, and context from user turns. */
 export { FactExtractor, getFactExtractor } from "./fact-extractor.js";
 export type { ExtractedFact, FactExtractorConfig } from "./fact-extractor.js";
+/** NER augmentation layer — detects people, projects, tech, metrics, dates in free text. */
+export { extractNEREntities, jaccardNER } from "./fact-extractor-ner.js";
+export type { NEREntity, NEREntityType } from "./fact-extractor-ner.js";
+/** LLM fallback for low-confidence sentences — injectable provider interface. */
+export { extractFactsWithFallback } from "./fact-extractor-llm.js";
+export type { FactExtractorLLMProvider } from "./fact-extractor-llm.js";
 
 /** Provider-agnostic memory bridge that injects context on session start. */
 export { loadProviderContext } from "./provider-bridge.js";

@@ -15,6 +15,7 @@
 
 import { EmbeddingService, fallbackEmbedding } from "./embedding-service.js";
 import { cosineSimilarity } from "./graphrag-scoring.js";
+import { extractNEREntities } from "./fact-extractor-ner.js";
 import type { MemoryScope } from "./types.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -41,6 +42,8 @@ export interface FactExtractorConfig {
 	useVectors: boolean;
 	/** Cosine similarity threshold for vector-based detection. Default: 0.65. */
 	vectorThreshold: number;
+	/** Whether to run NER augmentation (detects people, projects, tech, metrics, dates). Default: true. */
+	useNER: boolean;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -49,6 +52,7 @@ const DEFAULT_CONFIG: FactExtractorConfig = {
 	minConfidence: 0.5,
 	useVectors: true,
 	vectorThreshold: 0.65,
+	useNER: true,
 };
 
 /**
@@ -270,6 +274,30 @@ export class FactExtractor {
 			}
 		}
 
+		// Strategy 3: NER augmentation (people, projects, tech, metrics, dates)
+		// Runs on top of existing results — adds high-confidence entity facts
+		if (this.config.useNER) {
+			const nerEntities = extractNEREntities(text);
+			for (const entity of nerEntities) {
+				const category = nerEntityToCategory(entity.type);
+				if (!category) continue;
+				const factText = normalizeFact(category, entity.value);
+				if (!factText) continue;
+				// Skip if already captured by pattern/vector with higher confidence
+				const alreadyCovered = facts.some(
+					(f) => f.category === category && f.source.toLowerCase().includes(entity.value.toLowerCase().slice(0, 20)),
+				);
+				if (alreadyCovered) continue;
+				facts.push({
+					category,
+					fact: factText,
+					source: entity.value,
+					confidence: entity.confidence * 0.9, // slight discount for NER-only facts
+					method: "pattern",
+				});
+			}
+		}
+
 		// Filter by minimum confidence
 		return facts.filter((f) => f.confidence >= this.config.minConfidence);
 	}
@@ -418,6 +446,19 @@ function shouldAnalyzeForFacts(text: string): boolean {
 	const isQuestion = /\?\s*$/.test(lower);
 	if (isQuestion && !hasMemorySignal) return false;
 	return hasMemorySignal || hasFirstPerson || hasPatternCue;
+}
+
+/** Map NER entity type to ExtractedFact category. Returns null for entity types we don't persist. */
+function nerEntityToCategory(type: string): ExtractedFact["category"] | null {
+	switch (type) {
+		case "PERSON": return "relationship";
+		case "TECHNOLOGY": return "preference";
+		case "PROJECT": return "preference";
+		case "ORGANIZATION": return "work";
+		case "METRIC": return "personal";
+		case "DATE": return null; // dates are ephemeral, not worth persisting as facts
+		default: return null;
+	}
 }
 
 /** Vector matching is only used when text already looks like a memory candidate. */
