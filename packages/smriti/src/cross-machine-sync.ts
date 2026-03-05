@@ -1,12 +1,14 @@
 /**
- * @chitragupta/smriti — Cross-machine sync for day files + memory files.
+ * @chitragupta/smriti — Cross-machine sync for day files, memory files, and sessions.
  *
  * Sync model:
- * - Export creates a portable JSON snapshot containing `days/` and/or `memory/`.
+ * - Export creates a portable JSON snapshot containing `days/`, `memory/`, and/or
+ *   session `.md` files (last 30 by default).
  * - Import applies the snapshot with explicit conflict strategy (see sync-import.ts).
  * - Default strategy is safe (non-destructive): day-file conflicts are copied to
  *   `sync-conflicts/` and local files are preserved.
  * - Memory conflicts merge entries (local-first, remote deduplicated).
+ * - Session files are written only when the session ID does not exist locally.
  */
 
 import fs from "node:fs";
@@ -15,6 +17,11 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { getChitraguptaHome, SessionError } from "@chitragupta/core";
 import { getDayFilePath, listDayFiles } from "./day-consolidation.js";
+import { listSessionsFromFilesystem } from "./session-queries.js";
+import {
+	getSessionsRoot,
+	hashProject,
+} from "./session-db.js";
 
 // Re-export importCrossMachineSnapshot from the extracted module so that
 // index.ts (and all downstream consumers) continue to work unchanged.
@@ -46,6 +53,22 @@ export interface CrossMachineSnapshotFile {
 	mtimeMs: number;
 }
 
+/**
+ * A session entry embedded in a cross-machine snapshot.
+ * Contains the raw `.md` file content plus extracted metadata
+ * so receivers can resolve the write path without parsing markdown.
+ */
+export interface SnapshotSession {
+	/** Session ID (e.g. `session-2026-03-05-abc12345`). */
+	id: string;
+	/** Project path this session belongs to. */
+	project: string;
+	/** ISO timestamp when the session was last updated. */
+	updatedAt: string;
+	/** Raw UTF-8 content of the session `.md` file. */
+	content: string;
+}
+
 /** Portable JSON snapshot produced by {@link createCrossMachineSnapshot}. */
 export interface CrossMachineSnapshot {
 	version: 1;
@@ -56,6 +79,11 @@ export interface CrossMachineSnapshot {
 		home: string;
 	};
 	files: CrossMachineSnapshotFile[];
+	/**
+	 * Last N session `.md` files (optional — absent in snapshots created by
+	 * older versions so consumers must treat this as optional).
+	 */
+	sessions?: SnapshotSession[];
 }
 
 /** Options for {@link createCrossMachineSnapshot}. */
@@ -63,6 +91,13 @@ export interface CrossMachineSnapshotOptions {
 	includeDays?: boolean;
 	includeMemory?: boolean;
 	maxDays?: number;
+	/** Include recent sessions in the snapshot. Defaults to true. */
+	includeSessions?: boolean;
+	/**
+	 * Maximum number of sessions to include, ordered by most recently updated.
+	 * Defaults to 30.
+	 */
+	maxSessions?: number;
 }
 
 /** Options for {@link importCrossMachineSnapshot}. */
@@ -229,17 +264,69 @@ function assertSnapshot(value: unknown): asserts value is CrossMachineSnapshot {
 /*  Public API — snapshot creation, writing, reading, status           */
 /* ------------------------------------------------------------------ */
 
+/** Default maximum number of sessions to include in a snapshot. */
+const DEFAULT_MAX_SESSIONS = 30;
+
 /**
- * Create a portable cross-machine snapshot of day files and/or memory files.
+ * Collect the last N sessions from the local store as {@link SnapshotSession} entries.
+ * Sessions are sorted by `updated` descending (most recent first).
+ * Returns an empty array when no sessions exist or the sessions root is missing.
+ */
+function collectSnapshotSessions(maxSessions: number): SnapshotSession[] {
+	const sessionsRoot = getSessionsRoot();
+	if (!fs.existsSync(sessionsRoot)) return [];
+
+	const metas = listSessionsFromFilesystem();
+	// Already sorted newest-first by listSessionsFromFilesystem.
+	const limited = metas.slice(0, Math.max(0, maxSessions));
+	const result: SnapshotSession[] = [];
+
+	for (const meta of limited) {
+		const projHash = hashProject(meta.project);
+		const projectDir = path.join(sessionsRoot, projHash);
+		// Resolve using YYYY/MM layout first, then flat fallback.
+		const dateMatch = meta.id.match(/^session-(\d{4})-(\d{2})-\d{2}/);
+		let filePath: string | null = null;
+		if (dateMatch) {
+			const candidate = path.join(projectDir, dateMatch[1], dateMatch[2], `${meta.id}.md`);
+			if (fs.existsSync(candidate)) {
+				filePath = candidate;
+			}
+		}
+		if (!filePath) {
+			const flat = path.join(projectDir, `${meta.id}.md`);
+			if (fs.existsSync(flat)) filePath = flat;
+		}
+		if (!filePath) continue;
+
+		try {
+			const content = fs.readFileSync(filePath, "utf-8");
+			result.push({
+				id: meta.id,
+				project: meta.project,
+				updatedAt: meta.updated,
+				content,
+			});
+		} catch {
+			// Skip unreadable sessions: snapshot is best-effort.
+		}
+	}
+
+	return result;
+}
+
+/**
+ * Create a portable cross-machine snapshot of day files, memory files, and sessions.
  *
- * @param options - Controls which categories to include and optional day-file cap.
+ * @param options - Controls which categories to include and optional caps.
  * @returns A snapshot object ready for serialisation via {@link writeCrossMachineSnapshot}.
  */
 export function createCrossMachineSnapshot(options?: CrossMachineSnapshotOptions): CrossMachineSnapshot {
 	const includeDays = options?.includeDays ?? true;
 	const includeMemory = options?.includeMemory ?? true;
-	if (!includeDays && !includeMemory) {
-		throw new SessionError("Snapshot must include at least one category: days or memory");
+	const includeSessions = options?.includeSessions ?? true;
+	if (!includeDays && !includeMemory && !includeSessions) {
+		throw new SessionError("Snapshot must include at least one category: days, memory, or sessions");
 	}
 
 	const home = getChitraguptaHome();
@@ -290,6 +377,14 @@ export function createCrossMachineSnapshot(options?: CrossMachineSnapshotOptions
 		}
 	}
 
+	const sessions = includeSessions
+		? collectSnapshotSessions(
+			typeof options?.maxSessions === "number" && Number.isFinite(options.maxSessions)
+				? Math.max(0, Math.floor(options.maxSessions))
+				: DEFAULT_MAX_SESSIONS,
+		)
+		: undefined;
+
 	return {
 		version: SNAPSHOT_VERSION,
 		exportedAt: new Date().toISOString(),
@@ -299,6 +394,7 @@ export function createCrossMachineSnapshot(options?: CrossMachineSnapshotOptions
 			home,
 		},
 		files,
+		...(sessions !== undefined ? { sessions } : {}),
 	};
 }
 
