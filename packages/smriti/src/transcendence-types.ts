@@ -122,8 +122,8 @@ export interface CoOccurrence {
 	entityA: string;
 	/** Co-occurring entity. */
 	entityB: string;
-	/** How often B appears when A does (0-1). */
-	probability: number;
+	/** Relative co-occurrence strength of B given A (0-1). Not a true conditional probability. */
+	strength: number;
 	/** Number of co-occurrences observed. */
 	count: number;
 }
@@ -142,7 +142,7 @@ export interface TranscendenceConfig {
 	maxCacheEntries: number;
 	/** Min trend confidence to use as signal. Default: 0.3. */
 	minTrendConfidence: number;
-	/** Min co-occurrence probability to use. Default: 0.3. */
+	/** Min co-occurrence strength to use. Default: 0.3. */
 	minCoOccurrence: number;
 	/** Weight for trend signals (0-1). Default: 0.35. */
 	trendWeight: number;

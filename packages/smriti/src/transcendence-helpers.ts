@@ -49,7 +49,7 @@ export function jaccardSimilarity(a: string[], b: string[]): number {
 
 // ─── Database Queries ───────────────────────────────────────────────────────
 
-/** Query temporal patterns — entities by hour-of-day and day-of-week. */
+/** Query temporal patterns — entities by hour-of-day and day-of-week from akasha traces. */
 export function queryTemporalPatterns(
 	db: TranscendenceDb,
 	ts: number,
@@ -60,14 +60,13 @@ export function queryTemporalPatterns(
 
 	try {
 		const rows = db.prepare(`
-			SELECT content AS entity, session_id,
-			       CAST(strftime('%H', updated_at) AS INTEGER) AS hour,
-			       CAST(strftime('%w', updated_at) AS INTEGER) AS day_of_week
-			FROM memory
-			WHERE scope = 'project'
-			  AND CAST(strftime('%H', updated_at) AS INTEGER) BETWEEN ? AND ?
-			  AND CAST(strftime('%w', updated_at) AS INTEGER) = ?
-			ORDER BY updated_at DESC
+			SELECT topic AS entity, agent_id AS session_id,
+			       CAST(strftime('%H', created_at / 1000, 'unixepoch', 'localtime') AS INTEGER) AS hour,
+			       CAST(strftime('%w', created_at / 1000, 'unixepoch', 'localtime') AS INTEGER) AS day_of_week
+			FROM akasha_traces
+			WHERE CAST(strftime('%H', created_at / 1000, 'unixepoch', 'localtime') AS INTEGER) BETWEEN ? AND ?
+			  AND CAST(strftime('%w', created_at / 1000, 'unixepoch', 'localtime') AS INTEGER) = ?
+			ORDER BY created_at DESC
 			LIMIT 20
 		`).all(Math.max(0, hour - 1), Math.min(23, hour + 1), dayOfWeek) as SessionEntityRow[];
 
@@ -92,22 +91,19 @@ export function queryTemporalPatterns(
 	}
 }
 
-/** Query entity co-occurrences from session history. */
+/** Query entity co-occurrences from akasha traces within time proximity. */
 export function queryCoOccurrences(
 	db: TranscendenceDb,
 	config: TranscendenceConfig,
 ): CoOccurrence[] {
 	try {
 		const rows = db.prepare(`
-			SELECT a.content AS entity_a, b.content AS entity_b, COUNT(*) AS cnt
-			FROM memory a
-			JOIN memory b ON a.scope = b.scope
-			  AND a.key != b.key
-			  AND a.content != b.content
-			  AND a.updated_at BETWEEN datetime(b.updated_at, '-1 hour')
-			      AND datetime(b.updated_at, '+1 hour')
-			WHERE a.scope = 'project'
-			GROUP BY a.content, b.content
+			SELECT a.topic AS entity_a, b.topic AS entity_b, COUNT(*) AS cnt
+			FROM akasha_traces a
+			JOIN akasha_traces b ON a.id != b.id
+			  AND a.topic != b.topic
+			  AND a.created_at BETWEEN b.created_at - 3600000 AND b.created_at + 3600000
+			GROUP BY a.topic, b.topic
 			HAVING cnt >= 2
 			ORDER BY cnt DESC
 			LIMIT 20
@@ -122,30 +118,29 @@ export function queryCoOccurrences(
 			.map((r) => ({
 				entityA: r.entity_a,
 				entityB: r.entity_b,
-				probability: r.cnt / (entityTotals.get(r.entity_a) ?? r.cnt),
+				strength: r.cnt / (entityTotals.get(r.entity_a) ?? r.cnt),
 				count: r.cnt,
 			}))
-			.filter((co) => co.probability >= config.minCoOccurrence);
+			.filter((co) => co.strength >= config.minCoOccurrence);
 	} catch {
 		return [];
 	}
 }
 
-/** Query recent memory entries for continuation predictions. */
+/** Query recent akasha trace topics for continuation predictions. */
 export function queryRecentMemory(
 	db: TranscendenceDb,
 	ts: number,
 ): Array<{ entity: string; last_seen: string }> {
 	try {
 		return db.prepare(`
-			SELECT content AS entity, MAX(updated_at) AS last_seen
-			FROM memory
-			WHERE scope = 'project'
-			  AND updated_at >= ?
-			GROUP BY content
+			SELECT topic AS entity, MAX(created_at) AS last_seen
+			FROM akasha_traces
+			WHERE created_at >= ?
+			GROUP BY topic
 			ORDER BY last_seen DESC
 			LIMIT 5
-		`).all(new Date(ts - 3_600_000).toISOString()) as Array<{
+		`).all(ts - 3_600_000) as Array<{
 			entity: string;
 			last_seen: string;
 		}>;

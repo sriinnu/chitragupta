@@ -237,10 +237,10 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	mcpTools.push(createEpisodicRecallTool(projectPath));
 	mcpTools.push(createEpisodicRecordTool(projectPath));
 
-	// Cerebral Expansion (Wire 2 diagnostic tool)
-	const cerebralDiag = new CerebralExpansion();
+	// Cerebral Expansion — single shared instance for diagnostic tool + onToolNotFound
+	const cerebralExpansion = new CerebralExpansion();
 	mcpTools.push(createCerebralExpansionTool(
-		cerebralDiag,
+		cerebralExpansion,
 		() => import("./mcp-subsystems.js").then((m) => m.getAkasha()),
 		() => import("./mcp-subsystems.js").then((m) => m.getSkillRegistry()),
 	));
@@ -269,7 +269,6 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	const learningDir = path.dirname(learningPersistPath);
 	fs.mkdirSync(learningDir, { recursive: true });
 
-	const cerebralExpansion = new CerebralExpansion();
 	const cerebralHandler = createCerebralHandler(
 		cerebralExpansion,
 		() => import("./mcp-subsystems.js").then((m) => m.getAkasha()),
@@ -377,12 +376,9 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		active: true, project: projectPath, lastTool: "(startup)",
 		sessionId: null, turnCount: null, filesModified: null,
 	}));
-	setImmediate(() => void import("./daemon-bridge.js").then(async (m) => {
-		await m.getDaemonClient({ autoStart: true });
-		process.stderr.write("[daemon] RPC bridge warm\n");
-	}).catch((err: unknown) => {
-		process.stderr.write(`[daemon] RPC warm-up skipped: ${err instanceof Error ? err.message : String(err)}\n`);
-	}));
+	setImmediate(() => void import("./daemon-bridge.js").then((m) =>
+		m.getDaemonClient({ autoStart: true }).then(() => process.stderr.write("[daemon] RPC bridge warm\n")),
+	).catch(() => { /* daemon warm-up optional */ }));
 
 	// 4c. Dynamic ToolRegistry (runtime tool registration via plugins)
 	const registry = new ToolRegistry({ strictNamespaces: true, validateSchemas: true });
@@ -442,9 +438,12 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		process.stderr.write(`[mesh] Bootstrap skipped: ${err instanceof Error ? err.message : String(err)}\n`);
 	}
 
-	// 7. Transcendence: Warm predictive context cache (best-effort)
-	setImmediate(() => void import("./mcp-subsystems.js").then(async (m) => {
+	// 7. Transcendence: Warm cache + periodic refresh (5 min cycle matches TTL)
+	const runPrefetch = () => void import("./mcp-subsystems.js").then(async (m) => {
 		const r = await m.runTranscendencePrefetch() as { predictions: unknown[]; cacheSize: number; durationMs: number } | null;
 		if (r) process.stderr.write(`[transcendence] ${r.predictions.length} predictions, cache=${r.cacheSize}, ${r.durationMs}ms\n`);
-	}).catch(() => { /* best-effort */ }));
+	}).catch(() => { /* best-effort */ });
+	setImmediate(runPrefetch);
+	const prefetchTimer = setInterval(runPrefetch, 300_000);
+	prefetchTimer.unref(); // Don't block process exit
 }

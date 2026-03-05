@@ -27,7 +27,7 @@ function createMockDb(overrides?: {
 			return {
 				all(...params: unknown[]) {
 					const key = `${params[0]}-${params[1]}`;
-					if (sql.includes("memory")) {
+					if (sql.includes("akasha_traces")) {
 						return overrides?.entityMentions?.[key] ?? [];
 					}
 					if (sql.includes("episodes")) {
@@ -58,16 +58,17 @@ describe("NatashaObserver", () => {
 	describe("detectTrends", () => {
 		it("detects rising trends when current count exceeds previous", () => {
 			const dayMs = 86_400_000;
-			const currentStart = new Date(NOW - dayMs).toISOString();
-			const currentEnd = new Date(NOW).toISOString();
-			const prevStart = new Date(NOW - 2 * dayMs).toISOString();
+			const currentStartMs = NOW - dayMs;
+			const currentEndMs = NOW;
+			const prevStartMs = NOW - 2 * dayMs;
+			const prevEndMs = currentStartMs;
 
 			const db = createMockDb({
 				entityMentions: {
-					[`${currentStart}-${currentEnd}`]: [
+					[`${currentStartMs}-${currentEndMs}`]: [
 						{ entity: "typescript", cnt: 10 },
 					],
-					[`${prevStart}-${currentStart}`]: [
+					[`${prevStartMs}-${prevEndMs}`]: [
 						{ entity: "typescript", cnt: 3 },
 					],
 				},
@@ -84,14 +85,15 @@ describe("NatashaObserver", () => {
 
 		it("detects falling trends when current count is zero", () => {
 			const dayMs = 86_400_000;
-			const currentStart = new Date(NOW - dayMs).toISOString();
-			const currentEnd = new Date(NOW).toISOString();
-			const prevStart = new Date(NOW - 2 * dayMs).toISOString();
+			const currentStartMs = NOW - dayMs;
+			const currentEndMs = NOW;
+			const prevStartMs = NOW - 2 * dayMs;
+			const prevEndMs = currentStartMs;
 
 			const db = createMockDb({
 				entityMentions: {
-					[`${currentStart}-${currentEnd}`]: [],
-					[`${prevStart}-${currentStart}`]: [
+					[`${currentStartMs}-${currentEndMs}`]: [],
+					[`${prevStartMs}-${prevEndMs}`]: [
 						{ entity: "python", cnt: 5 },
 					],
 				},
@@ -107,16 +109,17 @@ describe("NatashaObserver", () => {
 
 		it("ignores entities below minimum count threshold", () => {
 			const dayMs = 86_400_000;
-			const currentStart = new Date(NOW - dayMs).toISOString();
-			const currentEnd = new Date(NOW).toISOString();
-			const prevStart = new Date(NOW - 2 * dayMs).toISOString();
+			const currentStartMs = NOW - dayMs;
+			const currentEndMs = NOW;
+			const prevStartMs = NOW - 2 * dayMs;
+			const prevEndMs = currentStartMs;
 
 			const db = createMockDb({
 				entityMentions: {
-					[`${currentStart}-${currentEnd}`]: [
+					[`${currentStartMs}-${currentEndMs}`]: [
 						{ entity: "obscure", cnt: 1 },
 					],
-					[`${prevStart}-${currentStart}`]: [],
+					[`${prevStartMs}-${prevEndMs}`]: [],
 				},
 			});
 
@@ -128,16 +131,17 @@ describe("NatashaObserver", () => {
 
 		it("ignores changes below minimum change percent", () => {
 			const dayMs = 86_400_000;
-			const currentStart = new Date(NOW - dayMs).toISOString();
-			const currentEnd = new Date(NOW).toISOString();
-			const prevStart = new Date(NOW - 2 * dayMs).toISOString();
+			const currentStartMs = NOW - dayMs;
+			const currentEndMs = NOW;
+			const prevStartMs = NOW - 2 * dayMs;
+			const prevEndMs = currentStartMs;
 
 			const db = createMockDb({
 				entityMentions: {
-					[`${currentStart}-${currentEnd}`]: [
+					[`${currentStartMs}-${currentEndMs}`]: [
 						{ entity: "stable", cnt: 10 },
 					],
-					[`${prevStart}-${currentStart}`]: [
+					[`${prevStartMs}-${prevEndMs}`]: [
 						{ entity: "stable", cnt: 9 },
 					],
 				},
@@ -227,18 +231,19 @@ describe("NatashaObserver", () => {
 	describe("measureVelocity", () => {
 		it("computes velocity metrics for a window", () => {
 			const dayMs = 86_400_000;
-			const currentStart = new Date(NOW - dayMs).toISOString();
-			const currentEnd = new Date(NOW).toISOString();
-			const prevStart = new Date(NOW - 2 * dayMs).toISOString();
+			const currentStartMs = NOW - dayMs;
+			const currentEndMs = NOW;
+			const prevStartMs = NOW - 2 * dayMs;
+			const prevEndMs = currentStartMs;
 
 			const db = createMockDb({
 				sessionCount: {
-					[`${currentStart}-${currentEnd}`]: 5,
-					[`${prevStart}-${currentStart}`]: 3,
+					[`${currentStartMs}-${currentEndMs}`]: 5,
+					[`${prevStartMs}-${prevEndMs}`]: 3,
 				},
 				turnCount: {
-					[`${currentStart}-${currentEnd}`]: 50,
-					[`${prevStart}-${currentStart}`]: 30,
+					[`${currentStartMs}-${currentEndMs}`]: 50,
+					[`${prevStartMs}-${prevEndMs}`]: 30,
 				},
 			});
 
