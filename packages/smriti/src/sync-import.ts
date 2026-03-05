@@ -18,7 +18,12 @@ import type {
 	CrossMachineImportOptions,
 	CrossMachineSyncTotals,
 	CrossMachineImportResult,
+	SnapshotSession,
 } from "./cross-machine-sync.js";
+import {
+	getSessionsRoot,
+	hashProject,
+} from "./session-db.js";
 
 const ENTRY_SEPARATOR = "\n---\n\n";
 
@@ -169,6 +174,52 @@ function writeSyncState(home: string, patch: Partial<CrossMachineSyncState>): vo
 }
 
 /* ------------------------------------------------------------------ */
+/*  Session import                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Resolve the filesystem path for a session file within the local sessions store.
+ *
+ * Uses the YYYY/MM/ layout for date-based IDs, falling back to a flat path.
+ * Does NOT create the directory — callers must ensure it exists.
+ */
+function resolveLocalSessionPath(id: string, project: string): string {
+	const projectDir = path.join(getSessionsRoot(), hashProject(project));
+	const dateMatch = id.match(/^session-(\d{4})-(\d{2})-\d{2}/);
+	if (dateMatch) {
+		return path.join(projectDir, dateMatch[1], dateMatch[2], `${id}.md`);
+	}
+	return path.join(projectDir, `${id}.md`);
+}
+
+/**
+ * Import sessions from a snapshot into the local sessions store.
+ *
+ * Strategy: **skip if the session ID already exists locally** (safe, non-destructive).
+ * We never overwrite existing local sessions — the local version is authoritative.
+ *
+ * @param sessions - Array of session entries from the snapshot.
+ * @param dryRun - When true, no files are written.
+ * @returns Number of sessions written (created).
+ */
+function importSnapshotSessions(sessions: SnapshotSession[], dryRun: boolean): number {
+	let created = 0;
+	for (const entry of sessions) {
+		if (!entry.id || !entry.project || typeof entry.content !== "string") continue;
+		try {
+			const filePath = resolveLocalSessionPath(entry.id, entry.project);
+			// Skip if the session already exists locally.
+			if (fs.existsSync(filePath)) continue;
+			if (!dryRun) writeTextFile(filePath, entry.content);
+			created += 1;
+		} catch {
+			// Skip sessions that fail to write — best-effort import.
+		}
+	}
+	return created;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Public API                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -181,6 +232,9 @@ function writeSyncState(home: string, patch: Partial<CrossMachineSyncState>): vo
  *   under `sync-conflicts/`; memory files are merged with deduplication.
  * - **preferRemote**: remote content always overwrites local.
  * - **preferLocal**: local content is always kept.
+ *
+ * Sessions in the snapshot are always imported with the **skip-if-exists** strategy —
+ * local sessions are never overwritten regardless of the chosen strategy.
  *
  * @param source - A snapshot object or path to a snapshot JSON file.
  * @param options - Import strategy and dry-run toggle.
@@ -267,6 +321,13 @@ export function importCrossMachineSnapshot(
 			totals.errors += 1;
 			errorPaths.push(file.path);
 		}
+	}
+
+	// Import sessions: skip-if-exists strategy (safe, non-destructive).
+	if (Array.isArray(snapshot.sessions) && snapshot.sessions.length > 0) {
+		const sessionsCreated = importSnapshotSessions(snapshot.sessions, dryRun);
+		totals.created += sessionsCreated;
+		totals.files += snapshot.sessions.length;
 	}
 
 	if (!dryRun) {
