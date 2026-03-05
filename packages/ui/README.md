@@ -2,11 +2,11 @@
 
 ![Logo](../../assets/logos/ui.svg)
 
-**चित्रगुप्त दृश्य (Chitragupta Drishya) -- Terminal UI**
+**⛩ Chitragupta Drishya -- Terminal UI**
 
 **Full terminal rendering stack for Chitragupta: ANSI escape sequences, keyboard input, theming with the Nakshatram palette, and a library of rich components -- from Markdown renderers and diff viewers to ECG-style agent heartbeat monitors.**
 
-The `@chitragupta/ui` package is the visual layer of the Chitragupta ecosystem. Everything is built on raw ANSI escape sequences with zero heavy dependencies. The Nakshatram theme provides a distinctive star-chart color palette, and the iconic **chi** prompt renders the Devanagari character at the command line as the CLI's visual identity.
+The `@chitragupta/ui` package is the visual layer of the Chitragupta ecosystem. Everything is built on raw ANSI escape sequences with zero heavy dependencies. The Nakshatram theme provides a distinctive star-chart color palette, and the iconic **⛩** torii gate prompt is the CLI's visual identity.
 
 ## Installation
 

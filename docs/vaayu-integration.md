@@ -1,6 +1,6 @@
 # Chitragupta Integration Guide for Vaayu
 
-> **चित्रगुप्त** — The divine scribe who records all deeds.
+> **⛩ Chitragupta** — The divine scribe who records all deeds.
 > This document is the handshake protocol between **Vaayu** (personal AI assistant) and **Chitragupta** (the AI agent platform).
 
 ---
@@ -229,7 +229,7 @@ Chitragupta uses cascading config: `global → workspace → project → session
 | tantra | तन्त्र | MCP server management |
 | vidhya-skills | विद्या | Skill discovery, evolution, learning |
 | niyanta | नियन्ता | Orchestrator, bandit strategies |
-| cli | चित्रगुप्त | Entry point, HTTP server, MCP server |
+| cli | ⛩ Chitragupta | Entry point, HTTP server, MCP server |
 
 ---
 
