@@ -32,6 +32,15 @@ export {
 // Public API: watchdog (self-healing process supervisor)
 export { ScarlettWatchdog, startScarlett, stopScarlett, type ScarlettConfig, type ScarlettEvents } from "./scarlett-watchdog.js";
 
+// Public API: internal health guardian (subsystem probes inside the daemon)
+export {
+	InternalScarlett, startInternalScarlett, stopInternalScarlett,
+	SmritiDbProbe, MemoryPressureProbe, NidraHeartbeatProbe, ConsolidationQueueProbe,
+	type InternalScarlettConfig, type InternalScarlettEvents,
+	type InternalProbe, type ProbeResult, type ProbeSeverity,
+	type NidraLike, type DbManagerLike, type SqliteDbLike,
+} from "./scarlett-internal.js";
+
 // Server + router (for daemon entry point and tests)
 export { startServer, type DaemonServer, type DaemonServerConfig } from "./server.js";
 export { startHttpServer, DEFAULT_HTTP_PORT, type DaemonHttpServer, type DaemonHttpConfig } from "./http-server.js";
