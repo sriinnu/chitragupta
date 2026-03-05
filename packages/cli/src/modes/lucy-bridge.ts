@@ -27,6 +27,15 @@ import { routeViaBridge } from "./coding-router.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
+/**
+ * Duck-typed Transcendence engine reference for pre-cached context lookup.
+ * Keeps lucy-bridge free of smriti import dependency.
+ */
+export interface TranscendenceEngineRef {
+	/** Fuzzy lookup — returns pre-cached context for the closest matching entity. */
+	fuzzyLookup(query: string): { entity: string; content: string; source: string } | null;
+}
+
 /** Configuration for the Lucy Bridge autonomous mode. */
 export interface LucyBridgeConfig {
 	/** Project root directory. */
@@ -45,6 +54,12 @@ export interface LucyBridgeConfig {
 	depositAkasha?: (trace: LucyTrace) => Promise<void>;
 	/** Streaming callback for progress events. */
 	onEvent?: (event: LucyEvent) => void;
+	/**
+	 * Optional Transcendence pre-cache — highest priority context source.
+	 * Pre-cached by Transcendence before this task was requested, so it's
+	 * more relevant than a just-in-time episodic query.
+	 */
+	transcendenceEngine?: TranscendenceEngineRef;
 }
 
 /** Episode recorded after a Lucy Bridge execution. */
@@ -207,7 +222,11 @@ export async function executeLucy(
 
 /**
  * Build Takumi context by querying Chitragupta's memory layers.
- * Queries episodic memory for past error patterns and Akasha for decisions.
+ *
+ * Priority order:
+ * 1. Transcendence pre-cache — predictively loaded before task was requested
+ * 2. Episodic memory — past error patterns and solutions
+ * 3. Akasha traces — recent architectural decisions
  */
 async function buildLucyContext(
 	task: string,
@@ -215,13 +234,21 @@ async function buildLucyContext(
 ): Promise<TakumiContext> {
 	const context: TakumiContext = {};
 
+	// Priority 1: Transcendence pre-cached context (highest signal quality)
+	const transcendenceHit = config.transcendenceEngine?.fuzzyLookup(task) ?? null;
+
 	const [episodic, decisions] = await Promise.all([
 		config.queryEpisodic?.(task, config.projectPath).catch(() => []) ?? Promise.resolve([]),
 		config.queryAkasha?.(task).catch(() => []) ?? Promise.resolve([]),
 	]);
 
-	if (episodic.length > 0) {
-		context.episodicHints = episodic.slice(0, 5);
+	// Prepend Transcendence hit as the first episodic hint — it was pre-loaded
+	const allEpisodic = transcendenceHit
+		? [`[Transcendence:${transcendenceHit.source}] ${transcendenceHit.content}`, ...episodic]
+		: episodic;
+
+	if (allEpisodic.length > 0) {
+		context.episodicHints = allEpisodic.slice(0, 5);
 	}
 	if (decisions.length > 0) {
 		context.recentDecisions = decisions.slice(0, 5);

@@ -305,3 +305,71 @@ describe("TranscendenceEngine", () => {
 		});
 	});
 });
+
+// ─── Natasha → Transcendence Integration (Wire 3) ───────────────────────────
+
+describe("Natasha → Transcendence integration", () => {
+	it("trend signal → ingestTrends → prefetch → lookup returns cached entry", () => {
+		const engine = new TranscendenceEngine(createMockDb());
+
+		// Simulate Natasha detecting a rising trend for "typescript"
+		const trend = makeTrend("typescript", "rising", 0.9);
+		engine.ingestTrends([trend]);
+
+		// Run prediction cycle (as if Transcendence's scheduled prefetch fired)
+		const result = engine.prefetch(NOW);
+
+		// The entity should appear in predictions
+		const tsPredictions = result.predictions.filter((p) => p.entity === "typescript");
+		expect(tsPredictions.length).toBeGreaterThanOrEqual(1);
+		expect(tsPredictions[0].source).toBe("trend");
+		expect(tsPredictions[0].confidence).toBeGreaterThan(0);
+
+		// And should be accessible via lookup — pass same NOW to avoid TTL expiry
+		const cached = engine.lookup("typescript", NOW);
+		expect(cached).not.toBeNull();
+		expect(cached?.entity).toBe("typescript");
+	});
+
+	it("regression signal → ingestRegressions → prefetch → entity boosted in predictions", () => {
+		const engine = new TranscendenceEngine(createMockDb());
+
+		// Simulate Scarlett signal bridge injecting a smriti-db critical regression
+		const regression = makeRegression("smriti", "critical");
+		engine.ingestRegressions([regression]);
+
+		const result = engine.prefetch(NOW);
+
+		const regressionPreds = result.predictions.filter((p) => p.source === "regression");
+		expect(regressionPreds.length).toBeGreaterThanOrEqual(1);
+		// Critical regression gets confidence 0.9
+		expect(regressionPreds[0].confidence).toBeGreaterThanOrEqual(0.8);
+	});
+
+	it("fuzzyLookup finds trend-cached entity by substring match", () => {
+		// Lower minCacheConfidence so trend predictions get cached (default trendWeight=0.35 gives ~0.385)
+		const engine = new TranscendenceEngine(createMockDb(), { minCacheConfidence: 0.3 });
+		engine.ingestTrends([makeTrend("typescript-refactor", "rising", 0.85)]);
+		engine.prefetch(NOW);
+
+		// fuzzyLookup with partial query should still find it — pass NOW to avoid TTL expiry
+		const hit = engine.fuzzyLookup("typescript", NOW);
+		expect(hit).not.toBeNull();
+		expect(hit?.entity).toBe("typescript-refactor");
+	});
+
+	it("signals are consumed after prefetch — next cycle starts clean", () => {
+		const engine = new TranscendenceEngine(createMockDb());
+		engine.ingestTrends([makeTrend("react", "rising", 0.9)]);
+		engine.prefetch(NOW);
+
+		// After prefetch, signals are cleared. Second prefetch with no new signals
+		// should not re-use the same trends.
+		const result2 = engine.prefetch(NOW + 1000);
+		const reactFromTrend = result2.predictions.filter(
+			(p) => p.entity === "react" && p.source === "trend",
+		);
+		// Should be 0 — signals consumed
+		expect(reactFromTrend.length).toBe(0);
+	});
+});
