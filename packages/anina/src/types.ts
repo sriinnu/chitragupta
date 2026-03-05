@@ -79,6 +79,8 @@ export type AgentEventType =
 	| "nidra:heartbeat"
 	| "nidra:consolidation_start"
 	| "nidra:consolidation_end"
+	| "nidra:deep_sleep_consolidation_start"
+	| "nidra:deep_sleep_consolidation_end"
 	| "pratyabhijna:recognized";
 
 // ─── Agent Messages ─────────────────────────────────────────────────────────
@@ -372,6 +374,10 @@ export interface NidraConfig {
 	autoStart: boolean;
 	/** Project path for scoping consolidation. */
 	project?: string;
+	/** Consecutive idle DREAMING cycles before forcing DEEP_SLEEP. Default: 5. */
+	consecutiveIdleDreamThreshold: number;
+	/** Sessions processed since last DEEP_SLEEP before forcing DEEP_SLEEP. Default: 20. */
+	sessionCountThreshold: number;
 }
 
 /** Default Nidra configuration. */
@@ -385,6 +391,8 @@ export const DEFAULT_NIDRA_CONFIG: NidraConfig = {
 	dreamDurationMs: 600_000,      // 10min dreaming → deep sleep
 	deepSleepDurationMs: 1_800_000, // 30min deep sleep → wake
 	autoStart: false,
+	consecutiveIdleDreamThreshold: 5,
+	sessionCountThreshold: 20,
 };
 
 /** Snapshot of Nidra daemon state. */
@@ -397,6 +405,12 @@ export interface NidraSnapshot {
 	consolidationPhase?: SwapnaPhase;
 	consolidationProgress: number;
 	uptime: number;
+	/** Consecutive DREAMING cycles where no new sessions were seen. */
+	consecutiveIdleDreamCycles: number;
+	/** Sessions processed since the last DEEP_SLEEP entry. */
+	sessionsProcessedSinceDeepSleep: number;
+	/** Session IDs pending multi-session consolidation in next DEEP_SLEEP. */
+	pendingSessionIds: readonly string[];
 }
 
 // ─── Phase 1: Pratyabhijna (Self-Recognition) Types ────────────────────────
