@@ -16,6 +16,7 @@ import { RpcRouter } from "./rpc-router.js";
 import { startServer, type DaemonServer } from "./server.js";
 import { startHttpServer, type DaemonHttpServer } from "./http-server.js";
 import { registerServices } from "./services.js";
+import { startInternalScarlett, stopInternalScarlett } from "./scarlett-internal.js";
 
 const log = createLogger("daemon:entry");
 
@@ -102,10 +103,35 @@ async function main(): Promise<void> {
 
 	// Start Nidra consolidation daemon (cron + backfill)
 	let nidraStop: (() => Promise<void>) | null = null;
+	let nidraInstance: import("./scarlett-internal.js").NidraLike | undefined;
 	try {
-		nidraStop = await startNidra(router);
+		const nidraResult = await startNidra(router);
+		nidraStop = nidraResult.stop;
+		nidraInstance = nidraResult.nidra;
 	} catch (err) {
 		log.warn("Nidra consolidation failed to start — running without it", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+
+	// Start InternalScarlett — watches smriti DB, heap, nidra heartbeat, consolidation queue
+	try {
+		const internalScarlett = startInternalScarlett({ nidra: nidraInstance });
+		internalScarlett.on("probe-result", (r) => {
+			if (!r.healthy) {
+				log.warn("InternalScarlett probe unhealthy", {
+					probe: r.probe, severity: r.severity, summary: r.summary,
+				});
+			}
+		});
+		internalScarlett.on("recovery-ok", (probe, detail) => {
+			log.info("InternalScarlett recovery ok", { probe, detail });
+		});
+		internalScarlett.on("recovery-failed", (probe, detail) => {
+			log.warn("InternalScarlett recovery failed", { probe, detail });
+		});
+	} catch (err) {
+		log.warn("InternalScarlett failed to start — running without it", {
 			error: err instanceof Error ? err.message : String(err),
 		});
 	}
@@ -113,6 +139,7 @@ async function main(): Promise<void> {
 	// Wire shutdown
 	const shutdown = async () => {
 		log.info("Daemon shutting down");
+		stopInternalScarlett();
 		if (nidraStop) {
 			try { await nidraStop(); } catch { /* best-effort */ }
 		}
@@ -147,7 +174,7 @@ async function main(): Promise<void> {
  * Runs cron at 2am, backfills missed days on startup.
  * Registers RPC methods for manual consolidation triggers.
  */
-async function startNidra(router: RpcRouter): Promise<() => Promise<void>> {
+async function startNidra(router: RpcRouter): Promise<{ stop: () => Promise<void>; nidra: import("./scarlett-internal.js").NidraLike }> {
 	const { ChitraguptaDaemon } = await import("@chitragupta/anina");
 
 	type NidraActivity = "offline" | "listening" | "dreaming" | "consolidating" | "consolidated" | "learning";
@@ -270,7 +297,7 @@ async function startNidra(router: RpcRouter): Promise<() => Promise<void>> {
 	await nidra.start();
 	log.info("Nidra consolidation active");
 
-	return () => nidra.stop();
+	return { stop: () => nidra.stop(), nidra };
 }
 
 main().catch((err) => {
