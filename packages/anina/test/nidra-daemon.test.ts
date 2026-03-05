@@ -1441,4 +1441,168 @@ describe("NidraDaemon", () => {
 			expect(snap1).toEqual(snap2);
 		});
 	});
+
+	// ═══════════════════════════════════════════════════════════════════════════
+	// 14. Autonomous DEEP_SLEEP Entry
+	// ═══════════════════════════════════════════════════════════════════════════
+
+	describe("Autonomous DEEP_SLEEP Entry", () => {
+		it("should expose zero counts in initial snapshot", () => {
+			daemon = createDaemon();
+			daemon.start();
+			const snap = daemon.snapshot();
+			expect(snap.consecutiveIdleDreamCycles).toBe(0);
+			expect(snap.sessionsProcessedSinceDeepSleep).toBe(0);
+			expect(snap.pendingSessionIds).toEqual([]);
+		});
+
+		it("notifySession() should record session in snapshot", () => {
+			daemon = createDaemon();
+			daemon.start();
+			daemon.notifySession("sess-1");
+			const snap = daemon.snapshot();
+			expect(snap.sessionsProcessedSinceDeepSleep).toBe(1);
+			expect(snap.pendingSessionIds).toContain("sess-1");
+		});
+
+		it("notifySession() should not duplicate the same session ID in pendingSessionIds", () => {
+			daemon = createDaemon();
+			daemon.start();
+			daemon.notifySession("sess-dup");
+			daemon.notifySession("sess-dup");
+			const snap = daemon.snapshot();
+			expect(snap.pendingSessionIds.filter((id) => id === "sess-dup").length).toBe(1);
+			// sessionsProcessedSinceDeepSleep counts calls, not unique IDs
+			expect(snap.sessionsProcessedSinceDeepSleep).toBe(2);
+		});
+
+		it("should track consecutive idle dream cycles in snapshot", () => {
+			daemon = createDaemon();
+			daemon.start();
+
+			// First DREAMING cycle (no sessions) → DEEP_SLEEP → LISTENING
+			vi.advanceTimersByTime(1001 + 2001 + 3001);
+			expect(daemon.snapshot().state).toBe("LISTENING");
+
+			// Second idle DREAMING cycle
+			vi.advanceTimersByTime(1001 + 2001 + 3001);
+			expect(daemon.snapshot().state).toBe("LISTENING");
+
+			// Idle counter resets on LISTENING (deep sleep was entered)
+			expect(daemon.snapshot().consecutiveIdleDreamCycles).toBe(0);
+		});
+
+		it("should force DEEP_SLEEP when sessionCountThreshold sessions are processed", () => {
+			daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 3 });
+			daemon.start();
+
+			// Stay in LISTENING — 3 sessions should force DEEP_SLEEP
+			daemon.notifySession("s1");
+			daemon.notifySession("s2");
+			expect(daemon.snapshot().state).toBe("LISTENING");
+			daemon.notifySession("s3");
+			expect(daemon.snapshot().state).toBe("DEEP_SLEEP");
+		});
+
+		it("should force DEEP_SLEEP during DREAMING when sessionCountThreshold is hit", () => {
+			daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 2 });
+			daemon.start();
+
+			// Enter DREAMING
+			vi.advanceTimersByTime(1001);
+			expect(daemon.snapshot().state).toBe("DREAMING");
+
+			// Hit threshold while dreaming
+			daemon.notifySession("s1");
+			daemon.notifySession("s2");
+			expect(daemon.snapshot().state).toBe("DEEP_SLEEP");
+		});
+
+		it("should wake from DEEP_SLEEP to LISTENING on notifySession()", () => {
+			daemon = createDaemon();
+			daemon.start();
+
+			// Enter DEEP_SLEEP via normal timer path
+			vi.advanceTimersByTime(1001 + 2001);
+			expect(daemon.snapshot().state).toBe("DEEP_SLEEP");
+
+			// New session arrives — should wake
+			daemon.notifySession("wake-sess");
+			expect(daemon.snapshot().state).toBe("LISTENING");
+		});
+
+		it("should reset session counters when transitioning to LISTENING", () => {
+			daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 5 });
+			daemon.start();
+
+			daemon.notifySession("s1");
+			daemon.notifySession("s2");
+			expect(daemon.snapshot().sessionsProcessedSinceDeepSleep).toBe(2);
+
+			// Full cycle back to LISTENING
+			vi.advanceTimersByTime(1001 + 2001 + 3001);
+			expect(daemon.snapshot().state).toBe("LISTENING");
+			expect(daemon.snapshot().sessionsProcessedSinceDeepSleep).toBe(0);
+			expect(daemon.snapshot().pendingSessionIds).toEqual([]);
+		});
+
+		it("should invoke deepSleepConsolidationHandler with pending session IDs", async () => {
+			const consolidateFn = vi.fn(async (_ids: readonly string[]) => {});
+			daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 2 });
+			daemon.onDeepSleepConsolidation(consolidateFn);
+			daemon.start();
+
+			daemon.notifySession("s1");
+			daemon.notifySession("s2");
+			expect(daemon.snapshot().state).toBe("DEEP_SLEEP");
+
+			await vi.advanceTimersByTimeAsync(0);
+			expect(consolidateFn).toHaveBeenCalledOnce();
+			const [passedIds] = consolidateFn.mock.calls[0] as [readonly string[]];
+			expect(passedIds).toContain("s1");
+			expect(passedIds).toContain("s2");
+		});
+
+		it("deepSleepConsolidationHandler should supersede legacy deepSleepHandler", async () => {
+			const legacyFn = vi.fn(async () => {});
+			const consolidateFn = vi.fn(async (_ids: readonly string[]) => {});
+			daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 1 });
+			daemon.onDeepSleep(legacyFn);
+			daemon.onDeepSleepConsolidation(consolidateFn);
+			daemon.start();
+
+			daemon.notifySession("s1");
+			expect(daemon.snapshot().state).toBe("DEEP_SLEEP");
+
+			await vi.advanceTimersByTimeAsync(0);
+			expect(consolidateFn).toHaveBeenCalledOnce();
+			expect(legacyFn).not.toHaveBeenCalled();
+		});
+
+		it("should not crash if notifySession() called on disposed daemon", () => {
+			daemon = createDaemon();
+			daemon.start();
+			daemon.dispose();
+			expect(() => daemon.notifySession("any")).toThrow("disposed");
+		});
+
+		it("should not crash if notifySession() called when not running", () => {
+			daemon = createDaemon();
+			// Not started — notifySession should silently no-op
+			expect(() => daemon.notifySession("any")).not.toThrow();
+		});
+
+		it("should reset pendingSessionIds after DEEP_SLEEP → LISTENING", () => {
+			daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 5 });
+			daemon.start();
+
+			daemon.notifySession("s1");
+			daemon.notifySession("s2");
+
+			// Full cycle to LISTENING
+			vi.advanceTimersByTime(1001 + 2001 + 3001);
+			expect(daemon.snapshot().state).toBe("LISTENING");
+			expect(daemon.snapshot().pendingSessionIds).toEqual([]);
+		});
+	});
 });
