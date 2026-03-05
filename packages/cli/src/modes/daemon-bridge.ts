@@ -339,11 +339,28 @@ export async function searchDayFilesViaDaemon(
 	return result.results;
 }
 
-/** Load provider context via daemon. */
+/** Options forwarded to the daemon's context.load RPC. */
+export interface LoadContextOptions {
+	/** Provider context window size in tokens (for adaptive budget). */
+	providerContextWindow?: number;
+	/** Device identifier for cross-device session pickup. */
+	deviceId?: string;
+}
+
+/**
+ * Load provider context via daemon.
+ *
+ * Passes adaptive-budget hints (providerContextWindow, deviceId) to the
+ * daemon so loadProviderContext() can scale memory injection accordingly.
+ */
 export async function loadContextViaDaemon(
 	project: string,
+	opts?: LoadContextOptions,
 ): Promise<{ assembled: string; itemCount: number }> {
-	return daemonCall("context.load", { project });
+	const params: Record<string, unknown> = { project };
+	if (opts?.providerContextWindow != null) params.providerContextWindow = opts.providerContextWindow;
+	if (opts?.deviceId != null) params.deviceId = opts.deviceId;
+	return daemonCall("context.load", params);
 }
 
 /** Unified recall across all memory layers via daemon. */

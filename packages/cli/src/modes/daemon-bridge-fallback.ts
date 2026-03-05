@@ -98,7 +98,18 @@ export async function directFallback<T>(
 		}
 		case "context.load": {
 			const provider = await import("@chitragupta/smriti/provider-bridge");
-			const ctx = await provider.loadProviderContext(params?.project as string);
+			const providerCtxWindow =
+				typeof params?.providerContextWindow === "number" && (params.providerContextWindow as number) > 0
+					? (params.providerContextWindow as number)
+					: undefined;
+			const deviceIdVal =
+				typeof params?.deviceId === "string" && (params.deviceId as string).trim()
+					? (params.deviceId as string).trim()
+					: undefined;
+			const ctx = await provider.loadProviderContext(
+				params?.project as string,
+				{ providerContextWindow: providerCtxWindow, deviceId: deviceIdVal },
+			);
 			return { assembled: ctx.assembled, itemCount: ctx.itemCount } as T;
 		}
 		case "memory.unified_recall": {
