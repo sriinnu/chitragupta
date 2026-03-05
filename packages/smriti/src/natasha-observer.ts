@@ -405,7 +405,7 @@ function classifySeverity(
 
 /** Compute normalized delta between two values (-1 to 1). */
 function normalizedDelta(current: number, previous: number): number {
-	if (current === 0 && previous === 0) return 0;
 	const sum = current + previous;
+	if (sum === 0) return 0;
 	return (current - previous) / sum;
 }
