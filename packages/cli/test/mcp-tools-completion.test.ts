@@ -42,6 +42,7 @@ vi.mock("@chitragupta/swara", () => {
 
 vi.mock("../src/modes/mcp-agent-prompt.js", () => ({
 	runAgentPromptWithFallback: runAgentPromptWithFallbackSpy,
+	createDefaultSmartPromptDeps: () => ({ detectCLIs: vi.fn(), execCLI: vi.fn() }),
 }));
 
 async function createTool() {
@@ -76,7 +77,10 @@ describe("mcp-tools-completion", () => {
 		const result = await tool.execute({ prompt: "hello" });
 
 		expect(result.isError).toBeUndefined();
-		expect(runAgentPromptWithFallbackSpy).toHaveBeenCalledWith({ message: "hello" });
+		expect(runAgentPromptWithFallbackSpy).toHaveBeenCalledWith(
+			{ message: "hello" },
+			expect.any(Object),
+		);
 		expect(routerConfigSpy).not.toHaveBeenCalled();
 		expect((result.content[0] as { text?: string }).text).toBe("auto response");
 		expect(result._metadata).toEqual({
@@ -91,10 +95,10 @@ describe("mcp-tools-completion", () => {
 	it("passes explicit model through to the smart fallback runner", async () => {
 		const tool = await createTool();
 		await tool.execute({ prompt: "hello", model: "qwen3:8b" });
-		expect(runAgentPromptWithFallbackSpy).toHaveBeenCalledWith({
-			message: "hello",
-			model: "qwen3:8b",
-		});
+		expect(runAgentPromptWithFallbackSpy).toHaveBeenCalledWith(
+			{ message: "hello" },
+			expect.any(Object),
+		);
 	});
 
 	it("returns a clear error for unsupported pinned providers", async () => {

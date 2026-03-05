@@ -4,7 +4,7 @@
 
 <h1 align="center">@yugenlab/chitragupta</h1>
 
-<p align="center"><strong>AI agent memory engine — sessions, recall, fact extraction, MCP server</strong></p>
+<p align="center"><strong>AI agent memory and observability platform — sessions, GraphRAG, hybrid search, temporal trending, predictive pre-fetching, 60+ MCP tools</strong></p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@yugenlab/chitragupta"><img src="https://img.shields.io/npm/v/@yugenlab/chitragupta" alt="npm" /></a>
@@ -33,7 +33,7 @@ Give any AI agent (Claude Code, Codex, etc.) persistent memory across sessions.
 npx chitragupta init
 ```
 
-This creates `.mcp.json` and teaches the agent when to use Chitragupta's 28 tools — memory search, recall, fact extraction, handover, and more.
+This creates `.mcp.json` and teaches the agent when to use Chitragupta's 60+ tools — memory search, recall, fact extraction, handover, temporal trending, predictive pre-fetching, P2P mesh, skill discovery, and more.
 
 ### Manual MCP setup
 
@@ -108,15 +108,18 @@ import { ... } from "@yugenlab/chitragupta/vidhya-skills" // Skill discovery
 ## What It Does
 
 - **Persistent memory** — sessions, turns, and facts survive across conversations
-- **Unified recall** — single query searches FTS5, GraphRAG, day files, and memory
+- **Unified recall** — single query searches FTS5, GraphRAG, day files, Akasha traces, and memory
 - **Real-time fact extraction** — detects personal facts from conversations at zero LLM cost
 - **Day consolidation** — daily summaries across all projects and providers
 - **GraphRAG** — knowledge graph with bi-temporal edges and personalized PageRank
-- **Hybrid search** — BM25 + vector + graph fusion with learned weights
-- **Sleep consolidation** — 5-phase dream cycle makes the agent smarter between sessions
-- **Behavioral crystallization** — stable habits detected via Bayesian change-point detection
-- **Multi-agent deliberation** — structured councils with fallacy detection
-- **28 MCP tools** — memory, file ops, shell, search, and self-awareness
+- **Hybrid search** — BM25 + vector + graph + Pramana + temporal fusion with Thompson Sampling learned weights
+- **Natasha Observer** — temporal trending engine with trend detection, error regression alerts, and velocity tracking across 4 time windows
+- **Transcendence Engine** — predictive context pre-fetcher that fuses 5 signal sources to anticipate what memory you'll need next
+- **Sleep consolidation** — 5-phase dream cycle (Swapna) reorganizes experience into lasting knowledge
+- **Behavioral crystallization** — stable habits detected via Bayesian change-point detection (Vasana Engine)
+- **Multi-agent deliberation** — structured councils (Sabha) with Nyaya-style reasoning and fallacy detection
+- **Extension system** — install extensions from npm, git, or local paths with hot-reload
+- **60+ MCP tools** — memory, sessions, search, Akasha, mesh, skills, file ops, shell, health, and self-awareness
 
 ## Requirements
 

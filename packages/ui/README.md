@@ -8,6 +8,16 @@
 
 The `@chitragupta/ui` package is the visual layer of the Chitragupta ecosystem. Everything is built on raw ANSI escape sequences with zero heavy dependencies. The Nakshatram theme provides a distinctive star-chart color palette, and the iconic **chi** prompt renders the Devanagari character at the command line as the CLI's visual identity.
 
+## Installation
+
+```bash
+npm install @chitragupta/ui
+# or
+pnpm add @chitragupta/ui
+```
+
+**Requires Node.js >= 22.**
+
 ---
 
 ## Key Features

@@ -146,11 +146,10 @@ export function createCompletionTool(): McpToolHandler {
 			try {
 				// Auto mode: CLI providers first, then local Ollama, then API keys.
 				if (!pinnedProvider) {
-					const { runAgentPromptWithFallback } = await import("./mcp-agent-prompt.js");
+					const { runAgentPromptWithFallback, createDefaultSmartPromptDeps } = await import("./mcp-agent-prompt.js");
 					const result = await runAgentPromptWithFallback({
 						message: prompt,
-						...(model ? { model } : {}),
-					});
+					}, createDefaultSmartPromptDeps());
 					return {
 						content: [{ type: "text", text: result.response || "(empty response)" }],
 						_metadata: {

@@ -6,6 +6,16 @@
 
 Use Claude Code, Cursor, or any Anthropic-compatible client with **any model** — OpenAI, Gemini, Groq, DeepSeek, Ollama, LM Studio, vLLM, or any OpenAI-compatible endpoint.
 
+## Installation
+
+```bash
+npm install @chitragupta/darpana
+# or
+pnpm add @chitragupta/darpana
+```
+
+**Requires Node.js >= 22.**
+
 ## Why Darpana?
 
 - **Zero-config** — auto-detects credentials from Claude Code, Codex CLI, env vars, and Ollama
@@ -389,6 +399,8 @@ Everything else is I/O wait. We achieve this with:
 - Stream piping for SSE — transform chunks on-the-fly, never buffer
 - No sync logging on hot path
 
-## Part of Chitragupta
+---
 
-Darpana is the `@chitragupta/darpana` package in the [Chitragupta](https://github.com/sriinnu/chitragupta) monorepo — an autonomous AI agent platform with GraphRAG memory, self-evolving skills, and multi-provider support.
+Part of the [Chitragupta](https://github.com/sriinnu/chitragupta) monorepo.
+
+[Back to Chitragupta root](../../README.md)

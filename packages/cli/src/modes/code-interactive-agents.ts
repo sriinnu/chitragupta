@@ -47,7 +47,7 @@ export async function askCodebase(
 	try {
 		const { CompletionRouter } = await import("@chitragupta/swara");
 
-		const router = new CompletionRouter();
+		const router = new CompletionRouter({ providers: [] });
 		const prompt =
 			`You are a code exploration assistant for the project at ${projectPath}.\n\n` +
 			`Answer this question about the codebase:\n\n${question}\n\n` +
@@ -55,16 +55,15 @@ export async function askCodebase(
 
 		const response = await router.complete({
 			messages: [{ role: "user", content: prompt }],
-			providerId: providerInfo.providerId,
-			model: providerInfo.model,
+			model: providerInfo.model ?? "claude-sonnet-4-5-20250929",
 		});
 
 		const text = typeof response.content === "string"
 			? response.content
 			: Array.isArray(response.content)
-				? response.content
-					.filter((p: Record<string, unknown>) => p.type === "text")
-					.map((p: Record<string, unknown>) => p.text as string)
+				? (response.content as Array<{ type: string; text?: string }>)
+					.filter((p) => p.type === "text")
+					.map((p) => p.text ?? "")
 					.join("\n")
 				: "";
 
@@ -104,19 +103,18 @@ export async function chatResponse(
 	try {
 		const { CompletionRouter } = await import("@chitragupta/swara");
 
-		const router = new CompletionRouter();
+		const router = new CompletionRouter({ providers: [] });
 		const response = await router.complete({
 			messages: [{ role: "user", content: message }],
-			providerId: providerInfo.providerId,
-			model: providerInfo.model,
+			model: providerInfo.model ?? "claude-sonnet-4-5-20250929",
 		});
 
 		const text = typeof response.content === "string"
 			? response.content
 			: Array.isArray(response.content)
-				? response.content
-					.filter((p: Record<string, unknown>) => p.type === "text")
-					.map((p: Record<string, unknown>) => p.text as string)
+				? (response.content as Array<{ type: string; text?: string }>)
+					.filter((p) => p.type === "text")
+					.map((p) => p.text ?? "")
 					.join("\n")
 				: "";
 

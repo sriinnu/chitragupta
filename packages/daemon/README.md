@@ -8,6 +8,16 @@
 
 The daemon is Chitragupta's centralized process — a long-lived background service that all MCP clients, CLI sessions, and tools connect to via a Unix domain socket. It owns all database writes (single-writer guarantee), eliminating SQLite contention across concurrent sessions.
 
+## Installation
+
+```bash
+npm install @chitragupta/daemon
+# or
+pnpm add @chitragupta/daemon
+```
+
+**Requires Node.js >= 22.**
+
 ---
 
 ## Key Features

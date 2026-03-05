@@ -152,6 +152,52 @@ function recordSkillGap(context: string): void {
 	} catch { /* best-effort */ }
 }
 
+// ─── Default Deps Factory ───────────────────────────────────────────────────
+
+/**
+ * Create default SmartPromptDeps for MCP tool contexts.
+ *
+ * Uses real CLI detection + execution via child_process, no-op memory,
+ * and no local/cloud completion. Suitable for unpinned auto-mode calls.
+ */
+export function createDefaultSmartPromptDeps(): SmartPromptDeps {
+	return {
+		detectCLIs: async () => {
+			try {
+				const { detectAvailableCLIs } = await import("@chitragupta/swara");
+				const results = await detectAvailableCLIs();
+				return results.map((r) => ({ command: r.command, available: r.available }));
+			} catch {
+				return [];
+			}
+		},
+		executeCLI: async (cmd, args) => {
+			const { execFile } = await import("node:child_process");
+			const { promisify } = await import("node:util");
+			const execFileAsync = promisify(execFile);
+			try {
+				const { stdout, stderr } = await execFileAsync(cmd, args, {
+					timeout: 120_000,
+					maxBuffer: 10 * 1024 * 1024,
+				});
+				return { stdout, stderr, exitCode: 0, killed: false };
+			} catch (err: unknown) {
+				const e = err as { stdout?: string; stderr?: string; code?: number; killed?: boolean };
+				return {
+					stdout: e.stdout ?? "",
+					stderr: e.stderr ?? String(err),
+					exitCode: e.code ?? 1,
+					killed: e.killed ?? false,
+				};
+			}
+		},
+		loadProjectMemory: () => undefined,
+		getCompletionRouter: async () => null,
+		localComplete: async () => null,
+		margaDecide: () => null,
+	};
+}
+
 // ─── Main Entry Point ───────────────────────────────────────────────────────
 
 /**

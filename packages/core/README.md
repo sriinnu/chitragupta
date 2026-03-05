@@ -8,6 +8,16 @@
 
 `@chitragupta/core` is the bedrock layer that every other Chitragupta package depends on. It defines the shared type system, the plugin registry, the event bus for cross-package communication, cascading configuration that merges four scope levels, runtime validation without external dependencies, a zero-dependency auth stack (JWT, RBAC, OAuth, multi-tenant), and a full observability suite (structured logging, distributed tracing, Prometheus metrics, health checks).
 
+## Installation
+
+```bash
+npm install @chitragupta/core
+# or
+pnpm add @chitragupta/core
+```
+
+**Requires Node.js >= 22.**
+
 ---
 
 ## Key Features

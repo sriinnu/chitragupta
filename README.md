@@ -17,7 +17,7 @@
 
 ---
 
-Chitragupta is an AI agent platform that treats cognition as a first-class engineering discipline. It is a TypeScript ESM monorepo of 16 packages — a complete cognitive system with memory, identity, attention, affect, intention, self-reflection, deliberation, and self-evolution. Most of which runs at zero LLM cost.
+Chitragupta is an AI agent platform that treats cognition as a first-class engineering discipline. It is a TypeScript ESM monorepo of 17 packages — a complete cognitive system with memory, identity, attention, affect, intention, self-reflection, deliberation, and self-evolution. Most of which runs at zero LLM cost.
 
 It exposes a **CLI**, an **HTTP server**, an **MCP server**, a **web dashboard (Hub)**, and a **programmatic API**. It is designed to be consumed by other applications.
 
@@ -574,25 +574,32 @@ Build: `cd apps/macos-menubar && xcodegen && xcodebuild`
 
 ## The 17 Packages
 
-| Package | What It Does | Internal Name | Meaning |
+### Published (11 packages — `@chitragupta/*` on npm)
+
+| Package | What It Does | Sanskrit Name | Meaning |
 |---------|-------------|---------------|---------|
-| [`@chitragupta/core`](./packages/core) | Foundation — types, plugin system, config, validation, auth, observability | — | — |
-| [`@chitragupta/swara`](./packages/swara) | AI Providers — LLM streaming, cost tracking, model routing, embeddings | Swara | Voice |
-| [`@chitragupta/anina`](./packages/anina) | Agent Runtime — tool execution, consciousness, learning loop, identity | Anina | Soul |
-| [`@chitragupta/smriti`](./packages/smriti) | Memory — 4-stream memory, GraphRAG, bi-temporal edges, hybrid search, compaction | Smriti | Remembrance |
-| [`@chitragupta/ui`](./packages/ui) | Terminal UI — themes (Aurora/Nebula/Minimal), ANSI rendering, markdown, progress, diff viewer | — | — |
-| [`@chitragupta/yantra`](./packages/yantra) | Tools — 12+ built-in tools, sandbox, .env fortress, credential protection | Yantra | Instrument |
-| [`@chitragupta/dharma`](./packages/dharma) | Policy — security rules, rate limiting, approval gates, karma tracking | Dharma | Law |
-| [`@chitragupta/netra`](./packages/netra) | Vision — image analysis, pixel diffing, screenshot capture, multimodal | Netra | Eye |
-| [`@chitragupta/vayu`](./packages/vayu) | Workflows — DAG execution, worker thread pool, parallel pipelines | Vayu | Wind |
-| [`@chitragupta/sutra`](./packages/sutra) | IPC — P2P actor mesh, 4-lane mailboxes, SWIM gossip, pub/sub, 6 coordination patterns | Sutra | Thread |
-| [`@chitragupta/tantra`](./packages/tantra) | MCP — server lifecycle, circuit breaker, capability aggregation, auto-restart | Tantra | Technique |
-| [`@chitragupta/vidhya-skills`](./packages/vidhya-skills) | Skills — trait vector matching, evolution, security scanning, autonomous learning | Vidhya | Knowledge |
-| [`@chitragupta/niyanta`](./packages/niyanta) | Orchestrator — multi-armed bandit, task routing, agent evaluation, auto-scaling | Niyanta | Director |
-| [`@chitragupta/hub`](./packages/hub) | Web Dashboard — Preact SPA, device pairing, real-time monitoring | — | — |
 | [`@chitragupta/cli`](./packages/cli) | Entry Point — interactive CLI, HTTP server, MCP server, onboarding | — | — |
 | [`@chitragupta/daemon`](./packages/daemon) | Daemon — Unix socket, single-writer SQLite, JSON-RPC, health monitor, circuit breaker | Sevaka | Guardian |
+| [`@chitragupta/core`](./packages/core) | Foundation — types, plugin system, config, validation, auth, observability | — | — |
+| [`@chitragupta/sutra`](./packages/sutra) | IPC — P2P actor mesh, 4-lane mailboxes, SWIM gossip, pub/sub, 6 coordination patterns | Sutra | Thread |
+| [`@chitragupta/smriti`](./packages/smriti) | Memory — 4-stream memory, GraphRAG, bi-temporal edges, hybrid search, compaction | Smriti | Remembrance |
+| [`@chitragupta/swara`](./packages/swara) | AI Providers — LLM streaming, cost tracking, model routing, embeddings | Swara | Voice |
+| [`@chitragupta/dharma`](./packages/dharma) | Policy — security rules, rate limiting, approval gates, karma tracking | Dharma | Law |
 | [`@chitragupta/darpana`](./packages/darpana) | LLM Proxy — mirrors Anthropic API to any provider, <5ms overhead, zero-config | Darpana | Mirror |
+| [`@chitragupta/niyanta`](./packages/niyanta) | Orchestrator — multi-armed bandit, task routing, agent evaluation, auto-scaling | Niyanta | Director |
+| [`@chitragupta/ui`](./packages/ui) | Terminal UI — themes (Aurora/Nebula/Minimal), ANSI rendering, markdown, progress, diff viewer | — | — |
+| [`@chitragupta/vidhya-skills`](./packages/vidhya-skills) | Skills — trait vector matching, evolution, security scanning, autonomous learning | Vidhya | Knowledge |
+
+### Private (6 packages — internal, not published)
+
+| Package | What It Does | Sanskrit Name | Meaning |
+|---------|-------------|---------------|---------|
+| [`@chitragupta/anina`](./packages/anina) | Agent Runtime — tool execution, consciousness, learning loop, identity | Anina | Soul |
+| [`@chitragupta/hub`](./packages/hub) | Web Dashboard — Preact SPA, device pairing, real-time monitoring | — | — |
+| [`@chitragupta/netra`](./packages/netra) | Vision — image analysis, pixel diffing, screenshot capture, multimodal | Netra | Eye |
+| [`@chitragupta/tantra`](./packages/tantra) | MCP — server lifecycle, circuit breaker, capability aggregation, auto-restart | Tantra | Technique |
+| [`@chitragupta/vayu`](./packages/vayu) | Workflows — DAG execution, worker thread pool, parallel pipelines | Vayu | Wind |
+| [`@chitragupta/yantra`](./packages/yantra) | Tools — 12+ built-in tools, sandbox, .env fortress, credential protection | Yantra | Instrument |
 
 > **npm:** Published as [`@yugenlab/chitragupta`](https://www.npmjs.com/package/@yugenlab/chitragupta) — `npm install -g @yugenlab/chitragupta`
 
@@ -758,6 +765,67 @@ const reply = await system.ask("caller", "remote-agent", { task: "analyze" });
 ### Gossip & Failure Detection
 
 SWIM-based protocol: `alive` → `suspect` (no heartbeat) → `dead` (evicted). Lamport generation clock ensures causal ordering. Configurable fanout, sweep intervals, and timeouts.
+
+---
+
+## Lucy Neural Expansion System
+
+Chitragupta's autonomous intelligence layer is named after the film _Lucy_ (2014) — the idea of a system gaining new cognitive abilities as more neural capacity comes online. Each module maps to a stage of cerebral expansion.
+
+### Architecture
+
+```
+              ┌─────────────────────────────────────────────┐
+              │          Lucy Neural Expansion               │
+              │                                             │
+  20%         │  ┌──────────────────────┐                   │
+  Self-Heal   │  │  Scarlett Watchdog   │ Daemon crash      │
+              │  │  (packages/daemon)   │ detection +       │
+              │  └──────────┬───────────┘ auto-restart      │
+              │             │                               │
+  40%         │  ┌──────────┴───────────┐                   │
+  Autonomy    │  │  Lucy Bridge         │ Context injection  │
+              │  │  (packages/cli)      │ + watch-and-fix   │
+              │  └──────────┬───────────┘ loop              │
+              │             │                               │
+  60%         │  ┌──────────┴───────────┐                   │
+  Expansion   │  │  Cerebral Expansion  │ Autonomous skill  │
+              │  │  (packages/cli)      │ discovery +       │
+              │  └──────────┬───────────┘ installation      │
+              │             │                               │
+  80%         │  ┌──────────┴───────────┐                   │
+  Observation │  │  Natasha Observer    │ Temporal trending  │
+              │  │  (packages/smriti)   │ + regression       │
+              │  └──────────┬───────────┘ detection         │
+              │             │                               │
+  100%        │  ┌──────────┴───────────┐                   │
+  Precognition│  │  Transcendence       │ Predictive context │
+              │  │  (packages/smriti)   │ pre-fetching       │
+              │  └──────────────────────┘                   │
+              └─────────────────────────────────────────────┘
+                             │
+                      CPH4 Catalyst
+                  (tool_calls persistence)
+```
+
+### Components
+
+| Module | Stage | What It Does |
+|--------|-------|-------------|
+| **Scarlett Watchdog** | 20% — Self-Healing | Monitors daemon liveness via PID + socket ping. Auto-restarts on crash with exponential backoff and restart-storm prevention. Named after Scarlett Johansson. |
+| **Lucy Bridge** | 40% — Autonomy | Wraps the coding agent with autonomous behaviors: queries episodic memory before every task, injects context hints, monitors test output, and auto-dispatches fix tasks on failure. |
+| **Cerebral Expansion** | 60% — Expansion | Autonomous skill discovery pipeline. When a tool is not found: extract intent from the name, check Akasha cache, TVM-match against local skills, run Suraksha security scan, install if confidence > 0.8. |
+| **Natasha Observer** | 80% — Observation | Temporal trending engine. Tracks entity mention frequency across 4 time windows (hour/day/week/month), detects error regressions by comparing periods, and measures coding velocity deltas. |
+| **Transcendence Engine** | 100% — Precognition | Predictive context pre-fetcher. Fuses 5 signal sources (trends, temporal patterns, session continuation, behavioral tendencies, co-occurrence) to predict what memory context will be needed before it is requested. |
+| **CPH4 Catalyst** | — | Named after the synthetic molecule that triggers neural expansion. Ensures tool_calls data survives snake_case/camelCase client boundaries so downstream learning pipelines receive complete data. |
+
+### Research Basis
+
+- Neural Paging (ArXiv 2603.02228) — predictive memory pre-loading
+- MEM1 (ArXiv 2506.15841) — anticipatory context staging
+- Codified Context (ArXiv 2602.20478) — memory-augmented tool orchestration
+- MemWeaver (ArXiv 2601.18204) — three-tier memory with prefetch
+- Zep/Graphiti (ArXiv 2501.13956) — bitemporal knowledge graphs
 
 ---
 

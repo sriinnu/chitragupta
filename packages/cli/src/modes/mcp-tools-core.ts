@@ -313,14 +313,11 @@ export function createAgentPromptTool(): McpToolHandler {
 
 			const promptPromise = (async () => {
 				try {
-					const { runAgentPromptWithFallback } = await import("./mcp-agent-prompt.js");
+					const { runAgentPromptWithFallback, createDefaultSmartPromptDeps } = await import("./mcp-agent-prompt.js");
 					const result = await runAgentPromptWithFallback({
 						message,
-						...(args.provider ? { provider: String(args.provider) } : {}),
-						...(args.model ? { model: String(args.model) } : {}),
-						...(args.timeout ? { timeoutMs: Number(args.timeout) } : {}),
-						onHeartbeat: heartbeat,
-					});
+						onHeartbeat: (info) => heartbeat({ ...info, attempt: 1, provider: "unknown" }),
+					}, createDefaultSmartPromptDeps());
 					completeJob(jobId, result.response);
 					return result.response;
 				} catch (err) {
