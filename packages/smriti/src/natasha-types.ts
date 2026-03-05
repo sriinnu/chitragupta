@@ -1,17 +1,17 @@
 /**
- * Morgan — The Observer: Type Definitions
+ * Natasha — The Watcher: Type Definitions
  *
- * Named after Morgan Freeman's character in Lucy (2014) — the scientist
- * who observes, narrates, and makes sense of Lucy's transformation.
- * Morgan watches the temporal patterns across sessions and surfaces
- * trends, regressions, and velocity signals.
+ * Named after Natasha Romanoff (Black Widow), played by Scarlett Johansson —
+ * the master spy who observes everything from the shadows, misses nothing,
+ * and sees patterns others can't. Natasha watches the temporal pulse of the
+ * system and surfaces trends, regressions, and velocity signals.
  *
  * Research basis:
  * - Zep/Graphiti (ArXiv 2501.13956): Bitemporal facts with event + ingestion time
  * - TG-RAG (ArXiv 2510.13590): Hierarchical time summaries
  * - MemoTime (ArXiv 2510.13614): Operator-aware temporal reasoning
  *
- * @module morgan-types
+ * @module natasha-types
  */
 
 // ─── Time Windows ───────────────────────────────────────────────────────────
@@ -100,10 +100,10 @@ export interface VelocityMetrics {
 	velocityDelta: number;
 }
 
-// ─── Morgan Configuration ───────────────────────────────────────────────────
+// ─── Natasha Configuration ───────────────────────────────────────────────────
 
-/** Configuration for the Morgan temporal trending engine. */
-export interface MorganConfig {
+/** Configuration for the Natasha temporal trending engine. */
+export interface NatashaConfig {
 	/** Minimum count threshold for a trend to be considered significant. */
 	minCountThreshold: number;
 	/** Minimum change percentage to flag as a trend. */
@@ -114,8 +114,8 @@ export interface MorganConfig {
 	maxTrendsPerWindow: number;
 }
 
-/** Default Morgan configuration. */
-export const DEFAULT_MORGAN_CONFIG: Readonly<MorganConfig> = {
+/** Default Natasha configuration. */
+export const DEFAULT_NATASHA_CONFIG: Readonly<NatashaConfig> = {
 	minCountThreshold: 2,
 	minChangePercent: 25,
 	criticalRegressionThreshold: 3,
@@ -124,8 +124,8 @@ export const DEFAULT_MORGAN_CONFIG: Readonly<MorganConfig> = {
 
 // ─── Database Types ─────────────────────────────────────────────────────────
 
-/** Duck-typed database interface for Morgan queries. */
-export interface MorganDb {
+/** Duck-typed database interface for Natasha queries. */
+export interface NatashaDb {
 	prepare(sql: string): {
 		all(...params: unknown[]): unknown[];
 		get(...params: unknown[]): unknown;
