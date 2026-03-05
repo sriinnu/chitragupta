@@ -1,11 +1,11 @@
 /**
- * Morgan Observer — Tests
+ * Natasha Observer — Tests
  * Tests for the temporal trending engine.
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { MorganObserver } from "../src/morgan-observer.js";
-import type { MorganDb } from "../src/morgan-types.js";
+import { NatashaObserver } from "../src/natasha-observer.js";
+import type { NatashaDb } from "../src/natasha-types.js";
 
 // ─── Mock Database ──────────────────────────────────────────────────────────
 
@@ -21,7 +21,7 @@ function createMockDb(overrides?: {
 	}>>;
 	sessionCount?: Record<string, number>;
 	turnCount?: Record<string, number>;
-}): MorganDb {
+}): NatashaDb {
 	return {
 		prepare(sql: string) {
 			return {
@@ -52,7 +52,7 @@ function createMockDb(overrides?: {
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
-describe("MorganObserver", () => {
+describe("NatashaObserver", () => {
 	const NOW = new Date("2026-03-04T12:00:00Z").getTime();
 
 	describe("detectTrends", () => {
@@ -73,8 +73,8 @@ describe("MorganObserver", () => {
 				},
 			});
 
-			const morgan = new MorganObserver(db);
-			const trends = morgan.detectTrends("day", NOW);
+			const natasha = new NatashaObserver(db);
+			const trends = natasha.detectTrends("day", NOW);
 
 			expect(trends.length).toBeGreaterThanOrEqual(1);
 			const ts = trends.find((t) => t.entity === "typescript");
@@ -97,8 +97,8 @@ describe("MorganObserver", () => {
 				},
 			});
 
-			const morgan = new MorganObserver(db);
-			const trends = morgan.detectTrends("day", NOW);
+			const natasha = new NatashaObserver(db);
+			const trends = natasha.detectTrends("day", NOW);
 
 			const ts = trends.find((t) => t.entity === "python");
 			expect(ts?.direction).toBe("falling");
@@ -120,8 +120,8 @@ describe("MorganObserver", () => {
 				},
 			});
 
-			const morgan = new MorganObserver(db, { minCountThreshold: 3 });
-			const trends = morgan.detectTrends("day", NOW);
+			const natasha = new NatashaObserver(db, { minCountThreshold: 3 });
+			const trends = natasha.detectTrends("day", NOW);
 
 			expect(trends.find((t) => t.entity === "obscure")).toBeUndefined();
 		});
@@ -143,8 +143,8 @@ describe("MorganObserver", () => {
 				},
 			});
 
-			const morgan = new MorganObserver(db, { minChangePercent: 25 });
-			const trends = morgan.detectTrends("day", NOW);
+			const natasha = new NatashaObserver(db, { minChangePercent: 25 });
+			const trends = natasha.detectTrends("day", NOW);
 
 			// ~11% change is below 25% threshold
 			expect(trends.find((t) => t.entity === "stable")).toBeUndefined();
@@ -154,8 +154,8 @@ describe("MorganObserver", () => {
 	describe("detectAllTrends", () => {
 		it("returns trends for all four windows", () => {
 			const db = createMockDb();
-			const morgan = new MorganObserver(db);
-			const allTrends = morgan.detectAllTrends(NOW);
+			const natasha = new NatashaObserver(db);
+			const allTrends = natasha.detectAllTrends(NOW);
 
 			expect(allTrends.size).toBe(4);
 			expect(allTrends.has("hour")).toBe(true);
@@ -187,8 +187,8 @@ describe("MorganObserver", () => {
 				},
 			});
 
-			const morgan = new MorganObserver(db);
-			const regressions = morgan.detectRegressions("day", NOW);
+			const natasha = new NatashaObserver(db);
+			const regressions = natasha.detectRegressions("day", NOW);
 
 			expect(regressions.length).toBe(1);
 			expect(regressions[0].errorSignature).toBe("TypeError: x is not a function");
@@ -217,8 +217,8 @@ describe("MorganObserver", () => {
 				},
 			});
 
-			const morgan = new MorganObserver(db);
-			const regressions = morgan.detectRegressions("day", NOW);
+			const natasha = new NatashaObserver(db);
+			const regressions = natasha.detectRegressions("day", NOW);
 
 			expect(regressions[0]?.severity).toBe("info");
 		});
@@ -242,8 +242,8 @@ describe("MorganObserver", () => {
 				},
 			});
 
-			const morgan = new MorganObserver(db);
-			const velocity = morgan.measureVelocity("day", NOW);
+			const natasha = new NatashaObserver(db);
+			const velocity = natasha.measureVelocity("day", NOW);
 
 			expect(velocity.sessionCount).toBe(5);
 			expect(velocity.totalTurns).toBe(50);
@@ -253,8 +253,8 @@ describe("MorganObserver", () => {
 
 		it("returns zero delta when both periods are empty", () => {
 			const db = createMockDb();
-			const morgan = new MorganObserver(db);
-			const velocity = morgan.measureVelocity("day", NOW);
+			const natasha = new NatashaObserver(db);
+			const velocity = natasha.measureVelocity("day", NOW);
 
 			expect(velocity.velocityDelta).toBe(0);
 			expect(velocity.sessionCount).toBe(0);
@@ -264,8 +264,8 @@ describe("MorganObserver", () => {
 	describe("observe", () => {
 		it("returns a comprehensive summary", () => {
 			const db = createMockDb();
-			const morgan = new MorganObserver(db);
-			const summary = morgan.observe(NOW);
+			const natasha = new NatashaObserver(db);
+			const summary = natasha.observe(NOW);
 
 			expect(summary.trends).toBeDefined();
 			expect(summary.regressions).toBeDefined();

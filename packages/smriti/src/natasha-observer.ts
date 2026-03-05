@@ -1,10 +1,9 @@
 /**
- * Morgan — The Observer: Temporal Trending Engine
+ * Natasha — The Watcher: Temporal Trending Engine
  *
- * Named after Morgan Freeman's character in Lucy (2014) — the scientist
- * who observes Lucy's transformation with clarity and wisdom, narrating
- * what others cannot perceive. Morgan watches the temporal pulse of the
- * system and surfaces patterns invisible to individual sessions.
+ * Named after Natasha Romanoff (Black Widow), played by Scarlett Johansson —
+ * the master spy who observes everything from the shadows. She sees patterns
+ * others can't, tracks targets across time, and never misses a regression.
  *
  * Three capabilities:
  * 1. **Trending Detection** — Track entity mention frequency across time
@@ -20,7 +19,7 @@
  * - MemoTime (ArXiv 2510.13614): Operator-aware temporal reasoning
  * - MemWeaver (ArXiv 2601.18204): Three-tier memory, 95% context reduction
  *
- * @module morgan-observer
+ * @module natasha-observer
  */
 
 import type {
@@ -30,13 +29,13 @@ import type {
 	RegressionAlert,
 	RegressionSeverity,
 	VelocityMetrics,
-	MorganConfig,
-	MorganDb,
+	NatashaConfig,
+	NatashaDb,
 	SessionCountRow,
 	EntityMentionRow,
 	ErrorFrequencyRow,
-} from "./morgan-types.js";
-import { DEFAULT_MORGAN_CONFIG, TREND_WINDOWS } from "./morgan-types.js";
+} from "./natasha-types.js";
+import { DEFAULT_NATASHA_CONFIG, TREND_WINDOWS } from "./natasha-types.js";
 
 // ─── Time Constants ─────────────────────────────────────────────────────────
 
@@ -60,19 +59,19 @@ const WINDOW_MS: Readonly<Record<TrendWindow, number>> = {
  *
  * @example
  * ```ts
- * const morgan = new MorganObserver(db);
- * const trends = morgan.detectTrends("day");
- * const regressions = morgan.detectRegressions("week");
- * const velocity = morgan.measureVelocity("day");
+ * const natasha = new NatashaObserver(db);
+ * const trends = natasha.detectTrends("day");
+ * const regressions = natasha.detectRegressions("week");
+ * const velocity = natasha.measureVelocity("day");
  * ```
  */
-export class MorganObserver {
-	private readonly db: MorganDb;
-	private readonly config: MorganConfig;
+export class NatashaObserver {
+	private readonly db: NatashaDb;
+	private readonly config: NatashaConfig;
 
-	constructor(db: MorganDb, config?: Partial<MorganConfig>) {
+	constructor(db: NatashaDb, config?: Partial<NatashaConfig>) {
 		this.db = db;
-		this.config = { ...DEFAULT_MORGAN_CONFIG, ...config };
+		this.config = { ...DEFAULT_NATASHA_CONFIG, ...config };
 	}
 
 	// ─── Trending Detection ──────────────────────────────────────────────
@@ -278,7 +277,7 @@ export class MorganObserver {
 	 * @param now - Optional override for "now" (ms).
 	 * @returns Summary object with trends, regressions, and velocity.
 	 */
-	observe(now?: number): MorganSummary {
+	observe(now?: number): NatashaSummary {
 		const trends = this.detectAllTrends(now);
 		const regressions = this.detectRegressions("day", now);
 		const velocity = this.measureVelocity("day", now);
@@ -357,7 +356,7 @@ export class MorganObserver {
 // ─── Summary Type ───────────────────────────────────────────────────────────
 
 /** Complete temporal observation summary. */
-export interface MorganSummary {
+export interface NatashaSummary {
 	/** Trends by time window. */
 	trends: Record<TrendWindow, TrendSignal[]>;
 	/** Detected error regressions (daily window). */

@@ -283,8 +283,8 @@ export type {
 } from "./kala-chakra.js";
 
 /** Temporal trending engine — detects trends, regressions, and velocity across time. */
-export { MorganObserver } from "./morgan-observer.js";
-export type { MorganSummary } from "./morgan-observer.js";
+export { NatashaObserver } from "./natasha-observer.js";
+export type { NatashaSummary } from "./natasha-observer.js";
 export type {
 	TrendWindow,
 	TrendSignal,
@@ -292,10 +292,10 @@ export type {
 	RegressionAlert,
 	RegressionSeverity,
 	VelocityMetrics,
-	MorganConfig,
-	MorganDb,
-} from "./morgan-types.js";
-export { DEFAULT_MORGAN_CONFIG, TREND_WINDOWS } from "./morgan-types.js";
+	NatashaConfig,
+	NatashaDb,
+} from "./natasha-types.js";
+export { DEFAULT_NATASHA_CONFIG, TREND_WINDOWS } from "./natasha-types.js";
 
 /** Five mental fluctuation classifier (pramana, viparyaya, vikalpa, nidra, smriti). */
 export { PanchaVritti, VRITTI_CONFIDENCE_WEIGHTS, VRITTI_TYPES } from "./pancha-vritti.js";
