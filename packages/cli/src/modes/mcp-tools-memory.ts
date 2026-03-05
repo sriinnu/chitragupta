@@ -288,6 +288,9 @@ export function createDaySearchTool(): McpToolHandler {
 /**
  * Create the `chitragupta_context` tool — load memory context for a new session.
  * Returns global facts, project memory, and recent session summaries.
+ *
+ * Accepts optional `providerContextWindow` to scale adaptive memory budget,
+ * and `deviceId` for cross-device session pickup.
  */
 export function createContextTool(projectPath: string): McpToolHandler {
 	return {
@@ -296,15 +299,33 @@ export function createContextTool(projectPath: string): McpToolHandler {
 			description: "Load memory context for a new session. Returns global facts, project memory, and recent session summaries. Call this at the start of every session to get persistent memory.",
 			inputSchema: {
 				type: "object" as const,
-				properties: { project: { type: "string", description: "Project path for project-specific memory. Defaults to current project." } },
+				properties: {
+					project: { type: "string", description: "Project path for project-specific memory. Defaults to current project." },
+					providerContextWindow: {
+						type: "number",
+						description: "Provider context window in tokens (e.g. 200000 for Claude, 128000 for GPT-4). Used to scale adaptive memory budget.",
+					},
+					deviceId: {
+						type: "string",
+						description: "Device identifier for cross-device interrupted-session pickup.",
+					},
+				},
 				required: [],
 			},
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			const project = args.project != null ? String(args.project) : projectPath;
+			const providerContextWindow =
+				typeof args.providerContextWindow === "number" && args.providerContextWindow > 0
+					? args.providerContextWindow
+					: undefined;
+			const deviceId =
+				typeof args.deviceId === "string" && args.deviceId.trim()
+					? args.deviceId.trim()
+					: undefined;
 			try {
 				const bridge = await import("./daemon-bridge.js");
-				const ctx = await bridge.loadContextViaDaemon(project);
+				const ctx = await bridge.loadContextViaDaemon(project, { providerContextWindow, deviceId });
 				if (ctx.itemCount === 0) {
 					return { content: [{ type: "text", text: "No memory context found. This appears to be a fresh start." }], _metadata: { action: "context", itemCount: 0 } };
 				}

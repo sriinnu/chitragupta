@@ -108,10 +108,21 @@ export function registerReadMethods(router: RpcRouter): void {
 		const store = await import("@chitragupta/smriti/session-store");
 		const project = resolveProjectAgainstKnown(projectInput, knownProjectsFromStore(store));
 		if (!project) throw new Error("Missing project");
+
+		// Extract optional adaptive-budget params forwarded from CLI/MCP side.
+		const providerContextWindow =
+			typeof params.providerContextWindow === "number" && params.providerContextWindow > 0
+				? params.providerContextWindow
+				: undefined;
+		const deviceId =
+			typeof params.deviceId === "string" && params.deviceId.trim()
+				? params.deviceId.trim()
+				: undefined;
+
 		const { loadProviderContext } = await import("@chitragupta/smriti/provider-bridge");
-		const ctx = await loadProviderContext(project);
+		const ctx = await loadProviderContext(project, { providerContextWindow, deviceId });
 		return { assembled: ctx.assembled, itemCount: ctx.itemCount };
-	}, "Load provider context for a project");
+	}, "Load provider context for a project — accepts providerContextWindow and deviceId");
 }
 
 // ─── Daemon Introspection ───────────────────────────────────────────────────
