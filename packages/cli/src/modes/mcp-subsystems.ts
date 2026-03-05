@@ -48,6 +48,30 @@ let _actorSystem: ActorSystemLike | undefined;
 let _skillRegistry: SkillRegistryLike | undefined;
 let _skillRegistryBootstrap: Promise<void> | undefined;
 
+/** Natasha Observer singleton (temporal trending). */
+let _natashaObserver: NatashaObserverLike | undefined;
+/** Transcendence Engine singleton (predictive context). */
+let _transcendence: TranscendenceEngineLike | undefined;
+
+/** Duck-typed NatashaObserver interface. */
+interface NatashaObserverLike {
+	detectTrends(window: string, now?: number): unknown[];
+	detectRegressions(window: string, now?: number): unknown[];
+	measureVelocity(window: string, now?: number): unknown;
+	observe(now?: number): unknown;
+}
+
+/** Duck-typed TranscendenceEngine interface. */
+interface TranscendenceEngineLike {
+	ingestTrends(trends: unknown[]): void;
+	ingestRegressions(regressions: unknown[]): void;
+	prefetch(now?: number): unknown;
+	lookup(entity: string, now?: number): unknown;
+	fuzzyLookup(query: string, now?: number): unknown;
+	getStats(): unknown;
+	getPredictions(): unknown[];
+}
+
 /** Lazily create or return the Samiti singleton. */
 export async function getSamiti(): Promise<SamitiLike> {
 	if (!_samiti) {
@@ -327,4 +351,51 @@ export async function getSkillRegistry(): Promise<SkillRegistryLike> {
 		await _skillRegistryBootstrap;
 	}
 	return _skillRegistry;
+}
+
+/** Lazily create or return the NatashaObserver singleton (temporal trending). */
+export async function getNatasha(): Promise<NatashaObserverLike> {
+	if (!_natashaObserver) {
+		const { NatashaObserver } = await import("@chitragupta/smriti");
+		const { DatabaseManager } = await import("@chitragupta/smriti/db/database");
+		const db = DatabaseManager.instance().get("agent");
+		_natashaObserver = new NatashaObserver(db) as unknown as NatashaObserverLike;
+	}
+	return _natashaObserver;
+}
+
+/**
+ * Lazily create or return the TranscendenceEngine singleton (predictive context).
+ * Automatically wires into Natasha for signal ingestion.
+ */
+export async function getTranscendence(): Promise<TranscendenceEngineLike> {
+	if (!_transcendence) {
+		const { TranscendenceEngine } = await import("@chitragupta/smriti");
+		const { DatabaseManager } = await import("@chitragupta/smriti/db/database");
+		const db = DatabaseManager.instance().get("agent");
+		_transcendence = new TranscendenceEngine(db) as unknown as TranscendenceEngineLike;
+	}
+	return _transcendence;
+}
+
+/**
+ * Run a Transcendence prefetch cycle — feeds Natasha signals and pre-caches context.
+ * Call on session start or periodically (e.g., every 5 min).
+ */
+export async function runTranscendencePrefetch(): Promise<unknown> {
+	try {
+		const natasha = await getNatasha();
+		const transcendence = await getTranscendence();
+
+		// Feed Natasha's observations into Transcendence
+		const trends = natasha.detectTrends("day") as unknown[];
+		const regressions = natasha.detectRegressions("day") as unknown[];
+		transcendence.ingestTrends(trends);
+		transcendence.ingestRegressions(regressions);
+
+		return transcendence.prefetch();
+	} catch {
+		// Best-effort — prefetch failure should never block sessions
+		return null;
+	}
 }

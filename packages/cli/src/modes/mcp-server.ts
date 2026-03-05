@@ -315,13 +315,18 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 				return chitraguptaToolToMcp(resolved as unknown as ChitraguptaToolHandler);
 			}
 
-			// Phase 2: Cerebral Expansion — autonomous skill discovery
+			// Phase 2: Cerebral Expansion — autonomous skill discovery + learning
 			try {
 				const expansion = await cerebralHandler(toolName);
 				if (expansion.resolved && expansion.skillName) {
 					process.stderr.write(
-						`[cerebral] Resolved ${toolName} → ${expansion.skillName} ` +
-						`(${expansion.source}, confidence=${expansion.confidence.toFixed(3)})\n`,
+						`[cerebral] Learned ${toolName} → ${expansion.skillName} ` +
+						`(${expansion.source}, confidence=${expansion.confidence.toFixed(3)}). ` +
+						`Will be available next session.\n`,
+					);
+				} else {
+					process.stderr.write(
+						`[cerebral] No match for "${toolName}" (${expansion.rejectionReason ?? "unknown"})\n`,
 					);
 				}
 			} catch (err) {
@@ -366,33 +371,18 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	server.registerResource(createSystemConfigResource(projectPath, transport));
 	server.registerResource(createRecentToolCallsResource(() => server.getRecentCalls()));
 
-	// 4b. State file (best-effort, deferred to not block event loop)
+	// 4b. State file + daemon warm-up (deferred, non-blocking)
 	resetMcpStartedAt();
-	setImmediate(() => {
-		writeChitraguptaState({
-			active: true,
-			project: projectPath,
-			lastTool: "(startup)",
-			sessionId: null,
-			turnCount: null,
-			filesModified: null,
-		});
-	});
-
-	// 4b.1 Warm daemon RPC bridge so first tool call avoids cold connect.
-	setImmediate(() => {
-		void (async () => {
-			try {
-				const { getDaemonClient } = await import("./daemon-bridge.js");
-				await getDaemonClient({ autoStart: true });
-				process.stderr.write("[daemon] RPC bridge warm\n");
-			} catch (err) {
-				process.stderr.write(
-					`[daemon] RPC warm-up skipped: ${err instanceof Error ? err.message : String(err)}\n`,
-				);
-			}
-		})();
-	});
+	setImmediate(() => writeChitraguptaState({
+		active: true, project: projectPath, lastTool: "(startup)",
+		sessionId: null, turnCount: null, filesModified: null,
+	}));
+	setImmediate(() => void import("./daemon-bridge.js").then(async (m) => {
+		await m.getDaemonClient({ autoStart: true });
+		process.stderr.write("[daemon] RPC bridge warm\n");
+	}).catch((err: unknown) => {
+		process.stderr.write(`[daemon] RPC warm-up skipped: ${err instanceof Error ? err.message : String(err)}\n`);
+	}));
 
 	// 4c. Dynamic ToolRegistry (runtime tool registration via plugins)
 	const registry = new ToolRegistry({ strictNamespaces: true, validateSchemas: true });
@@ -413,15 +403,13 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		process.stderr.write(`[extensions] Wire failed: ${err instanceof Error ? err.message : String(err)}\n`);
 	});
 
-	// 4d. EventBridge + MCP notification sink (fire-and-forget)
+	// 4d. EventBridge + MCP notification sink
 	try {
 		const { EventBridge, McpNotificationSink } = await import("@chitragupta/sutra");
-		const eventBridge = new EventBridge();
-		const mcpSink = new McpNotificationSink((n) => server.sendNotification(n));
-		eventBridge.addSink(mcpSink);
-		(server as unknown as Record<string, unknown>)._eventBridge = eventBridge;
+		const eb = new EventBridge();
+		eb.addSink(new McpNotificationSink((n) => server.sendNotification(n)));
+		(server as unknown as Record<string, unknown>)._eventBridge = eb;
 	} catch {
-		// EventBridge is optional — MCP server works without it
 	}
 
 	// 4e. Graceful shutdown — trigger Swapna dream-cycle before exit
@@ -453,4 +441,10 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	} catch (err) {
 		process.stderr.write(`[mesh] Bootstrap skipped: ${err instanceof Error ? err.message : String(err)}\n`);
 	}
+
+	// 7. Transcendence: Warm predictive context cache (best-effort)
+	setImmediate(() => void import("./mcp-subsystems.js").then(async (m) => {
+		const r = await m.runTranscendencePrefetch() as { predictions: unknown[]; cacheSize: number; durationMs: number } | null;
+		if (r) process.stderr.write(`[transcendence] ${r.predictions.length} predictions, cache=${r.cacheSize}, ${r.durationMs}ms\n`);
+	}).catch(() => { /* best-effort */ }));
 }

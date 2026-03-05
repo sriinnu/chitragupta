@@ -373,3 +373,18 @@ export type {
 /** Durable episodic developer memory for error pattern recall and experience tagging. */
 export { EpisodicMemoryStore } from "./episodic-store.js";
 export type { Episode, EpisodeInput, EpisodicQuery } from "./episodic-types.js";
+
+/** Predictive context pre-fetcher — anticipates memory needs before they're requested. */
+export { TranscendenceEngine } from "./transcendence.js";
+export type {
+	ContextPrediction,
+	CachedContext,
+	PrefetchResult,
+	CacheStats,
+	TemporalPattern,
+	CoOccurrence,
+	TranscendenceConfig,
+	TranscendenceDb,
+	PredictionSource,
+} from "./transcendence-types.js";
+export { DEFAULT_TRANSCENDENCE_CONFIG } from "./transcendence-types.js";
