@@ -1,10 +1,22 @@
-# @chitragupta/cli
+<p align="center">
+  <img src="assets/logo.svg" alt="Chitragupta CLI" width="120" />
+</p>
 
-**CLI and MCP server for the Chitragupta AI agent platform.**
+<h1 align="center">⛩ @chitragupta/cli</h1>
 
-Chitragupta is a persistent memory and observability layer for AI coding agents. The CLI package is the unified entry point: it runs as a standalone interactive agent, a single-shot task runner, an MCP server for Claude Code / Cursor / any MCP client, or a full HTTP API server.
+<p align="center"><strong>CLI and MCP server for the Chitragupta AI agent platform</strong></p>
 
-> **npm**: `@chitragupta/cli` | **Node**: >=22 | **License**: MIT
+<p align="center">
+  <a href="https://www.npmjs.com/package/@yugenlab/chitragupta"><img src="https://img.shields.io/npm/v/@yugenlab/chitragupta" alt="npm" /></a>
+  <img src="https://img.shields.io/badge/tests-12%2C022-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/MCP_tools-60%2B-blue" alt="MCP Tools" />
+  <img src="https://img.shields.io/badge/node-%3E%3D22-blue" alt="Node" />
+  <a href="../../LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
+</p>
+
+---
+
+Persistent memory and observability layer for AI coding agents. The CLI is the unified entry point: interactive agent, single-shot task runner, MCP server for Claude Code / Cursor / any MCP client, or full HTTP API server.
 
 ---
 
@@ -502,6 +514,11 @@ await runMcpServerMode({
 
 ## Links
 
-- [GitHub Repository](https://github.com/sriinnu/chitragupta)
+- [npm](https://www.npmjs.com/package/@yugenlab/chitragupta)
+- [GitHub](https://github.com/sriinnu/chitragupta)
 - [Issues](https://github.com/sriinnu/chitragupta/issues)
-- [Chitragupta Monorepo Root](../../README.md)
+- [Monorepo Root](../../README.md)
+
+## License
+
+MIT
