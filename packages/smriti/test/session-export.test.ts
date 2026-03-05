@@ -1,12 +1,34 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import crypto from "node:crypto";
 import {
 	exportSessionToJson,
 	exportSessionToMarkdown,
 	importSessionFromJson,
 	detectExportFormat,
+	importCrossMachineSnapshot,
 } from "@chitragupta/smriti";
 import type { Session, SessionMeta, SessionTurn, SessionToolCall } from "@chitragupta/smriti";
-import type { ExportedSession } from "@chitragupta/smriti";
+import type { ExportedSession, CrossMachineSnapshot, SnapshotSession } from "@chitragupta/smriti";
+
+// ─── Core mock (cross-machine sync tests) ───────────────────────────────────
+
+// Must be hoisted — vi.mock is hoisted to the top of the file by Vitest.
+vi.mock("@chitragupta/core", () => {
+	let _home = "/tmp/test-smriti-home";
+	return {
+		getChitraguptaHome: () => _home,
+		_setHome: (h: string) => { _home = h; },
+		SessionError: class SessionError extends Error {
+			constructor(msg: string) {
+				super(msg);
+				this.name = "SessionError";
+			}
+		},
+	};
+});
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -648,5 +670,210 @@ describe("detectExportFormat", () => {
 
 	it('detects markdown with leading whitespace before # Session:', () => {
 		expect(detectExportFormat("  \n# Session: Test")).toBe("markdown");
+	});
+});
+
+// ─── Cross-machine sync: session export/import ──────────────────────────────
+
+/**
+ * These tests exercise the session-level fields in CrossMachineSnapshot:
+ *   - Export: snapshot.sessions array (optional, backward compat)
+ *   - Import: write session .md files to local store, skip if ID exists
+ *
+ * We use a real tmpdir and mock getChitraguptaHome to point to it.
+ */
+describe("cross-machine sync: session export/import", () => {
+	let tmpDir: string;
+
+	// Resolve the mocked @chitragupta/core _setHome helper.
+	async function setHome(dir: string): Promise<void> {
+		const core = await import("@chitragupta/core");
+		(core as unknown as { _setHome: (h: string) => void })._setHome(dir);
+	}
+
+	// Build a minimal CrossMachineSnapshot that carries session entries.
+	function makeSnapshotWithSessions(sessions: SnapshotSession[]): CrossMachineSnapshot {
+		return {
+			version: 1,
+			exportedAt: new Date().toISOString(),
+			source: { machine: "remote-host", platform: "linux-x64", home: "/remote/.chitragupta" },
+			files: [],
+			sessions,
+		};
+	}
+
+	// Resolve the destination path for a session file under tmpDir.
+	function sessionPath(project: string, id: string): string {
+		const projHash = crypto
+			.createHash("sha256")
+			.update(project)
+			.digest("hex")
+			.slice(0, 12);
+		const dateMatch = id.match(/^session-(\d{4})-(\d{2})-\d{2}/);
+		if (dateMatch) {
+			return path.join(tmpDir, "sessions", projHash, dateMatch[1], dateMatch[2], `${id}.md`);
+		}
+		return path.join(tmpDir, "sessions", projHash, `${id}.md`);
+	}
+
+	beforeEach(async () => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "smriti-sync-test-"));
+		await setHome(tmpDir);
+	});
+
+	afterEach(() => {
+		try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+	});
+
+	it("import writes new session .md files to local sessions store", async () => {
+		const project = "/home/user/myproject";
+		const id = "session-2026-03-05-abc12345";
+		const content = "---\nid: session-2026-03-05-abc12345\ntitle: Test\n---\n\nHello";
+
+		const snapshot = makeSnapshotWithSessions([
+			{ id, project, updatedAt: "2026-03-05T10:00:00.000Z", content },
+		]);
+
+		const result = importCrossMachineSnapshot(snapshot);
+
+		// One session created.
+		expect(result.totals.created).toBe(1);
+		// File should exist on disk.
+		const dest = sessionPath(project, id);
+		expect(fs.existsSync(dest)).toBe(true);
+		expect(fs.readFileSync(dest, "utf-8")).toBe(content);
+	});
+
+	it("import skips session if ID already exists locally (safe strategy)", async () => {
+		const project = "/home/user/myproject";
+		const id = "session-2026-03-05-abc12345";
+		const existing = "---\nid: session-2026-03-05-abc12345\ntitle: Local\n---\n\nLocal content";
+		const remote = "---\nid: session-2026-03-05-abc12345\ntitle: Remote\n---\n\nRemote content";
+
+		// Pre-write the session locally.
+		const dest = sessionPath(project, id);
+		fs.mkdirSync(path.dirname(dest), { recursive: true });
+		fs.writeFileSync(dest, existing, "utf-8");
+
+		const snapshot = makeSnapshotWithSessions([
+			{ id, project, updatedAt: "2026-03-05T12:00:00.000Z", content: remote },
+		]);
+
+		importCrossMachineSnapshot(snapshot);
+
+		// Local file must be untouched.
+		expect(fs.readFileSync(dest, "utf-8")).toBe(existing);
+	});
+
+	it("import writes only new sessions when mix of new and existing", async () => {
+		const project = "/home/user/myproject";
+		const existingId = "session-2026-03-05-aaa11111";
+		const newId = "session-2026-03-05-bbb22222";
+		const existingContent = "---\nid: session-2026-03-05-aaa11111\n---\n";
+		const newContent = "---\nid: session-2026-03-05-bbb22222\n---\n";
+
+		// Pre-write the existing session.
+		const existingDest = sessionPath(project, existingId);
+		fs.mkdirSync(path.dirname(existingDest), { recursive: true });
+		fs.writeFileSync(existingDest, existingContent, "utf-8");
+
+		const snapshot = makeSnapshotWithSessions([
+			{ id: existingId, project, updatedAt: "2026-03-05T10:00:00.000Z", content: "overwrite?" },
+			{ id: newId, project, updatedAt: "2026-03-05T11:00:00.000Z", content: newContent },
+		]);
+
+		const result = importCrossMachineSnapshot(snapshot);
+
+		// Only the new session should be created.
+		expect(result.totals.created).toBe(1);
+		// Existing unchanged.
+		expect(fs.readFileSync(existingDest, "utf-8")).toBe(existingContent);
+		// New session written.
+		const newDest = sessionPath(project, newId);
+		expect(fs.existsSync(newDest)).toBe(true);
+		expect(fs.readFileSync(newDest, "utf-8")).toBe(newContent);
+	});
+
+	it("import is safe with no sessions field (backward compat — old snapshot format)", async () => {
+		const snapshot: CrossMachineSnapshot = {
+			version: 1,
+			exportedAt: new Date().toISOString(),
+			source: { machine: "old-host", platform: "linux-x64", home: "/old/.chitragupta" },
+			files: [],
+			// sessions field is absent — older snapshot format
+		};
+
+		const result = importCrossMachineSnapshot(snapshot);
+
+		expect(result.totals.errors).toBe(0);
+		expect(result.totals.created).toBe(0);
+	});
+
+	it("import with empty sessions array is a no-op", async () => {
+		const snapshot = makeSnapshotWithSessions([]);
+		const result = importCrossMachineSnapshot(snapshot);
+
+		expect(result.totals.created).toBe(0);
+		expect(result.totals.errors).toBe(0);
+	});
+
+	it("import creates parent directories for session files", async () => {
+		const project = "/home/user/deep/nested/project";
+		const id = "session-2026-03-05-ccc33333";
+		const content = "---\nid: session-2026-03-05-ccc33333\n---\n";
+
+		const snapshot = makeSnapshotWithSessions([
+			{ id, project, updatedAt: "2026-03-05T10:00:00.000Z", content },
+		]);
+
+		// No directories pre-created — import must create them.
+		importCrossMachineSnapshot(snapshot);
+
+		const dest = sessionPath(project, id);
+		expect(fs.existsSync(dest)).toBe(true);
+	});
+
+	it("import dry-run does not write session files to disk", async () => {
+		const project = "/home/user/myproject";
+		const id = "session-2026-03-05-ddd44444";
+		const content = "---\nid: session-2026-03-05-ddd44444\n---\n";
+
+		const snapshot = makeSnapshotWithSessions([
+			{ id, project, updatedAt: "2026-03-05T10:00:00.000Z", content },
+		]);
+
+		const result = importCrossMachineSnapshot(snapshot, { dryRun: true });
+
+		// Dry-run still reports what would be created.
+		expect(result.dryRun).toBe(true);
+		expect(result.totals.created).toBe(1);
+		// But no file was written.
+		const dest = sessionPath(project, id);
+		expect(fs.existsSync(dest)).toBe(false);
+	});
+
+	it("snapshot sessions field is an array when sessions exist", async () => {
+		const { createCrossMachineSnapshot } = await import("@chitragupta/smriti");
+		// With no sessions on disk, sessions array should be empty (not undefined).
+		const snapshot = createCrossMachineSnapshot({
+			includeDays: false,
+			includeMemory: false,
+			includeSessions: true,
+		});
+
+		expect(Array.isArray(snapshot.sessions)).toBe(true);
+	});
+
+	it("snapshot omits sessions field when includeSessions is false", async () => {
+		const { createCrossMachineSnapshot } = await import("@chitragupta/smriti");
+		// Must include at least one other category — use includeDays (produces empty
+		// files list since tmpDir has no days on disk).
+		const snapshot = createCrossMachineSnapshot({
+			includeDays: true,
+			includeMemory: false,
+			includeSessions: false,
+		});
+
+		expect(snapshot.sessions).toBeUndefined();
 	});
 });
