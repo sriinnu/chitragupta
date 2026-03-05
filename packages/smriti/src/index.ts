@@ -108,6 +108,7 @@ export type {
 	CrossMachineSyncTotals,
 	CrossMachineImportResult,
 	CrossMachineSyncStatus,
+	SnapshotSession,
 } from "./cross-machine-sync.js";
 
 /** Branch sessions into tree structures for parallel conversation exploration. */
