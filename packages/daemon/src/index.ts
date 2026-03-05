@@ -32,6 +32,12 @@ export {
 // Public API: watchdog (self-healing process supervisor)
 export { ScarlettWatchdog, startScarlett, stopScarlett, type ScarlettConfig, type ScarlettEvents } from "./scarlett-watchdog.js";
 
+// Public API: signal bridge (Wire 1 — InternalScarlett → TranscendenceEngine)
+export {
+	injectProbeSignal, injectCycleSignals,
+	type TranscendenceEngineRef as ScarlettTranscendenceRef, type RegressionAlertLike,
+} from "./scarlett-signal-bridge.js";
+
 // Public API: internal health guardian (subsystem probes inside the daemon)
 export {
 	InternalScarlett, startInternalScarlett, stopInternalScarlett,
