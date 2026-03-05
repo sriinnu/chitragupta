@@ -17,6 +17,8 @@ import { DaemonClient, DaemonUnavailableError, type DaemonClientConfig } from "@
 import { HealthState } from "@chitragupta/daemon/resilience";
 import { createLogger } from "@chitragupta/core";
 import { directFallback } from "./daemon-bridge-fallback.js";
+import type { LoadContextOptions } from "./daemon-bridge-types.js";
+export type { LoadContextOptions } from "./daemon-bridge-types.js";
 
 const log = createLogger("cli:daemon-bridge");
 
@@ -204,8 +206,6 @@ export async function daemonCall<T = unknown>(
 	}
 }
 
-// ─── Session Proxy Methods ──────────────────────────────────────────────────
-
 /** List sessions via daemon. */
 export async function listSessions(project?: string): Promise<Array<Record<string, unknown>>> {
 	const result = await daemonCall<{ sessions: Array<Record<string, unknown>> }>(
@@ -268,8 +268,6 @@ export async function listTurns(
 	return result.turns;
 }
 
-// ─── Memory Proxy Methods ───────────────────────────────────────────────────
-
 /** Full-text search across turns. */
 export async function memorySearch(
 	query: string,
@@ -292,8 +290,6 @@ export async function memoryRecall(
 	);
 	return result.results;
 }
-
-// ─── Read-Through Methods (memory files, day files, context) ─────────────────
 
 /** Search memory markdown files via daemon. */
 export async function searchMemoryFiles(
@@ -337,14 +333,6 @@ export async function searchDayFilesViaDaemon(
 		"day.search", { query, limit: opts?.limit ?? 10 },
 	);
 	return result.results;
-}
-
-/** Options forwarded to the daemon's context.load RPC. */
-export interface LoadContextOptions {
-	/** Provider context window size in tokens (for adaptive budget). */
-	providerContextWindow?: number;
-	/** Device identifier for cross-device session pickup. */
-	deviceId?: string;
 }
 
 /**
@@ -416,8 +404,6 @@ export async function getSessionsModifiedSinceViaDaemon(project: string, sinceMs
 	return (await daemonCall<{ sessions: Array<Record<string, unknown>> }>("session.modified_since", { project, sinceMs })).sessions;
 }
 
-// ─── Write Methods (single-writer through daemon) ───────────────────────────
-
 /** Extract and save facts from text through daemon (single-writer). */
 export async function extractFacts(
 	text: string,
@@ -434,8 +420,6 @@ export async function appendMemoryViaDaemon(
 ): Promise<void> {
 	await daemonCall("memory.append", { scopeType, entry, scopePath });
 }
-
-// ─── Daemon Health ──────────────────────────────────────────────────────────
 
 /** Ping the daemon. */
 export async function ping(): Promise<boolean> {
