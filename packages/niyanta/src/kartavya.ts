@@ -12,6 +12,9 @@ import {
 	persistEngine, restoreEngine, computeEngineStats,
 } from "./kartavya-lifecycle.js";
 import type { EngineStats } from "./kartavya-lifecycle.js";
+import { deliberateWithSabha } from "@chitragupta/sutra";
+import type { SabhaProvider, SabhaDeliberateOptions } from "@chitragupta/sutra";
+export type { SabhaProvider } from "@chitragupta/sutra";
 
 // ─── FNV-1a ─────────────────────────────────────────────────────────────────
 
@@ -104,6 +107,18 @@ export interface KartavyaConfig {
 	maxExecutionsPerHour: number;
 	/** Enable automatic vasana-to-kartavya promotion. Default: true. */
 	enableAutoPromotion: boolean;
+	/**
+	 * Optional Sabha LLM provider. When set, niyamas with confidence above
+	 * `sabhaRiskThreshold` are routed through Sabha deliberation before approval.
+	 */
+	sabhaProvider?: SabhaProvider;
+	/**
+	 * Confidence threshold above which Sabha deliberation is required.
+	 * Default: 0.7. High-confidence proposals carry more risk — Sabha reviews them.
+	 */
+	sabhaRiskThreshold: number;
+	/** Options forwarded to Sabha.deliberate() on each consultation. */
+	sabhaOptions?: SabhaDeliberateOptions;
 }
 
 /** Context supplied to trigger evaluation. */
@@ -133,6 +148,7 @@ const DEFAULT_CONFIG: KartavyaConfig = {
 	defaultCooldownMs: 300_000,
 	maxExecutionsPerHour: 10,
 	enableAutoPromotion: true,
+	sabhaRiskThreshold: 0.7,
 };
 
 function clampConfig(cfg: KartavyaConfig): KartavyaConfig {
@@ -236,6 +252,46 @@ export class KartavyaEngine {
 
 		this.kartavyas.set(kartavyaId, kartavya);
 		return kartavya;
+	}
+
+	/**
+	 * Approve a niyama, routing through Sabha deliberation first if:
+	 * - `sabhaProvider` is configured in KartavyaConfig, AND
+	 * - The proposal confidence >= `sabhaRiskThreshold`
+	 *
+	 * Sabha deliberation runs with the proposal's name + evidence as context.
+	 * If Sabha rejects it, throws `SabhaRejectedError` and the proposal stays pending.
+	 * If Sabha approves or returns no-consensus, proceeds with normal approval.
+	 *
+	 * @throws {SabhaRejectedError} when Sabha votes to reject
+	 * @throws {Error} on provider failure (proposal stays pending, re-triable)
+	 */
+	async approveNiyamaWithSabha(niyamaId: string): Promise<Kartavya> {
+		const proposal = this.proposals.get(niyamaId);
+		if (!proposal) throw new Error(`Niyama proposal '${niyamaId}' not found`);
+
+		const needsSabha =
+			this.config.sabhaProvider &&
+			proposal.confidence >= this.config.sabhaRiskThreshold;
+
+		if (needsSabha && this.config.sabhaProvider) {
+			const context = [
+				`Action: ${proposal.name}`,
+				`Description: ${proposal.description}`,
+				`Confidence: ${proposal.confidence.toFixed(3)}`,
+				`Evidence: ${proposal.evidence.join("; ")}`,
+			].join("\n");
+
+			// SabhaRejectedError propagates — proposal stays pending
+			await deliberateWithSabha(
+				proposal.name,
+				context,
+				this.config.sabhaProvider,
+				this.config.sabhaOptions,
+			);
+		}
+
+		return this.approveNiyama(niyamaId);
 	}
 
 	/** Reject a niyama proposal. @throws If not found or not pending. */

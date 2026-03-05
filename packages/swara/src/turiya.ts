@@ -31,6 +31,7 @@ import {
 	preferenceBlendedScore,
 } from "./turiya-math.js";
 import { clamp, buildContext } from "./turiya-context.js";
+import { heuristicClassify, buildRationale, dominantDimension } from "./turiya-bandit.js";
 
 // Re-export all types for backwards compatibility
 export type {
@@ -355,89 +356,19 @@ export class TuriyaRouter {
 		];
 	}
 
-	/**
-	 * Heuristic classification for cold start (before enough data for LinUCB).
-	 *
-	 * IMPORTANT: no-llm is only for explicit memory/session/status/help commands.
-	 * All other messages (questions, chat, coding, math, explanations) must go
-	 * to an LLM tier. When in doubt, send to haiku — no-llm is the exception.
-	 */
+	/** @see turiya-bandit.heuristicClassify */
 	private heuristicClassify(context: TuriyaContext): TuriyaDecision {
-		const { complexity, urgency, precision, codeRatio, creativity } = context;
-		const score = complexity * 0.25 + precision * 0.2 + codeRatio * 0.2
-			+ creativity * 0.2 + urgency * 0.15;
-
-		let tier: TuriyaTier;
-		let rationale: string;
-
-		// no-llm is ONLY valid when all feature dimensions are near-zero AND
-		// conversationDepth is low — this means pure tool dispatch commands.
-		// A score of 0.0 exactly means zero signal from all dimensions.
-		const allDimensionsNearZero = complexity < 0.01 && urgency < 0.01
-			&& precision < 0.01 && codeRatio < 0.01 && creativity < 0.01
-			&& context.conversationDepth < 0.01;
-
-		if (allDimensionsNearZero) {
-			tier = "no-llm";
-			rationale = "Pure tool dispatch — all context dimensions near zero.";
-		} else if (score < 0.25) {
-			tier = "haiku";
-			rationale = "Simple request — lightweight model suffices.";
-		} else if (score < 0.55) {
-			tier = "sonnet";
-			rationale = "Standard request — balanced cost and capability.";
-		} else {
-			tier = "opus";
-			rationale = "Complex request — requires maximum capability.";
-		}
-
-		if (complexity > 0.7) {
-			tier = "opus";
-			rationale = "High complexity detected — routing to strongest model.";
-		}
-
-		return {
-			tier,
-			confidence: 0.6,
-			costEstimate: this.tierCosts[tier],
-			context,
-			rationale: `[heuristic] ${rationale}`,
-			armIndex: ALL_TIERS.indexOf(tier),
-		};
+		return heuristicClassify(context, this.tierCosts);
 	}
 
-	/** Build a human-readable rationale for the routing decision. */
-	private buildRationale(
-		tier: TuriyaTier,
-		context: TuriyaContext,
-		expected: number,
-		uncertainty: number,
-	): string {
-		const dominant = this.dominantDimension(context);
-		const tierLabel = {
-			"no-llm": "tool dispatch (zero cost)",
-			"haiku": "lightweight model",
-			"sonnet": "balanced model",
-			"opus": "maximum capability",
-		}[tier];
-
-		return `${tierLabel} — dominant signal: ${dominant} ` +
-			`(E[r]=${expected.toFixed(3)}, uncertainty=${uncertainty.toFixed(3)})`;
+	/** @see turiya-bandit.buildRationale */
+	private buildRationale(tier: TuriyaTier, context: TuriyaContext, expected: number, uncertainty: number): string {
+		return buildRationale(tier, context, expected, uncertainty);
 	}
 
-	/** Find the dimension with the highest value in the context vector. */
+	/** @see turiya-bandit.dominantDimension */
 	private dominantDimension(ctx: TuriyaContext): string {
-		const dims: Array<[string, number]> = [
-			["complexity", ctx.complexity],
-			["urgency", ctx.urgency],
-			["creativity", ctx.creativity],
-			["precision", ctx.precision],
-			["codeRatio", ctx.codeRatio],
-			["conversationDepth", ctx.conversationDepth],
-			["memoryLoad", ctx.memoryLoad],
-		];
-		dims.sort((a, b) => b[1] - a[1]);
-		return dims[0][0];
+		return dominantDimension(ctx);
 	}
 
 	/** Initialize all arm states to defaults. */

@@ -128,6 +128,16 @@ export type {
 	SabhaConfig,
 } from "./sabha.js";
 
+/** Sabha LLM deliberation — injectable risk gate for high-confidence actions. */
+export { deliberateWithSabha, aggregatePerspectives, SabhaRejectedError } from "./sabha-deliberate.js";
+export type {
+	SabhaProvider,
+	SabhaVerdict,
+	SabhaDeliberateResult,
+	SabhaDeliberatePerspective,
+	SabhaDeliberateOptions,
+} from "./sabha-deliberate.js";
+
 /** Realtime event bridge — fan-out hub for agent events to transport sinks. */
 export { EventBridge } from "./event-bridge.js";
 export type {
