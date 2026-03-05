@@ -180,12 +180,22 @@ export function createRecallTool(): McpToolHandler {
 			}
 
 			try {
+				// Check Transcendence predictive cache first (pre-staged context)
+				let predictedHit: string | null = null;
+				try {
+					const { getTranscendence } = await import("./mcp-subsystems.js");
+					const engine = await getTranscendence();
+					const cached = engine.fuzzyLookup(query) as { entity: string; content: string; source: string } | null;
+					if (cached) predictedHit = `**[Predicted — ${cached.source}]** ${cached.content}\n`;
+				} catch { /* Transcendence optional */ }
+
 				const bridge = await import("./daemon-bridge.js");
 				const results = await bridge.unifiedRecall(query, { limit, project }) as Array<{ score: number; answer: string; primarySource: string; sessionId?: string; date?: string }>;
-				if (results.length === 0) {
+				if (results.length === 0 && !predictedHit) {
 					return { content: [{ type: "text", text: `No recall results for: ${query}` }], _metadata: { action: "recall", query } };
 				}
 				const lines: string[] = [`Recall results for "${query}":\n`];
+				if (predictedHit) lines.push(predictedHit);
 				for (let i = 0; i < results.length; i++) {
 					const r = results[i];
 					lines.push(`**[${i + 1}]** (${(r.score * 100).toFixed(0)}% match, via ${r.primarySource})`);
@@ -194,7 +204,7 @@ export function createRecallTool(): McpToolHandler {
 					if (r.date) lines.push(`  Date: ${r.date}`);
 					lines.push("");
 				}
-				return { content: [{ type: "text", text: truncateOutput(lines.join("\n")) }], _metadata: { action: "recall", query, resultCount: results.length, typed: { query, results: results.map((r) => ({ score: r.score, answer: r.answer, source: r.primarySource, sessionId: r.sessionId })) } } };
+				return { content: [{ type: "text", text: truncateOutput(lines.join("\n")) }], _metadata: { action: "recall", query, resultCount: results.length + (predictedHit ? 1 : 0), typed: { query, predicted: !!predictedHit, results: results.map((r) => ({ score: r.score, answer: r.answer, source: r.primarySource, sessionId: r.sessionId })) } } };
 			} catch (err) {
 				return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
 			}

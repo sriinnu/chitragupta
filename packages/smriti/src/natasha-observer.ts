@@ -90,13 +90,13 @@ export class NatashaObserver {
 	detectTrends(window: TrendWindow, now?: number): TrendSignal[] {
 		const ts = now ?? Date.now();
 		const windowMs = WINDOW_MS[window];
-		const currentStart = new Date(ts - windowMs).toISOString();
-		const currentEnd = new Date(ts).toISOString();
-		const prevStart = new Date(ts - 2 * windowMs).toISOString();
-		const prevEnd = currentStart;
+		const currentStartMs = ts - windowMs;
+		const currentEndMs = ts;
+		const prevStartMs = ts - 2 * windowMs;
+		const prevEndMs = currentStartMs;
 
-		const current = this.queryEntityMentions(currentStart, currentEnd);
-		const previous = this.queryEntityMentions(prevStart, prevEnd);
+		const current = this.queryEntityMentions(currentStartMs, currentEndMs);
+		const previous = this.queryEntityMentions(prevStartMs, prevEndMs);
 
 		const prevMap = new Map(previous.map((r) => [r.entity, r.cnt]));
 		const signals: TrendSignal[] = [];
@@ -235,16 +235,18 @@ export class NatashaObserver {
 	measureVelocity(window: TrendWindow, now?: number): VelocityMetrics {
 		const ts = now ?? Date.now();
 		const windowMs = WINDOW_MS[window];
-		const currentStart = new Date(ts - windowMs).toISOString();
-		const currentEnd = new Date(ts).toISOString();
-		const prevStart = new Date(ts - 2 * windowMs).toISOString();
-		const prevEnd = currentStart;
+		const currentStartMs = ts - windowMs;
+		const currentEndMs = ts;
+		const currentStart = new Date(currentStartMs).toISOString();
+		const currentEnd = new Date(currentEndMs).toISOString();
+		const prevStartMs = ts - 2 * windowMs;
+		const prevEndMs = currentStartMs;
 
-		const currentSessions = this.querySessionCount(currentStart, currentEnd);
-		const prevSessions = this.querySessionCount(prevStart, prevEnd);
+		const currentSessions = this.querySessionCount(currentStartMs, currentEndMs);
+		const prevSessions = this.querySessionCount(prevStartMs, prevEndMs);
 
-		const currentTurns = this.queryTurnCount(currentStart, currentEnd);
-		const prevTurns = this.queryTurnCount(prevStart, prevEnd);
+		const currentTurns = this.queryTurnCount(currentStartMs, currentEndMs);
+		const prevTurns = this.queryTurnCount(prevStartMs, prevEndMs);
 
 		const avgTurns = currentSessions > 0
 			? currentTurns / currentSessions
@@ -292,19 +294,18 @@ export class NatashaObserver {
 
 	// ─── Database Queries ────────────────────────────────────────────────
 
-	/** Query entity mentions from memory entries within a time range. */
-	private queryEntityMentions(start: string, end: string): EntityMentionRow[] {
+	/** Query entity mentions from akasha traces within a time range (epoch ms). */
+	private queryEntityMentions(startMs: number, endMs: number): EntityMentionRow[] {
 		try {
 			return this.db.prepare(`
-				SELECT content AS entity, COUNT(*) AS cnt
-				FROM memory
-				WHERE scope = 'project'
-				  AND updated_at >= ? AND updated_at <= ?
-				GROUP BY content
+				SELECT topic AS entity, COUNT(*) AS cnt
+				FROM akasha_traces
+				WHERE created_at >= ? AND created_at <= ?
+				GROUP BY topic
 				HAVING cnt >= 1
 				ORDER BY cnt DESC
 				LIMIT 50
-			`).all(start, end) as EntityMentionRow[];
+			`).all(startMs, endMs) as EntityMentionRow[];
 		} catch {
 			return [];
 		}
@@ -328,24 +329,24 @@ export class NatashaObserver {
 		}
 	}
 
-	/** Query session count within a time range. */
-	private querySessionCount(start: string, end: string): number {
+	/** Query session count within a time range (epoch ms). */
+	private querySessionCount(startMs: number, endMs: number): number {
 		try {
 			const row = this.db.prepare(
-				`SELECT COUNT(*) AS cnt FROM sessions WHERE created >= ? AND created <= ?`,
-			).get(start, end) as SessionCountRow | undefined;
+				`SELECT COUNT(*) AS cnt FROM sessions WHERE created_at >= ? AND created_at <= ?`,
+			).get(startMs, endMs) as SessionCountRow | undefined;
 			return row?.cnt ?? 0;
 		} catch {
 			return 0;
 		}
 	}
 
-	/** Query total turn count within a time range. */
-	private queryTurnCount(start: string, end: string): number {
+	/** Query total turn count within a time range (epoch ms). */
+	private queryTurnCount(startMs: number, endMs: number): number {
 		try {
 			const row = this.db.prepare(
-				`SELECT COALESCE(SUM(turn_count), 0) AS cnt FROM sessions WHERE created >= ? AND created <= ?`,
-			).get(start, end) as SessionCountRow | undefined;
+				`SELECT COALESCE(SUM(turn_count), 0) AS cnt FROM sessions WHERE created_at >= ? AND created_at <= ?`,
+			).get(startMs, endMs) as SessionCountRow | undefined;
 			return row?.cnt ?? 0;
 		} catch {
 			return 0;

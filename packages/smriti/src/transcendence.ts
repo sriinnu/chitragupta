@@ -183,7 +183,10 @@ export class TranscendenceEngine {
 		return this.trendSignals
 			.filter((t) => t.direction === "rising" && t.confidence >= this.config.minTrendConfidence)
 			.map((t) => ({
-				entity: t.entity, confidence: clamp(t.confidence * w + (t.changePercent / 200) * w),
+				entity: t.entity, confidence: clamp(
+					t.confidence * w +
+					clamp(t.changePercent / 200) * w * Math.min(1, t.currentCount / 3),
+				),
 				source: "trend" as PredictionSource,
 				evidence: `Rising ${t.changePercent}% in ${t.window} (${t.currentCount} mentions)`,
 				predictedAt: new Date(ts).toISOString(), validWindow: t.window,
@@ -232,9 +235,9 @@ export class TranscendenceEngine {
 		return coocs
 			.filter((co) => active.has(co.entityA.toLowerCase()))
 			.map((co) => ({
-				entity: co.entityB, confidence: clamp(co.probability * w),
+				entity: co.entityB, confidence: clamp(co.strength * w),
 				source: "cooccurrence" as PredictionSource,
-				evidence: `Co-occurs with "${co.entityA}" (${co.count}×, p=${co.probability.toFixed(2)})`,
+				evidence: `Co-occurs with "${co.entityA}" (${co.count}×, strength=${co.strength.toFixed(2)})`,
 				predictedAt: new Date(ts).toISOString(), validWindow: "day" as const,
 			}));
 	}

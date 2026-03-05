@@ -21,7 +21,7 @@ function createMockDb(overrides?: {
 				all(..._params: unknown[]) {
 					if (sql.includes("strftime")) return overrides?.temporalEntities ?? [];
 					if (sql.includes("JOIN")) return overrides?.coOccurrences ?? [];
-					if (sql.includes("MAX(updated_at)")) return overrides?.recentMemory ?? [];
+					if (sql.includes("MAX(created_at)")) return overrides?.recentMemory ?? [];
 					return [];
 				},
 				get() {
