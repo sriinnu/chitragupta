@@ -1,5 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <circle cx="32" cy="32" r="30" fill="#1e293b"/>
-  <polyline points="20,28 28,34 20,40" fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <line x1="32" y1="40" x2="44" y2="40" stroke="#06b6d4" stroke-width="2.5" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Dark background circle -->
+  <circle cx="64" cy="64" r="60" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" stroke-opacity="0.4"/>
+
+  <!-- Torii gate structure -->
+  <!-- Pillars -->
+  <line x1="38" y1="38" x2="38" y2="82" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>
+  <line x1="90" y1="38" x2="90" y2="82" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>
+  <!-- Top beam (kasagi) -->
+  <line x1="30" y1="38" x2="98" y2="38" stroke="#f59e0b" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- Second beam (nuki) -->
+  <line x1="34" y1="46" x2="94" y2="46" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Terminal prompt inside the gate -->
+  <polyline points="48,60 56,66 48,72" fill="none" stroke="#06b6d4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="60" y1="72" x2="78" y2="72" stroke="#06b6d4" stroke-width="2.5" stroke-linecap="round"/>
+
+  <!-- Pillar bases (nemaki) -->
+  <line x1="32" y1="82" x2="44" y2="82" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+  <line x1="84" y1="82" x2="96" y2="82" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Subtle inner glow -->
+  <circle cx="64" cy="60" r="22" fill="#f59e0b" fill-opacity="0.04"/>
+
+  <!-- Outer yantra ring -->
+  <circle cx="64" cy="64" r="56" fill="none" stroke="#f59e0b" stroke-width="0.6" stroke-opacity="0.15"/>
 </svg>
