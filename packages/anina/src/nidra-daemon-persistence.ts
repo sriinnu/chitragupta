@@ -20,8 +20,15 @@ export type DreamProgressFn = (phase: SwapnaPhase, pct: number) => void;
 /** Async handler invoked when entering the DREAMING state. */
 export type DreamHandler = (progress: DreamProgressFn) => Promise<void>;
 
-/** Async handler invoked when entering the DEEP_SLEEP state. */
+/** Async handler invoked when entering the DEEP_SLEEP state (legacy single-pass). */
 export type DeepSleepHandler = () => Promise<void>;
+
+/**
+ * Async handler invoked during DEEP_SLEEP for multi-session Swapna consolidation.
+ * Receives the array of session IDs accumulated since the last DEEP_SLEEP.
+ * When registered, it replaces the legacy `DeepSleepHandler` for DEEP_SLEEP runs.
+ */
+export type DeepSleepConsolidationHandler = (sessionIds: readonly string[]) => Promise<void>;
 
 /** Internal daemon state bag passed to persistence functions. */
 export interface NidraDaemonState {
@@ -34,6 +41,12 @@ export interface NidraDaemonState {
 	consolidationProgress: number;
 	startedAt: number;
 	running: boolean;
+	/** Consecutive DREAMING cycles where no new sessions were seen. */
+	consecutiveIdleDreamCycles: number;
+	/** Session count accumulated since last DEEP_SLEEP. */
+	sessionsProcessedSinceDeepSleep: number;
+	/** Pending session IDs for multi-session DEEP_SLEEP consolidation. */
+	pendingSessionIds: string[];
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -131,6 +144,9 @@ export function buildNidraSnapshot(s: NidraDaemonState): NidraSnapshot {
 		consolidationPhase: s.consolidationPhase,
 		consolidationProgress: s.consolidationProgress,
 		uptime: s.running ? now - s.startedAt : 0,
+		consecutiveIdleDreamCycles: s.consecutiveIdleDreamCycles,
+		sessionsProcessedSinceDeepSleep: s.sessionsProcessedSinceDeepSleep,
+		pendingSessionIds: [...s.pendingSessionIds],
 	};
 }
 
