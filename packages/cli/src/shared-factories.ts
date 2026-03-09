@@ -182,6 +182,9 @@ export function createToolNotFoundResolver(params: ToolNotFoundResolverParams): 
 	};
 }
 
+// Re-export Sabha provider factory (Wire 8)
+export { createSabhaProvider } from "./sabha-provider-factory.js";
+
 // ─── createPolicyAdapter ────────────────────────────────────────────────────
 
 /**
@@ -290,11 +293,12 @@ export async function createMeshInfrastructure(
 
 	// ActorSystem for P2P mesh
 	try {
-		const { ActorSystem } = await import("@chitragupta/sutra");
-		const system = new ActorSystem({ maxMailboxSize: 5_000 });
-		system.start();
+		const { ensureSharedMeshRuntime, shutdownSharedMeshRuntime } = await import("./shared-mesh-runtime.js");
+		const system = await ensureSharedMeshRuntime();
 		result.actorSystem = system as unknown as import("@chitragupta/anina").MeshActorSystem;
-		result.actorSystemShutdown = () => system.shutdown();
+		result.actorSystemShutdown = () => {
+			void shutdownSharedMeshRuntime();
+		};
 	} catch {
 		// ActorSystem is optional
 	}

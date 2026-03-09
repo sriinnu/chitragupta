@@ -6,6 +6,7 @@ export type { CompactionConfig, CompactionTier } from "./context-manager.js";
 export { SteeringManager } from "./steering.js";
 export type { SteeringInstruction, SteeringPriority, SteeringMode } from "./steering.js";
 export { MemoryBridge } from "./memory-bridge.js";
+export type { MemoryBridgeConfig, MemoryBridgePersistence } from "./memory-bridge.js";
 export {
 	MAX_SUB_AGENTS,
 	MAX_AGENT_DEPTH,
@@ -175,6 +176,8 @@ export type {
 // ─── Triguna Actuation ──────────────────────────────────────────────────────
 export { TrigunaActuator } from "./triguna-actuator.js";
 export type { TrigunaActuatorConfig } from "./triguna-actuator.js";
+export { deriveTrigunaRoutingInfluence } from "./triguna-routing.js";
+export type { TrigunaRoutingInfluence, RoutingTier, RoutingComplexity } from "./triguna-routing.js";
 
 // ─── Safe Execution Utilities ────────────────────────────────────────────────
 export { safeExecSync, validateCommand, parseCommand } from "./safe-exec.js";

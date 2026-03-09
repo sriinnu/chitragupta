@@ -26,12 +26,51 @@ cd chitragupta
 # Install all workspace dependencies
 pnpm install
 
-# Build all 16 packages (in dependency order)
+# Build all workspace packages (in dependency order)
 pnpm run build
 ```
 
-The build compiles packages in this order:
-`core -> swara -> anina -> smriti -> ui -> yantra -> dharma -> netra -> vayu -> sutra -> tantra -> vidhya-skills -> niyanta -> cli`
+For a graph-only audit without executing package builds:
+
+```bash
+pnpm run build:check
+```
+
+`pnpm run build` uses the root workspace graph builder and executes package builds in dependency order.
+
+For core runtime production-readiness checks, run:
+
+```bash
+pnpm run verify:engine
+```
+
+For publish/subtree workflows, see [docs/release-hygiene.md](release-hygiene.md).
+
+## Runtime Authority and Auth Surfaces (Production)
+
+Use these boundaries when operating Chitragupta in shared or long-running environments:
+
+| Surface | Primary role | Auth model | Operational note |
+|---------|--------------|------------|------------------|
+| Daemon socket / named pipe (`chitragupta daemon ...`) | Primary runtime authority for state and RPC | Bridge token handshake (`auth.handshake`) with method scopes | This is the daemon-first path for MCP/CLI/Hub server integration. |
+| MCP legacy HTTP+SSE (`chitragupta mcp-server --sse`) | HTTP/SSE MCP exposure for local bridge clients | Same bridge token family as daemon auth, with read/tools scope checks and per-key request limiting | Keep loopback-only unless you intentionally front it with a stronger external auth layer. |
+| Daemon loopback HTTP (`127.0.0.1:3690`) | Local status/ops endpoints (`/status`, `/consolidate`, `/shutdown`) | Loopback trust boundary (no bridge-token handshake) | Keep local-only; do not expose externally. |
+| Serve-mode HTTP (`chitragupta serve`) | User-facing API + Hub dashboard | Pairing/JWT and API auth routes (serve surface) | Separate auth surface from daemon socket auth. |
+
+Runtime expectations:
+- Daemon remains the single-writer authority for persistent state.
+- If daemon connectivity drops, fallback mode is intentionally read-only for a limited method subset; write calls fail closed.
+- Lucy/Scarlett are platform-wide internal runtime overlays; coding-agent and Takumi bridge behavior are only part of that system.
+- CLI, API, and serve now use daemon-backed `MemoryBridge` instances by default instead of mixing local and daemon session writers.
+- The `serve` memory API routes through daemon-backed memory/session methods; it does not write directly to Smriti from the HTTP process.
+- Raw sessions remain canonical truth; day/month/year artifacts are derived summaries with source-session provenance for drill-down recall.
+- Derived day summaries may compact low-signal sessions for readability; use source-session drill-down when you need the exact raw thread.
+- Nidra deep sleep now consolidates the exact pending sessions per project instead of broadening to whichever sessions were merely most recent.
+
+See also:
+- [runtime-constitution.md](./runtime-constitution.md)
+- [consumer-contract.md](./consumer-contract.md)
+- [current-status.md](./current-status.md)
 
 After building, the CLI binary is available at `packages/cli/dist/cli.js`. You can run it
 directly or link it globally:
@@ -148,6 +187,7 @@ chitragupta serve --port 3141 --host localhost
 # MCP server (for Claude Code, Codex, Gemini CLI, etc.)
 chitragupta mcp-server                         # stdio transport (default)
 chitragupta mcp-server --sse --port 3001       # SSE transport
+chitragupta mcp-server --streamable-http --port 3001  # streamable HTTP transport
 chitragupta mcp-server --agent                 # Enable agent prompt tool
 chitragupta mcp-server --name my-chitragupta      # Custom server name
 ```
@@ -270,6 +310,9 @@ chitragupta mcp-server
 # SSE transport for HTTP-based connections
 chitragupta mcp-server --sse --port 3001
 
+# Streamable HTTP transport for newer MCP HTTP clients
+chitragupta mcp-server --streamable-http --port 3001
+
 # Enable the agent prompt tool (requires a configured provider)
 chitragupta mcp-server --agent
 
@@ -284,11 +327,19 @@ chitragupta mcp-server --name my-chitragupta
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CHITRAGUPTA_MCP_TRANSPORT` | `"stdio"` or `"sse"` | `"stdio"` |
-| `CHITRAGUPTA_MCP_PORT` | Port for SSE transport | `3001` |
+| `CHITRAGUPTA_MCP_TRANSPORT` | `"stdio"`, `"sse"`, or `"streamable-http"` | `"stdio"` |
+| `CHITRAGUPTA_MCP_PORT` | Port for `sse` or `streamable-http` transport | `3001` |
 | `CHITRAGUPTA_MCP_PROJECT` | Project directory | `process.cwd()` |
 | `CHITRAGUPTA_MCP_AGENT` | `"true"` to enable agent prompt tool | `"false"` |
 | `CHITRAGUPTA_MCP_NAME` | Server name shown to MCP clients | `"chitragupta"` |
+| `CHITRAGUPTA_MCP_BRIDGE_API_KEY` | Override bridge token used by local SSE/daemon bridge clients | token file / daemon bridge key |
+
+When running `chitragupta mcp-server --sse` or `chitragupta mcp-server --streamable-http`, the server uses the same bridge-token model as the daemon socket:
+
+- Clients authenticate with `Authorization: Bearer <token>` or the `api_key` query parameter.
+- Read-style MCP methods (`initialize`, `tools/list`, `resources/*`, `prompts/*`, `ping`) require `read`.
+- `tools/call` requires `tools` or `write`.
+- Request limiting follows the bridge auth env knobs when configured: `CHITRAGUPTA_BRIDGE_RATE_LIMIT_MAX_REQUESTS`, `CHITRAGUPTA_BRIDGE_RATE_LIMIT_WINDOW_MS`, and `CHITRAGUPTA_BRIDGE_RATE_LIMIT_EXEMPT_METHODS`.
 
 ---
 
@@ -509,19 +560,20 @@ Add to `.cursor/mcp.json` in your project root:
 
 #### Generic / Custom Clients
 
-For SSE-based clients, start the server in SSE mode:
+For HTTP-based clients, start the server in SSE or streamable HTTP mode:
 
 ```bash
 chitragupta mcp-server --sse --port 3001 --agent
+chitragupta mcp-server --streamable-http --port 3001 --agent
 ```
 
-Then point your client to `http://localhost:3001/sse`.
+Then point your client to `http://localhost:3001/sse` for SSE or `http://localhost:3001/mcp` for streamable HTTP.
 
 ---
 
 ### Exposed MCP Capabilities
 
-**Tools** (32 total — 12 file/shell + 20 Chitragupta-specific):
+**Tools** (inventory varies by release/profile):
 - `read`, `write`, `edit` -- file operations
 - `bash` -- shell command execution
 - `grep`, `find`, `ls` -- search and navigation
@@ -544,6 +596,10 @@ Then point your client to `http://localhost:3001/sse`.
 - `atman_report` -- full self-report
 - `coding_agent` -- autonomous coding agent
 - `swara_marga_decide` -- LLM routing decisions
+
+For `coding_agent` modes and operator behavior, see [coding-agent.md](coding-agent.md). For deeper runtime wiring details, see [runtime-integrity.md](runtime-integrity.md).
+
+Day files are derived artifacts, not replacements for sessions. They now carry source-session provenance so recall can summarize first and still point back to canonical raw sessions when you need detail. Low-signal sessions may appear in compact form in the day view by design.
 
 **Resources:**
 - `chitragupta://memory/project` -- project memory (MEMORY.md)
@@ -604,7 +660,7 @@ On success, the browser receives a JWT and redirects to the dashboard. The JWT l
 - **Settings** — budget config, provider preferences
 - **Devices** — manage paired browsers, revoke access
 
-For full details, see [docs/HUB.md](docs/HUB.md).
+For full details, see [docs/hub.md](hub.md).
 
 ---
 
@@ -862,7 +918,7 @@ Add custom providers in your settings:
 
 ## Project Structure (for Contributors)
 
-Chitragupta is a monorepo with 16 packages under `packages/`:
+Chitragupta is a monorepo with 17 packages under `packages/`:
 
 | Package | npm Scope | Sanskrit Name | Purpose |
 |---------|-----------|---------------|---------|
@@ -874,7 +930,7 @@ Chitragupta is a monorepo with 16 packages under `packages/`:
 | `yantra` | `@chitragupta/yantra` | Tool | 12 built-in tools (read, write, edit, bash, grep, ...) |
 | `dharma` | `@chitragupta/dharma` | Law | Policy engine (security rules, permissions) |
 | `netra` | `@chitragupta/netra` | Vision | Vision/image processing capabilities |
-| `vayu` | `@chitragupta/vayu` | Wind | Workflow engine |
+| `prana` | `@chitragupta/prana` | Life Force | Workflow engine |
 | `sutra` | `@chitragupta/sutra` | Thread | IPC / inter-agent communication |
 | `tantra` | `@chitragupta/tantra` | Weave | MCP server/client implementation |
 | `vidhya-skills` | `@chitragupta/vidhya-skills` | Knowledge | Skill discovery via Trait Vector Matching |
@@ -929,8 +985,8 @@ pnpm run dev
 
 ## What's Next
 
-- **Hub dashboard** -- build and open the web dashboard for visual monitoring. See [docs/HUB.md](docs/HUB.md).
-- **Individual package READMEs** -- each of the 16 packages has its own README with
+- **Hub dashboard** -- build and open the web dashboard for visual monitoring. See [docs/hub.md](hub.md).
+- **Individual package READMEs** -- each of the 17 packages has its own README with
   full API documentation. See `packages/<name>/README.md`.
 - **Plugin development** -- create custom tools, commands, and themes as ESM modules
   in `~/.chitragupta/plugins/`.

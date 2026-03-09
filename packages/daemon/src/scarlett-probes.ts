@@ -1,5 +1,5 @@
 /**
- * Scarlett Probes — 4 subsystem health probes for InternalScarlett.
+ * Scarlett Probes — subsystem health probes for InternalScarlett.
  *
  * Extracted from scarlett-internal.ts to stay under the 450 LOC limit.
  * Each probe: check() -> ProbeResult, recover() -> auto-remediation.
@@ -78,6 +78,39 @@ const NIDRA_CRITICAL_AGE_MS = 15 * 60_000;
 const QUEUE_WARN_DEPTH = 20;
 /** Consolidation queue depth above which we flag critical. */
 const QUEUE_CRITICAL_DEPTH = 100;
+/** Semantic vector issues above which we flag critical. */
+const SEMANTIC_CRITICAL_ISSUES = 4;
+
+type SemanticSyncApi = {
+	inspectConsolidationVectorSync: typeof import("@chitragupta/smriti/consolidation-indexer").inspectConsolidationVectorSync;
+	repairConsolidationVectorSync: typeof import("@chitragupta/smriti/consolidation-indexer").repairConsolidationVectorSync;
+	inspectRemoteSemanticSync: typeof import("@chitragupta/smriti").inspectRemoteSemanticSync;
+	syncRemoteSemanticMirror: typeof import("@chitragupta/smriti").syncRemoteSemanticMirror;
+};
+type SemanticSyncApiLoader = () => Promise<SemanticSyncApi>;
+
+const defaultSemanticSyncApiLoader: SemanticSyncApiLoader = async () => {
+	const local = await import("@chitragupta/smriti/consolidation-indexer");
+	const remote = await import("@chitragupta/smriti");
+	return {
+		inspectConsolidationVectorSync: local.inspectConsolidationVectorSync,
+		repairConsolidationVectorSync: local.repairConsolidationVectorSync,
+		inspectRemoteSemanticSync: remote.inspectRemoteSemanticSync,
+		syncRemoteSemanticMirror: remote.syncRemoteSemanticMirror,
+	};
+};
+
+let semanticSyncApiLoader: SemanticSyncApiLoader = defaultSemanticSyncApiLoader;
+
+export async function loadSemanticSyncApi(): Promise<SemanticSyncApi> {
+	return semanticSyncApiLoader();
+}
+
+export function _setSemanticSyncApiLoaderForTests(
+	loader?: SemanticSyncApiLoader,
+): void {
+	semanticSyncApiLoader = loader ?? defaultSemanticSyncApiLoader;
+}
 
 // ─── Probe Implementations ───────────────────────────────────────────────────
 
@@ -315,5 +348,90 @@ export class ConsolidationQueueProbe implements InternalProbe {
 	async recover(result: ProbeResult): Promise<{ ok: boolean; detail: string }> {
 		log.warn("Consolidation queue attention", { summary: result.summary });
 		return { ok: true, detail: `Logged: ${result.summary}` };
+	}
+}
+
+/**
+ * SemanticSyncProbe — verifies that curated Nidra/periodic consolidation
+ * artifacts are reflected in the semantic/vector mirror with current hashes.
+ */
+export class SemanticSyncProbe implements InternalProbe {
+	readonly name = "semantic-sync";
+
+	async check(): Promise<ProbeResult> {
+		try {
+			const { inspectConsolidationVectorSync, inspectRemoteSemanticSync } = await loadSemanticSyncApi();
+			const [local, remote] = await Promise.all([
+				inspectConsolidationVectorSync(),
+				inspectRemoteSemanticSync(),
+			]);
+			if (local.scanned === 0) {
+				return {
+					healthy: true,
+					severity: "ok",
+					probe: this.name,
+					details: { local, remote },
+					summary: "Semantic sync healthy (no curated consolidation artifacts yet)",
+				};
+			}
+			const localIssues = local.missingCount + local.driftCount;
+			const remoteIssues = remote.enabled ? remote.missingCount + remote.driftCount : 0;
+			const remoteHealthProblem = remote.enabled && remote.remoteHealth?.ok === false;
+			const issueCount = localIssues + remoteIssues + (remoteHealthProblem ? 1 : 0);
+			if (issueCount === 0) {
+				return {
+					healthy: true,
+					severity: "ok",
+					probe: this.name,
+					details: { local, remote },
+					summary: remote.enabled
+						? `Semantic sync healthy (${local.scanned} curated artifacts mirrored locally and remotely)`
+						: `Semantic sync healthy (${local.scanned} curated artifacts mirrored locally)`,
+				};
+			}
+			const severity: ProbeSeverity = issueCount >= SEMANTIC_CRITICAL_ISSUES ? "critical" : "warn";
+			const summaryParts = [
+				`local ${local.missingCount} missing`,
+				`local ${local.driftCount} stale`,
+			];
+			if (remote.enabled) {
+				summaryParts.push(`remote ${remote.missingCount} missing`);
+				summaryParts.push(`remote ${remote.driftCount} stale`);
+				if (remoteHealthProblem) summaryParts.push("remote health degraded");
+			}
+			return {
+				healthy: false,
+				severity,
+				probe: this.name,
+				details: { local, remote },
+				summary: `Semantic mirror drift: ${summaryParts.join(", ")}`,
+				recoveryAction: "semantic-reindex",
+			};
+		} catch (err) {
+			return {
+				healthy: false,
+				severity: "critical",
+				probe: this.name,
+				details: { error: err instanceof Error ? err.message : String(err) },
+				summary: "semantic-sync probe threw — vector mirror may be unavailable",
+			};
+		}
+	}
+
+	async recover(_result: ProbeResult): Promise<{ ok: boolean; detail: string }> {
+		try {
+			const { repairConsolidationVectorSync, syncRemoteSemanticMirror } = await loadSemanticSyncApi();
+			const repair = await repairConsolidationVectorSync();
+			const remote = await syncRemoteSemanticMirror();
+			if (repair.reindexed === 0 && remote.synced === 0) {
+				return { ok: true, detail: "Semantic mirror already current" };
+			}
+			return {
+				ok: true,
+				detail: `Reindexed ${repair.reindexed} local curated artifacts; mirrored ${remote.synced} remote artifacts`,
+			};
+		} catch (err) {
+			return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+		}
 	}
 }

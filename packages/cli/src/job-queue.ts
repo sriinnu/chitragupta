@@ -70,6 +70,7 @@ export type JobRunner = (
 	message: string,
 	onEvent: (type: string, data: unknown) => void,
 	signal: AbortSignal,
+	metadata?: Record<string, unknown>,
 ) => Promise<string>;
 
 export interface JobStats {
@@ -336,7 +337,7 @@ export class JobQueue {
 		};
 
 		// Fire and forget — the promise chain handles completion
-		this.runner(job.message, onEvent, controller.signal)
+		this.runner(job.message, onEvent, controller.signal, job.metadata)
 			.then((response) => {
 				// Only update if the job hasn't been cancelled mid-flight
 				if (job.status === "running") {

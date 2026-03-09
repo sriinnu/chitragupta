@@ -12,43 +12,25 @@
  * @module smaran
  */
 
-import path from "path";
 import { getChitraguptaHome } from "@chitragupta/core";
+import path from "path";
 import {
-	fnv1a,
-	extractTags,
-	loadSmaranEntries,
-	saveSmaranEntry,
 	deleteSmaranFile,
+	extractTags,
 	findSimilarEntry,
+	fnv1a,
+	loadSmaranEntries,
+	type ScoreBM25Options,
+	type ScoredEntry,
+	saveSmaranEntry,
 	scoreBM25Recall,
 } from "./smaran-store.js";
 
-// Re-export smaran-store symbols so index.ts needs no changes
-export {
-	fnv1a,
-	tokenize,
-	extractTags,
-	loadSmaranEntries,
-	saveSmaranEntry,
-	deleteSmaranFile,
-	toSmaranMarkdown,
-	fromSmaranMarkdown,
-	findSimilarEntry,
-	scoreBM25Recall,
-	parseSimpleYaml,
-	parseTags,
-} from "./smaran-store.js";
 export type { ScoredEntry } from "./smaran-store.js";
+// Re-export smaran-store symbols so index.ts needs no changes
+export { deleteSmaranFile, extractTags, findSimilarEntry, fnv1a, fromSmaranMarkdown, loadSmaranEntries, parseSimpleYaml, parseTags, saveSmaranEntry, scoreBM25Recall, tokenize, toSmaranMarkdown } from "./smaran-store.js";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-export type SmaranCategory =
-	| "preference"
-	| "fact"
-	| "decision"
-	| "instruction"
-	| "context";
+export type SmaranCategory = "preference" | "fact" | "decision" | "instruction" | "context";
 
 export interface SmaranEntry {
 	/** Unique ID: smr-<8-char FNV hash> */
@@ -71,6 +53,10 @@ export interface SmaranEntry {
 	sessionId?: string;
 	/** Decay half-life in days (0 = never decays) */
 	decayHalfLifeDays: number;
+	/** Optional base importance in [0, 1] for aging-aware ranking. */
+	importance?: number;
+	/** Optional confidence anchor used by deterministic decay updates. */
+	baselineConfidence?: number;
 }
 
 export interface SmaranConfig {
@@ -84,6 +70,10 @@ export interface SmaranConfig {
 	recallThreshold: number;
 	/** Maximum results for recall. Default: 10 */
 	recallLimit: number;
+	/** Minimum score to proactively surface a memory. Default: 0.8 */
+	proactiveThreshold: number;
+	/** Maximum proactive memories to surface per turn. Default: 4 */
+	proactiveLimit: number;
 }
 
 const DEFAULT_CONFIG: SmaranConfig = {
@@ -91,14 +81,23 @@ const DEFAULT_CONFIG: SmaranConfig = {
 	defaultDecayDays: 90,
 	recallThreshold: 0.1,
 	recallLimit: 10,
+	proactiveThreshold: 0.8,
+	proactiveLimit: 4,
 };
 
 const SMARAN_HARD_CEILINGS = {
 	maxEntries: 10_000,
 	recallLimit: 50,
+	proactiveLimit: 20,
 } as const;
 
-// ─── SmaranStore ────────────────────────────────────────────────────────────
+export interface ProactiveRecallOptions {
+	limit?: number;
+	threshold?: number;
+	excludeIds?: Iterable<string>;
+	nowMs?: number;
+	minImportance?: number;
+}
 
 export class SmaranStore {
 	private readonly config: SmaranConfig;
@@ -110,13 +109,11 @@ export class SmaranStore {
 		this.config = {
 			...DEFAULT_CONFIG,
 			...config,
-			maxEntries: Math.min(
-				config?.maxEntries ?? DEFAULT_CONFIG.maxEntries,
-				SMARAN_HARD_CEILINGS.maxEntries,
-			),
-			recallLimit: Math.min(
-				config?.recallLimit ?? DEFAULT_CONFIG.recallLimit,
-				SMARAN_HARD_CEILINGS.recallLimit,
+			maxEntries: Math.min(config?.maxEntries ?? DEFAULT_CONFIG.maxEntries, SMARAN_HARD_CEILINGS.maxEntries),
+			recallLimit: Math.min(config?.recallLimit ?? DEFAULT_CONFIG.recallLimit, SMARAN_HARD_CEILINGS.recallLimit),
+			proactiveLimit: Math.min(
+				config?.proactiveLimit ?? DEFAULT_CONFIG.proactiveLimit,
+				SMARAN_HARD_CEILINGS.proactiveLimit,
 			),
 		};
 		this.storagePath = this.config.storagePath ?? path.join(getChitraguptaHome(), "smaran");
@@ -134,6 +131,7 @@ export class SmaranStore {
 			source?: "explicit" | "inferred";
 			confidence?: number;
 			decayHalfLifeDays?: number;
+			importance?: number;
 		},
 	): SmaranEntry {
 		this.ensureLoaded();
@@ -142,6 +140,11 @@ export class SmaranStore {
 		const existing = findSimilarEntry(content, this.entries.values());
 		if (existing) {
 			existing.confidence = Math.min(1, existing.confidence + 0.1);
+			existing.baselineConfidence = Math.max(existing.baselineConfidence ?? existing.confidence, existing.confidence);
+			existing.importance = Math.min(
+				1,
+				typeof existing.importance === "number" ? existing.importance + 0.05 : 0.65 + 0.35 * existing.confidence,
+			);
 			existing.updatedAt = new Date().toISOString();
 			if (opts?.tags) {
 				existing.tags = [...new Set([...existing.tags, ...opts.tags])];
@@ -156,7 +159,9 @@ export class SmaranStore {
 
 		const source = opts?.source ?? "explicit";
 		const now = new Date().toISOString();
-		const id = `smr-${fnv1a(content + now).toString(16).slice(0, 8)}`;
+		const id = `smr-${fnv1a(content + now)
+			.toString(16)
+			.slice(0, 8)}`;
 
 		const entry: SmaranEntry = {
 			id,
@@ -164,12 +169,13 @@ export class SmaranStore {
 			category,
 			source,
 			confidence: opts?.confidence ?? (source === "explicit" ? 1.0 : 0.6),
+			baselineConfidence: opts?.confidence ?? (source === "explicit" ? 1.0 : 0.6),
 			tags: opts?.tags ?? extractTags(content),
 			createdAt: now,
 			updatedAt: now,
 			sessionId: opts?.sessionId,
-			decayHalfLifeDays: opts?.decayHalfLifeDays ??
-				(source === "explicit" ? 0 : this.config.defaultDecayDays),
+			decayHalfLifeDays: opts?.decayHalfLifeDays ?? (source === "explicit" ? 0 : this.config.defaultDecayDays),
+			importance: opts?.importance,
 		};
 
 		this.entries.set(id, entry);
@@ -204,7 +210,7 @@ export class SmaranStore {
 	/** Update an existing memory entry. */
 	update(
 		id: string,
-		updates: Partial<Pick<SmaranEntry, "content" | "category" | "tags" | "confidence">>,
+		updates: Partial<Pick<SmaranEntry, "content" | "category" | "tags" | "confidence" | "importance">>,
 	): SmaranEntry | null {
 		this.ensureLoaded();
 		const entry = this.entries.get(id);
@@ -213,7 +219,11 @@ export class SmaranStore {
 		if (updates.content !== undefined) entry.content = updates.content;
 		if (updates.category !== undefined) entry.category = updates.category;
 		if (updates.tags !== undefined) entry.tags = updates.tags;
-		if (updates.confidence !== undefined) entry.confidence = updates.confidence;
+		if (updates.confidence !== undefined) {
+			entry.confidence = updates.confidence;
+			entry.baselineConfidence = updates.confidence;
+		}
+		if (updates.importance !== undefined) entry.importance = updates.importance;
 		entry.updatedAt = new Date().toISOString();
 
 		saveSmaranEntry(this.storagePath, entry);
@@ -230,11 +240,40 @@ export class SmaranStore {
 
 	/** Recall memories relevant to a query using BM25-like scoring. */
 	recall(query: string, limit?: number): SmaranEntry[] {
+		return this.recallScored(query, limit).map((s) => s.entry);
+	}
+
+	/** Recall memories with explicit score breakdown (relevance + importance). */
+	recallScored(query: string, limit?: number, options?: ScoreBM25Options): ScoredEntry[] {
 		this.ensureLoaded();
 		if (this.entries.size === 0) return [];
 		const maxResults = limit ?? this.config.recallLimit;
-		const scored = scoreBM25Recall(this.entries.values(), query, this.config.recallThreshold);
-		return scored.slice(0, maxResults).map(s => s.entry);
+		const scored = scoreBM25Recall(this.entries.values(), query, this.config.recallThreshold, options);
+		return scored.slice(0, maxResults);
+	}
+
+	/**
+	 * Surface high-confidence memories proactively for the current turn.
+	 * Filters by score threshold and excludes already-surfaced IDs.
+	 */
+	proactiveRecall(query: string, options?: ProactiveRecallOptions): ScoredEntry[] {
+		this.ensureLoaded();
+		if (this.entries.size === 0) return [];
+		const threshold = options?.threshold ?? this.config.proactiveThreshold;
+		const limit = Math.max(1, Math.min(options?.limit ?? this.config.proactiveLimit, this.config.proactiveLimit));
+		const excluded = new Set(options?.excludeIds ?? []);
+		const candidates = this.recallScored(query, Math.min(this.config.recallLimit * 2, 30), {
+			nowMs: options?.nowMs,
+			minImportance: options?.minImportance ?? 0.35,
+		});
+		const surfaced: ScoredEntry[] = [];
+		for (const candidate of candidates) {
+			if (excluded.has(candidate.entry.id)) continue;
+			if (candidate.score < threshold) continue;
+			surfaced.push(candidate);
+			if (surfaced.length >= limit) break;
+		}
+		return surfaced;
 	}
 
 	/** List all entries matching a category. */
@@ -250,9 +289,7 @@ export class SmaranStore {
 	/** List all entries. */
 	listAll(): SmaranEntry[] {
 		this.ensureLoaded();
-		return [...this.entries.values()].sort(
-			(a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-		);
+		return [...this.entries.values()].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 	}
 
 	/** Get total count of stored memories. */
@@ -268,13 +305,14 @@ export class SmaranStore {
 	 * If a query is provided, returns relevant memories scored by BM25.
 	 * Otherwise returns all memories grouped by category.
 	 */
-	buildContextSection(query?: string, maxTokens = 2000): string {
+	buildContextSection(query?: string, maxTokens = 2000, options?: { excludeIds?: Iterable<string> }): string {
 		this.ensureLoaded();
 		if (this.entries.size === 0) return "";
 
-		const entries = query
-			? this.recall(query, 15)
-			: this.listAll().slice(0, 20);
+		const excluded = new Set(options?.excludeIds ?? []);
+		const entries = (query ? this.recall(query, 15) : this.listAll().slice(0, 20)).filter(
+			(entry) => !excluded.has(entry.id),
+		);
 
 		if (entries.length === 0) return "";
 
@@ -311,6 +349,26 @@ export class SmaranStore {
 		return sections.join("\n");
 	}
 
+	/** Build a proactive per-turn memory section and return surfaced IDs. */
+	buildProactiveContextSection(
+		query: string,
+		options?: ProactiveRecallOptions,
+	): { section: string; surfacedIds: string[] } {
+		const surfaced = this.proactiveRecall(query, options);
+		if (surfaced.length === 0) return { section: "", surfacedIds: [] };
+		const lines = [
+			"## Proactive Memory Hints",
+			"",
+			...surfaced.map(
+				(hit) =>
+					`- [${hit.entry.category}] ${hit.entry.content} ` +
+					`(relevance ${(hit.relevance * 100).toFixed(0)}%, importance ${(hit.importance * 100).toFixed(0)}%)`,
+			),
+			"",
+		];
+		return { section: lines.join("\n"), surfacedIds: surfaced.map((hit) => hit.entry.id) };
+	}
+
 	// ─── Maintenance ──────────────────────────────────────────────────────
 
 	/** Apply temporal decay to all entries with configured half-lives. */
@@ -321,10 +379,15 @@ export class SmaranStore {
 
 		for (const entry of this.entries.values()) {
 			if (entry.decayHalfLifeDays <= 0) continue;
+			const baseline = entry.baselineConfidence ?? entry.confidence;
+			if (entry.baselineConfidence === undefined) {
+				entry.baselineConfidence = baseline;
+				modified = true;
+			}
 			const ageMs = now - new Date(entry.updatedAt).getTime();
 			const ageDays = ageMs / (1000 * 60 * 60 * 24);
-			const decay = Math.exp(-Math.LN2 * ageDays / entry.decayHalfLifeDays);
-			const newConf = entry.confidence * decay;
+			const decay = Math.exp((-Math.LN2 * ageDays) / entry.decayHalfLifeDays);
+			const newConf = baseline * decay;
 			if (Math.abs(newConf - entry.confidence) > 0.01) {
 				entry.confidence = Math.max(0, newConf);
 				modified = true;

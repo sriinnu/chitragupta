@@ -162,37 +162,39 @@ export function createRecallTool(): McpToolHandler {
 				"that happened across any provider, project, or date.",
 			inputSchema: {
 				type: "object" as const,
-				properties: {
-					query: { type: "string", description: "Natural language question. E.g. 'how did I fix the yaxis interval in charts?' or 'what do we know about the auth system?'" },
-					project: { type: "string", description: "Optional: filter to specific project path." },
-					limit: { type: "number", description: "Max results. Default: 5." },
+					properties: {
+						query: { type: "string", description: "Natural language question. E.g. 'how did I fix the yaxis interval in charts?' or 'what do we know about the auth system?'" },
+						project: { type: "string", description: "Optional: filter to specific project path." },
+						limit: { type: "number", description: "Max results. Default: 5." },
+						noCache: { type: "boolean", description: "Bypass predictive cache and search only live memory layers." },
+						fresh: { type: "boolean", description: "Alias for noCache; forces fresh recall without predictive cache hints." },
+					},
+					required: ["query"],
 				},
-				required: ["query"],
 			},
-		},
-		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
-			const query = String(args.query ?? "");
-			const project = args.project != null ? String(args.project) : undefined;
-			const limit = Math.min(20, Math.max(1, Number(args.limit ?? 5) || 5));
+			async execute(args: Record<string, unknown>): Promise<McpToolResult> {
+				const query = String(args.query ?? "");
+				const project = args.project != null ? String(args.project) : undefined;
+				const limit = Math.min(20, Math.max(1, Number(args.limit ?? 5) || 5));
+				const noCache = Boolean(args.noCache) || Boolean(args.fresh);
 
 			if (!query) {
 				return { content: [{ type: "text", text: "Error: 'query' is required." }], isError: true };
 			}
 
 			try {
-				// Check Transcendence predictive cache first (pre-staged context)
-				let predictedHit: string | null = null;
-				try {
-					const { getTranscendence } = await import("./mcp-subsystems.js");
-					const engine = await getTranscendence();
-					const cached = engine.fuzzyLookup(query) as { entity: string; content: string; source: string } | null;
-					if (cached) predictedHit = `**[Predicted — ${cached.source}]** ${cached.content}\n`;
-				} catch { /* Transcendence optional */ }
+					// Check Transcendence predictive cache first unless the caller asked for fresh-only recall.
+					let predictedHit: string | null = null;
+						try {
+							const { lookupTranscendenceFuzzy } = await import("./mcp-subsystems.js");
+							const cached = await lookupTranscendenceFuzzy(query, { noCache, project });
+							if (cached) predictedHit = `**[Predicted — ${cached.source}]** ${cached.content}\n`;
+						} catch { /* Transcendence optional */ }
 
 				const bridge = await import("./daemon-bridge.js");
 				const results = await bridge.unifiedRecall(query, { limit, project }) as Array<{ score: number; answer: string; primarySource: string; sessionId?: string; date?: string }>;
 				if (results.length === 0 && !predictedHit) {
-					return { content: [{ type: "text", text: `No recall results for: ${query}` }], _metadata: { action: "recall", query } };
+						return { content: [{ type: "text", text: `No recall results for: ${query}` }], _metadata: { action: "recall", query, noCache } };
 				}
 				const lines: string[] = [`Recall results for "${query}":\n`];
 				if (predictedHit) lines.push(predictedHit);
@@ -204,7 +206,7 @@ export function createRecallTool(): McpToolHandler {
 					if (r.date) lines.push(`  Date: ${r.date}`);
 					lines.push("");
 				}
-				return { content: [{ type: "text", text: truncateOutput(lines.join("\n")) }], _metadata: { action: "recall", query, resultCount: results.length + (predictedHit ? 1 : 0), typed: { query, predicted: !!predictedHit, results: results.map((r) => ({ score: r.score, answer: r.answer, source: r.primarySource, sessionId: r.sessionId })) } } };
+				return { content: [{ type: "text", text: truncateOutput(lines.join("\n")) }], _metadata: { action: "recall", query, noCache, resultCount: results.length + (predictedHit ? 1 : 0), typed: { query, noCache, predicted: !!predictedHit, results: results.map((r) => ({ score: r.score, answer: r.answer, source: r.primarySource, sessionId: r.sessionId })) } } };
 			} catch (err) {
 				return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
 			}

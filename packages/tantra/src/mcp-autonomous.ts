@@ -25,17 +25,11 @@ import type {
 	CircuitBreakerState,
 	McpHealthReport,
 } from "./mcp-autonomous-types.js";
-import {
-	DEFAULT_DISCOVERY_INTERVAL_MS,
-	DEFAULT_HEALTH_THRESHOLD,
-	DEFAULT_QUARANTINE_MAX_CRASHES,
-	DEFAULT_QUARANTINE_CRASH_WINDOW_MS,
-	DEFAULT_QUARANTINE_DURATION_MS,
-	DEFAULT_CB_FAILURE_THRESHOLD,
-	DEFAULT_CB_WINDOW_MS,
-	DEFAULT_CB_COOLDOWN_MS,
-} from "./mcp-autonomous-types.js";
 import { CircuitBreaker } from "./mcp-circuit-breaker.js";
+import {
+	buildAutonomousConfig,
+	createAutonomousCircuitBreaker,
+} from "./mcp-autonomous-config.js";
 import {
 	type ManagerInternals,
 	handleRegistryEvent,
@@ -73,7 +67,7 @@ import {
 export class AutonomousMcpManager {
 	private readonly registry: McpServerRegistry;
 	private readonly discovery: ServerDiscovery;
-	private readonly circuitBreaker: CircuitBreaker;
+	private circuitBreaker: CircuitBreaker;
 	private readonly healthScores: Map<string, number>;
 	private readonly quarantine: Map<string, QuarantineInfo>;
 	private readonly crashTimestamps: Map<string, number[]>;
@@ -81,6 +75,7 @@ export class AutonomousMcpManager {
 
 	private skillCallback?: SkillGeneratorCallback;
 	private discoveryInterval?: ReturnType<typeof setInterval>;
+	private quarantineSweepInterval?: ReturnType<typeof setInterval>;
 	private directoryCleanups: Array<() => void> = [];
 	private registryCleanup?: () => void;
 	private config: Required<AutonomousMcpConfig>;
@@ -95,23 +90,8 @@ export class AutonomousMcpManager {
 		this.knownServerIds = new Set();
 
 		// Default config; overridden by start()
-		this.config = {
-			discoveryIntervalMs: DEFAULT_DISCOVERY_INTERVAL_MS,
-			discoveryDirectories: [],
-			healthThreshold: DEFAULT_HEALTH_THRESHOLD,
-			quarantineMaxCrashes: DEFAULT_QUARANTINE_MAX_CRASHES,
-			quarantineCrashWindowMs: DEFAULT_QUARANTINE_CRASH_WINDOW_MS,
-			quarantineDurationMs: DEFAULT_QUARANTINE_DURATION_MS,
-			circuitBreakerFailureThreshold: DEFAULT_CB_FAILURE_THRESHOLD,
-			circuitBreakerWindowMs: DEFAULT_CB_WINDOW_MS,
-			circuitBreakerCooldownMs: DEFAULT_CB_COOLDOWN_MS,
-		};
-
-		this.circuitBreaker = new CircuitBreaker(
-			this.config.circuitBreakerFailureThreshold,
-			this.config.circuitBreakerWindowMs,
-			this.config.circuitBreakerCooldownMs,
-		);
+		this.config = buildAutonomousConfig();
+		this.circuitBreaker = createAutonomousCircuitBreaker(this.config);
 	}
 
 	/**
@@ -130,17 +110,8 @@ export class AutonomousMcpManager {
 		if (this.running) return;
 		this.running = true;
 
-		this.config = {
-			discoveryIntervalMs: config?.discoveryIntervalMs ?? DEFAULT_DISCOVERY_INTERVAL_MS,
-			discoveryDirectories: config?.discoveryDirectories ?? [],
-			healthThreshold: config?.healthThreshold ?? DEFAULT_HEALTH_THRESHOLD,
-			quarantineMaxCrashes: config?.quarantineMaxCrashes ?? DEFAULT_QUARANTINE_MAX_CRASHES,
-			quarantineCrashWindowMs: config?.quarantineCrashWindowMs ?? DEFAULT_QUARANTINE_CRASH_WINDOW_MS,
-			quarantineDurationMs: config?.quarantineDurationMs ?? DEFAULT_QUARANTINE_DURATION_MS,
-			circuitBreakerFailureThreshold: config?.circuitBreakerFailureThreshold ?? DEFAULT_CB_FAILURE_THRESHOLD,
-			circuitBreakerWindowMs: config?.circuitBreakerWindowMs ?? DEFAULT_CB_WINDOW_MS,
-			circuitBreakerCooldownMs: config?.circuitBreakerCooldownMs ?? DEFAULT_CB_COOLDOWN_MS,
-		};
+		this.config = buildAutonomousConfig(config);
+		this.circuitBreaker = createAutonomousCircuitBreaker(this.config);
 
 		// Subscribe to registry events for health tracking
 		this.registryCleanup = this.registry.onEvent((event) => {
@@ -158,6 +129,10 @@ export class AutonomousMcpManager {
 			clearInterval(this.discoveryInterval);
 			this.discoveryInterval = undefined;
 		}
+		if (this.quarantineSweepInterval) {
+			clearInterval(this.quarantineSweepInterval);
+			this.quarantineSweepInterval = undefined;
+		}
 
 		// Start periodic discovery
 		this.discoveryInterval = setInterval(() => {
@@ -165,6 +140,9 @@ export class AutonomousMcpManager {
 				// Best-effort discovery; failures are non-fatal
 			});
 		}, this.config.discoveryIntervalMs);
+		this.quarantineSweepInterval = setInterval(() => {
+			this.pruneExpiredQuarantines();
+		}, Math.max(1_000, Math.min(this.config.discoveryIntervalMs, 5_000)));
 
 		// Watch configured directories
 		for (const dir of this.config.discoveryDirectories) {
@@ -187,6 +165,10 @@ export class AutonomousMcpManager {
 		if (this.discoveryInterval) {
 			clearInterval(this.discoveryInterval);
 			this.discoveryInterval = undefined;
+		}
+		if (this.quarantineSweepInterval) {
+			clearInterval(this.quarantineSweepInterval);
+			this.quarantineSweepInterval = undefined;
 		}
 
 		for (const cleanup of this.directoryCleanups) {
@@ -259,6 +241,7 @@ export class AutonomousMcpManager {
 	 */
 	async rediscover(): Promise<void> {
 		if (!this.running) return;
+		this.pruneExpiredQuarantines();
 
 		const discovered = await this.discovery.discoverAll({
 			directories: this.config.discoveryDirectories,
@@ -288,9 +271,24 @@ export class AutonomousMcpManager {
 	releaseFromQuarantine(serverId: string): void {
 		this.quarantine.delete(serverId);
 		this.crashTimestamps.delete(serverId);
+		this.circuitBreaker.remove(serverId);
 
-		// Attempt to restart the server
-		this.registry.startServer(serverId).catch(() => {
+		const server = this.registry.getServer(serverId);
+		if (
+			!server ||
+			server.state === "ready" ||
+			server.state === "starting" ||
+			server.state === "restarting" ||
+			server.state === "stopping"
+		) {
+			return;
+		}
+
+		const recovery = server.state === "error"
+			? this.registry.restartServer(serverId)
+			: this.registry.startServer(serverId).then(() => undefined);
+
+		recovery.catch(() => {
 			// If restart fails, it will go through normal error handling
 		});
 	}

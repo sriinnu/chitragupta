@@ -35,7 +35,7 @@ const CLI_DIST_DEPENDENCIES = [
 	"@chitragupta/vidhya-skills/dist/index.js",
 	"@chitragupta/dharma/dist/index.js",
 	"@chitragupta/niyanta/dist/index.js",
-	"@chitragupta/vayu/dist/index.js",
+	"@chitragupta/prana/dist/index.js",
 	"@chitragupta/sutra/dist/index.js",
 ] as const;
 const RESPONSE_TIMEOUT_MS = 8_000;
@@ -202,6 +202,37 @@ class McpTestClient {
 
 			this._pendingResponses.set(req.id, { resolve, reject, timer });
 			this._child!.stdin!.write(line);
+		});
+	}
+
+	/**
+	 * Send a JSON-RPC request using legacy MCP Content-Length framing.
+	 */
+	async requestFramed(
+		method: string,
+		params?: Record<string, unknown>,
+		id?: number | string,
+	): Promise<JsonRpcResponse> {
+		if (!this._child?.stdin) {
+			throw new Error("McpTestClient: not connected");
+		}
+
+		const req = makeRequest(method, params, id);
+		const payload = JSON.stringify(req);
+		const framed = `Content-Length: ${Buffer.byteLength(payload, "utf8")}\r\n\r\n${payload}`;
+
+		return new Promise<JsonRpcResponse>((resolve, reject) => {
+			const timer = setTimeout(() => {
+				this._pendingResponses.delete(req.id);
+				reject(
+					new Error(
+						`Timeout waiting for framed response to request ${req.id} (method: ${method}) after ${RESPONSE_TIMEOUT_MS}ms`,
+					),
+				);
+			}, RESPONSE_TIMEOUT_MS);
+
+			this._pendingResponses.set(req.id, { resolve, reject, timer });
+			this._child!.stdin!.write(framed);
 		});
 	}
 
@@ -413,7 +444,7 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 	// ═════════════════════════════════════════════════════════════════════════
 
 	describe("initialize handshake", () => {
-		it("should complete the MCP initialize handshake", async () => {
+			it("should complete the MCP initialize handshake", async () => {
 			if (!existsSync(CLI_ENTRY)) return;
 
 			const { initResponse } = await startAndInitialize();
@@ -427,12 +458,29 @@ describe("E2E: MCP Client → Chitragupta MCP Server (stdio)", () => {
 			expect(result.serverInfo).toBeDefined();
 			expect(result.capabilities).toBeDefined();
 
-			const serverInfo = result.serverInfo as Record<string, unknown>;
-			expect(serverInfo.name).toBe("chitragupta");
-			expect(serverInfo.version).toBe(CLI_PACKAGE_VERSION);
-		}, 15_000);
+				const serverInfo = result.serverInfo as Record<string, unknown>;
+				expect(serverInfo.name).toBe("chitragupta");
+				expect(serverInfo.version).toBe(CLI_PACKAGE_VERSION);
+			}, 15_000);
 
-		it("should advertise tools, resources, and prompts capabilities", async () => {
+			it("should accept legacy Content-Length framed initialize requests", async () => {
+				if (!existsSync(CLI_ENTRY)) return;
+
+				client = new McpTestClient();
+				await client.start(CLI_ENTRY, ["--project", tmpProjectDir], CLI_LAUNCH.runtime);
+
+				const initResponse = await client.requestFramed("initialize", {
+					protocolVersion: "2024-11-05",
+					capabilities: {},
+					clientInfo: { name: "chitragupta-e2e-test", version: "0.1.0" },
+				});
+
+				expect(initResponse.jsonrpc).toBe("2.0");
+				expect(initResponse.error).toBeUndefined();
+				expect((initResponse.result as Record<string, unknown>).protocolVersion).toBe("2024-11-05");
+			}, 15_000);
+
+			it("should advertise tools, resources, and prompts capabilities", async () => {
 			if (!existsSync(CLI_ENTRY)) return;
 
 			const { initResponse } = await startAndInitialize();

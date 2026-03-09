@@ -106,10 +106,10 @@ interface DatabaseManagerLike {
 interface BuddhiLike {
 	listDecisions(
 		opts: { project?: string; category?: string; limit?: number },
-		db: DatabaseManagerLike,
-	): DecisionLike[];
-	getDecision(id: string, db: DatabaseManagerLike): DecisionLike | null;
-	explainDecision(id: string, db: DatabaseManagerLike): string | null;
+		db?: DatabaseManagerLike,
+	): DecisionLike[] | Promise<DecisionLike[]>;
+	getDecision(id: string, db?: DatabaseManagerLike): DecisionLike | null | Promise<DecisionLike | null>;
+	explainDecision(id: string, db?: DatabaseManagerLike): string | null | Promise<string | null>;
 }
 
 interface ServerLike {
@@ -289,7 +289,7 @@ export function mountIntelligenceRoutes(
 	server.route("GET", "/api/decisions", async (req) => {
 		const buddhi = deps.getBuddhi();
 		const db = deps.getDatabase();
-		if (!buddhi || !db) {
+		if (!buddhi) {
 			return { status: 503, body: { error: "Buddhi decision framework not available" } };
 		}
 
@@ -298,7 +298,7 @@ export function mountIntelligenceRoutes(
 			const project = req.query.project ?? deps.getProjectPath();
 			const category = req.query.category;
 
-			const decisions = buddhi.listDecisions(
+			const decisions = await buddhi.listDecisions(
 				{ project, category, limit },
 				db,
 			);
@@ -327,12 +327,12 @@ export function mountIntelligenceRoutes(
 	server.route("GET", "/api/decisions/:id/reasoning", async (req) => {
 		const buddhi = deps.getBuddhi();
 		const db = deps.getDatabase();
-		if (!buddhi || !db) {
+		if (!buddhi) {
 			return { status: 503, body: { error: "Buddhi decision framework not available" } };
 		}
 
 		try {
-			const decision = buddhi.getDecision(req.params.id, db);
+			const decision = await buddhi.getDecision(req.params.id, db);
 			if (!decision) {
 				return { status: 404, body: { error: `Decision not found: ${req.params.id}` } };
 			}

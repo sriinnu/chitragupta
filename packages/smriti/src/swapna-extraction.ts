@@ -75,6 +75,37 @@ export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 	return union > 0 ? intersection / union : 0;
 }
 
+/**
+ * Resolve the exact session scope for a Swapna cycle.
+ *
+ * If `config.sessionIds` is present, those IDs are treated as authoritative and
+ * filtered to existing sessions in the current project. Otherwise the cycle
+ * falls back to the most recent project sessions.
+ */
+export function resolveSwapnaSessionIds(
+	agentDb: ReturnType<DatabaseManager["get"]>,
+	config: SwapnaConfig,
+): string[] {
+	const scopedIds = [...new Set((config.sessionIds ?? []).filter(Boolean))];
+	if (scopedIds.length === 0) {
+		return (
+			agentDb
+				.prepare(`SELECT id FROM sessions WHERE project = ? ORDER BY updated_at DESC LIMIT ?`)
+				.all(config.project, config.maxSessionsPerCycle) as Array<{ id: string }>
+		).map((session) => session.id);
+	}
+
+	const placeholders = scopedIds.map(() => "?").join(",");
+	const rows = agentDb
+		.prepare(
+			`SELECT id FROM sessions WHERE project = ? AND id IN (${placeholders})`,
+		)
+		.all(config.project, ...scopedIds) as Array<{ id: string }>;
+
+	const existing = new Set(rows.map((row) => row.id));
+	return scopedIds.filter((id) => existing.has(id));
+}
+
 // ─── Phase 1: REPLAY (Hippocampal Replay) ───────────────────────────────────
 
 /**
@@ -89,18 +120,12 @@ export async function swapnaReplay(
 ): Promise<ReplayResult> {
 	const start = performance.now();
 	const agentDb = db.get("agent");
+	const sessionIds = resolveSwapnaSessionIds(agentDb, config);
 
-	const sessions = agentDb
-		.prepare(
-			`SELECT id FROM sessions WHERE project = ? ORDER BY updated_at DESC LIMIT ?`,
-		)
-		.all(config.project, config.maxSessionsPerCycle) as Array<{ id: string }>;
-
-	if (sessions.length === 0) {
+	if (sessionIds.length === 0) {
 		return { allTurns: [], highSurpriseTurns: [], turnsScored: 0, highSurprise: 0, durationMs: performance.now() - start };
 	}
 
-	const sessionIds = sessions.map((s) => s.id);
 	const placeholders = sessionIds.map(() => "?").join(",");
 
 	const turns = agentDb
@@ -207,26 +232,23 @@ export async function swapnaRecombine(
 
 	const agentDb = db.get("agent");
 	const sessionFingerprints = new Map<string, { fingerprint: Set<string>; fingerprintStr: string }>();
+	const sessionIds = resolveSwapnaSessionIds(agentDb, config);
 
-	const sessions = agentDb
-		.prepare(`SELECT id FROM sessions WHERE project = ? ORDER BY updated_at DESC LIMIT ?`)
-		.all(config.project, config.maxSessionsPerCycle) as Array<{ id: string }>;
-
-	for (const session of sessions) {
+	for (const sessionId of sessionIds) {
 		const turns = agentDb
 			.prepare(
 				`SELECT tool_calls FROM turns
 				 WHERE session_id = ? AND tool_calls IS NOT NULL
 				 ORDER BY turn_number ASC`,
 			)
-			.all(session.id) as Array<{ tool_calls: string }>;
+			.all(sessionId) as Array<{ tool_calls: string }>;
 
 		const allNames: string[] = [];
 		for (const turn of turns) allNames.push(...toolNames(parseToolCalls(turn.tool_calls)));
 
 		if (allNames.length > 0) {
 			const fp = buildToolFingerprint(allNames);
-			sessionFingerprints.set(session.id, {
+			sessionFingerprints.set(sessionId, {
 				fingerprint: fp,
 				fingerprintStr: [...fp].sort().join(","),
 			});

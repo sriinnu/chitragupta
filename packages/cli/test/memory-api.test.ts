@@ -75,6 +75,58 @@ vi.mock("@chitragupta/core", async (importOriginal) => {
 	};
 });
 
+vi.mock("../src/modes/daemon-bridge.js", () => ({
+	listMemoryScopesViaDaemon: vi.fn(async () => {
+		const scopes: Array<Record<string, string>> = [];
+		for (const key of mockMemoryStore.keys()) {
+			if (key === "global") scopes.push({ type: "global" });
+			else if (key.startsWith("project:")) scopes.push({ type: "project", path: key.slice("project:".length) });
+			else if (key.startsWith("agent:")) scopes.push({ type: "agent", agentId: key.slice("agent:".length) });
+		}
+		return scopes;
+	}),
+	getMemoryEntryViaDaemon: vi.fn(async (scope: { type: string; path?: string; agentId?: string }) => {
+		const key = scopeToKey(scope);
+		return {
+			scope: key,
+			content: mockMemoryStore.get(key) ?? "",
+			exists: mockMemoryStore.has(key),
+		};
+	}),
+	updateMemoryViaDaemon: vi.fn(async (scope: { type: string; path?: string; agentId?: string }, content: string) => {
+		const key = scopeToKey(scope);
+		mockMemoryStore.set(key, content);
+		return { updated: true, scope: key, timestamp: new Date().toISOString() };
+	}),
+	appendMemoryViaDaemon: vi.fn(async (scopeType: "global" | "project" | "agent", entry: string, scopeRef?: string) => {
+		const key = scopeType === "global" ? "global" : `${scopeType}:${scopeRef}`;
+		const existing = mockMemoryStore.get(key) ?? "";
+		mockMemoryStore.set(key, existing + `\n---\n${entry}\n`);
+	}),
+	deleteMemoryViaDaemon: vi.fn(async (scope: { type: string; path?: string; agentId?: string }) => {
+		const key = scopeToKey(scope);
+		mockMemoryStore.delete(key);
+		return { deleted: true, scope: key, timestamp: new Date().toISOString() };
+	}),
+	searchMemoryFiles: vi.fn(async (query: string) => {
+		const results: Array<{
+			scope: { type: string; path?: string; agentId?: string };
+			content: string;
+			relevance: number;
+		}> = [];
+		for (const [key, content] of mockMemoryStore.entries()) {
+			if (!content.toLowerCase().includes(query.toLowerCase())) continue;
+			const scope = key === "global"
+				? { type: "global" }
+				: key.startsWith("project:")
+					? { type: "project", path: key.slice("project:".length) }
+					: { type: "agent", agentId: key.slice("agent:".length) };
+			results.push({ scope, content, relevance: 0.9 });
+		}
+		return results;
+	}),
+}));
+
 function scopeToKey(scope: { type: string; path?: string; agentId?: string }): string {
 	if (scope.type === "global") return "global";
 	if (scope.type === "project") return `project:${scope.path}`;
@@ -329,6 +381,7 @@ describe("Memory HTTP routes", () => {
 			expect(body.ok).toBe(true);
 			const data = body.data as Record<string, unknown>;
 			expect(data.content).toBe("");
+			expect(data.exists).toBe(false);
 		});
 
 		it("should return 400 for invalid scope format", async () => {
@@ -392,6 +445,7 @@ describe("Memory HTTP routes", () => {
 			expect(body.message).toBe("Entry appended");
 			expect(body.scope).toBe("global");
 			expect(body.timestamp).toBeDefined();
+			expect(mockMemoryStore.get("global")).toContain("New learning about TypeScript");
 		});
 
 		it("should return 400 for missing entry", async () => {
@@ -430,6 +484,16 @@ describe("Memory HTTP routes", () => {
 			});
 			expect(status).toBe(404);
 			expect(body.error).toContain("not found");
+		});
+
+		it("should delete existing memory through the daemon-owned route", async () => {
+			mockMemoryStore.set("global", "to delete");
+			const { status, body } = await req(port, "/api/memory/global", {
+				method: "DELETE",
+			});
+			expect(status).toBe(200);
+			expect(body.message).toBe("Memory deleted");
+			expect(mockMemoryStore.has("global")).toBe(false);
 		});
 
 		it("should return 400 for invalid scope", async () => {

@@ -6,7 +6,7 @@
  * and aggregated within Chitragupta.
  */
 
-import type { McpTool, McpResource, McpPrompt } from "./types.js";
+import type { McpTool, McpResource, McpPrompt, McpClientAuthConfig } from "./types.js";
 import type { McpClient } from "./client.js";
 import type { ServerInfo } from "./types.js";
 
@@ -58,15 +58,17 @@ export interface McpRemoteServerConfig {
 	/** Human-readable display name. */
 	name: string;
 	/** Transport type for communication. */
-	transport: "stdio" | "sse";
+	transport: "stdio" | "sse" | "streamable-http";
 	/** Command to spawn (stdio transport). */
 	command?: string;
 	/** Command arguments (stdio transport). */
 	args?: string[];
 	/** Environment variables for the spawned process. */
 	env?: Record<string, string>;
-	/** Server URL (SSE transport). */
+	/** Server URL (HTTP transport). */
 	url?: string;
+	/** Optional transport auth for protected HTTP endpoints. */
+	auth?: McpClientAuthConfig;
 	/** Connection timeout in milliseconds (default 30000). */
 	timeout?: number;
 	/** Health check configuration. */

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock @chitragupta/core to provide getChitraguptaHome
 vi.mock("@chitragupta/core", () => ({
@@ -26,7 +26,7 @@ vi.mock("fs", () => {
 			readdirSync: vi.fn((dirPath: string) => {
 				const files: string[] = [];
 				for (const key of store.keys()) {
-					if (key.startsWith(dirPath + "/") && key.endsWith(".md")) {
+					if (key.startsWith(`${dirPath}/`) && key.endsWith(".md")) {
 						const relative = key.slice(dirPath.length + 1);
 						if (!relative.includes("/")) {
 							files.push(relative);
@@ -45,7 +45,6 @@ vi.mock("fs", () => {
 });
 
 import { SmaranStore } from "../src/smaran.js";
-import type { SmaranEntry, SmaranCategory, SmaranConfig } from "../src/smaran.js";
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
@@ -274,8 +273,8 @@ describe("SmaranStore", () => {
 			const results = store.recall("dark mode");
 			// Entries containing the exact phrase "dark mode" should score higher
 			expect(results.length).toBeGreaterThanOrEqual(2);
-			const topTwo = results.slice(0, 2).map(r => r.content.toLowerCase());
-			expect(topTwo.every(c => c.includes("dark mode"))).toBe(true);
+			const topTwo = results.slice(0, 2).map((r) => r.content.toLowerCase());
+			expect(topTwo.every((c) => c.includes("dark mode"))).toBe(true);
 		});
 
 		it("should apply confidence boost", () => {
@@ -337,12 +336,75 @@ describe("SmaranStore", () => {
 			const results = store.recall("coding habits");
 			// The fresh entry should score higher than the decayed old one
 			if (results.length >= 2) {
-				const newIdx = results.findIndex(r => r.content.includes("New"));
-				const oldIdx = results.findIndex(r => r.content.includes("Old"));
+				const newIdx = results.findIndex((r) => r.content.includes("New"));
+				const oldIdx = results.findIndex((r) => r.content.includes("Old"));
 				if (newIdx >= 0 && oldIdx >= 0) {
 					expect(newIdx).toBeLessThan(oldIdx);
 				}
 			}
+		});
+
+		it("should weight newer memories higher via importance aging", () => {
+			const old = store.remember("TypeScript build pipeline details", "fact", {
+				source: "inferred",
+				confidence: 1.0,
+				decayHalfLifeDays: 30,
+			});
+			const fresh = store.remember("TypeScript build pipeline migration", "fact", {
+				confidence: 1.0,
+			});
+			const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+			const oldEntry = store.get(old.id);
+			if (oldEntry) {
+				(oldEntry as any).updatedAt = thirtyDaysAgo;
+			}
+			const scored = store.recallScored("TypeScript build pipeline", 5);
+			const oldHit = scored.find((h) => h.entry.id === old.id);
+			const freshHit = scored.find((h) => h.entry.id === fresh.id);
+			expect(oldHit).toBeDefined();
+			expect(freshHit).toBeDefined();
+			expect(freshHit!.importance).toBeGreaterThan(oldHit!.importance);
+		});
+	});
+
+	// ── proactiveRecall() ────────────────────────────────────────────────
+
+	describe("proactiveRecall()", () => {
+		it("surfaces only high-score memories above threshold", () => {
+			store.remember("Use pnpm for this monorepo and avoid npm", "instruction", {
+				confidence: 1.0,
+			});
+			store.remember("I like pizza on weekends", "preference", {
+				confidence: 0.7,
+			});
+			const surfaced = store.proactiveRecall("What package manager should we use in this monorepo?", {
+				threshold: 0.8,
+				limit: 3,
+			});
+			expect(surfaced.length).toBeGreaterThan(0);
+			expect(surfaced[0].score).toBeGreaterThanOrEqual(0.8);
+			expect(surfaced[0].entry.content.toLowerCase()).toContain("pnpm");
+		});
+
+		it("respects excludeIds to avoid resurfacing already-injected memories", () => {
+			const entry = store.remember("Always run tests before commit", "instruction", { confidence: 1.0 });
+			const surfaced = store.proactiveRecall("Should I run tests before commit?", {
+				threshold: 0.75,
+				excludeIds: [entry.id],
+			});
+			expect(surfaced.find((s) => s.entry.id === entry.id)).toBeUndefined();
+		});
+
+		it("builds a proactive context section and returns surfaced IDs", () => {
+			const entry = store.remember("Use strict TypeScript mode in this repo", "instruction", {
+				confidence: 1.0,
+			});
+			const result = store.buildProactiveContextSection("Should we keep strict TypeScript mode?", {
+				threshold: 0.75,
+			});
+			expect(result.section).toContain("## Proactive Memory Hints");
+			expect(result.section).toContain("strict TypeScript mode");
+			expect(result.surfacedIds).toContain(entry.id);
 		});
 	});
 
@@ -357,7 +419,7 @@ describe("SmaranStore", () => {
 
 			const prefs = store.listByCategory("preference");
 			expect(prefs.length).toBe(2);
-			expect(prefs.every(e => e.category === "preference")).toBe(true);
+			expect(prefs.every((e) => e.category === "preference")).toBe(true);
 
 			const facts = store.listByCategory("fact");
 			expect(facts.length).toBe(1);
@@ -507,6 +569,23 @@ describe("SmaranStore", () => {
 			const after = store.get(entry.id)!;
 			expect(after.confidence).toBe(1.0);
 		});
+
+		it("should be deterministic across repeated decay calls at the same timestamp window", () => {
+			const entry = store.remember("Stable decay baseline check", "fact", {
+				source: "inferred",
+				confidence: 0.8,
+				decayHalfLifeDays: 2,
+			});
+			const stored = store.get(entry.id)!;
+			(stored as any).updatedAt = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString();
+
+			store.decayConfidence();
+			const once = store.get(entry.id)!.confidence;
+			store.decayConfidence();
+			const twice = store.get(entry.id)!.confidence;
+
+			expect(Math.abs(once - twice)).toBeLessThan(0.000001);
+		});
 	});
 
 	// ── prune() ─────────────────────────────────────────────────────────
@@ -635,9 +714,7 @@ describe("SmaranStore", () => {
 			expect(updated).not.toBeNull();
 			expect(updated!.updatedAt).toBeTruthy();
 			// updatedAt might be same ms, but should be set
-			expect(new Date(updated!.updatedAt).getTime()).toBeGreaterThanOrEqual(
-				new Date(originalUpdated).getTime(),
-			);
+			expect(new Date(updated!.updatedAt).getTime()).toBeGreaterThanOrEqual(new Date(originalUpdated).getTime());
 		});
 
 		it("should return null for a non-existent ID", () => {
@@ -723,7 +800,7 @@ describe("SmaranStore", () => {
 
 			expect(store2.size).toBe(2);
 			const all = store2.listAll();
-			const contents = all.map(e => e.content);
+			const contents = all.map((e) => e.content);
 			expect(contents).toContain("Persistent fact about science");
 			expect(contents).toContain("Persistent preference for tabs");
 		});

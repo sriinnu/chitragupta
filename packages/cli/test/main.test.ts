@@ -90,6 +90,7 @@ const {
 	MockVidyaBridge,
 	// @chitragupta/smriti (ConsolidationEngine)
 	MockConsolidationEngine,
+	mockRunConsolidationViaDaemon,
 	// local modules
 	mockDetectProject,
 	mockLoadContextFiles,
@@ -284,6 +285,16 @@ const {
 			save: vi.fn(),
 		};
 	});
+	const mockRunConsolidationViaDaemon = vi.fn(async () => ({
+		sessionsAnalyzed: 1,
+		newRulesCount: 0,
+		reinforcedRulesCount: 0,
+		weakenedRulesCount: 0,
+		patternsDetectedCount: 0,
+		newRulesPreview: [],
+		vidhisNewCount: 0,
+		vidhisReinforcedCount: 0,
+	}));
 
 	// ─── HTTP server mock ──────────────────────────────────────────────
 	const mockServerInstance = {
@@ -390,6 +401,7 @@ const {
 		MockVidyaBridge,
 		// @chitragupta/smriti (ConsolidationEngine)
 		MockConsolidationEngine,
+		mockRunConsolidationViaDaemon,
 		// local modules
 		mockDetectProject: vi.fn().mockReturnValue({ type: "typescript", name: "test-app", path: "/test/project" }),
 		mockLoadContextFiles: vi.fn().mockReturnValue({}),
@@ -457,6 +469,7 @@ vi.mock("@chitragupta/swara/provider-registry", () => ({
 
 vi.mock("@chitragupta/swara/providers", () => ({
 	registerBuiltinProviders: mockRegisterSwaraProviders,
+	createLlamaCpp: vi.fn().mockReturnValue({ id: "llama.cpp", name: "llama.cpp" }),
 	createOpenAICompatProvider: mockCreateOpenAICompatProvider,
 	claudeCodeProvider: { id: "claude-code", name: "Claude Code" },
 	geminiCLIProvider: { id: "gemini-cli", name: "Gemini CLI" },
@@ -492,6 +505,14 @@ vi.mock("@chitragupta/anina", () => ({
 	SoulManager: MockSoulManager,
 	ARCHETYPES: {},
 	AgentReflector: MockAgentReflector,
+	MemoryBridge: class MockMemoryBridge {
+		getIdentityContext() {
+			return { load: () => "" };
+		}
+		async loadMemoryContext() {
+			return "";
+		}
+	},
 }));
 
 vi.mock("@chitragupta/smriti/session-store", () => ({
@@ -501,6 +522,58 @@ vi.mock("@chitragupta/smriti/session-store", () => ({
 	saveSession: mockSaveSession,
 	addTurn: mockAddTurn,
 }));
+
+vi.mock("../src/modes/daemon-bridge.js", () => {
+	return {
+		openSession: vi.fn(async (opts: Record<string, unknown>) => {
+			const created = mockCreateSession(opts);
+			return { session: created, created: true };
+		}),
+		createSession: vi.fn(async (opts: Record<string, unknown>) => {
+			const created = mockCreateSession(opts);
+			return { id: created.meta.id };
+		}),
+		showSession: vi.fn(async (id: string, project: string) => {
+			const created = mockCreateSession.mock.results.at(-1)?.value;
+			if (created && id === created.meta.id) {
+				return created;
+			}
+			try {
+				const loaded = mockLoadSession(id, project);
+				return loaded ?? created;
+			} catch (error) {
+				if (created) return created;
+				throw error;
+			}
+		}),
+		listSessions: vi.fn(async (project?: string) => mockListSessions(project)),
+		addTurn: vi.fn(async (sessionId: string, project: string, turn: Record<string, unknown>) => {
+			await mockAddTurn(sessionId, project, turn);
+		}),
+		unifiedRecall: vi.fn(async () => []),
+		getLucyLiveContextViaDaemon: vi.fn(async () => ({ predictions: [], hit: null, liveSignals: [] })),
+		getAkashaStatsViaDaemon: vi.fn(async () => ({ totalTraces: 0, activeTraces: 0, avgStrength: 0, totalReinforcements: 0, byType: {} })),
+		queryAkashaViaDaemon: vi.fn(async () => []),
+		strongestAkashaViaDaemon: vi.fn(async () => []),
+		leaveAkashaViaDaemon: vi.fn(async () => ({ id: "trace-1" })),
+		onDaemonNotification: vi.fn(async () => () => {}),
+		getNidraStatusViaDaemon: vi.fn(async () => ({
+			state: "LISTENING",
+			lastStateChange: 0,
+			lastHeartbeat: 0,
+			consolidationProgress: 0,
+			uptimeMs: 0,
+		})),
+		touchNidraViaDaemon: vi.fn(async () => undefined),
+		notifyNidraSessionViaDaemon: vi.fn(async () => undefined),
+		wakeNidraViaDaemon: vi.fn(async () => undefined),
+		recordBuddhiDecisionViaDaemon: vi.fn(async () => ({ id: "decision-1" })),
+		listBuddhiDecisionsViaDaemon: vi.fn(async () => []),
+		getBuddhiDecisionViaDaemon: vi.fn(async () => null),
+		explainBuddhiDecisionViaDaemon: vi.fn(async () => null),
+		runConsolidationViaDaemon: mockRunConsolidationViaDaemon,
+	};
+});
 
 vi.mock("@chitragupta/smriti", () => ({
 	CheckpointManager: MockCheckpointManager,
@@ -978,67 +1051,77 @@ describe("main()", () => {
 	// Serve command
 	// ═══════════════════════════════════════════════════════════════════════
 
-	describe("serve command", () => {
-		it("should create HTTP server with default port and host", async () => {
-			// The serve command blocks on SIGINT; simulate SIGINT to unblock.
-			const originalOn = process.on.bind(process);
-			const onSpy = vi.spyOn(process, "on").mockImplementation(((event: string, handler: (...args: unknown[]) => void) => {
-				if (event === "SIGINT") {
-					setTimeout(() => handler(), 0);
+		describe("serve command", () => {
+			it("should create HTTP server with default port and host", async () => {
+				// The serve command blocks on SIGINT; simulate SIGINT to unblock.
+				const originalOn = process.on.bind(process);
+				const onSpy = vi.spyOn(process, "on").mockImplementation(((event: string, handler: (...args: unknown[]) => void) => {
+					if (event === "SIGINT") {
+						setTimeout(() => handler(), 0);
+					}
+					return originalOn(event, handler);
+				}) as typeof process.on);
+				try {
+					await main(makeArgs({ command: "serve" }));
+
+					expect(mockCreateChitraguptaAPI).toHaveBeenCalled();
+					expect(mockServerInstance.start).toHaveBeenCalled();
+					expect(stdoutSpy).toHaveBeenCalledWith(
+						expect.stringContaining("3141"),
+					);
+				} finally {
+					onSpy.mockRestore();
 				}
-				return originalOn(event, handler);
-			}) as typeof process.on);
+			});
 
-			await main(makeArgs({ command: "serve" }));
+			it("should use custom port and host from args", async () => {
+				const originalAllowInsecureRemoteServe = process.env.CHITRAGUPTA_ALLOW_INSECURE_REMOTE_SERVE;
+				process.env.CHITRAGUPTA_ALLOW_INSECURE_REMOTE_SERVE = "1";
+				const originalOn = process.on.bind(process);
+				const onSpy = vi.spyOn(process, "on").mockImplementation(((event: string, handler: (...args: unknown[]) => void) => {
+					if (event === "SIGINT") {
+						setTimeout(() => handler(), 0);
+					}
+					return originalOn(event, handler);
+				}) as typeof process.on);
+				try {
+					await main(makeArgs({ command: "serve", port: 8080, host: "0.0.0.0" }));
 
-			expect(mockCreateChitraguptaAPI).toHaveBeenCalled();
-			expect(mockServerInstance.start).toHaveBeenCalled();
-			expect(stdoutSpy).toHaveBeenCalledWith(
-				expect.stringContaining("3141"),
-			);
-
-			onSpy.mockRestore();
-		});
-
-		it("should use custom port and host from args", async () => {
-			const originalOn = process.on.bind(process);
-			const onSpy = vi.spyOn(process, "on").mockImplementation(((event: string, handler: (...args: unknown[]) => void) => {
-				if (event === "SIGINT") {
-					setTimeout(() => handler(), 0);
+					expect(mockCreateChitraguptaAPI).toHaveBeenCalledWith(
+						expect.any(Object),
+						expect.objectContaining({
+							port: 8080,
+							host: "0.0.0.0",
+						}),
+					);
+				} finally {
+					onSpy.mockRestore();
+					if (originalAllowInsecureRemoteServe === undefined) {
+						delete process.env.CHITRAGUPTA_ALLOW_INSECURE_REMOTE_SERVE;
+					} else {
+						process.env.CHITRAGUPTA_ALLOW_INSECURE_REMOTE_SERVE = originalAllowInsecureRemoteServe;
+					}
 				}
-				return originalOn(event, handler);
-			}) as typeof process.on);
+			});
 
-			await main(makeArgs({ command: "serve", port: 8080, host: "0.0.0.0" }));
+			it("should return early without running interactive or print mode", async () => {
+				const originalOn = process.on.bind(process);
+				const onSpy = vi.spyOn(process, "on").mockImplementation(((event: string, handler: (...args: unknown[]) => void) => {
+					if (event === "SIGINT") {
+						setTimeout(() => handler(), 0);
+					}
+					return originalOn(event, handler);
+				}) as typeof process.on);
+				try {
+					await main(makeArgs({ command: "serve" }));
 
-			expect(mockCreateChitraguptaAPI).toHaveBeenCalledWith(
-				expect.any(Object),
-				expect.objectContaining({
-					port: 8080,
-					host: "0.0.0.0",
-				}),
-			);
-
-			onSpy.mockRestore();
-		});
-
-		it("should return early without running interactive or print mode", async () => {
-			const originalOn = process.on.bind(process);
-			const onSpy = vi.spyOn(process, "on").mockImplementation(((event: string, handler: (...args: unknown[]) => void) => {
-				if (event === "SIGINT") {
-					setTimeout(() => handler(), 0);
+					expect(mockRunInteractiveMode).not.toHaveBeenCalled();
+					expect(mockRunPrintMode).not.toHaveBeenCalled();
+				} finally {
+					onSpy.mockRestore();
 				}
-				return originalOn(event, handler);
-			}) as typeof process.on);
-
-			await main(makeArgs({ command: "serve" }));
-
-			expect(mockRunInteractiveMode).not.toHaveBeenCalled();
-			expect(mockRunPrintMode).not.toHaveBeenCalled();
-
-			onSpy.mockRestore();
+			});
 		});
-	});
 
 	// ═══════════════════════════════════════════════════════════════════════
 	// Provider resolution
@@ -1558,24 +1641,11 @@ describe("main()", () => {
 	// Post-session consolidation
 	// ═══════════════════════════════════════════════════════════════════════
 
-		describe("post-session consolidation", () => {
-			it("should run ConsolidationEngine after interactive mode returns", async () => {
+	describe("post-session consolidation", () => {
+			it("should run daemon-backed consolidation after interactive mode returns", async () => {
 				await runMain(makeArgs());
-
-				if (!MockConsolidationEngine || !(MockConsolidationEngine as { mock?: unknown }).mock) {
-					expect(exitSpy).toHaveBeenCalledWith(0);
-					return;
-				}
-
-				// ConsolidationEngine should have been constructed
-				expect(MockConsolidationEngine).toHaveBeenCalled();
-
-				// Its load/consolidate/save methods should have been invoked
-				const instance = MockConsolidationEngine.mock.results[0]?.value;
-				expect(instance).toBeDefined();
-				if (instance?.load) {
-					expect(instance.load).toHaveBeenCalled();
-				}
+				expect(mockRunConsolidationViaDaemon).toHaveBeenCalledWith(process.cwd(), 5);
+				expect(MockConsolidationEngine).not.toHaveBeenCalled();
 			});
 
 		it("should call process.exit(0) after consolidation completes", async () => {
@@ -1585,26 +1655,7 @@ describe("main()", () => {
 		});
 
 		it("should exit cleanly even if consolidation throws", async () => {
-			if (!MockConsolidationEngine || !(MockConsolidationEngine as { mock?: unknown }).mock) {
-				await runMain(makeArgs());
-				expect(exitSpy).toHaveBeenCalledWith(0);
-				return;
-			}
-
-			const consolidationMock = MockConsolidationEngine as {
-				mockImplementation?: (impl: () => unknown) => void;
-			};
-			if (typeof consolidationMock.mockImplementation === "function") {
-				consolidationMock.mockImplementation(function () {
-					return {
-						load: vi.fn(() => { throw new Error("disk full"); }),
-						consolidate: vi.fn(),
-						decayRules: vi.fn(),
-						pruneRules: vi.fn(),
-						save: vi.fn(),
-					};
-				});
-			}
+			mockRunConsolidationViaDaemon.mockRejectedValueOnce(new Error("daemon unavailable"));
 
 			// Should not throw beyond the expected process.exit
 			await runMain(makeArgs());

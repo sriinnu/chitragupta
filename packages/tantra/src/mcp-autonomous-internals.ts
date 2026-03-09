@@ -31,6 +31,75 @@ export interface ManagerInternals {
 	running: boolean;
 }
 
+function quarantineRetryDelayMs(config: Required<AutonomousMcpConfig>): number {
+	return Math.max(1_000, Math.min(config.discoveryIntervalMs, 5_000));
+}
+
+function releaseRecoveredServer(serverId: string, state: ManagerInternals): void {
+	state.quarantine.delete(serverId);
+	state.crashTimestamps.delete(serverId);
+	state.circuitBreaker.remove(serverId);
+	refreshHealthScore(serverId, state);
+}
+
+function scheduleQuarantineRetry(
+	serverId: string,
+	state: ManagerInternals,
+): void {
+	const info = state.quarantine.get(serverId);
+	if (!info) return;
+
+	info.restartPending = false;
+	info.releaseAt = Date.now() + quarantineRetryDelayMs(state.config);
+}
+
+function recoverQuarantinedServer(
+	serverId: string,
+	state: ManagerInternals,
+): void {
+	const quarantineInfo = state.quarantine.get(serverId);
+	if (!quarantineInfo || quarantineInfo.restartPending) return;
+
+	const server = state.registry.getServer(serverId);
+	if (!server) {
+		state.quarantine.delete(serverId);
+		state.crashTimestamps.delete(serverId);
+		state.circuitBreaker.remove(serverId);
+		state.knownServerIds.delete(serverId);
+		return;
+	}
+
+	if (
+		server.state === "ready" ||
+		server.state === "starting" ||
+		server.state === "restarting"
+	) {
+		releaseRecoveredServer(serverId, state);
+		return;
+	}
+
+	if (server.state === "stopping") {
+		scheduleQuarantineRetry(serverId, state);
+		return;
+	}
+
+	quarantineInfo.restartPending = true;
+	quarantineInfo.restartAttempts = (quarantineInfo.restartAttempts ?? 0) + 1;
+	quarantineInfo.lastRestartAttemptAt = Date.now();
+
+	const recovery = server.state === "error"
+		? state.registry.restartServer(serverId)
+		: state.registry.startServer(serverId).then(() => undefined);
+
+	recovery
+		.then(() => {
+			releaseRecoveredServer(serverId, state);
+		})
+		.catch(() => {
+			scheduleQuarantineRetry(serverId, state);
+		});
+}
+
 /** Handle a registry event for health tracking and crash detection. */
 export function handleRegistryEvent(
 	event: RegistryEvent,
@@ -43,8 +112,13 @@ export function handleRegistryEvent(
 			if (event.to === "error") {
 				recordCrash(event.serverId, state);
 			}
-			if (event.to === "ready" && server && state.skillCallback) {
-				generateSkills(server, state);
+			if (event.to === "ready") {
+				if (state.quarantine.has(event.serverId)) {
+					releaseRecoveredServer(event.serverId, state);
+				}
+				if (server && state.skillCallback) {
+					generateSkills(server, state);
+				}
 			}
 			break;
 		}
@@ -70,6 +144,7 @@ export function handleRegistryEvent(
 		case "server:removed": {
 			state.knownServerIds.delete(event.serverId);
 			state.healthScores.delete(event.serverId);
+			state.quarantine.delete(event.serverId);
 			state.circuitBreaker.remove(event.serverId);
 			state.crashTimestamps.delete(event.serverId);
 			break;
@@ -165,6 +240,8 @@ export function recordCrash(
 	serverId: string,
 	state: ManagerInternals,
 ): void {
+	if (state.quarantine.has(serverId)) return;
+
 	const now = Date.now();
 	const timestamps = state.crashTimestamps.get(serverId) ?? [];
 	timestamps.push(now);
@@ -195,6 +272,8 @@ export function quarantineServer(
 		quarantinedAt: now,
 		releaseAt: now + state.config.quarantineDurationMs,
 		crashTimestamps,
+		restartPending: false,
+		restartAttempts: 0,
 	});
 	state.registry.stopServer(serverId).catch(() => {});
 }
@@ -205,9 +284,7 @@ export function pruneExpiredQuarantines(
 ): void {
 	const now = Date.now();
 	for (const [serverId, info] of state.quarantine) {
-		if (info.releaseAt <= now) {
-			state.quarantine.delete(serverId);
-			state.crashTimestamps.delete(serverId);
-		}
+		if (info.releaseAt > now) continue;
+		recoverQuarantinedServer(serverId, state);
 	}
 }

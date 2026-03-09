@@ -10,6 +10,16 @@ Anina is the soul of Chitragupta -- the core agent runtime that drives the conve
 
 Beyond the runtime, Anina houses the agent's **inner life**: the Chetana consciousness layer (affect, attention, self-model, intention, health, emotional awareness), the Manas pre-processor for zero-cost input classification, the Buddhi decision framework for Nyaya-style formal reasoning, the Nidra sleep-cycle daemon for background consolidation, the Pratyabhijna self-recognition engine for session-start identity loading, and the Lokapala guardian system for continuous security, performance, and correctness monitoring.
 
+Anina is one of the primary internal homes of the Lucy/Scarlett runtime model. The public coding path exposes only one slice of that story; inside Chitragupta, Anina is where live prompt refresh, Buddhi decisions, Nidra lifecycle, Lokapala findings, and Triguna/Chetana signals actually move.
+
+In the main Chitragupta runtime, Anina now receives a daemon-backed `MemoryBridge` by default so the live agent loop shares the same session and memory authority as CLI, API, and serve surfaces.
+
+Related docs:
+
+- Public coding path: [../../docs/coding-agent.md](../../docs/coding-agent.md)
+- Runtime integrity wiring: [../../docs/runtime-integrity.md](../../docs/runtime-integrity.md)
+- Engine constitution: [../../docs/runtime-constitution.md](../../docs/runtime-constitution.md)
+
 ---
 
 ## Key Features

@@ -36,12 +36,15 @@ export interface SamitiLike {
 }
 
 /** Duck-typed SabhaEngine (multi-agent deliberation). */
+type MaybePromise<T> = T | Promise<T>;
+
+/** Duck-typed SabhaEngine (multi-agent deliberation). */
 export interface SabhaEngineLike {
 	convene(
 		topic: string,
 		convener: string,
 		participants: Array<{ id: string; role: string; expertise: number; credibility: number }>,
-	): { id: string };
+	): MaybePromise<{ id: string }>;
 	propose(
 		sabhaId: string,
 		proposerId: string,
@@ -52,10 +55,15 @@ export interface SabhaEngineLike {
 			upanaya: string;
 			nigamana: string;
 		},
-	): unknown;
-	vote(sabhaId: string, participantId: string, position: "support" | "oppose" | "abstain", reasoning: string): unknown;
-	conclude(sabhaId: string): { finalVerdict: string | null; topic: string };
-	explain(sabhaId: string): string;
+	): MaybePromise<unknown>;
+	vote(
+		sabhaId: string,
+		participantId: string,
+		position: "support" | "oppose" | "abstain",
+		reasoning: string,
+	): MaybePromise<unknown>;
+	conclude(sabhaId: string): MaybePromise<{ finalVerdict: string | null; topic: string }>;
+	explain(sabhaId: string): MaybePromise<string>;
 }
 
 /** Duck-typed AkashaField (shared knowledge traces). */
@@ -71,8 +79,25 @@ export interface AkashaFieldLike {
 		content: string;
 		strength: number;
 		reinforcements: number;
-	}>;
-	leave(agentId: string, type: string, topic: string, content: string): { id: string };
+	}> | Promise<Array<{
+		id: string;
+		agentId: string;
+		traceType: string;
+		topic: string;
+		content: string;
+		strength: number;
+		reinforcements: number;
+	}>>;
+	leave(
+		agentId: string,
+		type: string,
+		topic: string,
+		content: string,
+		metadata?: Record<string, unknown>,
+	): { id: string } | Promise<{ id: string }>;
+	strongest?(limit?: number): Array<Record<string, unknown>> | Promise<Array<Record<string, unknown>>>;
+	stats?(): Record<string, unknown> | Promise<Record<string, unknown>>;
+	setOnEvent?(handler: (event: { type: string; trace?: unknown }) => void): void;
 }
 
 // ─── Behavioral & Health ────────────────────────────────────────────────────
@@ -163,7 +188,12 @@ export interface SoulManagerLike {
 export interface ActorSystemLike {
 	readonly actorCount: number;
 	readonly isRunning: boolean;
-	spawn(id: string, behavior: unknown, opts?: Record<string, unknown>): unknown;
+	spawn(id: string, options: {
+		behavior: unknown;
+		expertise?: string[];
+		capabilities?: string[];
+		mailboxSize?: number;
+	}): unknown;
 	tell(from: string, to: string, payload: unknown, opts?: Record<string, unknown>): void;
 	ask(from: string, to: string, payload: unknown, opts?: Record<string, unknown>): Promise<unknown>;
 	start(): void;

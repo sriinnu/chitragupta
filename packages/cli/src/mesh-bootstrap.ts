@@ -12,6 +12,12 @@
  */
 
 import { createLogger } from "@chitragupta/core";
+import { getMeshRuntimeSnapshot, type MeshStatusSnapshot } from "./mesh-observability.js";
+import {
+	connectMeshPeerViaDaemon,
+	getMeshStatusViaDaemon,
+} from "./modes/daemon-bridge-collective.js";
+import { allowLocalRuntimeFallback } from "./runtime-daemon-proxies.js";
 
 const log = createLogger("cli:mesh-bootstrap");
 
@@ -177,16 +183,6 @@ export function resolveMeshConfig(
 
 // ─── Status ─────────────────────────────────────────────────────────────────
 
-/** Snapshot of mesh network health for the /api/mesh/status endpoint. */
-export interface MeshStatusSnapshot {
-	nodeId: string;
-	meshPort: number;
-	peers: Array<{ peerId: string; endpoint: string; state: string; outbound: boolean }>;
-	connectedCount: number;
-	actorLocations: number;
-	gossipRunning: boolean;
-}
-
 /**
  * Build the mesh-related API handler fields for `createChitraguptaAPI`.
  *
@@ -204,14 +200,22 @@ export function buildMeshApiHandlers(
 				return (actorSystem as { getRouter(): unknown } | undefined)?.getRouter();
 			} catch { return undefined; }
 		},
-		getMeshStatus: (): MeshStatusSnapshot | undefined => {
+		getMeshStatus: async (): Promise<MeshStatusSnapshot | undefined> => {
+			try {
+				return await getMeshStatusViaDaemon();
+			} catch {
+				if (!allowLocalRuntimeFallback()) return undefined;
+			}
 			const br = getBootstrapResult();
-			if (!actorSystem || !br) return undefined;
-			const snap = getMeshStatus(actorSystem);
-			if (snap) snap.meshPort = br.meshPort;
-			return snap;
+			if (!actorSystem) return undefined;
+			return getMeshRuntimeSnapshot(actorSystem, br?.meshPort ?? 0);
 		},
 		connectToPeer: async (endpoint: string): Promise<boolean> => {
+			try {
+				return await connectMeshPeerViaDaemon(endpoint);
+			} catch {
+				if (!allowLocalRuntimeFallback()) return false;
+			}
 			try {
 				const connMgr = (actorSystem as {
 					getConnectionManager(): { connectToPeer(e: string): Promise<unknown> } | null;
@@ -231,32 +235,5 @@ export function buildMeshApiHandlers(
  * @returns Status snapshot, or `undefined` if P2P is not bootstrapped.
  */
 export function getMeshStatus(actorSystem: unknown): MeshStatusSnapshot | undefined {
-	try {
-		const sys = actorSystem as {
-			getConnectionManager(): {
-				nodeId: string;
-				getPeers(): Array<{ peerId: string; endpoint: string; state: string; outbound: boolean }>;
-				connectedCount: number;
-			} | null;
-			getNetworkGossip(): {
-				locationCount: number;
-			} | null;
-		};
-
-		const connMgr = sys.getConnectionManager();
-		if (!connMgr) return undefined;
-
-		const netGossip = sys.getNetworkGossip();
-
-		return {
-			nodeId: connMgr.nodeId,
-			meshPort: 0, // filled by caller from bootstrap result
-			peers: connMgr.getPeers(),
-			connectedCount: connMgr.connectedCount,
-			actorLocations: netGossip?.locationCount ?? 0,
-			gossipRunning: netGossip !== null,
-		};
-	} catch {
-		return undefined;
-	}
+	return getMeshRuntimeSnapshot(actorSystem, 0);
 }

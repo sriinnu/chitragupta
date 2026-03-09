@@ -21,6 +21,7 @@ import type {
 import { createRequest, isResponse } from "./jsonrpc.js";
 import { StdioClientTransport } from "./transport/stdio.js";
 import { SSEClientTransport } from "./transport/sse.js";
+import { StreamableHttpClientTransport } from "./transport/streamable-http.js";
 
 type AnyMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
 
@@ -52,6 +53,7 @@ export class McpClient {
 	private _serverInfo: ServerInfo | null = null;
 	private _stdioTransport: StdioClientTransport | null = null;
 	private _sseTransport: SSEClientTransport | null = null;
+	private _streamableHttpTransport: StreamableHttpClientTransport | null = null;
 	private _pending: Map<string | number, PendingRequest> = new Map();
 	private _notificationHandlers: Array<(n: JsonRpcNotification) => void> = [];
 	private _idCounter = 0;
@@ -78,6 +80,8 @@ export class McpClient {
 				await this._connectStdio();
 			} else if (this._config.transport === "sse") {
 				await this._connectSSE();
+			} else if (this._config.transport === "streamable-http") {
+				await this._connectStreamableHttp();
 			}
 
 			// Perform MCP initialize handshake
@@ -125,6 +129,10 @@ export class McpClient {
 		if (this._sseTransport) {
 			this._sseTransport.disconnect();
 			this._sseTransport = null;
+		}
+		if (this._streamableHttpTransport) {
+			this._streamableHttpTransport.disconnect();
+			this._streamableHttpTransport = null;
 		}
 
 		this._state = "disconnected";
@@ -277,7 +285,17 @@ export class McpClient {
 
 		this._sseTransport = new SSEClientTransport();
 		this._sseTransport.onMessage((msg) => this._onMessage(msg));
-		await this._sseTransport.connect(this._config.serverUrl);
+		await this._sseTransport.connect(this._config.serverUrl, this._config.auth);
+	}
+
+	private async _connectStreamableHttp(): Promise<void> {
+		if (!this._config.serverUrl) {
+			throw new Error("McpClient: serverUrl is required for streamable-http transport");
+		}
+
+		this._streamableHttpTransport = new StreamableHttpClientTransport();
+		this._streamableHttpTransport.onMessage((msg) => this._onMessage(msg));
+		await this._streamableHttpTransport.connect(this._config.serverUrl, this._config.auth);
 	}
 
 	/**
@@ -332,6 +350,12 @@ export class McpClient {
 						clearTimeout(timer);
 						reject(err);
 					});
+				} else if (this._streamableHttpTransport) {
+					this._streamableHttpTransport.send(request).catch((err) => {
+						this._pending.delete(id);
+						clearTimeout(timer);
+						reject(err);
+					});
 				} else {
 					clearTimeout(timer);
 					this._pending.delete(id);
@@ -359,6 +383,10 @@ export class McpClient {
 			this._stdioTransport.send(notification);
 		} else if (this._sseTransport) {
 			this._sseTransport.send(notification).catch(() => {
+				// Notifications are fire-and-forget
+			});
+		} else if (this._streamableHttpTransport) {
+			this._streamableHttpTransport.send(notification).catch(() => {
 				// Notifications are fire-and-forget
 			});
 		}

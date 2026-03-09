@@ -16,6 +16,7 @@ describe("Server integration (real socket)", () => {
 	let paths: DaemonPaths;
 	let server: DaemonServer;
 	let client: DaemonClient;
+	let router: RpcRouter;
 
 	beforeEach(async () => {
 		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "chitragupta-daemon-test-"));
@@ -26,7 +27,7 @@ describe("Server integration (real socket)", () => {
 			lock: path.join(tmpDir, "test.lock"),
 		};
 
-		const router = new RpcRouter();
+		router = new RpcRouter();
 		router.register("echo", async (params) => ({ echo: params.msg }), "Echo");
 		router.register("add", async (params) => ({
 			sum: Number(params.a) + Number(params.b),
@@ -92,10 +93,160 @@ describe("Server integration (real socket)", () => {
 		expect(typeof health.methods).toBe("number");
 	});
 
+	it("should deliver server-push notifications to connected clients", async () => {
+		const received: Array<Record<string, unknown>> = [];
+		const unsubscribe = client.onNotification("pattern_detected", (params) => {
+			received.push(params);
+		});
+
+		const delivered = router.notify("pattern_detected", { type: "tool_sequence", confidence: 0.8 });
+		expect(delivered).toBe(1);
+
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		unsubscribe();
+
+		expect(received).toEqual([
+			expect.objectContaining({ type: "tool_sequence", confidence: 0.8 }),
+		]);
+	});
+
 	it("should reject second daemon bind when socket is already live", async () => {
 		const secondRouter = new RpcRouter();
 		await expect(startServer({ paths, router: secondRouter }))
 			.rejects
 			.toThrow("Socket already in use by a live daemon");
+	});
+
+	it("should reconnect the same client after daemon restart and keep notifications alive", async () => {
+		const received: Array<Record<string, unknown>> = [];
+		client.onNotification("akasha.trace_added", (params) => {
+			received.push(params);
+		});
+
+		const deliveredBefore = router.notify("akasha.trace_added", { trace: { id: "trace-1" } });
+		expect(deliveredBefore).toBe(1);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		await server.stop();
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		const restartedRouter = new RpcRouter();
+		restartedRouter.register("echo", async (params) => ({ echo: params.msg }), "Echo");
+		server = await startServer({ paths, router: restartedRouter });
+
+		const echoed = (await client.call("echo", { msg: "after restart" })) as Record<string, unknown>;
+		expect(echoed.echo).toBe("after restart");
+
+		const deliveredAfter = restartedRouter.notify("akasha.trace_added", { trace: { id: "trace-2" } });
+		expect(deliveredAfter).toBe(1);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		expect(received).toEqual([
+			expect.objectContaining({ trace: expect.objectContaining({ id: "trace-1" }) }),
+			expect.objectContaining({ trace: expect.objectContaining({ id: "trace-2" }) }),
+		]);
+	});
+});
+
+describe("Server integration auth (real socket)", () => {
+	let tmpDir: string;
+	let paths: DaemonPaths;
+	let server: DaemonServer;
+	let router: RpcRouter;
+
+	beforeEach(async () => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "chitragupta-daemon-auth-test-"));
+		paths = {
+			socket: path.join(tmpDir, "auth.sock"),
+			pid: path.join(tmpDir, "auth.pid"),
+			logDir: path.join(tmpDir, "logs"),
+			lock: path.join(tmpDir, "auth.lock"),
+		};
+
+		router = new RpcRouter();
+		router.register("akasha.leave", async () => ({ ok: true }), "Synthetic write route");
+		server = await startServer({
+			paths,
+			router,
+			auth: {
+				required: true,
+				validateToken(token) {
+					if (token === "chg_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
+						return {
+							authenticated: true,
+							tenantId: "local",
+							keyId: "admin-key",
+							scopes: ["admin"],
+						};
+					}
+					if (token === "chg_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") {
+						return {
+							authenticated: true,
+							tenantId: "local",
+							keyId: "read-key",
+							scopes: ["read"],
+						};
+					}
+					return { authenticated: false, error: "invalid key" };
+				},
+			},
+		});
+	});
+
+	afterEach(async () => {
+		await server.stop();
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("authenticates a bridge client before allowing requests", async () => {
+		const client = new DaemonClient({
+			socketPath: paths.socket,
+			autoStart: false,
+			timeout: 5_000,
+			apiKey: "chg_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		});
+		await client.connect();
+
+		const health = await client.call("daemon.health") as Record<string, unknown>;
+		expect(health.status).toBe("ok");
+		client.disconnect();
+	});
+
+	it("rejects unauthenticated requests when auth is required", async () => {
+		const client = new DaemonClient({
+			socketPath: paths.socket,
+			autoStart: false,
+			timeout: 5_000,
+			apiKey: "",
+		});
+		await client.connect();
+		await expect(client.call("daemon.health")).rejects.toThrow("Bridge authentication required");
+		client.disconnect();
+	});
+
+	it("rejects invalid bridge tokens during the handshake", async () => {
+		const client = new DaemonClient({
+			socketPath: paths.socket,
+			autoStart: false,
+			timeout: 5_000,
+			apiKey: "chg_cccccccccccccccccccccccccccccccc",
+		});
+		await expect(client.connect()).rejects.toThrow(/invalid key|Bridge authentication failed/);
+		client.disconnect();
+	});
+
+	it("enforces method scopes after a successful handshake", async () => {
+		const client = new DaemonClient({
+			socketPath: paths.socket,
+			autoStart: false,
+			timeout: 5_000,
+			apiKey: "chg_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		});
+		await client.connect();
+
+		const health = await client.call("daemon.health") as Record<string, unknown>;
+		expect(health.status).toBe("ok");
+		await expect(client.call("akasha.leave", { text: "forbidden" })).rejects.toThrow("Insufficient scope");
+		client.disconnect();
 	});
 });

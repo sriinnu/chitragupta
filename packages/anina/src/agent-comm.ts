@@ -58,7 +58,9 @@ export function initializeSubsystems(
 		lokapala: null, kaala: null,
 	};
 
-	if (config.enableMemory && config.project) {
+	if (config.memoryBridge) {
+		refs.memoryBridge = config.memoryBridge;
+	} else if (config.enableMemory && config.project) {
 		refs.memoryBridge = new MemoryBridge({
 			enabled: true,
 			project: config.project,

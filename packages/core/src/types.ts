@@ -71,8 +71,8 @@ export interface ChitraguptaSettings {
 	 * The system picks the first available provider from this list.
 	 * CLIs are zero-cost, Ollama is local, API keys are paid fallback.
 	 *
-	 * Example: ["claude-code", "codex-cli", "ollama", "anthropic"]
-	 * Default: ["claude-code", "codex-cli", "gemini-cli", "ollama", "anthropic", "openai", "google"]
+	 * Example: ["claude-code", "codex-cli", "llamacpp", "ollama", "anthropic"]
+	 * Default: ["claude-code", "codex-cli", "gemini-cli", "llamacpp", "ollama", "anthropic", "openai", "google"]
 	 */
 	providerPriority?: string[];
 	thinkingLevel: ThinkingLevel;
@@ -81,6 +81,7 @@ export interface ChitraguptaSettings {
 	memory: { autoSave: boolean; searchDepth: number };
 	theme: string;
 	plugins: string[];
+	llamacppEndpoint?: string;
 	ollamaEndpoint?: string;
 	graphrag?: {
 		enabled: boolean;
@@ -136,11 +137,21 @@ export interface ChitraguptaSettings {
 		/** Model override for coding agent (uses default if unset). */
 		model?: string;
 	};
+	/** Optional engine-owned remote semantic mirror (Qdrant today). */
+	remoteSemantic?: {
+		enabled?: boolean;
+		provider?: "qdrant";
+		url?: string;
+		apiKey?: string;
+		collection?: string;
+		timeoutMs?: number;
+		batchSize?: number;
+	};
 }
 
 /**
- * Default provider priority: CLIs first (zero cost), then local (Ollama),
- * then cloud APIs (paid). User can reorder in settings.json.
+ * Default provider priority: CLIs first (zero cost), then performance-first local,
+ * then convenience local, then cloud APIs (paid). User can reorder in settings.json.
  */
 export const DEFAULT_PROVIDER_PRIORITY = [
 	"claude-code",    // Claude Code CLI — zero cost
@@ -150,6 +161,7 @@ export const DEFAULT_PROVIDER_PRIORITY = [
 	"aider-cli",      // Aider CLI — zero cost
 	"zai-cli",        // Z.AI CLI (GLM) — zero cost
 	"minimax-cli",    // MiniMax CLI (M2.5) — zero cost
+	"llamacpp",       // llama.cpp local runtime — performance-first
 	"ollama",         // Local Ollama — zero cost
 	"anthropic",      // Anthropic API — paid
 	"openai",         // OpenAI API — paid
@@ -167,6 +179,7 @@ export const DEFAULT_SETTINGS: ChitraguptaSettings = {
 	memory: { autoSave: true, searchDepth: 50 },
 	theme: "default",
 	plugins: [],
+	llamacppEndpoint: "http://localhost:8080/v1",
 	ollamaEndpoint: "http://localhost:11434",
 	graphrag: {
 		enabled: false,

@@ -44,7 +44,7 @@ export function tokenize(text: string): string[] {
 		.toLowerCase()
 		.replace(/[^\w\s]/g, " ")
 		.split(/\s+/)
-		.filter(t => t.length > 1);
+		.filter((t) => t.length > 1);
 }
 
 /**
@@ -101,7 +101,7 @@ export function parseSimpleYaml(yaml: string): Record<string, unknown> {
 		// Inline array: [a, b, c]
 		if (rawValue.startsWith("[") && rawValue.endsWith("]")) {
 			const inner = rawValue.slice(1, -1);
-			result[key] = inner.trim() === "" ? [] : inner.split(",").map(s => s.trim());
+			result[key] = inner.trim() === "" ? [] : inner.split(",").map((s) => s.trim());
 			continue;
 		}
 
@@ -124,7 +124,11 @@ export function parseSimpleYaml(yaml: string): Record<string, unknown> {
  */
 export function parseTags(value: unknown): string[] {
 	if (Array.isArray(value)) return value.map(String);
-	if (typeof value === "string") return value.split(",").map(s => s.trim()).filter(Boolean);
+	if (typeof value === "string")
+		return value
+			.split(",")
+			.map((s) => s.trim())
+			.filter(Boolean);
 	return [];
 }
 
@@ -143,13 +147,13 @@ export function toSmaranMarkdown(entry: SmaranEntry): string {
 	lines.push(`category: ${entry.category}`);
 	lines.push(`source: ${entry.source}`);
 	lines.push(`confidence: ${entry.confidence}`);
-	lines.push(entry.tags.length > 0
-		? `tags: [${entry.tags.join(", ")}]`
-		: "tags: []");
+	lines.push(entry.tags.length > 0 ? `tags: [${entry.tags.join(", ")}]` : "tags: []");
 	lines.push(`created: ${entry.createdAt}`);
 	lines.push(`updated: ${entry.updatedAt}`);
 	if (entry.sessionId) lines.push(`session: ${entry.sessionId}`);
 	lines.push(`decayHalfLifeDays: ${entry.decayHalfLifeDays}`);
+	if (typeof entry.importance === "number") lines.push(`importance: ${entry.importance}`);
+	if (typeof entry.baselineConfidence === "number") lines.push(`baselineConfidence: ${entry.baselineConfidence}`);
 	lines.push("---");
 	lines.push("");
 	lines.push(entry.content);
@@ -185,6 +189,8 @@ export function fromSmaranMarkdown(content: string): SmaranEntry | null {
 		updatedAt: String(meta.updated ?? new Date().toISOString()),
 		sessionId: meta.session ? String(meta.session) : undefined,
 		decayHalfLifeDays: Number(meta.decayHalfLifeDays ?? 0),
+		importance: typeof meta.importance === "number" ? Number(meta.importance) : undefined,
+		baselineConfidence: typeof meta.baselineConfidence === "number" ? Number(meta.baselineConfidence) : undefined,
 	};
 }
 
@@ -200,7 +206,7 @@ export function loadSmaranEntries(storagePath: string): Map<string, SmaranEntry>
 	const entries = new Map<string, SmaranEntry>();
 	if (!fs.existsSync(storagePath)) return entries;
 
-	const files = fs.readdirSync(storagePath).filter(f => f.endsWith(".md"));
+	const files = fs.readdirSync(storagePath).filter((f) => f.endsWith(".md"));
 	for (const file of files) {
 		try {
 			const content = fs.readFileSync(path.join(storagePath, file), "utf-8");
@@ -249,10 +255,7 @@ export function deleteSmaranFile(storagePath: string, id: string): void {
  * @param entries - Iterable of existing SmaranEntry records
  * @returns Matching entry or null if none exceed 80% similarity
  */
-export function findSimilarEntry(
-	content: string,
-	entries: Iterable<SmaranEntry>,
-): SmaranEntry | null {
+export function findSimilarEntry(content: string, entries: Iterable<SmaranEntry>): SmaranEntry | null {
 	const queryTerms = new Set(tokenize(content));
 	if (queryTerms.size === 0) return null;
 
@@ -274,8 +277,56 @@ export function findSimilarEntry(
 export interface ScoredEntry {
 	/** The matched memory entry */
 	entry: SmaranEntry;
-	/** BM25 relevance score (higher = more relevant) */
+	/** Final blended score in [0, 1] (higher = more relevant + important). */
 	score: number;
+	/** Normalized lexical relevance component in [0, 1]. */
+	relevance: number;
+	/** Importance component in [0, 1] after temporal aging decay. */
+	importance: number;
+}
+
+/** Optional controls for BM25+importance scoring. */
+export interface ScoreBM25Options {
+	/** Override wall-clock used for temporal decay calculations. */
+	nowMs?: number;
+	/** Drop memories whose computed importance falls below this threshold. */
+	minImportance?: number;
+}
+
+const CATEGORY_IMPORTANCE_WEIGHT: Record<SmaranCategory, number> = {
+	preference: 0.85,
+	fact: 0.75,
+	decision: 0.9,
+	instruction: 1.0,
+	context: 0.65,
+};
+
+const DEFAULT_IMPORTANCE_HALFLIFE_DAYS = 180;
+
+/** Clamp number to [0, 1]. */
+function clamp01(v: number): number {
+	if (v <= 0) return 0;
+	if (v >= 1) return 1;
+	return v;
+}
+
+/**
+ * Compute importance(t) = base_importance * e^(-lambda * age_days).
+ *
+ * `lambda = ln(2)/halfLifeDays`, so one half-life drops importance by 50%.
+ */
+export function computeEntryImportance(entry: SmaranEntry, nowMs = Date.now()): number {
+	const baseImportance = clamp01(
+		typeof entry.importance === "number"
+			? entry.importance
+			: CATEGORY_IMPORTANCE_WEIGHT[entry.category] * (0.55 + 0.45 * clamp01(entry.confidence)),
+	);
+	const halfLifeDays = entry.decayHalfLifeDays > 0 ? entry.decayHalfLifeDays : DEFAULT_IMPORTANCE_HALFLIFE_DAYS;
+	const updatedAtMs = new Date(entry.updatedAt).getTime();
+	if (!Number.isFinite(updatedAtMs)) return baseImportance;
+	const ageDays = Math.max(0, (nowMs - updatedAtMs) / (1000 * 60 * 60 * 24));
+	const decay = Math.exp((-Math.LN2 * ageDays) / Math.max(1, halfLifeDays));
+	return clamp01(baseImportance * decay);
 }
 
 /**
@@ -291,16 +342,19 @@ export function scoreBM25Recall(
 	entries: Iterable<SmaranEntry>,
 	query: string,
 	threshold: number,
+	options?: ScoreBM25Options,
 ): ScoredEntry[] {
 	const queryTerms = tokenize(query);
 	if (queryTerms.length === 0) return [];
+	const nowMs = options?.nowMs ?? Date.now();
+	const minImportance = options?.minImportance ?? 0;
 
 	// Build document frequency map
 	const allEntries: SmaranEntry[] = [];
 	const df = new Map<string, number>();
 	for (const entry of entries) {
 		allEntries.push(entry);
-		const terms = new Set(tokenize(entry.content + " " + entry.tags.join(" ")));
+		const terms = new Set(tokenize(`${entry.content} ${entry.tags.join(" ")}`));
 		for (const term of terms) {
 			df.set(term, (df.get(term) ?? 0) + 1);
 		}
@@ -314,33 +368,38 @@ export function scoreBM25Recall(
 	const scored: ScoredEntry[] = [];
 
 	for (const entry of allEntries) {
-		const docText = (entry.content + " " + entry.tags.join(" ")).toLowerCase();
+		const docText = `${entry.content} ${entry.tags.join(" ")}`.toLowerCase();
 		const docTerms = tokenize(docText);
 
 		let bm25 = 0;
 		for (const qt of queryTerms) {
-			const termFreq = docTerms.filter(t => t === qt).length;
+			const termFreq = docTerms.filter((t) => t === qt).length;
 			if (termFreq === 0) continue;
 			const docFreq = df.get(qt) ?? 0;
 			const idf = Math.log((N - docFreq + 0.5) / (docFreq + 0.5) + 1);
-			const tf = (termFreq * (k1 + 1)) / (termFreq + k1 * (1 - b + b * docTerms.length / avgLen));
+			const tf = (termFreq * (k1 + 1)) / (termFreq + k1 * (1 - b + (b * docTerms.length) / avgLen));
 			bm25 += idf * tf;
 		}
+		if (bm25 <= 0) continue;
 
 		// Boost for exact substring match
 		if (docText.includes(queryLower)) bm25 *= 1.5;
 
 		// Boost for high confidence
-		bm25 *= (0.5 + 0.5 * entry.confidence);
+		bm25 *= 0.5 + 0.5 * entry.confidence;
 
 		// Temporal decay
 		if (entry.decayHalfLifeDays > 0) {
-			const ageMs = Date.now() - new Date(entry.updatedAt).getTime();
+			const ageMs = nowMs - new Date(entry.updatedAt).getTime();
 			const ageDays = ageMs / (1000 * 60 * 60 * 24);
-			bm25 *= Math.exp(-Math.LN2 * ageDays / entry.decayHalfLifeDays);
+			bm25 *= Math.exp((-Math.LN2 * ageDays) / entry.decayHalfLifeDays);
 		}
 
-		if (bm25 >= threshold) scored.push({ entry, score: bm25 });
+		const relevance = clamp01(1 - Math.exp(-bm25));
+		const importance = computeEntryImportance(entry, nowMs);
+		if (importance < minImportance) continue;
+		const score = clamp01(0.65 * relevance + 0.35 * importance);
+		if (score >= threshold) scored.push({ entry, score, relevance, importance });
 	}
 
 	scored.sort((a, b) => b.score - a.score);

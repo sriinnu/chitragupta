@@ -10,6 +10,7 @@
  */
 
 import fs from "fs";
+import { renameSync as nodeRenameSync } from "node:fs";
 import path from "path";
 import crypto from "crypto";
 import { getChitraguptaHome, MemoryError } from "@chitragupta/core";
@@ -59,6 +60,24 @@ function resolveMemoryPath(scope: MemoryScope): string | null {
 function ensureDir(filePath: string): void {
 	const dir = path.dirname(filePath);
 	fs.mkdirSync(dir, { recursive: true });
+}
+
+function atomicRename(tmpPath: string, targetPath: string): void {
+	try {
+		nodeRenameSync(tmpPath, targetPath);
+	} catch (err: unknown) {
+		if (!process.env.VITEST) {
+			process.stderr.write(`[smriti:memory-store] atomic rename failed, using direct write: ${err instanceof Error ? err.message : String(err)}\n`);
+		}
+		fs.writeFileSync(targetPath, fs.readFileSync(tmpPath, "utf-8"), "utf-8");
+		try { fs.unlinkSync(tmpPath); } catch { /* best-effort tmp cleanup */ }
+	}
+}
+
+function atomicWriteFile(filePath: string, content: string): void {
+	const tmpPath = `${filePath}.tmp.${process.pid}`;
+	fs.writeFileSync(tmpPath, content, "utf-8");
+	atomicRename(tmpPath, filePath);
 }
 
 /**
@@ -179,12 +198,12 @@ export function updateMemory(scope: MemoryScope, content: string): Promise<void>
 	if (!filePath) return Promise.resolve();
 
 	const key = scopeKey(scope);
-	const prev = memoryWriteQueues.get(key) ?? Promise.resolve();
+	const prev = memoryWriteQueues.get(key)?.catch(() => undefined) ?? Promise.resolve();
 	const next = prev
 		.then(() => {
 			try {
 				ensureDir(filePath);
-				fs.writeFileSync(filePath, content, "utf-8");
+				atomicWriteFile(filePath, content);
 			} catch (err) {
 				throw new MemoryError(`Failed to write memory at ${filePath}: ${err}`);
 			}
@@ -222,7 +241,7 @@ export function appendMemory(scope: MemoryScope, entry: string, options?: Append
 	if (!filePath) return Promise.resolve();
 
 	const key = scopeKey(scope);
-	const prev = memoryWriteQueues.get(key) ?? Promise.resolve();
+	const prev = memoryWriteQueues.get(key)?.catch(() => undefined) ?? Promise.resolve();
 	const next = prev
 		.then(() => {
 			try {
@@ -254,14 +273,14 @@ export function appendMemory(scope: MemoryScope, entry: string, options?: Append
 					if (totalSize > MAX_MEMORY_SIZE) {
 						// Truncate oldest entries and write the full result
 						const result = truncateToFit(existing, formatted);
-						fs.writeFileSync(filePath, result, "utf-8");
+						atomicWriteFile(filePath, result);
 					} else {
 						fs.appendFileSync(filePath, formatted, "utf-8");
 					}
 				} else {
 					// First entry: write with a header
 					const header = buildMemoryHeader(scope);
-					fs.writeFileSync(filePath, header + formatted, "utf-8");
+					atomicWriteFile(filePath, header + formatted);
 				}
 			} catch (err) {
 				if (err instanceof MemoryError) throw err;

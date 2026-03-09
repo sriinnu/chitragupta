@@ -18,7 +18,19 @@ import type { ProjectInfo } from "../project-detector.js";
 export interface MargaPipelineInstance {
 	classify(
 		context: { messages: Array<{ role: string; content: unknown }>; systemPrompt?: string },
-		options?: Record<string, unknown>,
+		options?: {
+			maxTokens?: number;
+			temperature?: number;
+			topP?: number;
+			stopSequences?: string[];
+			thinking?: { enabled: boolean; budgetTokens?: number };
+			signal?: AbortSignal;
+			routingInfluence?: {
+				minimumComplexity?: "trivial" | "simple" | "medium" | "complex" | "expert";
+				avoidSkipLLM?: boolean;
+				rationale?: string;
+			};
+		},
 	): {
 		taskType: string;
 		complexity: string;
@@ -65,7 +77,12 @@ export interface TuriyaRouterInstance {
 		tools?: unknown[],
 		memoryHits?: number,
 	): Record<string, number>;
-	classify(context: Record<string, number>): {
+	classify(context: Record<string, number>, preference?: {
+		costWeight?: number;
+		costWeightBias?: number;
+		minimumTier?: string;
+		maximumTier?: string;
+	}): {
 		tier: string;
 		confidence: number;
 		costEstimate: number;
@@ -150,7 +167,7 @@ export interface InteractiveModeOptions {
 	};
 	onModelChange?: (model: string) => void;
 	onThinkingChange?: (level: ThinkingLevel) => void;
-	onTurnComplete?: (userMessage: string, assistantResponse: string) => void;
+	onTurnComplete?: (userMessage: string, assistantResponse: string) => void | Promise<void>;
 	/**
 	 * Shiksha autonomous skill learning controller.
 	 * When present, queries are checked for skill gaps before agent.prompt().
@@ -186,8 +203,17 @@ export interface InteractiveModeOptions {
 			consolidationPhase?: string;
 			consolidationProgress: number;
 			uptime: number;
-		};
-		wake(): void;
+		} | Promise<{
+			state: string;
+			lastStateChange: number;
+			lastHeartbeat: number;
+			lastConsolidationStart?: number;
+			lastConsolidationEnd?: number;
+			consolidationPhase?: string;
+			consolidationProgress: number;
+			uptime: number;
+		}>;
+		wake(): void | Promise<void>;
 	};
 }
 

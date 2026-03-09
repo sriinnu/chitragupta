@@ -7,7 +7,18 @@
  */
 
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import type { WebSocketClient } from "./ws-types.js";
+
+function safeCompare(a: string, b: string): boolean {
+	const bufA = Buffer.from(a, "utf-8");
+	const bufB = Buffer.from(b, "utf-8");
+	if (bufA.length !== bufB.length) {
+		timingSafeEqual(bufA, bufA);
+		return false;
+	}
+	return timingSafeEqual(bufA, bufB);
+}
 
 /**
  * Authenticate the upgrade request using legacy token/API key auth.
@@ -46,8 +57,8 @@ export function authenticateUpgrade(
 	const candidates = [queryToken, protocolToken, bearer].filter(Boolean) as string[];
 
 	for (const candidate of candidates) {
-		if (authToken && candidate === authToken) return true;
-		if (apiKeys?.includes(candidate)) return true;
+		if (authToken && safeCompare(candidate, authToken)) return true;
+		if (apiKeys?.some((key) => safeCompare(candidate, key))) return true;
 	}
 
 	return false;

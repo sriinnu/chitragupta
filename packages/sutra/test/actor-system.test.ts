@@ -101,6 +101,11 @@ describe("ActorSystem", () => {
 				.toThrow('Actor "dup" already exists');
 		});
 
+		it("should reject invalid spawn argument shapes", () => {
+			expect(() => system.spawn("bad-shape", undefined as never)).toThrow(/requires spawn options/i);
+			expect(() => system.spawn("bad-shape-2", {} as never)).toThrow(/requires spawn options/i);
+		});
+
 		it("should emit actor:spawned event", () => {
 			const events: unknown[] = [];
 			system.on((e) => events.push(e));
@@ -350,6 +355,29 @@ describe("ActorSystem", () => {
 			expect(reviewers).toHaveLength(1);
 			expect(reviewers[0].actorId).toBe("reviewer");
 		});
+
+		it("keeps local actors alive while the system is running", async () => {
+			vi.useFakeTimers();
+			try {
+				const localSystem = new ActorSystem({
+					gossipIntervalMs: 50,
+					suspectTimeoutMs: 120,
+					deadTimeoutMs: 240,
+				});
+				localSystem.start();
+				localSystem.spawn("steady", { behavior: mockBehavior(), capabilities: ["memory-search"] });
+
+				await vi.advanceTimersByTimeAsync(800);
+
+				const peer = localSystem.findAlive().find((entry) => entry.actorId === "steady");
+				expect(peer).toBeDefined();
+				expect(peer?.status).toBe("alive");
+
+				await localSystem.shutdown();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
 	});
 
 	// ═══════════════════════════════════════════════════════════════════
@@ -395,6 +423,25 @@ describe("ActorSystem", () => {
 			system.spawn("plain", { behavior: mockBehavior() });
 			const alive = system.findAlive();
 			expect(alive.some((p) => p.actorId === "plain")).toBe(true);
+		});
+
+		it("routes capability targets to local actors before P2P bootstrap", async () => {
+			const received: unknown[] = [];
+			system.start();
+			system.spawn("memory-worker", {
+				behavior: {
+					capabilities: ["memory-search"],
+					handle: (env) => {
+						received.push(env.payload);
+					},
+				},
+			});
+
+			expect(system.getCapabilityRouter()).not.toBeNull();
+			system.tell("caller", "capability:memory-search", { query: "auth decisions" });
+			await flush();
+
+			expect(received).toEqual([{ query: "auth decisions" }]);
 		});
 	});
 

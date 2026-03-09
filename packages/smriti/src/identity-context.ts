@@ -41,7 +41,11 @@ interface LoadedIdentityFile {
 	content: string;
 }
 
-const DEFAULT_INCLUDE: IdentityFileType[] = ["soul", "identity", "personality", "user"];
+interface IdentityLoadOptions {
+	fresh?: boolean;
+}
+
+const DEFAULT_INCLUDE: IdentityFileType[] = ["soul", "identity", "personality", "user", "agents"];
 
 const FILE_NAMES: Record<IdentityFileType, string[]> = {
 	soul: ["SOUL.md", "soul.md"],
@@ -58,6 +62,7 @@ const MAX_CHARS_PER_FILE = 3000;
 export class IdentityContext {
 	private readonly config: IdentityConfig;
 	private cachedFiles: LoadedIdentityFile[] | null = null;
+	private cachedFingerprints: Map<IdentityFileType, string | null> | null = null;
 
 	constructor(config?: IdentityConfig) {
 		this.config = config ?? {};
@@ -68,8 +73,8 @@ export class IdentityContext {
 	 *
 	 * @returns Markdown-formatted identity context, or empty string if no files found.
 	 */
-	load(): string {
-		const files = this.loadFiles();
+	load(options?: IdentityLoadOptions): string {
+		const files = this.loadFiles(options);
 		if (files.length === 0) return "";
 
 		const sections: string[] = [];
@@ -104,8 +109,8 @@ export class IdentityContext {
 	 * Load just user preferences from identity files.
 	 * Extracts preference-like sections from USER.md and PERSONALITY.md.
 	 */
-	loadUserPreferences(): string {
-		const files = this.loadFiles();
+	loadUserPreferences(options?: IdentityLoadOptions): string {
+		const files = this.loadFiles(options);
 		const userFile = files.find(f => f.type === "user");
 		if (!userFile) return "";
 
@@ -144,8 +149,8 @@ export class IdentityContext {
 	/**
 	 * Get paths of found identity files (for debugging/display).
 	 */
-	getFoundPaths(): Record<IdentityFileType, string | null> {
-		const files = this.loadFiles();
+	getFoundPaths(options?: IdentityLoadOptions): Record<IdentityFileType, string | null> {
+		const files = this.loadFiles(options);
 		const result: Record<string, string | null> = {};
 		for (const type of DEFAULT_INCLUDE) {
 			const found = files.find(f => f.type === type);
@@ -159,28 +164,49 @@ export class IdentityContext {
 	 */
 	clearCache(): void {
 		this.cachedFiles = null;
+		this.cachedFingerprints = null;
+	}
+
+	/**
+	 * Return true when any resolved identity file changed since the last cached load.
+	 */
+	hasChanges(): boolean {
+		if (!this.cachedFiles || !this.cachedFingerprints) return false;
+		const include = this.config.include ?? DEFAULT_INCLUDE;
+		for (const type of include) {
+			const current = this.resolveFile(type);
+			const fingerprint = current ? this.fingerprintForPath(current.path) : null;
+			if ((this.cachedFingerprints.get(type) ?? null) !== fingerprint) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// ─── Internal ─────────────────────────────────────────────────────────
 
-	private loadFiles(): LoadedIdentityFile[] {
-		if (this.cachedFiles) return this.cachedFiles;
+	private loadFiles(options?: IdentityLoadOptions): LoadedIdentityFile[] {
+		if (options?.fresh) {
+			this.clearCache();
+		}
+		if (this.cachedFiles && !this.hasChanges()) return this.cachedFiles;
 
 		const include = this.config.include ?? DEFAULT_INCLUDE;
 		const files: LoadedIdentityFile[] = [];
+		const fingerprints = new Map<IdentityFileType, string | null>();
 
 		for (const type of include) {
-			const content = this.loadFile(type);
-			if (content) {
-				files.push(content);
-			}
+			const file = this.resolveFile(type);
+			fingerprints.set(type, file ? this.fingerprintForPath(file.path) : null);
+			if (file) files.push(file);
 		}
 
 		this.cachedFiles = files;
+		this.cachedFingerprints = fingerprints;
 		return files;
 	}
 
-	private loadFile(type: IdentityFileType): LoadedIdentityFile | null {
+	private resolveFile(type: IdentityFileType): LoadedIdentityFile | null {
 		// 1. Check explicit path
 		const explicitPath = this.config.paths?.[type];
 		if (explicitPath) {
@@ -233,6 +259,15 @@ export class IdentityContext {
 			case "personality": return "Personality & Voice";
 			case "user": return "User Profile";
 			case "agents": return "Agent Behavior";
+		}
+	}
+
+	private fingerprintForPath(filePath: string): string | null {
+		try {
+			const stats = fs.statSync(filePath);
+			return `${path.resolve(filePath)}:${stats.size}:${stats.mtimeMs}`;
+		} catch {
+			return null;
 		}
 	}
 }

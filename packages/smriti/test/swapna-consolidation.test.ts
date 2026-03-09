@@ -145,6 +145,75 @@ describe("SwapnaConsolidation — construction", () => {
 		);
 		expect(swapna).toBeDefined();
 	});
+
+	it("should scope the full cycle to explicit sessionIds", async () => {
+		insertSession("s1");
+		insertSession("s2");
+		insertSession("s3");
+		insertSession("s4");
+		insertSession("s5");
+
+		// In-scope sessions: only simple conversational turns.
+		insertTurn("s1", 0, "user", "Summarize the plan");
+		insertTurn("s1", 1, "assistant", "Plan captured.");
+		insertTurn("s2", 0, "user", "Track the open issue");
+		insertTurn("s2", 1, "assistant", "Issue tracked.");
+
+		// Out-of-scope sessions: repeated tool patterns that would create Vidhis
+		// if Swapna fell back to \"latest sessions in project\".
+		for (const sessionId of ["s3", "s4", "s5"]) {
+			insertTurn(sessionId, 0, "user", `Fix ${sessionId}`);
+			insertTurn(sessionId, 1, "assistant", `Working ${sessionId}`, [
+				tc("read", JSON.stringify({ path: `${sessionId}.ts` }), "ok"),
+				tc("edit", JSON.stringify({ path: `${sessionId}.ts` }), "ok"),
+			]);
+			insertSamskara(
+				`sam-${sessionId}`,
+				sessionId,
+				"preference",
+				"Always update the file after reading it",
+				3,
+				0.92,
+			);
+		}
+
+		const swapna = new SwapnaConsolidation(
+			{
+				project: PROJECT,
+				sessionIds: ["s1", "s2"],
+				minSequenceLength: 2,
+			},
+			dbm,
+		);
+
+		const result = await swapna.run();
+
+		expect(result.sourceSessionIds).toEqual(["s1", "s2"]);
+		expect(result.phases.replay.turnsScored).toBe(4);
+		expect(result.phases.crystallize.vasanasCreated).toBe(0);
+		expect(result.phases.proceduralize.vidhisCreated).toBe(0);
+	});
+
+	it("should not truncate explicit sessionIds to maxSessionsPerCycle", async () => {
+		for (const sessionId of ["s1", "s2", "s3"]) {
+			insertSession(sessionId);
+			insertTurn(sessionId, 0, "user", `Message for ${sessionId}`);
+		}
+
+		const swapna = new SwapnaConsolidation(
+			{
+				project: PROJECT,
+				sessionIds: ["s1", "s2", "s3"],
+				maxSessionsPerCycle: 1,
+			},
+			dbm,
+		);
+
+		const result = await swapna.replay();
+
+		expect(result.turnsScored).toBe(3);
+		expect(new Set(result.allTurns.map((turn) => turn.sessionId))).toEqual(new Set(["s1", "s2", "s3"]));
+	});
 });
 
 // ─── Phase 1: REPLAY ───────────────────────────────────────────────────────
@@ -890,6 +959,27 @@ describe("SwapnaConsolidation — Phase 5: COMPRESS", () => {
 		expect(result.compressionRatio).toBeLessThanOrEqual(1.0);
 		expect(result.compressionRatio).toBeGreaterThan(0);
 		expect(result.durationMs).toBeGreaterThanOrEqual(0);
+	});
+
+	it("preserves raw turn content while emitting derived compaction output", async () => {
+		insertSession("s1");
+		const original = `Turn 0: ${"A".repeat(160)}`;
+		insertTurn("s1", 0, "user", original);
+		insertTurn("s1", 1, "assistant", `Turn 1: ${"B".repeat(160)}`, [
+			tc("read", '{"path":"src/a.ts"}', "content ".repeat(12)),
+		]);
+
+		const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+		const result = await swapna.compress();
+		const agentDb = dbm.get("agent");
+		const stored = agentDb.prepare(`
+			SELECT content
+			FROM turns
+			WHERE session_id = ? AND turn_number = 0
+		`).get("s1") as { content: string } | undefined;
+
+		expect(result.summaryText).toBeTruthy();
+		expect(stored?.content).toBe(original);
 	});
 
 	it("should apply Pramana-based preservation weights", async () => {

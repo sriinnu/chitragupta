@@ -23,6 +23,11 @@ import {
 import type { PendingInput } from "./agent-comm.js";
 import { runAgentLoop } from "./agent-loop.js";
 import type { AgentLoopDeps } from "./agent-loop.js";
+import { bridgeEventPayload } from "./agent-events.js";
+import {
+	buildDefaultSystemPrompt,
+	buildDynamicSystemPrompt,
+} from "./agent-prompt-context.js";
 import type {
 	AgentConfig, AgentEventType, AgentMessage, AgentState,
 	AgentTree, KaalaLifecycle, LokapalaGuardians,
@@ -46,18 +51,11 @@ const log = createLogger("anina:agent");
 const DEFAULT_MAX_TURNS = 25;
 const DEFAULT_WORKING_DIR = process.cwd();
 
-/** Map agent event → EventBridge payload, or null for unmapped events. */
-function bridgeEventPayload(ev: string, d: Record<string, unknown>): { type: string; payload: Record<string, unknown> } | null {
-	if (ev === "stream:text" || ev === "stream:thinking") return { type: ev, payload: { text: String(d.text ?? "") } };
-	if (ev === "tool:start") return { type: ev, payload: { toolName: String(d.toolName ?? d.name ?? ""), input: (d.input ?? {}) as Record<string, unknown> } };
-	if (ev === "tool:done") return { type: ev, payload: { toolName: String(d.toolName ?? d.name ?? ""), durationMs: Number(d.durationMs ?? 0), isError: Boolean(d.isError) } };
-	if (ev === "turn:start" || ev === "turn:done") return { type: ev, payload: { turnNumber: Number(d.turnNumber ?? 0) } };
-	return null;
-}
-
 export class Agent implements TreeAgent {
 	private state: AgentState;
 	private config: AgentConfig;
+	private readonly baseSystemPrompt: string;
+	private cachedMemoryPromptContext: string | null = null;
 	private toolExecutor: ToolExecutor;
 	private contextManager: ContextManager;
 	private steeringManager: SteeringManager;
@@ -103,11 +101,12 @@ export class Agent implements TreeAgent {
 			for (const tool of config.tools) this.toolExecutor.register(tool);
 		}
 		if (config.onToolNotFound) this.toolExecutor.setOnToolNotFound(config.onToolNotFound);
+		this.baseSystemPrompt = config.systemPrompt ?? buildDefaultSystemPrompt(config.profile);
 
 		this.state = {
 			messages: [], model: config.model, providerId: config.providerId,
 			tools: config.tools ?? [],
-			systemPrompt: config.systemPrompt ?? this.buildDefaultSystemPrompt(config.profile),
+			systemPrompt: this.baseSystemPrompt,
 			thinkingLevel: config.thinkingLevel ?? config.profile.preferredThinking ?? "medium",
 			isStreaming: false, sessionId: crypto.randomUUID(),
 			agentProfileId: config.profile.id,
@@ -141,21 +140,24 @@ export class Agent implements TreeAgent {
 		if (!this.provider) throw new Error("No provider set. Call setProvider() before prompt().");
 		this.abortController = new AbortController();
 		this.agentStatus = "running";
+		const project = this.config.project ?? this.workingDirectory;
 
 		if (this.memoryBridge && !this.memorySessionId) {
-			const project = this.config.project ?? this.workingDirectory;
 			this.memorySessionId = await this.memoryBridge.initSession(
 				this.id, this.config.profile.id, this.config.model, project,
 			);
-			const memCtx = await this.memoryBridge.loadMemoryContext(project, this.id);
-			if (memCtx) this.state.systemPrompt += `\n\n${memCtx}`;
-			// Wire 5: Inject persisted soul identity into system prompt
-			try {
-				const { SoulManager: S } = await import("./agent-soul.js");
-				const mgr = new S({ persist: true }), souls = mgr.getAll();
-				if (souls[0]) { const sp = mgr.buildSoulPrompt(souls[0].id); if (sp) this.state.systemPrompt += `\n\n${sp}`; }
-			} catch { /* soul is best-effort */ }
 		}
+			this.state.systemPrompt = await buildDynamicSystemPrompt({
+				baseSystemPrompt: this.baseSystemPrompt,
+				memoryBridge: this.memoryBridge,
+				project,
+				agentId: this.id,
+				cachedMemoryPromptContext: this.cachedMemoryPromptContext,
+				logger: log,
+				setCachedMemoryPromptContext: (value) => {
+					this.cachedMemoryPromptContext = value;
+				},
+			});
 
 		this.state.messages.push(this.createMessage("user", [{ type: "text", text: message }]));
 		if (this.memoryBridge && this.memorySessionId) {
@@ -202,9 +204,10 @@ export class Agent implements TreeAgent {
 		for (const child of this.children) child.abort();
 	}
 
-	getState(): Readonly<AgentState> { return { ...this.state }; }
-	getMessages(): readonly AgentMessage[] { return this.state.messages; }
-	getProfile(): AgentProfile { return this.config.profile; }
+		getState(): Readonly<AgentState> { return { ...this.state }; }
+		getMessages(): readonly AgentMessage[] { return this.state.messages; }
+		buildDefaultSystemPrompt(profile: AgentProfile): string { return buildDefaultSystemPrompt(profile); }
+		getProfile(): AgentProfile { return this.config.profile; }
 	getSessionId(): string { return this.state.sessionId; }
 	getStatus() { return this.agentStatus; }
 	setModel(model: string): void { this.state.model = model; }
@@ -214,7 +217,10 @@ export class Agent implements TreeAgent {
 	clearMessages(): void { this.state.messages = []; }
 	getConfig(): Readonly<AgentConfig> { return this.config; }
 	pushMessage(msg: AgentMessage): void { this.state.messages.push(msg); }
-	replaceState(state: AgentState): void { this.state = state; }
+	replaceState(state: AgentState): void {
+		this.state = state;
+		this.cachedMemoryPromptContext = null;
+	}
 	registerTool(handler: ToolHandler): void {
 		this.toolExecutor.register(handler); this.state.tools = [...this.state.tools, handler];
 	}
@@ -359,7 +365,7 @@ export class Agent implements TreeAgent {
 		for (const c of removing) c.dispose();
 		return before - this.children.length;
 	}
-	dispose(): void {
+		dispose(): void {
 		this.abort();
 		for (const [, p] of this.pendingInputs) {
 			if (p.timer) clearTimeout(p.timer);
@@ -372,11 +378,12 @@ export class Agent implements TreeAgent {
 			try { this.actorSystem.stop(`agent:${this.id}`); } catch { /* non-fatal */ }
 		}
 		this.actorRef = null; this.actorSystem = null; this.samiti = null;
-		this.kaala = null; this.lokapala = null;
-		this.memoryBridge = null; this.learningLoop = null;
-		this.autonomousAgent = null; this.chetana = null; this.provider = null;
-		this.state.messages = []; this.state.tools = []; this.agentStatus = "aborted";
-	}
+			this.kaala = null; this.lokapala = null;
+			this.memoryBridge = null; this.learningLoop = null;
+			this.autonomousAgent = null; this.chetana = null; this.provider = null;
+			this.cachedMemoryPromptContext = null;
+			this.state.messages = []; this.state.tools = []; this.agentStatus = "aborted";
+		}
 
 	// ── Tree Traversal ───────────────────────────────────────────
 	getRoot(): Agent { return getRoot(this) as Agent; }
@@ -392,15 +399,7 @@ export class Agent implements TreeAgent {
 	renderTree(): string { return renderTree(this); }
 
 	// ── Helpers ──────────────────────────────────────────────────
-	buildDefaultSystemPrompt(profile: AgentProfile): string {
-		const parts: string[] = [`You are ${profile.name}.`];
-		if (profile.personality) parts.push(profile.personality);
-		if (profile.expertise.length > 0) parts.push(`Your areas of expertise: ${profile.expertise.join(", ")}.`);
-		if (profile.voice === "custom" && profile.customVoice) parts.push(profile.customVoice);
-		return parts.join("\n\n");
-	}
-
-	private createMessage(
+		private createMessage(
 		role: AgentMessage["role"], content: ContentPart[],
 		extra?: { model?: string; cost?: CostBreakdown },
 	): AgentMessage {

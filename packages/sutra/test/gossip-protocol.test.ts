@@ -66,6 +66,26 @@ describe("GossipProtocol", () => {
 		});
 	});
 
+	describe("touch", () => {
+		it("refreshes lastSeen for an existing peer", () => {
+			gossip.register("refresh-me");
+			const before = gossip.getView()[0].lastSeen;
+			expect(gossip.touch("refresh-me")).toBe(true);
+			expect(gossip.getView()[0].lastSeen).toBeGreaterThanOrEqual(before);
+		});
+
+		it("revives suspect peers back to alive", () => {
+			gossip.register("revive-me");
+			const view = gossip.getView()[0]!;
+			view.status = "suspect";
+			const previousGeneration = view.generation;
+
+			expect(gossip.touch("revive-me")).toBe(true);
+			expect(view.status).toBe("alive");
+			expect(view.generation).toBeGreaterThan(previousGeneration);
+		});
+	});
+
 	// ═══════════════════════════════════════════════════════════════════════
 	// UNREGISTER
 	// ═══════════════════════════════════════════════════════════════════════
@@ -208,6 +228,29 @@ describe("GossipProtocol", () => {
 
 			expect(changed).toHaveLength(0);
 			expect(gossip.getView()[0].status).toBe("alive");
+		});
+
+		it("refreshes freshness for equal-generation alive updates", () => {
+			gossip.register("steady");
+			const local = gossip.getView()[0]!;
+			local.lastSeen = Date.now() - 5_000;
+			const sameGeneration = local.generation;
+			const incomingSeenAt = Date.now();
+
+			const changed = gossip.merge([
+				{
+					actorId: "steady",
+					status: "alive",
+					generation: sameGeneration,
+					lastSeen: incomingSeenAt,
+					capabilities: ["memory-search"],
+				},
+			]);
+
+			expect(changed).toHaveLength(0);
+			expect(local.status).toBe("alive");
+			expect(local.lastSeen).toBe(incomingSeenAt);
+			expect(local.capabilities).toEqual(["memory-search"]);
 		});
 
 		it("should handle empty incoming array", () => {

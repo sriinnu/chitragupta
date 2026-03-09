@@ -56,6 +56,7 @@ vi.mock("@chitragupta/core", () => ({
 
 vi.mock("@chitragupta/swara/providers", () => ({
 	registerBuiltinProviders: mockRegisterSwaraProviders,
+	createLlamaCpp: vi.fn().mockReturnValue({ id: "llama.cpp", name: "llama.cpp" }),
 }));
 
 // Import after mocks

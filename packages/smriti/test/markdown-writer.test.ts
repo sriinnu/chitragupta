@@ -95,6 +95,21 @@ describe("markdown-writer", () => {
 			expect(md).toContain("totalTokens: 0");
 		});
 
+		it("writes provider and metadata payload when present", () => {
+			const md = writeSessionMarkdown(makeSession({
+				meta: makeMeta({
+					provider: "claude-code",
+					metadata: {
+						provider: "claude-code",
+						clientKey: "tab-1",
+						sessionLineageKey: "lineage-a",
+					},
+				}),
+			}));
+			expect(md).toContain('provider: "claude-code"');
+			expect(md).toContain('metadataJson: "{\\"provider\\":\\"claude-code\\",\\"clientKey\\":\\"tab-1\\",\\"sessionLineageKey\\":\\"lineage-a\\"}"');
+		});
+
 		it("starts and ends with --- delimiters", () => {
 			const md = writeSessionMarkdown(makeSession());
 			expect(md.startsWith("---\n")).toBe(true);
@@ -133,6 +148,18 @@ describe("markdown-writer", () => {
 		it("includes both agent and model in heading", () => {
 			const md = writeTurnMarkdown(makeTurn({ role: "assistant", agent: "kartru", model: "claude-3" }));
 			expect(md).toContain("(agent: kartru, model: claude-3)");
+		});
+
+		it("embeds contentParts for faithful replay", () => {
+			const md = writeTurnMarkdown(makeTurn({
+				role: "assistant",
+				content: "Rendered text",
+				contentParts: [
+					{ type: "text", text: "Rendered text" },
+					{ type: "thinking", text: "hidden chain" },
+				],
+			}));
+			expect(md).toContain("<!-- contentPartsBase64:");
 		});
 	});
 
@@ -216,6 +243,44 @@ describe("markdown-writer", () => {
 			expect(parsed.meta.id).toBe(session.meta.id);
 			expect(parsed.meta.title).toBe(session.meta.title);
 			expect(parsed.turns).toEqual([]);
+		});
+
+		it("round-trips provider and metadata", () => {
+			const session = makeSession({
+				meta: makeMeta({
+					provider: "claude-code",
+					metadata: {
+						provider: "claude-code",
+						clientKey: "tab-1",
+						sessionLineageKey: "lineage-a",
+					},
+				}),
+			});
+			const md = writeSessionMarkdown(session);
+			const parsed = parseSessionMarkdown(md);
+			expect(parsed.meta.provider).toBe("claude-code");
+			expect(parsed.meta.metadata).toEqual(session.meta.metadata);
+		});
+
+		it("round-trips turn contentParts", () => {
+			const session = makeSession({
+				turns: [
+					makeTurn({
+						role: "assistant",
+						content: "Rendered text",
+						contentParts: [
+							{ type: "text", text: "Rendered text" },
+							{ type: "thinking", text: "hidden chain" },
+						],
+					}),
+				],
+			});
+			const parsed = parseSessionMarkdown(writeSessionMarkdown(session));
+			expect(parsed.turns[0].content).toBe("Rendered text");
+			expect(parsed.turns[0].contentParts).toEqual([
+				{ type: "text", text: "Rendered text" },
+				{ type: "thinking", text: "hidden chain" },
+			]);
 		});
 
 		it("round-trips session with turns", () => {

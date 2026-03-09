@@ -1,13 +1,4 @@
-/**
- * Nidra Daemon — Background Sleep Cycle Manager.
- *
- * Orchestrates a 3-state machine:
- *   LISTENING -> DREAMING -> DEEP_SLEEP -> LISTENING
- *
- * Autonomous DEEP_SLEEP entry: 5 consecutive idle DREAMING cycles OR 20
- * processed sessions since last DEEP_SLEEP. New session during DEEP_SLEEP
- * wakes back to LISTENING. Persistence utilities live in nidra-daemon-persistence.ts.
- */
+/** Nidra Daemon — background LISTENING -> DREAMING -> DEEP_SLEEP cycle manager. */
 
 import type { EventBus } from "@chitragupta/core";
 import { createLogger } from "@chitragupta/core";
@@ -19,8 +10,8 @@ import {
 	type DreamHandler, type DeepSleepHandler, type DreamProgressFn,
 	type DeepSleepConsolidationHandler, type NidraDaemonState,
 } from "./nidra-daemon-persistence.js";
+import { applyRestoredNidraState, buildNidraRuntimeStateBag } from "./nidra-daemon-state.js";
 
-// Re-export persistence utilities for consumers
 export {
 	persistNidraState, restoreNidraState, persistHeartbeat,
 	buildNidraSnapshot, unrefTimer, VALID_TRANSITIONS,
@@ -32,11 +23,7 @@ const log = createLogger("nidra");
 
 // ─── NidraDaemon ─────────────────────────────────────────────────────────────
 
-/**
- * Background sleep-cycle daemon with drift-correcting heartbeat, SQLite
- * persistence, and Swapna consolidation hooks. Autonomous DEEP_SLEEP entry
- * via consecutive idle dream cycles or session-count threshold.
- */
+/** Background sleep-cycle daemon with drift-correcting heartbeat and persistent consolidation state. */
 export class NidraDaemon {
 	private readonly config: NidraConfig;
 	private readonly events: EventBus | null;
@@ -50,14 +37,12 @@ export class NidraDaemon {
 	private consolidationProgress: number = 0;
 	private startedAt: number = 0;
 
-	/** Consecutive DREAMING cycles where no new sessions were observed. */
 	private consecutiveIdleDreamCycles: number = 0;
-	/** Session IDs accumulated since last DEEP_SLEEP. Drives consolidation. */
 	private pendingSessionIds: string[] = [];
-	/** Total sessions recorded since last DEEP_SLEEP (includes duplicates). */
 	private sessionsProcessedSinceDeepSleep: number = 0;
-	/** Whether at least one session was seen during the current DREAMING cycle. */
+	private sessionNotificationsSinceDeepSleep: number = 0;
 	private sessionSeenThisDream: boolean = false;
+	private preservePendingSessionsOnListening: boolean = false;
 
 	private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
 	private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -71,13 +56,15 @@ export class NidraDaemon {
 	private running = false;
 	private disposed = false;
 	private dreamAbort: AbortController | null = null;
+	private dreamRunGeneration = 0;
+	private deepSleepRunGeneration = 0;
+	private deepSleepCompletionPending = false;
 
 	constructor(config?: Partial<NidraConfig>, events?: EventBus) {
 		this.config = { ...DEFAULT_NIDRA_CONFIG, ...config };
 		this.events = events ?? null;
 	}
 
-	/** Start the daemon. Restores persisted state, then begins heartbeat + idle timer. */
 	start(): void {
 		this.assertNotDisposed();
 		if (this.running) return;
@@ -86,10 +73,11 @@ export class NidraDaemon {
 		this.restore();
 		this.scheduleHeartbeat();
 		this.schedulePhaseTransition();
+		if (this.state === "DREAMING") this.runDreamPhase();
+		else if (this.state === "DEEP_SLEEP") this.runDeepSleepPhase();
 		log.info(`Nidra daemon started in state=${this.state}`);
 	}
 
-	/** Stop the daemon gracefully. Cancels timers, aborts in-flight consolidation, persists state. */
 	async stop(): Promise<void> {
 		if (!this.running) return;
 		this.running = false;
@@ -99,17 +87,18 @@ export class NidraDaemon {
 		log.info("Nidra daemon stopped");
 	}
 
-	/** Force wake — interrupt from any state back to LISTENING. */
 	wake(): void {
 		this.assertNotDisposed();
 		if (!this.running) return;
 		if (this.state === "LISTENING") { this.resetIdleTimer(); return; }
+		if (this.state === "DEEP_SLEEP") {
+			this.preservePendingSessionsOnListening ||= this.pendingSessionIds.length > 0;
+		}
 		if (this.state === "DREAMING" && this.dreamAbort) { this.dreamAbort.abort(); this.dreamAbort = null; }
 		log.info(`Nidra wake interrupt: ${this.state} -> LISTENING`);
 		this.transitionTo("LISTENING", true);
 	}
 
-	/** Register user activity. Resets idle timer or triggers wake interrupt. */
 	touch(): void {
 		this.assertNotDisposed();
 		if (!this.running) return;
@@ -117,36 +106,29 @@ export class NidraDaemon {
 		else this.wake();
 	}
 
-	/**
-	 * Notify the daemon that a new session has been processed.
-	 *
-	 * - In LISTENING/DREAMING: records the session for pending consolidation,
-	 *   marks the current DREAMING cycle as "active", and resets the idle-dream counter.
-	 * - In DEEP_SLEEP: wakes the daemon back to LISTENING (new work has arrived).
-	 *
-	 * @param sessionId - Unique session identifier for consolidation tracking.
-	 */
 	notifySession(sessionId: string): void {
 		this.assertNotDisposed();
 		if (!this.running) return;
 
-		// Wake from DEEP_SLEEP — new activity arrived
 		if (this.state === "DEEP_SLEEP") {
 			log.info(`Nidra: new session during DEEP_SLEEP, waking → LISTENING (session=${sessionId})`);
+			this.preservePendingSessionsOnListening = true;
 			this.wake();
-			return;
 		}
 
-		// Track for consolidation
-		if (!this.pendingSessionIds.includes(sessionId)) {
+		const isNewSession = !this.pendingSessionIds.includes(sessionId);
+		if (isNewSession) {
 			this.pendingSessionIds.push(sessionId);
+			this.sessionsProcessedSinceDeepSleep += 1;
 		}
-		this.sessionsProcessedSinceDeepSleep += 1;
+		this.sessionNotificationsSinceDeepSleep += 1;
 		this.sessionSeenThisDream = true;
+		this.persist();
 
-		log.debug(`Nidra: session recorded (id=${sessionId}, total=${this.sessionsProcessedSinceDeepSleep})`);
+		log.debug(
+			`Nidra: session recorded (id=${sessionId}, unique=${this.sessionsProcessedSinceDeepSleep}, notifications=${this.sessionNotificationsSinceDeepSleep}, new=${isNewSession})`,
+		);
 
-		// State is LISTENING|DREAMING here (DEEP_SLEEP returned above).
 		if (this.sessionsProcessedSinceDeepSleep >= this.config.sessionCountThreshold) {
 			log.info(
 				`Nidra: session threshold reached (${this.sessionsProcessedSinceDeepSleep}` +
@@ -156,42 +138,24 @@ export class NidraDaemon {
 		}
 	}
 
-	/** Get a read-only snapshot of the daemon's current state. */
 	snapshot(): NidraSnapshot { return buildNidraSnapshot(this.getStateBag()); }
 
-	/** Register the dream handler (Swapna consolidation plug-in). */
 	onDream(handler: DreamHandler): void { this.dreamHandler = handler; }
 
-	/** Register the deep sleep handler (maintenance plug-in, legacy single-pass). */
 	onDeepSleep(handler: DeepSleepHandler): void { this.deepSleepHandler = handler; }
 
-	/**
-	 * Register the multi-session deep-sleep consolidation handler.
-	 * When registered, supersedes the legacy `onDeepSleep` handler for
-	 * DEEP_SLEEP runs; receives all pending session IDs in one pass.
-	 */
 	onDeepSleepConsolidation(handler: DeepSleepConsolidationHandler): void {
 		this.deepSleepConsolidationHandler = handler;
 	}
 
-	/** Persist current state to the nidra_state singleton row. */
 	persist(): void { persistNidraState(this.getStateBag()); }
 
-	/** Restore state from the nidra_state singleton row. */
 	restore(): void {
 		const bag = this.getStateBag();
 		restoreNidraState(bag);
-		this.state = bag.state;
-		this.lastStateChange = bag.lastStateChange;
-		this.lastHeartbeat = bag.lastHeartbeat;
-		this.lastConsolidationStart = bag.lastConsolidationStart;
-		this.lastConsolidationEnd = bag.lastConsolidationEnd;
-		this.consolidationPhase = bag.consolidationPhase;
-		this.consolidationProgress = bag.consolidationProgress;
-		// Note: session counters are not persisted (ephemeral per daemon lifetime)
+		applyRestoredNidraState(this as unknown as import("./nidra-daemon-state.js").NidraRuntimeStateFields, bag);
 	}
 
-	/** Dispose — stop and release all resources. Cannot be restarted. */
 	dispose(): void {
 		if (this.disposed) return;
 		this.running = false;
@@ -203,8 +167,6 @@ export class NidraDaemon {
 		this.disposed = true;
 		log.debug("Nidra daemon disposed");
 	}
-
-	// ─── State Machine ───────────────────────────────────────────────────
 
 	private transitionTo(target: NidraState, interrupt = false): void {
 		if (!this.running || this.disposed) return;
@@ -219,6 +181,11 @@ export class NidraDaemon {
 		const now = Date.now();
 
 		if (prev === "DREAMING" && target !== "DREAMING") {
+			if (this.dreamAbort) {
+				this.dreamAbort.abort();
+				this.dreamAbort = null;
+			}
+			this.dreamRunGeneration += 1;
 			this.consolidationPhase = undefined;
 			this.consolidationProgress = 0;
 			if (this.sessionSeenThisDream) {
@@ -232,10 +199,22 @@ export class NidraDaemon {
 		if (target === "DEEP_SLEEP") {
 			this.consecutiveIdleDreamCycles = 0;
 		}
+		if (prev === "DEEP_SLEEP" && target !== "DEEP_SLEEP") {
+			this.deepSleepRunGeneration += 1;
+			this.deepSleepCompletionPending = false;
+		}
 		if (target === "LISTENING") {
-			this.sessionsProcessedSinceDeepSleep = 0;
-			this.pendingSessionIds = [];
+			if (this.preservePendingSessionsOnListening) {
+				const pendingUniqueSessionIds = [...new Set(this.pendingSessionIds)];
+				this.pendingSessionIds = pendingUniqueSessionIds;
+				this.sessionsProcessedSinceDeepSleep = pendingUniqueSessionIds.length;
+			} else {
+				this.sessionsProcessedSinceDeepSleep = 0;
+				this.pendingSessionIds = [];
+			}
+			this.sessionNotificationsSinceDeepSleep = 0;
 			this.sessionSeenThisDream = false;
+			this.preservePendingSessionsOnListening = false;
 		}
 
 		this.state = target;
@@ -250,10 +229,6 @@ export class NidraDaemon {
 		else if (target === "DEEP_SLEEP") this.runDeepSleepPhase();
 	}
 
-	/**
-	 * Immediately force a transition to DEEP_SLEEP regardless of timers.
-	 * Aborts any in-flight DREAMING phase first.
-	 */
 	private forceDeepSleep(): void {
 		if (!this.running || this.disposed) return;
 		if (this.state === "DEEP_SLEEP") return;
@@ -265,18 +240,18 @@ export class NidraDaemon {
 		this.transitionTo("DEEP_SLEEP", true);
 	}
 
-	// ─── Phase Handlers ──────────────────────────────────────────────────
-
 	private runDreamPhase(): void {
 		if (!this.dreamHandler) return;
-		this.dreamAbort = new AbortController();
-		const { signal } = this.dreamAbort;
+		const runGeneration = ++this.dreamRunGeneration;
+		const dreamAbort = new AbortController();
+		this.dreamAbort = dreamAbort;
+		const { signal } = dreamAbort;
 		const now = Date.now();
 		this.lastConsolidationStart = now;
 		this.emit("nidra:consolidation_start", { timestamp: now });
 
 		const progress: DreamProgressFn = (phase, pct) => {
-			if (signal.aborted) return;
+			if (signal.aborted || this.state !== "DREAMING" || runGeneration !== this.dreamRunGeneration) return;
 			this.consolidationPhase = phase;
 			this.consolidationProgress = Math.max(0, Math.min(1, pct));
 			this.persist();
@@ -284,7 +259,12 @@ export class NidraDaemon {
 
 		this.dreamHandler(progress)
 			.then(() => {
-				if (signal.aborted || !this.running) return;
+				if (
+					signal.aborted ||
+					!this.running ||
+					this.state !== "DREAMING" ||
+					runGeneration !== this.dreamRunGeneration
+				) return;
 				const end = Date.now();
 				this.lastConsolidationEnd = end;
 				this.emit("nidra:consolidation_end", {
@@ -293,21 +273,22 @@ export class NidraDaemon {
 				log.info("Dream consolidation complete");
 			})
 			.catch((err: unknown) => {
-				if (signal.aborted) return;
+				if (signal.aborted || runGeneration !== this.dreamRunGeneration) return;
 				log.error("Dream handler failed", { error: String(err) });
 			})
-			.finally(() => { this.dreamAbort = null; });
+			.finally(() => {
+				if (this.dreamAbort === dreamAbort) {
+					this.dreamAbort = null;
+				}
+			});
 	}
 
-	/**
-	 * Run the DEEP_SLEEP phase.
-	 * Prefers `deepSleepConsolidationHandler` (multi-session Swapna bulk pass)
-	 * over the legacy `deepSleepHandler`.  After completion, clears pending sessions.
-	 */
 	private runDeepSleepPhase(): void {
+		const runGeneration = ++this.deepSleepRunGeneration;
 		const sessionIds = [...this.pendingSessionIds];
 
 		if (this.deepSleepConsolidationHandler) {
+			this.deepSleepCompletionPending = true;
 			log.info(
 				`Nidra: DEEP_SLEEP bulk consolidation starting (sessions=${sessionIds.length})`
 			);
@@ -317,19 +298,33 @@ export class NidraDaemon {
 				sessionIds,
 			});
 			this.deepSleepConsolidationHandler(sessionIds)
-				.then(() => {
-					if (!this.running) return;
+				.then((processedSessionIds) => {
+					if (!this.running || this.state !== "DEEP_SLEEP" || runGeneration !== this.deepSleepRunGeneration) {
+						return;
+					}
+					const consumed = [
+						...new Set(
+							(processedSessionIds ?? sessionIds).filter((id): id is string =>
+								typeof id === "string",
+							),
+						),
+					];
 					log.info("Nidra: DEEP_SLEEP bulk consolidation complete");
 					this.emit("nidra:deep_sleep_consolidation_end", {
 						timestamp: Date.now(),
-						sessionCount: sessionIds.length,
+						sessionCount: consumed.length,
 					});
-					// Sessions consumed — clear only what we processed
+					// Sessions consumed — clear only what the handler confirmed.
 					this.pendingSessionIds = this.pendingSessionIds.filter(
-						(id) => !sessionIds.includes(id)
+						(id) => !consumed.includes(id)
 					);
+					this.preservePendingSessionsOnListening = this.pendingSessionIds.length > 0;
+					this.deepSleepCompletionPending = false;
+					this.persist();
 				})
 				.catch((err: unknown) => {
+					if (runGeneration !== this.deepSleepRunGeneration) return;
+					this.deepSleepCompletionPending = false;
 					log.error("Deep sleep consolidation handler failed", { error: String(err) });
 				});
 			return;
@@ -337,12 +332,17 @@ export class NidraDaemon {
 
 		if (this.deepSleepHandler) {
 			this.deepSleepHandler()
-				.then(() => { if (this.running) log.info("Deep sleep maintenance complete"); })
-				.catch((err: unknown) => { log.error("Deep sleep handler failed", { error: String(err) }); });
+				.then(() => {
+					if (this.running && this.state === "DEEP_SLEEP" && runGeneration === this.deepSleepRunGeneration) {
+						log.info("Deep sleep maintenance complete");
+					}
+				})
+				.catch((err: unknown) => {
+					if (runGeneration !== this.deepSleepRunGeneration) return;
+					log.error("Deep sleep handler failed", { error: String(err) });
+				});
 		}
 	}
-
-	// ─── Drift-Correcting Heartbeat ──────────────────────────────────────
 
 	private scheduleHeartbeat(): void {
 		const interval = this.config.heartbeatMs[this.state];
@@ -364,16 +364,13 @@ export class NidraDaemon {
 		unrefTimer(this.heartbeatTimer);
 	}
 
-	// ─── Phase Duration Scheduling ───────────────────────────────────────
-
 	private schedulePhaseTransition(): void {
 		switch (this.state) {
 			case "LISTENING": this.resetIdleTimer(); break;
 			case "DREAMING":
 				this.phaseDurationTimer = setTimeout(() => {
 					if (!this.running || this.disposed) return;
-					// Check autonomous DEEP_SLEEP entry: 5 consecutive idle cycles
-					const willBeIdle = !this.sessionSeenThisDream;
+						const willBeIdle = !this.sessionSeenThisDream;
 					const idleCount = willBeIdle
 						? this.consecutiveIdleDreamCycles + 1
 						: 0;
@@ -388,10 +385,22 @@ export class NidraDaemon {
 				unrefTimer(this.phaseDurationTimer);
 				break;
 			case "DEEP_SLEEP":
-				this.phaseDurationTimer = setTimeout(() => {
-					if (!this.running || this.disposed) return;
-					this.transitionTo("LISTENING");
-				}, this.config.deepSleepDurationMs);
+				{
+					const phaseStartedAt = this.lastStateChange;
+					const attemptExitDeepSleep = (): void => {
+						if (!this.running || this.disposed) return;
+						if (this.state !== "DEEP_SLEEP" || this.lastStateChange !== phaseStartedAt) return;
+						if (this.deepSleepCompletionPending) {
+							this.phaseDurationTimer = setTimeout(attemptExitDeepSleep, 250);
+							unrefTimer(this.phaseDurationTimer);
+							return;
+						}
+						this.preservePendingSessionsOnListening =
+							this.preservePendingSessionsOnListening || this.deepSleepCompletionPending;
+						this.transitionTo("LISTENING");
+					};
+					this.phaseDurationTimer = setTimeout(attemptExitDeepSleep, this.config.deepSleepDurationMs);
+				}
 				unrefTimer(this.phaseDurationTimer);
 				break;
 		}
@@ -408,8 +417,6 @@ export class NidraDaemon {
 		unrefTimer(this.idleTimer);
 	}
 
-	// ─── Utilities ───────────────────────────────────────────────────────
-
 	private clearAllTimers(): void {
 		if (this.heartbeatTimer !== null) { clearTimeout(this.heartbeatTimer); this.heartbeatTimer = null; }
 		if (this.idleTimer !== null) { clearTimeout(this.idleTimer); this.idleTimer = null; }
@@ -425,19 +432,9 @@ export class NidraDaemon {
 		if (this.disposed) throw new Error("NidraDaemon has been disposed.");
 	}
 
-	/** Build a state bag for persistence functions. */
 	private getStateBag(): NidraDaemonState {
-		return {
-			state: this.state, lastStateChange: this.lastStateChange,
-			lastHeartbeat: this.lastHeartbeat,
-			lastConsolidationStart: this.lastConsolidationStart,
-			lastConsolidationEnd: this.lastConsolidationEnd,
-			consolidationPhase: this.consolidationPhase,
-			consolidationProgress: this.consolidationProgress,
-			startedAt: this.startedAt, running: this.running,
-			consecutiveIdleDreamCycles: this.consecutiveIdleDreamCycles,
-			sessionsProcessedSinceDeepSleep: this.sessionsProcessedSinceDeepSleep,
-			pendingSessionIds: [...this.pendingSessionIds],
-		};
+		return buildNidraRuntimeStateBag(
+			this as unknown as import("./nidra-daemon-state.js").NidraRuntimeStateFields,
+		);
 	}
 }

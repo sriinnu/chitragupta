@@ -44,8 +44,8 @@ interface NidraSnapshotLike {
 }
 
 interface NidraDaemonLike {
-	snapshot(): NidraSnapshotLike;
-	wake(): void;
+	snapshot(): NidraSnapshotLike | Promise<NidraSnapshotLike>;
+	wake(): void | Promise<void>;
 }
 
 interface VidhiLike {
@@ -150,7 +150,7 @@ export function mountEvolutionRoutes(
 		}
 
 		try {
-			const snap = daemon.snapshot();
+			const snap = await daemon.snapshot();
 			return { status: 200, body: snap };
 		} catch (err) {
 			return { status: 500, body: { error: `Failed: ${(err as Error).message}` } };
@@ -165,8 +165,8 @@ export function mountEvolutionRoutes(
 		}
 
 		try {
-			daemon.wake();
-			const snap = daemon.snapshot();
+			await daemon.wake();
+			const snap = await daemon.snapshot();
 			return { status: 200, body: { woken: true, state: snap.state } };
 		} catch (err) {
 			return { status: 500, body: { error: `Failed: ${(err as Error).message}` } };

@@ -19,7 +19,7 @@ export const FALLBACK_METHODS = new Set([
 	"session.list", "session.show", "session.dates", "session.projects",
 	"session.modified_since",
 	"turn.list", "turn.since", "turn.max_number",
-	"memory.file_search", "memory.scopes", "memory.unified_recall",
+	"memory.file_search", "memory.get", "memory.scopes", "memory.unified_recall",
 	"day.show", "day.list", "day.search",
 	"context.load",
 	"vidhi.list", "vidhi.match",
@@ -79,6 +79,26 @@ export async function directFallback<T>(
 		case "memory.file_search": {
 			const search = await import("@chitragupta/smriti/search");
 			return { results: search.searchMemory(params?.query as string) } as T;
+		}
+		case "memory.get": {
+			const memStore = await import("@chitragupta/smriti/memory-store");
+			const scopeType = String(params?.scopeType ?? params?.type ?? "");
+			const scope = scopeType === "global"
+				? { type: "global" as const }
+				: scopeType === "agent"
+					? { type: "agent" as const, agentId: String(params?.agentId ?? params?.scopePath ?? "") }
+					: { type: "project" as const, path: String(params?.scopePath ?? params?.path ?? params?.project ?? "") };
+			const content = memStore.getMemory(scope);
+			const exists = memStore.listMemoryScopes().some((candidate) =>
+				candidate.type === scope.type &&
+				(candidate.type !== "project" || candidate.path === scope.path) &&
+				(candidate.type !== "agent" || candidate.agentId === scope.agentId),
+			);
+			return {
+				scope: scope.type === "global" ? "global" : scope.type === "agent" ? `agent:${scope.agentId}` : `project:${scope.path}`,
+				content,
+				exists,
+			} as T;
 		}
 		case "memory.scopes": {
 			const memStore = await import("@chitragupta/smriti/memory-store");

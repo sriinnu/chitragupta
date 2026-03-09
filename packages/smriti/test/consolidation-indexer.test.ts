@@ -19,6 +19,14 @@ vi.mock("@chitragupta/core", () => {
 	return {
 		getChitraguptaHome: () => _home,
 		setChitraguptaHome: (h: string) => { _home = h; },
+		createLogger: () => ({
+			debug: () => {},
+			info: () => {},
+			warn: () => {},
+			error: () => {},
+		}),
+		generateTraceId: () => "trace-test",
+		generateSpanId: () => "span-test",
 		SessionError: class SessionError extends Error {},
 	};
 });
@@ -30,7 +38,17 @@ vi.mock("@chitragupta/swara", () => ({
 
 import { DatabaseManager } from "../src/db/database.js";
 import { initVectorsSchema } from "../src/db/schema.js";
-import { extractSummaryText, indexConsolidationSummary, searchConsolidationSummaries, backfillConsolidationIndices, _resetConsolidationIndexer } from "../src/consolidation-indexer.js";
+import { _setSummaryPackerForTests } from "../src/pakt-compression.js";
+import {
+	extractSummaryText,
+	indexConsolidationSummary,
+	searchConsolidationSummaries,
+	backfillConsolidationIndices,
+	inspectConsolidationVectorSync,
+	repairConsolidationVectorSync,
+	_resetConsolidationIndexer,
+} from "../src/consolidation-indexer.js";
+import { renderConsolidationMetadata } from "../src/consolidation-provenance.js";
 
 // ─── Setup ──────────────────────────────────────────────────────────────────
 
@@ -40,6 +58,7 @@ beforeEach(async () => {
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "chitragupta-cidx-test-"));
 	DatabaseManager.reset();
 	_resetConsolidationIndexer();
+	_setSummaryPackerForTests(null);
 	const core = vi.mocked(await import("@chitragupta/core")) as unknown as typeof import("@chitragupta/core") & { setChitraguptaHome: (h: string) => void };
 	core.setChitraguptaHome(tmpDir);
 	// Pre-initialize the DB singleton so consolidation-indexer picks up tmpDir
@@ -48,6 +67,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+	_setSummaryPackerForTests(null);
 	DatabaseManager.reset();
 	fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -63,6 +83,13 @@ function countEmbeddings(sourceType: string): number {
 function getFirstEmbedding(sourceType: string): { id: string; source_type: string; source_id: string; text: string } | null {
 	const db = DatabaseManager.instance().get("vectors");
 	return db.prepare("SELECT id, source_type, source_id, text FROM embeddings WHERE source_type = ?").get(sourceType) as any ?? null;
+}
+
+function getEmbeddingMetadata(sourceType: string): Record<string, unknown> | null {
+	const db = DatabaseManager.instance().get("vectors");
+	const row = db.prepare("SELECT metadata FROM embeddings WHERE source_type = ?").get(sourceType) as { metadata?: string | null } | null;
+	if (!row?.metadata) return null;
+	return JSON.parse(row.metadata) as Record<string, unknown>;
 }
 
 // ─── Sample Markdown ─────────────────────────────────────────────────────────
@@ -157,6 +184,34 @@ const YEARLY_MD = `# Yearly Consolidation — /my/project — 2025
 | Test-first development | 0.92 | positive | 0.95 |
 `;
 
+const CURATED_DAILY_MD = `${renderConsolidationMetadata({
+	kind: "day",
+	formatVersion: 1,
+	date: "2026-02-10",
+	generatedAt: "2026-02-10T03:00:00.000Z",
+	sessionCount: 2,
+	projectCount: 1,
+	sourceSessionIds: ["session-a", "session-b"],
+	sourceSessions: [
+		{ id: "session-a", project: "/my/project", title: "A", created: "2026-02-10T01:00:00.000Z", updated: "2026-02-10T01:10:00.000Z", provider: "claude", branch: null },
+		{ id: "session-b", project: "/my/project", title: "B", created: "2026-02-10T02:00:00.000Z", updated: "2026-02-10T02:10:00.000Z", provider: "claude", branch: null },
+	],
+	projects: [{ project: "/my/project", sessionIds: ["session-a", "session-b"] }],
+})}
+
+# 2026-02-10 — Monday
+
+> Implemented semantic sync checks for consolidated recall.
+
+## Facts Learned
+
+- [preference] User prefers deterministic session lineage
+
+## Project: /my/project
+
+**Decision**: Keep raw sessions canonical, promote only curated artifacts
+`;
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe("extractSummaryText", () => {
@@ -239,6 +294,33 @@ describe("indexConsolidationSummary", () => {
 
 		expect(countEmbeddings("daily_summary")).toBe(0);
 	});
+
+	it("stores curated provenance metadata and content hash when available", async () => {
+		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
+		const metadata = getEmbeddingMetadata("daily_summary");
+		expect(metadata?.curated).toBe(true);
+		expect(metadata?.sourceSessionIds).toEqual(["session-a", "session-b"]);
+		expect(typeof metadata?.contentHash).toBe("string");
+	});
+
+	it("stores packed curated summaries as derived metadata without replacing semantic text", async () => {
+		_setSummaryPackerForTests({
+			packSummary: vi.fn(async () => ({
+				runtime: "pakt",
+				packedText: "@from text\nsummary|deterministic lineage",
+				format: "text",
+				savings: 31,
+			})),
+		});
+
+		await indexConsolidationSummary("daily", "2026-02-10", `${CURATED_DAILY_MD}\n${"Deterministic lineage and semantic promotion. ".repeat(24)}`);
+		const row = getFirstEmbedding("daily_summary");
+		const metadata = getEmbeddingMetadata("daily_summary");
+
+		expect(row?.text).toContain("deterministic session lineage");
+		expect(metadata?.packedSummaryText).toContain("@from text");
+		expect((metadata?.compression as { runtime?: string })?.runtime).toBe("pakt");
+	});
 });
 
 describe("searchConsolidationSummaries", () => {
@@ -285,7 +367,7 @@ describe("backfillConsolidationIndices", () => {
 		// Create a day file at the expected path under the mocked home
 		const daysDir = path.join(tmpDir, "days", "2026", "02");
 		fs.mkdirSync(daysDir, { recursive: true });
-		fs.writeFileSync(path.join(daysDir, "10.md"), DAILY_MD, "utf-8");
+		fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
 
 		const counts = await backfillConsolidationIndices();
 		expect(counts.daily).toBeGreaterThanOrEqual(1);
@@ -293,14 +375,48 @@ describe("backfillConsolidationIndices", () => {
 
 	it("skips already-indexed summaries", async () => {
 		// Index first
-		await indexConsolidationSummary("daily", "2026-02-10", DAILY_MD);
+		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
 
 		// Create the day file
 		const daysDir = path.join(tmpDir, "days", "2026", "02");
 		fs.mkdirSync(daysDir, { recursive: true });
-		fs.writeFileSync(path.join(daysDir, "10.md"), DAILY_MD, "utf-8");
+		fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
 
 		const counts = await backfillConsolidationIndices();
 		expect(counts.daily).toBe(0); // Already indexed
+	});
+});
+
+describe("semantic sync inspection and repair", () => {
+	it("detects and repairs missing curated daily summary vectors", async () => {
+		const daysDir = path.join(tmpDir, "days", "2026", "02");
+		fs.mkdirSync(daysDir, { recursive: true });
+		fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
+
+		const before = await inspectConsolidationVectorSync();
+		expect(before.scanned).toBeGreaterThanOrEqual(1);
+		expect(before.missingCount).toBe(1);
+
+		const repaired = await repairConsolidationVectorSync();
+		expect(repaired.reindexed).toBe(1);
+
+		const after = await inspectConsolidationVectorSync();
+		expect(after.missingCount).toBe(0);
+		expect(after.driftCount).toBe(0);
+	});
+
+	it("detects recall drift when the curated artifact changed after indexing", async () => {
+		const daysDir = path.join(tmpDir, "days", "2026", "02");
+		fs.mkdirSync(daysDir, { recursive: true });
+		const dayPath = path.join(daysDir, "10.md");
+		fs.writeFileSync(dayPath, CURATED_DAILY_MD, "utf-8");
+
+		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
+		fs.writeFileSync(dayPath, CURATED_DAILY_MD.replace("semantic sync checks", "drift repair checks"), "utf-8");
+
+		const status = await inspectConsolidationVectorSync();
+		expect(status.missingCount).toBe(0);
+		expect(status.driftCount).toBe(1);
+		expect(status.issues[0]?.reason).toBe("stale_hash");
 	});
 });

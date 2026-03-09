@@ -326,10 +326,29 @@ export function createContextTool(projectPath: string): McpToolHandler {
 			try {
 				const bridge = await import("./daemon-bridge.js");
 				const ctx = await bridge.loadContextViaDaemon(project, { providerContextWindow, deviceId });
-				if (ctx.itemCount === 0) {
+				let assembled = ctx.assembled;
+				let itemCount = ctx.itemCount;
+
+				// Auto-inject strongest Akasha traces for collective learning.
+				// These are patterns, warnings, and solutions deposited by past sessions
+				// that passively inform future work without requiring explicit recall.
+				try {
+					const { getAkasha } = await import("./mcp-subsystems.js");
+					const akasha = await getAkasha();
+					const strongest = (akasha as unknown as { strongest(n: number): Array<{ traceType: string; topic: string; content: string; strength: number }> }).strongest(5);
+					if (strongest.length > 0) {
+						const traces = strongest.map((t) =>
+							`[${t.traceType}] ${t.topic}: ${t.content} (strength: ${t.strength.toFixed(2)})`
+						).join("\n");
+						assembled += `\n\n## Akasha — Collective Knowledge (auto-injected)\n${traces}`;
+						itemCount += strongest.length;
+					}
+				} catch { /* Akasha optional */ }
+
+				if (itemCount === 0) {
 					return { content: [{ type: "text", text: "No memory context found. This appears to be a fresh start." }], _metadata: { action: "context", itemCount: 0 } };
 				}
-				return { content: [{ type: "text", text: truncateOutput(ctx.assembled) }], _metadata: { action: "context", itemCount: ctx.itemCount, typed: { project, itemCount: ctx.itemCount } } };
+				return { content: [{ type: "text", text: truncateOutput(assembled) }], _metadata: { action: "context", itemCount, typed: { project, itemCount } } };
 			} catch (err) {
 				return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
 			}

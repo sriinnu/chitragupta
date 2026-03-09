@@ -29,6 +29,8 @@ export interface RecallAnswer {
 	primarySource: "turns" | "memory" | "graph" | "dayfile" | "hybrid" | "akasha";
 	/** Session ID if from a session. */
 	sessionId?: string;
+	/** Canonical source sessions if recall came from a derived consolidation artifact. */
+	sourceSessionIds?: string[];
 	/** Project path if known. */
 	project?: string;
 	/** Date (YYYY-MM-DD) if known. */
@@ -323,17 +325,26 @@ async function searchDayFileLayer(query: string, limit: number): Promise<RecallA
 	// Try hierarchical search first (vector-indexed, fast)
 	try {
 		const { hierarchicalTemporalSearch } = await import("./hierarchical-temporal-search.js");
+		const { readDayFileMetadata } = await import("./day-consolidation.js");
 		const results = await hierarchicalTemporalSearch(query, { limit });
 
 		if (results.length > 0) {
-			return results.map((r) => ({
-				score: r.score,
-				answer: `On ${r.date ?? r.period}: ${r.snippet.slice(0, 300)}`,
-				primarySource: "dayfile" as const,
-				date: r.date ?? r.period,
-				project: r.project,
-				snippet: r.snippet.slice(0, 300),
-			}));
+			return results.map((r) => {
+				const provenance = r.date ? readDayFileMetadata(r.date) : null;
+				const sourceSessionIds = provenance?.kind === "day" ? provenance.sourceSessionIds : undefined;
+				const sourcePreview = sourceSessionIds && sourceSessionIds.length > 0
+					? ` [sources: ${sourceSessionIds.slice(0, 3).join(", ")}${sourceSessionIds.length > 3 ? ", ..." : ""}]`
+					: "";
+				return {
+					score: r.score,
+					answer: `On ${r.date ?? r.period}: ${r.snippet.slice(0, 300)}${sourcePreview}`,
+					primarySource: "dayfile" as const,
+					date: r.date ?? r.period,
+					project: r.project,
+					sourceSessionIds,
+					snippet: r.snippet.slice(0, 300),
+				};
+			});
 		}
 	} catch { /* fall through to linear search */ }
 
@@ -342,13 +353,19 @@ async function searchDayFileLayer(query: string, limit: number): Promise<RecallA
 		const { searchDayFiles } = await import("./day-consolidation.js");
 		const results = searchDayFiles(query, { limit });
 
-		return results.map((r) => ({
-			score: 0.5,
-			answer: `On ${r.date}: ${r.matches.map((m) => m.text).join(" | ").slice(0, 300)}`,
-			primarySource: "dayfile" as const,
-			date: r.date,
-			snippet: r.matches.map((m) => m.text).join("\n").slice(0, 300),
-		}));
+		return results.map((r) => {
+			const sourcePreview = r.sourceSessionIds && r.sourceSessionIds.length > 0
+				? ` [sources: ${r.sourceSessionIds.slice(0, 3).join(", ")}${r.sourceSessionIds.length > 3 ? ", ..." : ""}]`
+				: "";
+			return {
+				score: 0.5,
+				answer: `On ${r.date}: ${r.matches.map((m) => m.text).join(" | ").slice(0, 300)}${sourcePreview}`,
+				primarySource: "dayfile" as const,
+				date: r.date,
+				sourceSessionIds: r.sourceSessionIds,
+				snippet: r.matches.map((m) => m.text).join("\n").slice(0, 300),
+			};
+		});
 	} catch {
 		return [];
 	}

@@ -253,7 +253,7 @@ async function handleServe(opts?: SubcommandOptions): Promise<void> {
 
 async function handleMcpServer(subcommand: string | undefined, rest: string[]): Promise<void> {
 	const mcpArgs = [subcommand, ...rest].filter(Boolean) as string[];
-	let mcpTransport: "stdio" | "sse" = "stdio";
+	let mcpTransport: "stdio" | "sse" | "streamable-http" = "stdio";
 	let mcpPort = 3001;
 	let mcpProject = process.cwd();
 	let mcpAgent = false;
@@ -261,6 +261,7 @@ async function handleMcpServer(subcommand: string | undefined, rest: string[]): 
 
 	for (let mi = 0; mi < mcpArgs.length; mi++) {
 		if (mcpArgs[mi] === "--sse") mcpTransport = "sse";
+		else if (mcpArgs[mi] === "--streamable-http") mcpTransport = "streamable-http";
 		else if (mcpArgs[mi] === "--stdio") mcpTransport = "stdio";
 		else if (mcpArgs[mi] === "--port" && mi + 1 < mcpArgs.length) mcpPort = parseInt(mcpArgs[++mi], 10) || 3001;
 		else if (mcpArgs[mi] === "--project" && mi + 1 < mcpArgs.length) mcpProject = mcpArgs[++mi];

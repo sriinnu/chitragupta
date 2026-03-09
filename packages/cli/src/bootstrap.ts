@@ -20,6 +20,7 @@ import type { ToolHandler } from "@chitragupta/core";
 import type { ProviderRegistry } from "@chitragupta/swara/provider-registry";
 import {
 	registerBuiltinProviders as registerSwaraProviders,
+	createLlamaCpp,
 	createOpenAICompatProvider,
 	type OpenAICompatConfig,
 } from "@chitragupta/swara/providers";
@@ -129,6 +130,9 @@ export const ALLOWED_CREDENTIAL_KEYS = new Set([
 	// Ollama
 	"OLLAMA_HOST",
 	"OLLAMA_BASE_URL",
+	// llama.cpp
+	"LLAMACPP_BASE_URL",
+	"LLAMACPP_ENDPOINT",
 	// xAI (Grok)
 	"XAI_API_KEY",
 	// Groq
@@ -175,12 +179,19 @@ export function loadCredentials(): void {
 // ─── Provider Registration ──────────────────────────────────────────────────
 
 /**
- * Register all built-in providers (Anthropic, OpenAI, Google, Ollama)
+ * Register all built-in providers (Anthropic, OpenAI, Google, Ollama, llama.cpp)
  * plus any user-configured OpenAI-compatible providers.
  */
 export function registerBuiltinProviders(registry: ProviderRegistry, settings: ChitraguptaSettings): void {
-	// Register the 4 built-in providers: anthropic, openai, google, ollama
+	// Register the built-in providers: anthropic, openai, google, ollama
 	registerSwaraProviders(registry);
+	registry.register(createLlamaCpp({
+		baseUrl:
+			process.env.LLAMACPP_BASE_URL
+			?? process.env.LLAMACPP_ENDPOINT
+			?? settings.llamacppEndpoint
+			?? "http://localhost:8080/v1",
+	}));
 
 	// Register any custom OpenAI-compatible providers from settings
 	const customProviders = (settings as unknown as Record<string, unknown>).customProviders as
@@ -244,6 +255,7 @@ export async function registerCLIProviders(registry: ProviderRegistry): Promise<
  */
 export function formatProviderSummary(
 	cliResults: CLIAvailability[],
+	hasLlamaCpp: boolean,
 	hasOllama: boolean,
 	apiKeys: string[],
 ): string {
@@ -257,6 +269,12 @@ export function formatProviderSummary(
 			lines.push(`    \x1b[32m✓\x1b[0m ${cli.command} CLI${ver} — zero cost${tag}`);
 			hasPrimary = true;
 		}
+	}
+
+	if (hasLlamaCpp) {
+		const tag = !hasPrimary ? " ← primary" : "";
+		lines.push(`    \x1b[32m✓\x1b[0m llama.cpp (local) — zero cost${tag}`);
+		hasPrimary = true;
 	}
 
 	if (hasOllama) {

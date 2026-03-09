@@ -7,76 +7,23 @@ import { McpServer, ToolRegistry, chitraguptaToolToMcp } from "@chitragupta/tant
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { getBuiltinTools } from "../bootstrap.js";
 import { createToolNotFoundResolver } from "../shared-factories.js";
+import { resolveLearningPersistPath } from "../nervous-system-wiring.js";
 import { CLI_PACKAGE_VERSION } from "../version.js";
 import { startHeartbeat } from "./mcp-telemetry.js";
 import { applyToolTiers, isCompactMode, getTierStats } from "./mcp-tool-tiers.js";
 import { wireExtensionsToMcp } from "./mcp-extension-bridge.js";
+import { createMcpSseAuthConfig, createMcpStreamableHttpAuthConfig } from "./mcp-server-auth.js";
+import {
+	MCP_HANDLER_REF,
+	type ResolverTool,
+	buildResolverTools,
+	collectMcpTools,
+	normalizeMcpProjectPath,
+} from "./mcp-server-tooling.js";
 
 import { resetMcpStartedAt, writeChitraguptaState, clearChitraguptaState } from "./mcp-state.js";
-import {
-	createMemorySearchTool,
-	createSessionListTool,
-	createSessionShowTool,
-	createMargaDecideTool,
-	createAgentPromptTool,
-	createPromptStatusTool,
-} from "./mcp-tools-core.js";
-import {
-	createSamitiChannelsTool,
-	createSamitiBroadcastTool,
-	createSabhaDeliberateTool,
-	createAkashaTracesTool,
-	createAkashaDepositTool,
-} from "./mcp-tools-collective.js";
-import {
-	createVasanaTendenciesTool,
-	createHealthStatusTool,
-	createAtmanReportTool,
-} from "./mcp-tools-introspection.js";
-import { createCodingAgentTool } from "./mcp-tools-coding.js";
-import {
-	createHandoverTool,
-	createDayShowTool,
-	createDayListTool,
-	createDaySearchTool,
-	createContextTool,
-} from "./mcp-tools-memory.js";
-import { createHandoverSinceTool, createMemoryChangesSinceTool } from "./mcp-tools-delta.js";
-import {
-	createSyncStatusTool,
-	createSyncExportTool,
-	createSyncImportTool,
-	createRecallTool,
-	createVidhisTool,
-	createConsolidateTool,
-} from "./mcp-tools-sync.js";
-import {
-	createMeshStatusTool,
-	createMeshSpawnTool,
-	createMeshSendTool,
-	createMeshAskTool,
-	createMeshFindCapabilityTool,
-	createMeshPeersTool,
-	createMeshGossipTool,
-	createMeshTopologyTool,
-} from "./mcp-tools-mesh.js";
-import {
-	createSkillsFindTool,
-	createSkillsListTool,
-	createSkillsHealthTool,
-	createSkillsLearnTool,
-	createSkillsScanTool,
-	createSkillsEcosystemTool,
-	createSkillsRecommendTool,
-} from "./mcp-tools-skills.js";
-import { createCompletionTool } from "./mcp-tools-completion.js";
-import { createRepoMapTool, createSemanticGraphQueryTool } from "./mcp-tools-netra.js";
-import { createAstQueryTool } from "./mcp-tools-ast.js";
-import { createEpisodicRecallTool, createEpisodicRecordTool } from "./mcp-tools-episodic.js";
-import { createUIExtensionsTool, createWidgetDataTool } from "./mcp-tools-plugins.js";
-import { CerebralExpansion, createCerebralExpansionTool, createCerebralHandler } from "./cerebral-expansion.js";
+import { createCerebralHandler } from "./cerebral-expansion.js";
 import {
 	createMemoryResource,
 	createSavePrompt,
@@ -97,19 +44,24 @@ import {
 	createSystemConfigResource,
 	createRecentToolCallsResource,
 } from "./mcp-resources.js";
-import { McpSessionRecorder } from "./mcp-session.js";
 import { triggerSwapnaConsolidation } from "../main-session.js";
+import {
+	wrapMcpToolWithNervousSystem,
+	updateMcpTriguna,
+	wrapMcpToolsWithNervousSystem,
+} from "./mcp-tool-guidance.js";
 
 // ─── Re-exports (backward compatibility) ─────────────────────────────────────
 
 export { formatOrchestratorResult } from "./mcp-tools-introspection.js";
+export { createMcpSseAuthConfig, createMcpStreamableHttpAuthConfig } from "./mcp-server-auth.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface McpServerModeOptions {
-	/** Transport: "stdio" for process spawning, "sse" for HTTP. Default: "stdio" */
-	transport?: "stdio" | "sse";
-	/** Port for SSE transport. Default: 3001 */
+	/** Transport: "stdio" for process spawning, "sse" for legacy HTTP+SSE, "streamable-http" for the newer MCP HTTP mode. Default: "stdio" */
+	transport?: "stdio" | "sse" | "streamable-http";
+	/** Port for HTTP transports. Default: 3001 */
 	port?: number;
 	/** Project path for memory/session context. Default: process.cwd() */
 	projectPath?: string;
@@ -117,16 +69,6 @@ export interface McpServerModeOptions {
 	name?: string;
 	/** Whether to expose the agent prompt tool (requires provider config). Default: false */
 	enableAgent?: boolean;
-}
-
-function normalizeMcpProjectPath(input: string): string {
-	const resolved = path.resolve(input);
-	try {
-		const real = fs.realpathSync.native(resolved);
-		return path.normalize(real);
-	} catch {
-		return path.normalize(resolved);
-	}
 }
 
 // ─── Main Entry Point ───────────────────────────────────────────────────────
@@ -151,104 +93,10 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	const t0 = performance.now();
 
 	// ─── 1. Collect all tools (fast: object construction only) ───────
-
-	const mcpTools: McpToolHandler[] = [];
-
-	// Convert yantra built-in tools to MCP format
-	const builtinTools: ToolHandler[] = getBuiltinTools();
-	for (const tool of builtinTools) {
-		mcpTools.push(chitraguptaToolToMcp(tool as unknown as ChitraguptaToolHandler));
-	}
-
-	// Core tools (memory search, session list/show, routing)
-	mcpTools.push(createMemorySearchTool(projectPath));
-	mcpTools.push(createSessionListTool(projectPath));
-	mcpTools.push(createSessionShowTool(projectPath));
-	mcpTools.push(createMargaDecideTool());
-	if (enableAgent) {
-		mcpTools.push(createAgentPromptTool());
-		mcpTools.push(createPromptStatusTool());
-	}
-
-	// Memory, handover & day files
-	mcpTools.push(createHandoverTool(projectPath));
-	mcpTools.push(createHandoverSinceTool(projectPath));
-	mcpTools.push(createMemoryChangesSinceTool(projectPath));
-	mcpTools.push(createDayShowTool());
-	mcpTools.push(createDayListTool());
-	mcpTools.push(createDaySearchTool());
-	mcpTools.push(createContextTool(projectPath));
-
-	// Coding agent
-	mcpTools.push(createCodingAgentTool(projectPath));
-
-	// Collective intelligence (Samiti, Sabha, Akasha)
-	mcpTools.push(createSamitiChannelsTool());
-	mcpTools.push(createSamitiBroadcastTool());
-	mcpTools.push(createSabhaDeliberateTool());
-	mcpTools.push(createAkashaTracesTool());
-	mcpTools.push(createAkashaDepositTool());
-
-	// Introspection (Vasana, Triguna health, Atman report)
-	mcpTools.push(createVasanaTendenciesTool(projectPath));
-	mcpTools.push(createHealthStatusTool());
-	mcpTools.push(createAtmanReportTool());
-
-	// Sync, recall & consolidation
-	mcpTools.push(createSyncStatusTool());
-	mcpTools.push(createSyncExportTool(projectPath));
-	mcpTools.push(createSyncImportTool());
-	mcpTools.push(createRecallTool());
-	mcpTools.push(createVidhisTool(projectPath));
-	mcpTools.push(createConsolidateTool(projectPath));
-
-	// P2P Actor Mesh (Sutra)
-	mcpTools.push(createMeshStatusTool());
-	mcpTools.push(createMeshSpawnTool());
-	mcpTools.push(createMeshSendTool());
-	mcpTools.push(createMeshAskTool());
-	mcpTools.push(createMeshFindCapabilityTool());
-	mcpTools.push(createMeshPeersTool());
-	mcpTools.push(createMeshGossipTool());
-	mcpTools.push(createMeshTopologyTool());
-
-	// Vidhya-Skills Pipeline
-	mcpTools.push(createSkillsFindTool());
-	mcpTools.push(createSkillsListTool());
-	mcpTools.push(createSkillsHealthTool());
-	mcpTools.push(createSkillsLearnTool());
-	mcpTools.push(createSkillsScanTool());
-	mcpTools.push(createSkillsEcosystemTool());
-	mcpTools.push(createSkillsRecommendTool());
-
-	// Completion Router (provider-agnostic LLM calls)
-	mcpTools.push(createCompletionTool());
-
-	// UI Extension Registry (TUI consumer queries)
-	mcpTools.push(createUIExtensionsTool());
-	mcpTools.push(createWidgetDataTool());
-
-	// Netra — Repo Map + Semantic Graph + AST Query
-	mcpTools.push(createRepoMapTool(projectPath));
-	mcpTools.push(createSemanticGraphQueryTool(projectPath));
-	mcpTools.push(createAstQueryTool(projectPath));
-
-	// Episodic Developer Memory
-	mcpTools.push(createEpisodicRecallTool(projectPath));
-	mcpTools.push(createEpisodicRecordTool(projectPath));
-
-	// Cerebral Expansion — single shared instance for diagnostic tool + onToolNotFound
-	const cerebralExpansion = new CerebralExpansion();
-	mcpTools.push(createCerebralExpansionTool(
-		cerebralExpansion,
-		() => import("./mcp-subsystems.js").then((m) => m.getAkasha()),
-		() => import("./mcp-subsystems.js").then((m) => m.getSkillRegistry()),
-	));
-
-	// ─── 2. Session recording ───────────────────────────────────────
-
-	const recorder = new McpSessionRecorder(projectPath);
-	mcpTools.push(recorder.createRecordConversationTool());
+	const { builtinTools, mcpTools, cerebralExpansion, recorder, buddhiRecorder } = collectMcpTools(
+		projectPath,
+		enableAgent,
+	);
 
 	// ─── 3. Apply tool tiers + Create + START server IMMEDIATELY ────
 	//
@@ -256,7 +104,13 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	// MCP clients send `initialize` immediately on spawn — if the stdin
 	// listener isn't set up yet, the client times out waiting for a response.
 
-	const finalTools = applyToolTiers(mcpTools);
+	const finalTools = wrapMcpToolsWithNervousSystem(
+		applyToolTiers(mcpTools),
+		{
+			projectPath,
+			sessionIdResolver: () => recorder.activeSessionId ?? undefined,
+		},
+	);
 	const heartbeat = startHeartbeat({ workspace: projectPath, transport });
 	heartbeat.update({ model: "mcp" });
 	let toolCallCount = 0;
@@ -265,9 +119,15 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	// Basic resolver runs first; if it fails, CerebralExpansion searches
 	// Akasha cache + local skill registry (TVM) + Suraksha security scan.
 
-	const learningPersistPath = path.join(os.homedir(), ".chitragupta", "learning", "session-state.json");
-	const learningDir = path.dirname(learningPersistPath);
-	fs.mkdirSync(learningDir, { recursive: true });
+	const learningPersistPaths = [
+		resolveLearningPersistPath(projectPath),
+		path.join(os.homedir(), ".chitragupta", "learning", "session-state.json"),
+	];
+	for (const persistPath of learningPersistPaths) {
+		fs.mkdirSync(path.dirname(persistPath), { recursive: true });
+	}
+
+	const resolverTools = buildResolverTools(builtinTools, finalTools);
 
 	const cerebralHandler = createCerebralHandler(
 		cerebralExpansion,
@@ -276,14 +136,17 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	);
 
 	const toolNotFoundResolver = createToolNotFoundResolver({
-		tools: builtinTools,
+		tools: resolverTools,
 		onGap: (toolName) => {
 			process.stderr.write(`[skill-gap] ${toolName}\n`);
-			// Append to learning persist file for cross-session gap tracking
-			try {
-				const entry = JSON.stringify({ type: "skill-gap", tool: toolName, ts: Date.now() }) + "\n";
-				fs.appendFileSync(learningPersistPath, entry);
-			} catch { /* best-effort persistence */ }
+			const entry = JSON.stringify({ type: "skill-gap", tool: toolName, ts: Date.now() }) + "\n";
+			for (const persistPath of learningPersistPaths) {
+				try {
+					fs.appendFileSync(persistPath, entry);
+				} catch {
+					/* best-effort persistence */
+				}
+			}
 		},
 	});
 
@@ -292,6 +155,12 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		version: CLI_PACKAGE_VERSION,
 		transport,
 		ssePort: port,
+		streamableHttpPort: port,
+		auth: transport === "sse"
+			? createMcpSseAuthConfig()
+			: transport === "streamable-http"
+				? createMcpStreamableHttpAuthConfig()
+				: undefined,
 		tools: finalTools,
 		resources: [createMemoryResource(projectPath)],
 		prompts: [
@@ -311,7 +180,20 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 			// Phase 1: Try basic fuzzy/Vidya resolution
 			const resolved = await toolNotFoundResolver(toolName);
 			if (resolved) {
-				return chitraguptaToolToMcp(resolved as unknown as ChitraguptaToolHandler);
+				const wrapped = (resolved as ResolverTool)[MCP_HANDLER_REF];
+				if (wrapped) {
+					return wrapMcpToolWithNervousSystem(wrapped, {
+						projectPath,
+						sessionIdResolver: () => recorder.activeSessionId ?? undefined,
+					});
+				}
+				return wrapMcpToolWithNervousSystem(
+					chitraguptaToolToMcp(resolved as unknown as ChitraguptaToolHandler),
+					{
+						projectPath,
+						sessionIdResolver: () => recorder.activeSessionId ?? undefined,
+					},
+				);
 			}
 
 			// Phase 2: Cerebral Expansion — autonomous skill discovery + learning
@@ -347,6 +229,12 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		 */
 		onToolCall: async (info) => {
 			await recorder.recordToolCall(info);
+			buddhiRecorder?.("tool:done", {
+				name: info.tool,
+				result: { isError: info.result.isError === true },
+				durationMs: info.elapsedMs,
+			});
+			await updateMcpTriguna(info);
 			heartbeat.update({ toolCallCount: ++toolCallCount, lastToolCallAt: Date.now(), state: "busy" });
 		},
 	});
@@ -355,7 +243,11 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 
 	const startupMs = performance.now() - t0;
 	const tierInfo = isCompactMode() ? ` ${JSON.stringify(getTierStats(mcpTools))}` : "";
-	const sseInfo = transport === "sse" ? ` on port ${port}` : "";
+	const sseInfo = transport === "sse"
+		? ` legacy-http+sse on port ${port}`
+		: transport === "streamable-http"
+			? ` streamable-http on port ${port}`
+			: "";
 	process.stderr.write(
 		`Chitragupta MCP server ready (${transport}${sseInfo}) in ${startupMs.toFixed(0)}ms\n` +
 		`  Tools: ${finalTools.length}${tierInfo}  Project: ${projectPath}\n` +
@@ -409,12 +301,14 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 	}
 
 	// 4e. Graceful shutdown — trigger Swapna dream-cycle before exit
+	let meshNetworkShutdown: (() => Promise<void>) | undefined;
 	const shutdown = async () => {
 		heartbeat.update({ state: "shutting_down" });
 		heartbeat.stop();
 		triggerSwapnaConsolidation(projectPath);
 		clearChitraguptaState();
 		try { const { disconnectDaemon } = await import("./daemon-bridge.js"); disconnectDaemon(); } catch { /* best-effort */ }
+		try { await meshNetworkShutdown?.(); } catch { /* best-effort */ }
 		await server.stop();
 		process.exit(0);
 	};
@@ -436,6 +330,23 @@ export async function runMcpServerMode(options: McpServerModeOptions = {}): Prom
 		process.stderr.write("[mesh] Actors and soul bootstrapped\n");
 	} catch (err) {
 		process.stderr.write(`[mesh] Bootstrap skipped: ${err instanceof Error ? err.message : String(err)}\n`);
+	}
+
+	try {
+		const { getActorSystem } = await import("./mcp-subsystems.js");
+		const { bootstrapMeshNetwork, resolveMeshConfig } = await import("../mesh-bootstrap.js");
+		const { loadGlobalSettings } = await import("@chitragupta/core");
+			const meshConfig = resolveMeshConfig(loadGlobalSettings() as unknown as Record<string, unknown>);
+		if (meshConfig) {
+			const meshSystem = await getActorSystem();
+			const meshResult = await bootstrapMeshNetwork(meshSystem, meshConfig);
+			meshNetworkShutdown = meshResult.shutdown;
+			process.stderr.write(
+				`[mesh] P2P bootstrapped on ${meshResult.meshPort} (${meshResult.nodeId.slice(0, 8)})\n`,
+			);
+		}
+	} catch (err) {
+		process.stderr.write(`[mesh] P2P bootstrap skipped: ${err instanceof Error ? err.message : String(err)}\n`);
 	}
 
 	// 7. Transcendence: Warm cache + periodic refresh (5 min cycle matches TTL)

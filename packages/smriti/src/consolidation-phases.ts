@@ -7,7 +7,6 @@
 
 import type { Session } from "./types.js";
 import type { DetectedPattern } from "./consolidation.js";
-
 // ─── Regex Patterns for Detection ───────────────────────────────────────────
 
 /** Patterns that indicate user preferences. */

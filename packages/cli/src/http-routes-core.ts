@@ -3,11 +3,10 @@
  * @module http-routes-core
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import type { ChitraguptaServer } from "./http-server.js";
 import type { ApiDeps, ServerConfig } from "./http-server-types.js";
 import { okResponse, errorResponse } from "./server-response.js";
+import { mountProviderRoutes } from "./http-routes-providers.js";
 import {
 	HealthChecker,
 	MetricsRegistry,
@@ -15,7 +14,6 @@ import {
 	MemoryHealthCheck,
 	EventLoopHealthCheck,
 	DiskHealthCheck,
-	getChitraguptaHome,
 } from "@chitragupta/core";
 import {
 	handleTokenExchange,
@@ -30,39 +28,8 @@ healthChecker.register(new MemoryHealthCheck());
 healthChecker.register(new EventLoopHealthCheck());
 healthChecker.register(new DiskHealthCheck());
 
-/** Shape of a persisted provider configuration entry. */
-interface ProviderConfig {
-	id: string;
-	type: string;
-	apiKey?: string;
-	endpoint?: string;
-	models?: string[];
-}
-
-/** Path to the persisted provider configurations file. */
-function getProvidersConfigPath(): string {
-	return path.join(getChitraguptaHome(), "config", "providers.json");
-}
-
-/** Read all provider configs from disk. Returns empty array on any error. */
-function readProviderConfigs(): ProviderConfig[] {
-	try {
-		const filePath = getProvidersConfigPath();
-		if (!fs.existsSync(filePath)) return [];
-		const raw = fs.readFileSync(filePath, "utf-8");
-		const parsed = JSON.parse(raw);
-		return Array.isArray(parsed) ? parsed as ProviderConfig[] : [];
-	} catch {
-		return [];
-	}
-}
-
-/** Write provider configs to disk. Creates the config directory if needed. */
-function writeProviderConfigs(configs: ProviderConfig[]): void {
-	const filePath = getProvidersConfigPath();
-	const dir = path.dirname(filePath);
-	fs.mkdirSync(dir, { recursive: true });
-	fs.writeFileSync(filePath, JSON.stringify(configs, null, "\t"), "utf-8");
+function parseSessionReusePolicy(value: unknown): "isolated" | "same_day" | undefined {
+	return value === "isolated" || value === "same_day" ? value : undefined;
 }
 
 /**
@@ -107,7 +74,7 @@ export function mountCoreRoutes(
 	// ── Sessions ──────────────────────────────────────────────────────
 	server.route("GET", "/api/sessions", async () => {
 		try {
-			const sessions = deps.listSessions();
+			const sessions = await Promise.resolve(deps.listSessions());
 			return {
 				status: 200,
 				body: okResponse({ sessions }, { count: sessions.length }),
@@ -119,26 +86,146 @@ export function mountCoreRoutes(
 
 	server.route("GET", "/api/sessions/:id", async (req) => {
 		try {
-			const session = deps.getSession();
-			if (!session || (session as Record<string, unknown>).id !== req.params.id) {
-				return { status: 404, body: errorResponse(`Session not found: ${req.params.id}`) };
-			}
+			const session = deps.loadSession
+				? await Promise.resolve(deps.loadSession(req.params.id))
+				: deps.getSession();
+			if (!session) return { status: 404, body: errorResponse(`Session not found: ${req.params.id}`) };
 			return { status: 200, body: okResponse({ session }) };
 		} catch (err) {
 			return { status: 500, body: errorResponse(`Failed to get session: ${(err as Error).message}`) };
 		}
 	});
 
+	server.route("GET", "/api/sessions/lineage/policy", async () => ({
+		status: 200,
+		body: okResponse({
+			defaultReusePolicy: "isolated",
+			explicitReusePolicy: "same_day",
+			headers: {
+				lineage: "x-chitragupta-lineage",
+				client: "x-chitragupta-client",
+			},
+			bodyFields: [
+				"sessionLineageKey",
+				"lineageKey",
+				"sessionReusePolicy",
+				"consumer",
+				"surface",
+				"channel",
+				"actorId",
+			],
+			guidance: "Use isolated sessions by default. Reuse a lineage key only for intentional same-thread collaboration across tabs, agents, or surfaces.",
+		}),
+	}));
+
 	server.route("POST", "/api/sessions", async (req) => {
 		try {
 			const body = (req.body ?? {}) as Record<string, unknown>;
-			const title = typeof body.title === "string" ? body.title : "API Session";
+			if (!deps.openSession) {
+				return { status: 501, body: { error: "Session creation is not available on this runtime surface" } };
+			}
+			const opened = await deps.openSession({
+				sessionId: typeof body.sessionId === "string" ? body.sessionId : undefined,
+				title: typeof body.title === "string" ? body.title : "API Session",
+				clientKey:
+					typeof body.clientKey === "string"
+						? body.clientKey
+						: req.headers["x-chitragupta-client"],
+				sessionLineageKey:
+					typeof body.sessionLineageKey === "string"
+						? body.sessionLineageKey
+						: typeof body.lineageKey === "string"
+							? body.lineageKey
+							: req.headers["x-chitragupta-lineage"],
+				sessionReusePolicy: parseSessionReusePolicy(body.sessionReusePolicy),
+				consumer: typeof body.consumer === "string" ? body.consumer : undefined,
+				surface: typeof body.surface === "string" ? body.surface : undefined,
+				channel: typeof body.channel === "string" ? body.channel : undefined,
+				actorId: typeof body.actorId === "string" ? body.actorId : undefined,
+			});
 			return {
 				status: 201,
-				body: { message: "Session creation requested", title, requestId: req.requestId },
+				body: {
+					sessionId: opened.id,
+					created: opened.created,
+					requestId: req.requestId,
+				},
 			};
 		} catch (err) {
 			return { status: 500, body: { error: `Failed to create session: ${(err as Error).message}` } };
+		}
+	});
+
+	server.route("POST", "/api/sessions/collaborate", async (req) => {
+		try {
+			const body = (req.body ?? {}) as Record<string, unknown>;
+			const lineageKey =
+				typeof body.sessionLineageKey === "string"
+					? body.sessionLineageKey
+					: typeof body.lineageKey === "string"
+						? body.lineageKey
+						: req.headers["x-chitragupta-lineage"];
+			if (typeof lineageKey !== "string" || lineageKey.trim().length === 0) {
+				return {
+					status: 400,
+					body: { error: "Missing sessionLineageKey/lineageKey or x-chitragupta-lineage header" },
+				};
+			}
+			if (!deps.openSession) {
+				return { status: 501, body: { error: "Shared collaboration sessions are not available on this runtime surface" } };
+			}
+			const collaborator =
+				deps.openSharedSession
+					? await deps.openSharedSession({
+						sessionId: typeof body.sessionId === "string" ? body.sessionId : undefined,
+						title: typeof body.title === "string" ? body.title : "Shared Collaboration Session",
+						clientKey:
+							typeof body.clientKey === "string"
+								? body.clientKey
+								: req.headers["x-chitragupta-client"],
+						sessionLineageKey: lineageKey,
+						consumer: typeof body.consumer === "string" ? body.consumer : undefined,
+						surface: typeof body.surface === "string" ? body.surface : "collaboration",
+						channel: typeof body.channel === "string" ? body.channel : "shared",
+						actorId: typeof body.actorId === "string" ? body.actorId : undefined,
+					})
+					: await deps.openSession({
+						sessionId: typeof body.sessionId === "string" ? body.sessionId : undefined,
+						title: typeof body.title === "string" ? body.title : "Shared Collaboration Session",
+						clientKey:
+							typeof body.clientKey === "string"
+								? body.clientKey
+								: req.headers["x-chitragupta-client"],
+						sessionLineageKey: lineageKey,
+						sessionReusePolicy: "same_day",
+						consumer: typeof body.consumer === "string" ? body.consumer : undefined,
+						surface: typeof body.surface === "string" ? body.surface : "collaboration",
+						channel: typeof body.channel === "string" ? body.channel : "shared",
+						actorId: typeof body.actorId === "string" ? body.actorId : undefined,
+					});
+			const collaboratorSessionId =
+				"session" in collaborator
+					&& typeof collaborator.session === "object"
+					&& collaborator.session !== null
+					&& "meta" in collaborator.session
+					&& typeof collaborator.session.meta === "object"
+					&& collaborator.session.meta !== null
+					&& "id" in collaborator.session.meta
+					&& typeof collaborator.session.meta.id === "string"
+						? collaborator.session.meta.id
+						: collaborator.id;
+			return {
+				status: 201,
+				body: {
+					sessionId: collaboratorSessionId,
+					created: collaborator.created,
+					lineageKey,
+					sessionReusePolicy: "same_day",
+					requestId: req.requestId,
+				},
+			};
+		} catch (err) {
+			return { status: 500, body: { error: `Failed to open collaboration session: ${(err as Error).message}` } };
 		}
 	});
 
@@ -149,6 +236,42 @@ export function mountCoreRoutes(
 			const message = body.message;
 			if (typeof message !== "string" || message.trim().length === 0) {
 				return { status: 400, body: { error: "Missing or empty 'message' field in request body" } };
+			}
+			if (deps.prompt) {
+				const sessionOptions = {
+					sessionId:
+						typeof body.sessionId === "string"
+							? body.sessionId
+							: req.headers["x-session-id"],
+					title: typeof body.title === "string" ? body.title : "Serve Session",
+					clientKey:
+						typeof body.clientKey === "string"
+							? body.clientKey
+							: req.headers["x-chitragupta-client"],
+					sessionLineageKey:
+						typeof body.sessionLineageKey === "string"
+							? body.sessionLineageKey
+							: typeof body.lineageKey === "string"
+								? body.lineageKey
+								: req.headers["x-chitragupta-lineage"],
+					sessionReusePolicy: parseSessionReusePolicy(body.sessionReusePolicy),
+					consumer: typeof body.consumer === "string" ? body.consumer : undefined,
+					surface: typeof body.surface === "string" ? body.surface : undefined,
+					channel: typeof body.channel === "string" ? body.channel : undefined,
+					actorId: typeof body.actorId === "string" ? body.actorId : undefined,
+				};
+				let sessionId = sessionOptions.sessionId;
+				let createdSession = false;
+				if (deps.openSession) {
+					const opened = await deps.openSession(sessionOptions);
+					sessionId = opened.id;
+					createdSession = opened.created;
+				}
+				const response = await deps.prompt(message.trim(), { sessionId });
+				return {
+					status: 200,
+					body: { response, sessionId, createdSession, requestId: req.requestId },
+				};
 			}
 			const agent = deps.getAgent() as Record<string, unknown> | null;
 			if (!agent) {
@@ -165,116 +288,7 @@ export function mountCoreRoutes(
 	});
 
 	// ── Providers & Tools ─────────────────────────────────────────────
-	server.route("GET", "/api/providers", async () => {
-		try {
-			const providers = deps.listProviders?.() ?? [];
-			return { status: 200, body: { providers } };
-		} catch (err) {
-			return { status: 500, body: { error: `Failed to list providers: ${(err as Error).message}` } };
-		}
-	});
-
-	// ── Provider CRUD (persisted config) ─────────────────────────────
-	server.route("POST", "/api/providers", async (req) => {
-		try {
-			const body = (req.body ?? {}) as Record<string, unknown>;
-			if (typeof body.id !== "string" || body.id.trim().length === 0) {
-				return { status: 400, body: { error: "Missing or empty 'id' field" } };
-			}
-			if (typeof body.type !== "string" || body.type.trim().length === 0) {
-				return { status: 400, body: { error: "Missing or empty 'type' field" } };
-			}
-
-			const entry: ProviderConfig = {
-				id: body.id.trim(),
-				type: body.type.trim(),
-				apiKey: typeof body.apiKey === "string" ? body.apiKey : undefined,
-				endpoint: typeof body.endpoint === "string" ? body.endpoint : undefined,
-				models: Array.isArray(body.models)
-					? (body.models as unknown[]).filter((m): m is string => typeof m === "string")
-					: undefined,
-			};
-
-			const configs = readProviderConfigs();
-			if (configs.some((c) => c.id === entry.id)) {
-				return { status: 409, body: { error: `Provider already exists: ${entry.id}` } };
-			}
-			configs.push(entry);
-			writeProviderConfigs(configs);
-			return { status: 201, body: { provider: entry } };
-		} catch (err) {
-			return { status: 500, body: { error: `Failed to create provider: ${(err as Error).message}` } };
-		}
-	});
-
-	server.route("PUT", "/api/providers/:id", async (req) => {
-		try {
-			const body = (req.body ?? {}) as Record<string, unknown>;
-			if (body === null || typeof body !== "object" || Array.isArray(body)) {
-				return { status: 400, body: { error: "Request body must be a JSON object" } };
-			}
-
-			const configs = readProviderConfigs();
-			const idx = configs.findIndex((c) => c.id === req.params.id);
-			if (idx === -1) {
-				return { status: 404, body: { error: `Provider not found: ${req.params.id}` } };
-			}
-
-			const existing = configs[idx];
-			const updated: ProviderConfig = {
-				...existing,
-				type: typeof body.type === "string" ? body.type : existing.type,
-				apiKey: typeof body.apiKey === "string" ? body.apiKey : existing.apiKey,
-				endpoint: typeof body.endpoint === "string" ? body.endpoint : existing.endpoint,
-				models: Array.isArray(body.models)
-					? (body.models as unknown[]).filter((m): m is string => typeof m === "string")
-					: existing.models,
-			};
-
-			configs[idx] = updated;
-			writeProviderConfigs(configs);
-			return { status: 200, body: { provider: updated } };
-		} catch (err) {
-			return { status: 500, body: { error: `Failed to update provider: ${(err as Error).message}` } };
-		}
-	});
-
-	server.route("DELETE", "/api/providers/:id", async (req) => {
-		try {
-			const configs = readProviderConfigs();
-			const idx = configs.findIndex((c) => c.id === req.params.id);
-			if (idx === -1) {
-				return { status: 404, body: { error: `Provider not found: ${req.params.id}` } };
-			}
-			const removed = configs.splice(idx, 1)[0];
-			writeProviderConfigs(configs);
-			return { status: 200, body: { removed } };
-		} catch (err) {
-			return { status: 500, body: { error: `Failed to delete provider: ${(err as Error).message}` } };
-		}
-	});
-
-	server.route("POST", "/api/providers/:id/test", async (req) => {
-		try {
-			const configs = readProviderConfigs();
-			const config = configs.find((c) => c.id === req.params.id);
-			if (!config) {
-				return { status: 404, body: { error: `Provider not found: ${req.params.id}` } };
-			}
-			// Mock connection test -- real implementation would ping the provider
-			return {
-				status: 200,
-				body: {
-					success: true,
-					providerId: config.id,
-					latencyMs: 42,
-					modelsAvailable: config.models?.length ?? 0,
-				},
-			};
-		} catch (err) {
-			return { status: 500, body: { error: `Provider test failed: ${(err as Error).message}` } };
-		}
-	});
+	mountProviderRoutes(server, deps);
 
 	server.route("GET", "/api/tools", async () => {
 		try {

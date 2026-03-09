@@ -1,11 +1,11 @@
 /**
- * Workflow API Routes — REST endpoints for Vayu DAG engine.
+ * Workflow API Routes — REST endpoints for the Prana workflow engine.
  *
  * Mounts onto the existing ChitraguptaServer via `server.route()`.
  * Returns JSON responses for CLI, Vaayu, and external consumers.
  */
 
-import type { Workflow, WorkflowExecution, StepExecution } from "@chitragupta/vayu";
+import type { Workflow, WorkflowExecution, StepExecution } from "@chitragupta/prana";
 
 // Duck-typed server to avoid hard import dependency
 interface ServerLike {
@@ -61,7 +61,7 @@ export function mountWorkflowRoutes(server: ServerLike): void {
 			const {
 				listChitraguptaWorkflows,
 				listWorkflows: listSavedWorkflows,
-			} = await import("@chitragupta/vayu");
+			} = await import("@chitragupta/prana");
 
 			const builtIn = listChitraguptaWorkflows().map((w) => ({
 				...w,
@@ -97,7 +97,7 @@ export function mountWorkflowRoutes(server: ServerLike): void {
 				listChitraguptaWorkflows,
 				listWorkflows: listSavedWorkflows,
 				listExecutions,
-			} = await import("@chitragupta/vayu");
+			} = await import("@chitragupta/prana");
 
 			const limit = parseInt(req.query.limit ?? "20", 10);
 
@@ -145,7 +145,7 @@ export function mountWorkflowRoutes(server: ServerLike): void {
 	// Get a specific execution by ID.
 	server.route("GET", "/api/workflows/executions/:id", async (req) => {
 		try {
-			const { loadExecution } = await import("@chitragupta/vayu");
+			const { loadExecution } = await import("@chitragupta/prana");
 			const exec = loadExecution(req.params.id);
 
 			if (!exec) {
@@ -176,7 +176,7 @@ export function mountWorkflowRoutes(server: ServerLike): void {
 				loadWorkflow,
 				getExecutionLevels,
 				getCriticalPath,
-			} = await import("@chitragupta/vayu");
+			} = await import("@chitragupta/prana");
 
 			const name = req.params.name;
 			const workflow = getChitraguptaWorkflow(name) ?? loadWorkflow(name);
@@ -243,7 +243,7 @@ export function mountWorkflowRoutes(server: ServerLike): void {
 				loadWorkflow,
 				WorkflowExecutor,
 				saveExecution,
-			} = await import("@chitragupta/vayu");
+			} = await import("@chitragupta/prana");
 
 			const name = req.params.name;
 			const workflow = getChitraguptaWorkflow(name) ?? loadWorkflow(name);

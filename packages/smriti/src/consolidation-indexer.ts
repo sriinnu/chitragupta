@@ -9,23 +9,44 @@
  * table, allowing efficient filtered vector search by consolidation level.
  */
 
+import fs from "node:fs";
 import { DatabaseManager } from "./db/database.js";
 import { initVectorsSchema } from "./db/schema.js";
 import { EmbeddingService, fallbackEmbedding } from "./embedding-service.js";
+import { packCuratedSummaryText } from "./pakt-compression.js";
 import { vectorToBlob, blobToVector } from "./recall.js";
 import { cosineSimilarity } from "./recall-scoring.js";
+import {
+	parseConsolidationMetadata,
+} from "./consolidation-provenance.js";
+import {
+	buildArtifactContentHash,
+	buildConsolidationEmbeddingId,
+	buildConsolidationSourceId,
+	extractSummaryText,
+	listCuratedConsolidationArtifacts,
+	type ConsolidationLevel,
+	type ConsolidationSummaryIndex,
+	type ConsolidationVectorSyncIssue,
+	type ConsolidationVectorSyncStatus,
+	type CuratedConsolidationArtifact,
+	type CuratedConsolidationArtifactQuery,
+} from "./consolidation-indexer-artifacts.js";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-export type ConsolidationLevel = "daily" | "monthly" | "yearly";
-
-export interface ConsolidationSummaryIndex {
-	level: ConsolidationLevel;
-	period: string;         // "YYYY-MM-DD" | "YYYY-MM" | "YYYY"
-	project?: string;       // undefined for cross-project day files
-	embedding: number[];
-	summaryText: string;
-}
+export {
+	buildConsolidationEmbeddingId,
+	buildConsolidationSourceId,
+	extractSummaryText,
+	listCuratedConsolidationArtifacts,
+};
+export type {
+	ConsolidationLevel,
+	ConsolidationSummaryIndex,
+	ConsolidationVectorSyncIssue,
+	ConsolidationVectorSyncStatus,
+	CuratedConsolidationArtifact,
+	CuratedConsolidationArtifactQuery,
+};
 
 // ─── Embedding helper ────────────────────────────────────────────────────────
 
@@ -57,98 +78,77 @@ export function _resetConsolidationIndexer(): void {
 	_embeddingService = null;
 }
 
-/** Build a stable ID for a consolidation summary embedding. */
-function buildEmbeddingId(level: ConsolidationLevel, period: string, project?: string): string {
-	const suffix = project ? `-${fnvHash4(project)}` : "";
-	return `${level}_summary:${period}${suffix}`;
+interface EmbeddingRow {
+	id: string;
+	vector: Buffer;
+	text: string;
+	source_type: string;
+	source_id: string;
+	metadata: string | null;
 }
 
-/** FNV-1a 4-char hex hash (same as periodic-consolidation.ts). */
-function fnvHash4(s: string): string {
-	let h = 0x811c9dc5;
-	for (let i = 0; i < s.length; i++) {
-		h ^= s.charCodeAt(i);
-		h = (h * 0x01000193) >>> 0;
+function parseEmbeddingMetadata(
+	row: Pick<EmbeddingRow, "metadata"> | undefined,
+): Record<string, unknown> {
+	if (!row?.metadata) return {};
+	try {
+		return JSON.parse(row.metadata) as Record<string, unknown>;
+	} catch {
+		return {};
 	}
-	return (h >>> 0).toString(16).slice(0, 4);
 }
 
-// ─── Extract Summary Text ────────────────────────────────────────────────────
-
-/**
- * Extract high-signal text from consolidation markdown for embedding.
- * Strips formatting, focuses on semantic content per level.
- */
-export function extractSummaryText(markdown: string, level: ConsolidationLevel): string {
-	const lines = markdown.split("\n");
-	const parts: string[] = [];
-
-	if (level === "daily") {
-		// Daily: header + facts + topics + decisions (skip raw tool lists)
-		for (const line of lines) {
-			const trimmed = line.trim();
-			// Strip leading "- " for bullet points
-			const stripped = trimmed.replace(/^-\s*/, "");
-			// Keep headers, facts, decisions, topics, errors, prefs
-			if (trimmed.startsWith("# ") || trimmed.startsWith("## ")) {
-				parts.push(trimmed.replace(/^#+\s*/, ""));
-			} else if (stripped.startsWith("**Fact**:") || stripped.startsWith("**Decision**:") ||
-				stripped.startsWith("**Pref**:") || stripped.startsWith("**Error**:") ||
-				stripped.startsWith("**Topic**:") || stripped.startsWith("**Q**:")) {
-				parts.push(stripped.replace(/\*\*/g, ""));
-			} else if (trimmed.startsWith("- [") && trimmed.includes("]")) {
-				// Fact lines like "- [preference] user prefers..."
-				parts.push(stripped);
-			} else if (trimmed.startsWith("**Topics**:")) {
-				parts.push(trimmed.replace(/\*\*/g, ""));
-			} else if (trimmed.startsWith(">") && !trimmed.includes("sessions |")) {
-				// Narrative summaries (skip stats line)
-				parts.push(trimmed.replace(/^>\s*/, ""));
-			}
+function inspectArtifacts(
+	artifacts: readonly CuratedConsolidationArtifact[],
+	rowsById: Map<string, EmbeddingRow>,
+): ConsolidationVectorSyncStatus {
+	const issues: ConsolidationVectorSyncIssue[] = [];
+	let missingCount = 0;
+	let driftCount = 0;
+	for (const artifact of artifacts) {
+		const row = rowsById.get(artifact.id);
+		if (!row) {
+			missingCount++;
+			issues.push({
+				id: artifact.id,
+				level: artifact.level,
+				period: artifact.period,
+				project: artifact.project,
+				reason: "missing_vector",
+			});
+			continue;
 		}
-	} else if (level === "monthly") {
-		// Monthly: header + key metrics + vasana names + recommendations
-		let inRecommendations = false;
-		let inVasanas = false;
-		for (const line of lines) {
-			const trimmed = line.trim();
-			if (trimmed.startsWith("# ")) {
-				parts.push(trimmed.replace(/^#+\s*/, ""));
-			} else if (trimmed.startsWith("- **Sessions**:") || trimmed.startsWith("- **Turns**:") ||
-				trimmed.startsWith("- **Estimated Cost**:")) {
-				parts.push(trimmed.replace(/^-\s*/, "").replace(/\*\*/g, ""));
-			}
-			if (trimmed === "## Recommendations") inRecommendations = true;
-			else if (trimmed.startsWith("## ") && inRecommendations) inRecommendations = false;
-			if (inRecommendations && trimmed.startsWith("- ")) {
-				parts.push(trimmed.replace(/^-\s*/, ""));
-			}
-			if (trimmed === "## Vasanas Crystallized") inVasanas = true;
-			else if (trimmed.startsWith("## ") && trimmed !== "## Vasanas Crystallized") inVasanas = false;
-			if (inVasanas && trimmed.startsWith("|") && !trimmed.startsWith("|--") && !trimmed.startsWith("| Tendency")) {
-				const cells = trimmed.split("|").filter(Boolean).map((c) => c.trim());
-				if (cells[0]) parts.push(`Vasana: ${cells[0]}`);
-			}
+		const metadata = parseEmbeddingMetadata(row);
+		const storedHash = typeof metadata.contentHash === "string" ? metadata.contentHash : "";
+		const curated = metadata.curated === true;
+		if (!curated) {
+			driftCount++;
+			issues.push({
+				id: artifact.id,
+				level: artifact.level,
+				period: artifact.period,
+				project: artifact.project,
+				reason: "legacy_vector",
+			});
+			continue;
 		}
-	} else {
-		// Yearly: header + annual summary + trends + top decisions
-		let inTrends = false;
-		for (const line of lines) {
-			const trimmed = line.trim();
-			if (trimmed.startsWith("# ") || trimmed.startsWith("## Annual Summary")) {
-				parts.push(trimmed.replace(/^#+\s*/, ""));
-			} else if (trimmed.startsWith("- **Sessions**:") || trimmed.startsWith("- **Vasanas Crystallized**:")) {
-				parts.push(trimmed.replace(/^-\s*/, "").replace(/\*\*/g, ""));
-			}
-			if (trimmed === "## Trends") inTrends = true;
-			else if (trimmed.startsWith("## ") && trimmed !== "## Trends") inTrends = false;
-			if (inTrends && trimmed.startsWith("- ")) {
-				parts.push(trimmed.replace(/^-\s*/, ""));
-			}
+		if (storedHash !== artifact.contentHash) {
+			driftCount++;
+			issues.push({
+				id: artifact.id,
+				level: artifact.level,
+				period: artifact.period,
+				project: artifact.project,
+				reason: "stale_hash",
+			});
 		}
 	}
-
-	return parts.join(" ").slice(0, 2000);
+	return {
+		scanned: artifacts.length,
+		missingCount,
+		driftCount,
+		issues,
+	};
 }
 
 // ─── Index Consolidation Summary ─────────────────────────────────────────────
@@ -165,6 +165,14 @@ export async function indexConsolidationSummary(
 ): Promise<void> {
 	const summaryText = extractSummaryText(markdown, level);
 	if (!summaryText || summaryText.length < 10) return;
+	const compression = await packCuratedSummaryText(summaryText);
+	const packedSummaryText = compression?.packedText;
+	const provenance = parseConsolidationMetadata(markdown);
+	const contentHash = buildArtifactContentHash(summaryText);
+	const sourceSessionIds =
+		provenance && "sourceSessionIds" in provenance ? provenance.sourceSessionIds : [];
+	const sourcePeriods =
+		provenance && "sourcePeriods" in provenance ? provenance.sourcePeriods : [];
 
 	// Generate embedding
 	let embedding: number[];
@@ -175,9 +183,9 @@ export async function indexConsolidationSummary(
 		embedding = fallbackEmbedding(summaryText);
 	}
 
-	const id = buildEmbeddingId(level, period, project);
+	const id = buildConsolidationEmbeddingId(level, period, project);
 	const sourceType = `${level}_summary`;
-	const sourceId = project ? `${period}-${fnvHash4(project)}` : period;
+	const sourceId = buildConsolidationSourceId(period, project);
 
 	try {
 		const db = getVectorsDb();
@@ -186,29 +194,31 @@ export async function indexConsolidationSummary(
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		`).run(
 			id,
-			vectorToBlob(embedding),
-			summaryText.slice(0, 5000),
-			sourceType,
-			sourceId,
-			embedding.length,
-			JSON.stringify({ level, period, project: project ?? null }),
-			Date.now(),
-		);
-	} catch {
-		// Best-effort — don't break consolidation if vector indexing fails
-	}
+				vectorToBlob(embedding),
+				summaryText.slice(0, 5000),
+				sourceType,
+				sourceId,
+				embedding.length,
+				JSON.stringify({
+					level,
+					period,
+						project: project ?? null,
+						curated: provenance !== null,
+						contentHash,
+						packedSummaryText: packedSummaryText ?? null,
+						compression: compression ?? null,
+						generatedAt: provenance?.generatedAt ?? null,
+						sourceSessionIds,
+						sourcePeriods,
+					}),
+				Date.now(),
+			);
+		} catch {
+			// Best-effort — don't break consolidation if vector indexing fails
+		}
 }
 
 // ─── Search Consolidation Summaries ──────────────────────────────────────────
-
-interface EmbeddingRow {
-	id: string;
-	vector: Buffer;
-	text: string;
-	source_type: string;
-	source_id: string;
-	metadata: string | null;
-}
 
 /**
  * Search vector-indexed consolidation summaries by level.
@@ -269,6 +279,70 @@ export async function searchConsolidationSummaries(
 	}
 }
 
+/**
+ * Inspect recent curated consolidation artifacts and compare them against the
+ * semantic/vector mirror in vectors.db.
+ */
+export async function inspectConsolidationVectorSync(
+	options: CuratedConsolidationArtifactQuery = {},
+): Promise<ConsolidationVectorSyncStatus> {
+	try {
+			const artifacts = await listCuratedConsolidationArtifacts(options);
+		if (artifacts.length === 0) {
+			return { scanned: 0, missingCount: 0, driftCount: 0, issues: [] };
+		}
+		const db = getVectorsDb();
+		const rows = db.prepare(
+			`SELECT id, vector, text, source_type, source_id, metadata
+			 FROM embeddings
+			 WHERE source_type IN ('daily_summary', 'monthly_summary', 'yearly_summary')`,
+		).all() as EmbeddingRow[];
+		return inspectArtifacts(artifacts, new Map(rows.map((row) => [row.id, row])));
+	} catch {
+		return { scanned: 0, missingCount: 0, driftCount: 0, issues: [] };
+	}
+}
+
+/**
+ * Re-index recent curated consolidation artifacts that are missing or stale in
+ * the semantic/vector mirror.
+ */
+export async function repairConsolidationVectorSync(
+	options: CuratedConsolidationArtifactQuery = {},
+): Promise<{ status: ConsolidationVectorSyncStatus; reindexed: number }> {
+	const artifacts = await listCuratedConsolidationArtifacts(options);
+	if (artifacts.length === 0) {
+		return {
+			status: { scanned: 0, missingCount: 0, driftCount: 0, issues: [] },
+			reindexed: 0,
+		};
+	}
+	const db = getVectorsDb();
+	const rows = db.prepare(
+		`SELECT id, vector, text, source_type, source_id, metadata
+		 FROM embeddings
+		 WHERE source_type IN ('daily_summary', 'monthly_summary', 'yearly_summary')`,
+	).all() as EmbeddingRow[];
+	const status = inspectArtifacts(artifacts, new Map(rows.map((row) => [row.id, row])));
+	if (status.issues.length === 0) return { status, reindexed: 0 };
+
+	const artifactsById = new Map(artifacts.map((artifact) => [artifact.id, artifact]));
+	let reindexed = 0;
+	for (const issue of status.issues) {
+		const artifact = artifactsById.get(issue.id);
+		if (!artifact) continue;
+		await indexConsolidationSummary(
+			artifact.level,
+			artifact.period,
+			artifact.markdown,
+			artifact.project,
+		);
+	}
+	const repairedStatus = await inspectConsolidationVectorSync(options);
+	reindexed = Math.max(0, status.issues.length - repairedStatus.issues.length);
+	return { status: repairedStatus, reindexed };
+}
+
 // ─── Backfill ────────────────────────────────────────────────────────────────
 
 /**
@@ -287,20 +361,23 @@ export async function backfillConsolidationIndices(): Promise<{ daily: number; m
 				.map((r) => r.id),
 		);
 
-		// Backfill day files
-		try {
-			const { listDayFiles, readDayFile } = await import("./day-consolidation.js");
-			const dayFiles = listDayFiles();
+			// Backfill day files
+				try {
+					const { listDayFiles, getDayFilePath } = await import("./day-consolidation.js");
+					const dayFiles = listDayFiles();
 
-			for (const date of dayFiles) {
-				const id = buildEmbeddingId("daily", date);
-				if (existing.has(id)) continue;
+					for (const date of dayFiles) {
+						const id = buildConsolidationEmbeddingId("daily", date);
+						if (existing.has(id)) continue;
 
-				const content = readDayFile(date);
-				if (content && content.length > 20) {
-					await indexConsolidationSummary("daily", date, content);
-					counts.daily++;
-				}
+					const dayPath = getDayFilePath(date);
+					if (!fs.existsSync(dayPath)) continue;
+						const content = fs.readFileSync(dayPath, "utf-8");
+						const provenance = parseConsolidationMetadata(content);
+						if (content && content.length > 20 && provenance?.kind === "day") {
+							await indexConsolidationSummary("daily", date, content);
+							counts.daily++;
+					}
 			}
 		} catch {
 			// Day files unavailable
@@ -317,18 +394,19 @@ export async function backfillConsolidationIndices(): Promise<{ daily: number; m
 				const pc = new PeriodicConsolidation({ project });
 				const reports = pc.listReports();
 
-				for (const report of reports) {
-					const level: ConsolidationLevel = report.type === "monthly" ? "monthly" : "yearly";
-					const id = buildEmbeddingId(level, report.period, project);
-					if (existing.has(id)) continue;
+					for (const report of reports) {
+						const level: ConsolidationLevel = report.type === "monthly" ? "monthly" : "yearly";
+						const id = buildConsolidationEmbeddingId(level, report.period, project);
+						if (existing.has(id)) continue;
 
 					try {
 						const fs = await import("node:fs");
-						const content = fs.readFileSync(report.path, "utf-8");
-						if (content && content.length > 20) {
-							await indexConsolidationSummary(level, report.period, content, project);
-							if (level === "monthly") counts.monthly++;
-							else counts.yearly++;
+							const content = fs.readFileSync(report.path, "utf-8");
+							const provenance = parseConsolidationMetadata(content);
+							if (content && content.length > 20 && provenance?.kind === report.type) {
+								await indexConsolidationSummary(level, report.period, content, project);
+								if (level === "monthly") counts.monthly++;
+								else counts.yearly++;
 						}
 					} catch {
 						// Skip unreadable reports

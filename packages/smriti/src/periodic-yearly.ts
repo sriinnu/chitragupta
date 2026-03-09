@@ -9,6 +9,8 @@
 import fs from "node:fs";
 import { DatabaseManager } from "./db/index.js";
 import type { ConsolidationStats, ConsolidationReport, ConsolidationLogEntry } from "./periodic-consolidation.js";
+import { renderConsolidationMetadata } from "./consolidation-provenance.js";
+import type { PeriodicConsolidationMetadata } from "./consolidation-provenance.js";
 
 // ─── Internal Row Shapes ────────────────────────────────────────────────────
 
@@ -17,6 +19,7 @@ interface SamskaraRow { id: string; pattern_type: string; pattern_content: strin
 interface VidhiRow { name: string; steps: string; success_rate: number; learned_from: string }
 interface NodeCountRow { cnt: number }
 interface EdgeCountRow { cnt: number }
+interface SessionRow { id: string; title: string; created_at: number; updated_at: number }
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
 
@@ -67,15 +70,23 @@ function buildYearlyMarkdown(
 	vasanas: VasanaRow[], vidhis: VidhiRow[], samskaras: SamskaraRow[],
 	yearNodes: number, yearEdges: number, monthlyReports: ConsolidationReport[],
 	trends: string[], prevYearStats: ConsolidationStats | null,
+	metadata: PeriodicConsolidationMetadata,
 ): string {
 	const lines: string[] = [];
 	lines.push(`# Yearly Consolidation — ${project} — ${period}`, `> Generated: ${new Date().toISOString()}`, "");
+	lines.push(renderConsolidationMetadata(metadata), "");
 
 	lines.push("## Annual Summary");
 	lines.push(`- **Sessions**: ${stats.sessions}`, `- **Turns**: ${stats.turns}`);
 	lines.push(`- **Total Tokens**: ${stats.tokens.toLocaleString()}`, `- **Estimated Cost**: $${stats.cost.toFixed(4)}`);
 	lines.push(`- **Vasanas Crystallized**: ${stats.vasanasCreated}`, `- **Vidhis Extracted**: ${stats.vidhisCreated}`);
 	lines.push(`- **Samskaras Active**: ${stats.samskarasActive}`, "");
+	lines.push("## Source Provenance");
+	lines.push(`- **Source Sessions**: ${metadata.sourceSessionIds.length}`);
+	if (metadata.sourcePeriods && metadata.sourcePeriods.length > 0) {
+		lines.push(`- **Source Monthly Reports**: ${metadata.sourcePeriods.join(", ")}`);
+	}
+	lines.push("");
 
 	if (prevYearStats) {
 		lines.push("## Year-over-Year Comparison");
@@ -184,6 +195,12 @@ export async function buildYearlyReport(
 	const allVasanas = agentDb.prepare(`SELECT name, description, strength, valence, stability FROM vasanas WHERE (project = ? OR project IS NULL) AND created_at >= ? AND created_at < ? ORDER BY strength DESC`).all(project, startMs, endMs) as VasanaRow[];
 	const allVidhis = agentDb.prepare(`SELECT name, steps, success_rate, learned_from FROM vidhis WHERE project = ? AND created_at >= ? AND created_at < ? ORDER BY success_rate DESC`).all(project, startMs, endMs) as VidhiRow[];
 	const allSamskaras = agentDb.prepare(`SELECT id, pattern_type, pattern_content, confidence, observation_count FROM samskaras WHERE (project = ? OR project IS NULL) AND updated_at >= ? AND updated_at < ? ORDER BY confidence DESC LIMIT 30`).all(project, startMs, endMs) as SamskaraRow[];
+	const sessions = agentDb.prepare(
+		`SELECT id, title, created_at, updated_at
+		 FROM sessions
+		 WHERE project = ? AND created_at >= ? AND created_at < ?
+		 ORDER BY created_at ASC`,
+	).all(project, startMs, endMs) as SessionRow[];
 
 	const yearNodes = (graphDb.prepare(`SELECT COUNT(*) AS cnt FROM nodes WHERE created_at >= ? AND created_at < ?`).get(startMs, endMs) as NodeCountRow | undefined)?.cnt ?? 0;
 	const yearEdges = (graphDb.prepare(`SELECT COUNT(*) AS cnt FROM edges WHERE recorded_at >= ? AND recorded_at < ?`).get(startMs, endMs) as EdgeCountRow | undefined)?.cnt ?? 0;
@@ -193,7 +210,22 @@ export async function buildYearlyReport(
 	if (fs.existsSync(prevPath)) prevYearStats = extractStatsFromMarkdown(fs.readFileSync(prevPath, "utf-8"));
 
 	const trends = analyzeTrends(monthlyReports);
-	const markdown = buildYearlyMarkdown(project, period, annualStats, allVasanas, allVidhis, allSamskaras, yearNodes, yearEdges, monthlyReports, trends, prevYearStats);
+	const metadata: PeriodicConsolidationMetadata = {
+		kind: "yearly",
+		period,
+		project,
+		generatedAt: new Date().toISOString(),
+		sourceSessionIds: sessions.map((session) => session.id),
+		sourceSessions: sessions.map((session) => ({
+			id: session.id,
+			project,
+			title: session.title,
+			created: new Date(session.created_at).toISOString(),
+			updated: new Date(session.updated_at).toISOString(),
+		})),
+		sourcePeriods: monthlyReports.map((report) => report.period),
+	};
+	const markdown = buildYearlyMarkdown(project, period, annualStats, allVasanas, allVidhis, allSamskaras, yearNodes, yearEdges, monthlyReports, trends, prevYearStats, metadata);
 
 	const filePath = getReportPath("yearly", period);
 	writeReport(filePath, markdown);

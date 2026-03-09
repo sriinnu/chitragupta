@@ -29,7 +29,6 @@ import {
 const DEFAULT_PING_INTERVAL_MS = 10_000;
 const DEFAULT_MAX_MISSED_PINGS = 3;
 const CLOSE_GOING_AWAY = 1001;
-
 /** Minimal WebSocket interface that works with both native and `ws`. */
 export interface WsLike {
 	readonly readyState: number;

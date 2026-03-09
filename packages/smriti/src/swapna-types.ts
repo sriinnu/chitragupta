@@ -9,6 +9,7 @@
  */
 
 import type { SessionToolCall, PramanaType } from "./types.js";
+import type { PackedSummaryResult } from "./pakt-compression.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,8 @@ export interface SwapnaConfig {
 	minSuccessRate: number;
 	/** Project scope for this consolidation cycle. */
 	project: string;
+	/** Optional explicit session scope. When set, Swapna uses exactly these sessions. */
+	sessionIds?: string[];
 }
 
 /** A turn scored with surprise value during the REPLAY phase. */
@@ -88,6 +91,9 @@ export interface CompressResult {
 	tokensCompressed: number;
 	compressionRatio: number;
 	durationMs: number;
+	summaryText?: string;
+	packedSummaryText?: string;
+	compression?: PackedSummaryResult;
 }
 
 /** Full result of a Swapna consolidation cycle. */
@@ -101,6 +107,7 @@ export interface SwapnaResult {
 	};
 	totalDurationMs: number;
 	cycleId: string;
+	sourceSessionIds: string[];
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -113,6 +120,7 @@ export const DEFAULT_CONFIG: SwapnaConfig = {
 	minSequenceLength: 2,
 	minSuccessRate: 0.8,
 	project: "",
+	sessionIds: undefined,
 };
 
 /** Pramana compression weights — higher = resists compression more. */

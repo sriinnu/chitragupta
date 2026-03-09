@@ -25,16 +25,19 @@ vi.mock("@chitragupta/core", async (importOriginal) => {
 });
 
 // Import after mock setup
-import {
-	createSession,
-	saveSession,
-	loadSession,
-	listSessions,
-	deleteSession,
-	addTurn,
-	migrateExistingSessions,
-	_resetDbInit,
-} from "@chitragupta/smriti/session-store";
+		import {
+			createSession,
+			saveSession,
+			loadSession,
+			listSessions,
+			listSessionsByIds,
+			deleteSession,
+			addTurn,
+			updateSessionMeta,
+			migrateExistingSessions,
+		_resetDbInit,
+		_resetSessionCache,
+	} from "@chitragupta/smriti/session-store";
 import { SessionError } from "@chitragupta/core";
 import { writeSessionMarkdown } from "@chitragupta/smriti/markdown-writer";
 
@@ -143,11 +146,11 @@ describe("SessionStore v2", () => {
 			expect(session.meta.tags).toEqual(["debug", "refactor"]);
 		});
 
-		it("should reuse same-day MCP session for the same client key", () => {
-			const s1 = createSession({
-				project: "/test/mcp-reuse",
-				agent: "mcp",
-				model: "mcp-client",
+			it("should reuse same-day MCP session for the same client key", () => {
+				const s1 = createSession({
+					project: "/test/mcp-reuse",
+					agent: "mcp",
+					model: "mcp-client",
 				title: "Tab Session",
 				metadata: { clientKey: "tab-1" },
 			});
@@ -158,13 +161,15 @@ describe("SessionStore v2", () => {
 				title: "Should Reuse",
 				metadata: { clientKey: "tab-1" },
 			});
-			expect(s2.meta.id).toBe(s1.meta.id);
-			expect(listSessions("/test/mcp-reuse").length).toBe(1);
-		});
+				expect(s2.meta.id).toBe(s1.meta.id);
+				expect(listSessions("/test/mcp-reuse").length).toBe(1);
+				expect(s2.meta.metadata?.sessionLineageKey).toBe("tab-1");
+				expect(s2.meta.metadata?.sessionReusePolicy).toBe("same_day");
+			});
 
-		it("should create separate MCP sessions for different client keys", () => {
-			const s1 = createSession({
-				project: "/test/mcp-split",
+			it("should create separate MCP sessions for different client keys", () => {
+				const s1 = createSession({
+					project: "/test/mcp-split",
 				agent: "mcp",
 				model: "mcp-client",
 				metadata: { clientKey: "tab-a" },
@@ -174,11 +179,61 @@ describe("SessionStore v2", () => {
 				agent: "mcp",
 				model: "mcp-client",
 				metadata: { clientKey: "tab-b" },
+				});
+				expect(s2.meta.id).not.toBe(s1.meta.id);
+				expect(listSessions("/test/mcp-split").length).toBe(2);
 			});
-			expect(s2.meta.id).not.toBe(s1.meta.id);
-			expect(listSessions("/test/mcp-split").length).toBe(2);
-		});
-		});
+
+			it("should reuse same-day sessions for explicit lineage keys outside MCP", () => {
+				const s1 = createSession({
+					project: "/test/api-lineage",
+					agent: "chitragupta",
+					model: "api-client",
+					metadata: {
+						surface: "api",
+						sessionLineageKey: "tab-7",
+						sessionReusePolicy: "same_day",
+					},
+				});
+				const s2 = createSession({
+					project: "/test/api-lineage",
+					agent: "chitragupta",
+					model: "api-client",
+					metadata: {
+						surface: "api",
+						sessionLineageKey: "tab-7",
+						sessionReusePolicy: "same_day",
+					},
+				});
+				expect(s2.meta.id).toBe(s1.meta.id);
+				expect(listSessions("/test/api-lineage").length).toBe(1);
+			});
+
+			it("should keep isolated sessions separate even with the same lineage key", () => {
+				const s1 = createSession({
+					project: "/test/isolated-tabs",
+					agent: "chitragupta",
+					model: "api-client",
+					metadata: {
+						surface: "api",
+						sessionLineageKey: "tab-9",
+						sessionReusePolicy: "isolated",
+					},
+				});
+				const s2 = createSession({
+					project: "/test/isolated-tabs",
+					agent: "chitragupta",
+					model: "api-client",
+					metadata: {
+						surface: "api",
+						sessionLineageKey: "tab-9",
+						sessionReusePolicy: "isolated",
+					},
+				});
+				expect(s2.meta.id).not.toBe(s1.meta.id);
+				expect(listSessions("/test/isolated-tabs").length).toBe(2);
+			});
+			});
 
 	describe("loadSession", () => {
 		it("should load a previously saved session", () => {
@@ -209,6 +264,125 @@ describe("SessionStore v2", () => {
 			expect(session.meta.updated).toBeDefined();
 			const loaded = loadSession(session.meta.id, "/test");
 			expect(loaded.meta.title).toBe("Updated Title");
+		});
+
+		it("should write updated metadata through to SQLite on save", async () => {
+			const session = createSession({ project: "/test/save-db-sync" });
+
+			await addTurn(session.meta.id, "/test/save-db-sync", {
+				turnNumber: 0,
+				role: "user",
+				content: "Persist this session cleanly",
+			});
+
+			const loaded = loadSession(session.meta.id, "/test/save-db-sync");
+			loaded.meta.title = "Updated In Save";
+			loaded.meta.totalCost = 0.125;
+			loaded.meta.totalTokens = 321;
+			saveSession(loaded);
+
+			const db = DatabaseManager.instance(tmpDir).get("agent");
+			const row = db.prepare(
+				"SELECT title, turn_count, cost, tokens FROM sessions WHERE id = ?",
+			).get(session.meta.id) as { title: string; turn_count: number; cost: number; tokens: number };
+
+			expect(row.title).toBe("Updated In Save");
+			expect(row.turn_count).toBe(1);
+			expect(row.cost).toBe(0.125);
+			expect(row.tokens).toBe(321);
+		});
+
+		it("should preserve provider and metadata across load and DB reconcile", () => {
+			const session = createSession({
+				project: "/test/meta-roundtrip",
+				provider: "claude-code",
+				metadata: {
+					clientKey: "tab-1",
+					sessionLineageKey: "lineage-a",
+					sessionReusePolicy: "same_day",
+				},
+			});
+
+			_resetSessionCache();
+			const loaded = loadSession(session.meta.id, "/test/meta-roundtrip");
+			expect(loaded.meta.provider).toBe("claude-code");
+			expect(loaded.meta.metadata).toMatchObject({
+				provider: "claude-code",
+				clientKey: "tab-1",
+				sessionLineageKey: "lineage-a",
+				sessionReusePolicy: "same_day",
+			});
+
+			const db = DatabaseManager.instance(tmpDir).get("agent");
+			const row = db.prepare("SELECT metadata FROM sessions WHERE id = ?").get(session.meta.id) as { metadata: string | null };
+			expect(JSON.parse(row.metadata ?? "{}")).toMatchObject({
+				provider: "claude-code",
+				clientKey: "tab-1",
+				sessionLineageKey: "lineage-a",
+				sessionReusePolicy: "same_day",
+			});
+		});
+
+		it("should preserve DB metadata when saving a partial session object without metadata/provider", () => {
+			const session = createSession({
+				project: "/test/meta-preserve-db",
+				provider: "claude-code",
+				metadata: {
+					clientKey: "tab-keep",
+					sessionLineageKey: "lineage-keep",
+				},
+			});
+
+			const partial = {
+				...session,
+				meta: {
+					...session.meta,
+					title: "Partial Save",
+					provider: undefined,
+					metadata: undefined,
+				},
+			};
+
+			saveSession(partial);
+			_resetSessionCache();
+			const loaded = loadSession(session.meta.id, "/test/meta-preserve-db");
+			expect(loaded.meta.provider).toBe("claude-code");
+			expect(loaded.meta.metadata).toMatchObject({
+				provider: "claude-code",
+				clientKey: "tab-keep",
+				sessionLineageKey: "lineage-keep",
+			});
+		});
+
+		it("should keep markdown and DB metadata in sync after updateSessionMeta", () => {
+			const session = createSession({
+				project: "/test/meta-update-sync",
+				provider: "claude-code",
+				metadata: {
+					clientKey: "tab-sync",
+					sessionLineageKey: "lineage-sync",
+				},
+			});
+
+			updateSessionMeta(session.meta.id, {
+				title: "Updated Session Title",
+				metadata: {
+					clientKey: "tab-sync-2",
+					sessionLineageKey: "lineage-sync",
+					channel: "serve",
+				},
+			});
+
+			_resetSessionCache();
+			const loaded = loadSession(session.meta.id, "/test/meta-update-sync");
+			expect(loaded.meta.title).toBe("Updated Session Title");
+			expect(loaded.meta.provider).toBe("claude-code");
+			expect(loaded.meta.metadata).toMatchObject({
+				provider: "claude-code",
+				clientKey: "tab-sync-2",
+				sessionLineageKey: "lineage-sync",
+				channel: "serve",
+			});
 		});
 	});
 
@@ -357,9 +531,152 @@ describe("SessionStore v2", () => {
 			const loaded = loadSession(session.meta.id, "/test");
 			expect(loaded.turns.length).toBe(5);
 		});
+
+		it("should isolate cached sessions from caller-side mutation", async () => {
+			const session = createSession({ project: "/test/cache-isolation" });
+
+			await addTurn(session.meta.id, "/test/cache-isolation", {
+				turnNumber: 0,
+				role: "user",
+				content: "Original content",
+			});
+
+			const loaded = loadSession(session.meta.id, "/test/cache-isolation");
+			loaded.meta.title = "Mutated only in memory";
+			loaded.turns[0].content = "Corrupted in cache";
+
+			const reloaded = loadSession(session.meta.id, "/test/cache-isolation");
+			expect(reloaded.meta.title).toBe("New Session");
+			expect(reloaded.turns[0].content).toBe("Original content");
+		});
+
+		it("should continue processing queued turns after an earlier queued failure", async () => {
+			const session = createSession({ project: "/test/queue-recovery" });
+
+			const invalidWrite = addTurn(session.meta.id, "/test/queue-recovery", {
+				turnNumber: 0,
+				role: "user",
+				content: "   \n",
+			});
+			const validWrite = addTurn(session.meta.id, "/test/queue-recovery", {
+				turnNumber: 0,
+				role: "assistant",
+				content: "Survives queue recovery",
+			});
+
+			await expect(invalidWrite).rejects.toThrow(SessionError);
+			await expect(validWrite).resolves.toBeUndefined();
+
+			const loaded = loadSession(session.meta.id, "/test/queue-recovery");
+			expect(loaded.turns).toHaveLength(1);
+			expect(loaded.turns[0].content).toBe("Survives queue recovery");
+		});
+
+		it("should reconcile SQLite turns from markdown on load when DB rows drift", async () => {
+			const session = createSession({ project: "/test/reconcile" });
+
+			await addTurn(session.meta.id, "/test/reconcile", {
+				turnNumber: 0,
+				role: "user",
+				content: "First durable turn",
+			});
+			await addTurn(session.meta.id, "/test/reconcile", {
+				turnNumber: 0,
+				role: "assistant",
+				content: "Second durable turn",
+			});
+
+			const db = DatabaseManager.instance(tmpDir).get("agent");
+			const turnRows = db
+				.prepare("SELECT id FROM turns WHERE session_id = ? ORDER BY turn_number ASC")
+				.all(session.meta.id) as Array<{ id: number }>;
+			for (const row of turnRows) {
+				db.prepare("DELETE FROM turns_fts WHERE rowid = ?").run(row.id);
+			}
+			db.prepare("DELETE FROM turns WHERE session_id = ?").run(session.meta.id);
+			db.prepare("UPDATE sessions SET turn_count = 0 WHERE id = ?").run(session.meta.id);
+
+			_resetSessionCache();
+			const loaded = loadSession(session.meta.id, "/test/reconcile");
+			expect(loaded.turns).toHaveLength(2);
+
+			const repairedTurns = db.prepare("SELECT COUNT(*) AS count FROM turns WHERE session_id = ?").get(session.meta.id) as { count: number };
+			const repairedFts = db.prepare(`
+				SELECT COUNT(*) AS count
+				FROM turns_fts f
+				JOIN turns t ON t.id = f.rowid
+				WHERE t.session_id = ?
+			`).get(session.meta.id) as { count: number };
+			const repairedSession = db.prepare("SELECT turn_count FROM sessions WHERE id = ?").get(session.meta.id) as { turn_count: number };
+
+			expect(repairedTurns.count).toBe(2);
+			expect(repairedFts.count).toBe(2);
+			expect(repairedSession.turn_count).toBe(2);
+		});
+
+		it("should treat duplicate explicit turns as idempotent and avoid markdown duplication", async () => {
+			const session = createSession({ project: "/test/idempotent" });
+			const turn = {
+				turnNumber: 1,
+				role: "user" as const,
+				content: "Retry-safe write",
+			};
+
+			await addTurn(session.meta.id, "/test/idempotent", turn);
+			await addTurn(session.meta.id, "/test/idempotent", turn);
+
+			const loaded = loadSession(session.meta.id, "/test/idempotent");
+			expect(loaded.turns).toHaveLength(1);
+			expect(loaded.turns[0].content).toBe("Retry-safe write");
+
+			const db = DatabaseManager.instance(tmpDir).get("agent");
+			const row = db.prepare("SELECT COUNT(*) AS count FROM turns WHERE session_id = ?").get(session.meta.id) as { count: number };
+			expect(row.count).toBe(1);
+		});
+
+		it("should reject duplicate explicit turns with conflicting content", async () => {
+			const session = createSession({ project: "/test/idempotent-conflict" });
+
+			await addTurn(session.meta.id, "/test/idempotent-conflict", {
+				turnNumber: 1,
+				role: "user",
+				content: "Original",
+			});
+
+			await expect(
+				addTurn(session.meta.id, "/test/idempotent-conflict", {
+					turnNumber: 1,
+					role: "user",
+					content: "Changed",
+				}),
+			).rejects.toThrow("already exists");
+		});
+
+		it("should treat duplicate auto-numbered retry turns as idempotent when the last turn already matches", async () => {
+			const session = createSession({ project: "/test/idempotent-auto-retry" });
+			const retryTurn = {
+				turnNumber: 0,
+				role: "assistant" as const,
+				content: "Retry-safe auto write",
+				agent: "takumi",
+				model: "local-fast",
+			};
+
+			await addTurn(session.meta.id, "/test/idempotent-auto-retry", retryTurn);
+			await addTurn(session.meta.id, "/test/idempotent-auto-retry", retryTurn);
+
+			const loaded = loadSession(session.meta.id, "/test/idempotent-auto-retry");
+			expect(loaded.turns).toHaveLength(1);
+			expect(loaded.turns[0].turnNumber).toBe(1);
+			expect(loaded.turns[0].content).toBe("Retry-safe auto write");
+
+			const db = DatabaseManager.instance(tmpDir).get("agent");
+			const row = db.prepare("SELECT COUNT(*) AS count FROM turns WHERE session_id = ?").get(session.meta.id) as { count: number };
+			expect(row.count).toBe(1);
+		});
 	});
 
-	describe("listSessions", () => {
+		describe("listSessions", () => {
 		it("should list sessions for a project from SQLite", () => {
 			createSession({ project: "/proj-a", title: "Session A1" });
 			createSession({ project: "/proj-a", title: "Session A2" });
@@ -390,10 +707,20 @@ describe("SessionStore v2", () => {
 			expect(list[1].title).toBe("First");
 		});
 
-		it("should return empty array for unknown project", () => {
-			expect(listSessions("/nonexistent")).toEqual([]);
+			it("should return empty array for unknown project", () => {
+				expect(listSessions("/nonexistent")).toEqual([]);
+			});
+
+			it("should resolve specific session IDs without scanning unrelated projects", () => {
+				const s1 = createSession({ project: "/proj-a", title: "Session A1" });
+				const s2 = createSession({ project: "/proj-a", title: "Session A2" });
+				createSession({ project: "/proj-b", title: "Session B1" });
+
+				const resolved = listSessionsByIds([s2.meta.id, s1.meta.id, "missing"]);
+				expect(resolved.map((session) => session.id)).toEqual([s2.meta.id, s1.meta.id]);
+				expect(resolved.every((session) => session.project === "/proj-a")).toBe(true);
+			});
 		});
-	});
 
 	describe("deleteSession", () => {
 		it("should delete session file and SQLite records", () => {

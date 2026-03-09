@@ -21,6 +21,29 @@ import type {
 	UIExtensionRegistryLike,
 	VasanaEngineLike,
 } from "./mcp-subsystems-types.js";
+import { allowLocalRuntimeFallback, createDaemonSabhaProxy } from "../runtime-daemon-proxies.js";
+import { ensureSharedMeshRuntime } from "../shared-mesh-runtime.js";
+import {
+	type DaemonAkashaProxy,
+	type DaemonAnomalyAlert,
+	type DaemonHealReport,
+	type DurableAkashaRef,
+	type FreshContextOptions,
+	type NatashaObserverLike,
+	type SharedRegressionSignal,
+	type TranscendenceEngineLike,
+	type TranscendencePrediction,
+} from "./mcp-subsystems-lucy-types.js";
+import { createDaemonAkashaProxy, isDaemonAkashaProxy } from "./mcp-subsystems-akasha-proxy.js";
+import { bootstrapSkillRegistry } from "./mcp-subsystems-skill-bootstrap.js";
+import { getAgentDbBestEffort, refreshAkashaFromDb } from "./mcp-subsystems-db.js";
+import {
+	lookupTranscendenceFuzzy as lookupTranscendenceFuzzyViaLucyRuntime,
+	primeLucyScarlettRuntime,
+	refreshTranscendenceFromSharedSignals,
+	registerLiveTranscendenceEngine,
+	runTranscendencePrefetch as runTranscendencePrefetchViaLucyRuntime,
+} from "./mcp-subsystems-lucy-runtime.js";
 
 // Re-export all types so existing consumers don't break.
 export type {
@@ -44,35 +67,19 @@ let _vasana: VasanaEngineLike | undefined;
 let _triguna: TrigunaLike | undefined;
 let _chetana: ChetanaControllerLike | undefined;
 let _soulManager: SoulManagerLike | undefined;
-let _actorSystem: ActorSystemLike | undefined;
 let _skillRegistry: SkillRegistryLike | undefined;
 let _skillRegistryBootstrap: Promise<void> | undefined;
+let _akashaLastRefreshAt = 0;
+
+const AKASHA_REFRESH_INTERVAL_MS = 2_000;
 
 /** Natasha Observer singleton (temporal trending). */
 let _natashaObserver: NatashaObserverLike | undefined;
 /** Transcendence Engine singleton (predictive context). */
 let _transcendence: TranscendenceEngineLike | undefined;
 
-/** Duck-typed NatashaObserver interface. */
-interface NatashaObserverLike {
-	detectTrends(window: string, now?: number): unknown[];
-	detectRegressions(window: string, now?: number): unknown[];
-	measureVelocity(window: string, now?: number): unknown;
-	observe(now?: number): unknown;
-}
+export { primeLucyScarlettRuntime };
 
-/** Duck-typed TranscendenceEngine interface. */
-interface TranscendenceEngineLike {
-	ingestTrends(trends: unknown[]): void;
-	ingestRegressions(regressions: unknown[]): void;
-	prefetch(now?: number): unknown;
-	lookup(entity: string, now?: number): unknown;
-	fuzzyLookup(query: string, now?: number): unknown;
-	getStats(): unknown;
-	getPredictions(): unknown[];
-}
-
-/** Lazily create or return the Samiti singleton. */
 export async function getSamiti(): Promise<SamitiLike> {
 	if (!_samiti) {
 		const { Samiti } = await import("@chitragupta/sutra");
@@ -84,8 +91,7 @@ export async function getSamiti(): Promise<SamitiLike> {
 /** Lazily create or return the SabhaEngine singleton. */
 export async function getSabha(): Promise<SabhaEngineLike> {
 	if (!_sabha) {
-		const { SabhaEngine } = await import("@chitragupta/sutra");
-		_sabha = new SabhaEngine() as unknown as SabhaEngineLike;
+		_sabha = createDaemonSabhaProxy() as unknown as SabhaEngineLike;
 	}
 	return _sabha;
 }
@@ -93,23 +99,40 @@ export async function getSabha(): Promise<SabhaEngineLike> {
 /** Lazily create or return the AkashaField singleton with DB persistence. */
 export async function getAkasha(): Promise<AkashaFieldLike> {
 	if (!_akasha) {
-		const { AkashaField } = await import("@chitragupta/smriti");
-		const akasha = new AkashaField();
 		try {
-			const { DatabaseManager } = await import("@chitragupta/smriti/db/database");
-			const db = DatabaseManager.instance().get("agent");
-			if (db) akasha.restore(db);
+			_akasha = await createDaemonAkashaProxy();
+			return _akasha;
 		} catch {
-			/* best-effort restore */
+			if (!allowLocalRuntimeFallback()) {
+				throw new Error("Daemon-backed Akasha unavailable");
+			}
+			const { AkashaField } = await import("@chitragupta/smriti");
+			const akasha = new AkashaField() as unknown as AkashaFieldLike & DurableAkashaRef;
+			const db = await getAgentDbBestEffort();
+			if (db) {
+				try {
+					akasha.restore(db);
+					_akashaLastRefreshAt = Date.now();
+				} catch {
+					/* best-effort restore */
+				}
+			}
+			_akasha = akasha as unknown as AkashaFieldLike;
 		}
-		_akasha = akasha as unknown as AkashaFieldLike;
+	}
+	if (!isDaemonAkashaProxy(_akasha)) {
+		_akashaLastRefreshAt = await refreshAkashaFromDb(
+			_akasha as unknown as DurableAkashaRef,
+			_akashaLastRefreshAt,
+			AKASHA_REFRESH_INTERVAL_MS,
+		);
 	}
 	return _akasha;
 }
 
 /** Persist akasha traces to SQLite (call after deposit). */
 export async function persistAkasha(): Promise<void> {
-	if (!_akasha) return;
+	if (!_akasha || isDaemonAkashaProxy(_akasha)) return;
 	try {
 		const { DatabaseManager } = await import("@chitragupta/smriti/db/database");
 		const db = DatabaseManager.instance().get("agent");
@@ -166,45 +189,7 @@ export async function getSoulManager(): Promise<SoulManagerLike> {
 
 /** Lazily create or return the ActorSystem singleton (local-only, P2P optional). */
 export async function getActorSystem(): Promise<ActorSystemLike> {
-	if (!_actorSystem) {
-		const { ActorSystem } = await import("@chitragupta/sutra");
-		const sys = new ActorSystem();
-		sys.start();
-		_actorSystem = sys as unknown as ActorSystemLike;
-	}
-	return _actorSystem;
-}
-
-function parseEnvSkillPaths(value: string | undefined, delimiter: string): string[] {
-	if (!value) return [];
-	return value
-		.split(delimiter)
-		.map((v) => v.trim())
-		.filter((v) => v.length > 0);
-}
-
-function buildSkillScanPaths(opts: {
-	projectPath: string;
-	chitraguptaHome: string;
-	homeDir: string;
-	delimiter: string;
-	join: (...parts: string[]) => string;
-}): string[] {
-	const { projectPath, chitraguptaHome, homeDir, delimiter, join } = opts;
-	const envPaths = parseEnvSkillPaths(process.env.CHITRAGUPTA_SKILL_PATHS ?? process.env.VAAYU_SKILL_PATHS, delimiter);
-
-	const candidates = [
-		...envPaths,
-		chitraguptaHome ? join(chitraguptaHome, "skills") : "",
-		join(projectPath, "skills"),
-		join(projectPath, "skills-core"),
-		join(projectPath, "chitragupta", "skills-core"),
-		join(projectPath, "chitragupta", "skills"),
-		homeDir ? join(homeDir, ".agents", "skills") : "",
-		homeDir ? join(homeDir, ".codex", "skills") : "",
-	];
-
-	return [...new Set(candidates.filter((v) => v.length > 0))];
+	return ensureSharedMeshRuntime();
 }
 
 async function getUIExtensionRegistryBestEffort(): Promise<UIExtensionRegistryLike | null> {
@@ -216,134 +201,12 @@ async function getUIExtensionRegistryBestEffort(): Promise<UIExtensionRegistryLi
 	}
 }
 
-function toStringOrUndefined(value: unknown): string | undefined {
-	return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function toRecordArray(value: unknown): Array<Record<string, unknown>> {
-	if (!Array.isArray(value)) return [];
-	return value.filter((v): v is Record<string, unknown> => typeof v === "object" && v !== null);
-}
-
-const WIDGET_POS = new Set(["left", "center", "right"]);
-const WIDGET_FMT = new Set(["plain", "ansi", "json"]);
-const PANEL_FMT = new Set(["plain", "ansi", "markdown", "json"]);
-const PANEL_TYPE = new Set(["sidebar", "modal", "overlay", "tab"]);
-
-function registerUiContributionFromSkill(registry: UIExtensionRegistryLike, manifest: Record<string, unknown>): void {
-	const rawUi = manifest.ui;
-	if (typeof rawUi !== "object" || rawUi === null) return;
-	const ui = rawUi as Record<string, unknown>;
-
-	const widgets = toRecordArray(ui.widgets)
-		.map((w) => {
-			const r: Record<string, unknown> = { id: toStringOrUndefined(w.id), label: toStringOrUndefined(w.label) };
-			const pos = toStringOrUndefined(w.position);
-			if (pos && WIDGET_POS.has(pos)) r.position = pos;
-			const ms = Number(w.refreshMs);
-			if (Number.isFinite(ms) && ms > 0) r.refreshMs = ms;
-			const fmt = toStringOrUndefined(w.format);
-			if (fmt && WIDGET_FMT.has(fmt)) r.format = fmt;
-			return r;
-		})
-		.filter((w) => typeof w.id === "string" && typeof w.label === "string");
-
-	const keybinds = toRecordArray(ui.keybinds)
-		.map((k) => {
-			const r: Record<string, unknown> = {
-				key: toStringOrUndefined(k.key),
-				description: toStringOrUndefined(k.description),
-				command: toStringOrUndefined(k.command),
-			};
-			if (typeof k.args === "object" && k.args !== null) r.args = k.args;
-			return r;
-		})
-		.filter((k) => typeof k.key === "string" && typeof k.description === "string" && typeof k.command === "string");
-
-	const panels = toRecordArray(ui.panels)
-		.map((p) => {
-			const r: Record<string, unknown> = {
-				id: toStringOrUndefined(p.id),
-				title: toStringOrUndefined(p.title),
-				type: toStringOrUndefined(p.type),
-			};
-			const fmt = toStringOrUndefined(p.format);
-			if (fmt && PANEL_FMT.has(fmt)) r.format = fmt;
-			return r;
-		})
-		.filter(
-			(p) =>
-				typeof p.id === "string" &&
-				typeof p.title === "string" &&
-				typeof p.type === "string" &&
-				PANEL_TYPE.has(p.type as string),
-		);
-
-	if (widgets.length === 0 && keybinds.length === 0 && panels.length === 0) return;
-	const skillName = String(manifest.name ?? "").trim();
-	if (!skillName) return;
-	registry.register({
-		skillName,
-		version: String(manifest.version ?? "0.0.0"),
-		widgets,
-		keybinds,
-		panels,
-		registeredAt: Date.now(),
-	});
-}
-
-async function bootstrapSkillRegistry(registry: SkillRegistryLike): Promise<void> {
-	try {
-		const [{ SkillDiscovery }, { getChitraguptaHome }, fs, path] = await Promise.all([
-			import("@chitragupta/vidhya-skills"),
-			import("@chitragupta/core"),
-			import("node:fs"),
-			import("node:path"),
-		]);
-
-		const discovery = new SkillDiscovery() as unknown as SkillDiscoveryLike;
-		const uiRegistry = await getUIExtensionRegistryBestEffort();
-		const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? "";
-		const scanPaths = buildSkillScanPaths({
-			projectPath: process.cwd(),
-			chitraguptaHome: String(getChitraguptaHome() ?? ""),
-			homeDir,
-			delimiter: path.delimiter,
-			join: path.join,
-		});
-
-		for (const scanPath of scanPaths) {
-			if (!fs.existsSync(scanPath)) continue;
-
-			let manifests: Array<Record<string, unknown>> = [];
-			try {
-				manifests = await discovery.discoverFromDirectory(scanPath);
-			} catch {
-				continue;
-			}
-
-			for (const manifest of manifests) {
-				try {
-					registry.register(manifest);
-					if (uiRegistry) {
-						registerUiContributionFromSkill(uiRegistry, manifest);
-					}
-				} catch {
-					// Best-effort: malformed skill should not break registry bootstrap.
-				}
-			}
-		}
-	} catch {
-		// Best-effort bootstrap: keep registry available even if discovery fails.
-	}
-}
-
 /** Lazily create or return the SkillRegistry singleton. */
 export async function getSkillRegistry(): Promise<SkillRegistryLike> {
 	if (!_skillRegistry) {
 		const { SkillRegistry } = await import("@chitragupta/vidhya-skills");
 		_skillRegistry = new SkillRegistry() as unknown as SkillRegistryLike;
-		_skillRegistryBootstrap = bootstrapSkillRegistry(_skillRegistry).finally(() => {
+		_skillRegistryBootstrap = bootstrapSkillRegistry(_skillRegistry, getUIExtensionRegistryBestEffort).finally(() => {
 			_skillRegistryBootstrap = undefined;
 		});
 	}
@@ -364,18 +227,24 @@ export async function getNatasha(): Promise<NatashaObserverLike> {
 	return _natashaObserver;
 }
 
-/**
- * Lazily create or return the TranscendenceEngine singleton (predictive context).
- * Automatically wires into Natasha for signal ingestion.
- */
 export async function getTranscendence(): Promise<TranscendenceEngineLike> {
 	if (!_transcendence) {
 		const { TranscendenceEngine } = await import("@chitragupta/smriti");
 		const { DatabaseManager } = await import("@chitragupta/smriti/db/database");
 		const db = DatabaseManager.instance().get("agent");
 		_transcendence = new TranscendenceEngine(db) as unknown as TranscendenceEngineLike;
+		registerLiveTranscendenceEngine(_transcendence);
 	}
+	await primeLucyScarlettRuntime(_transcendence);
+	await refreshTranscendenceFromSharedSignals(_transcendence);
 	return _transcendence;
+}
+
+export async function lookupTranscendenceFuzzy(
+	query: string,
+	options?: FreshContextOptions,
+): Promise<TranscendencePrediction | null> {
+	return lookupTranscendenceFuzzyViaLucyRuntime(query, options, getTranscendence);
 }
 
 /**
@@ -383,19 +252,5 @@ export async function getTranscendence(): Promise<TranscendenceEngineLike> {
  * Call on session start or periodically (e.g., every 5 min).
  */
 export async function runTranscendencePrefetch(): Promise<unknown> {
-	try {
-		const natasha = await getNatasha();
-		const transcendence = await getTranscendence();
-
-		// Feed Natasha's observations into Transcendence
-		const trends = natasha.detectTrends("day") as unknown[];
-		const regressions = natasha.detectRegressions("day") as unknown[];
-		transcendence.ingestTrends(trends);
-		transcendence.ingestRegressions(regressions);
-
-		return transcendence.prefetch();
-	} catch {
-		// Best-effort — prefetch failure should never block sessions
-		return null;
-	}
+	return runTranscendencePrefetchViaLucyRuntime(getNatasha, getTranscendence);
 }

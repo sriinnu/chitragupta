@@ -24,6 +24,7 @@
 
 import type { TakumiContext, TakumiResponse, TakumiEvent } from "./takumi-bridge-types.js";
 import { routeViaBridge } from "./coding-router.js";
+import { packContextWithFallback } from "../context-packing.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -40,6 +41,10 @@ export interface TranscendenceEngineRef {
 export interface LucyBridgeConfig {
 	/** Project root directory. */
 	projectPath: string;
+	/** When true, bypass predictive caches and favor live reads only. */
+	noCache?: boolean;
+	/** Alias for `noCache` to make fresh-mode intent explicit at call sites. */
+	fresh?: boolean;
 	/** Maximum auto-fix attempts before giving up. */
 	maxAutoFixAttempts: number;
 	/** Confidence threshold for auto-fix (0-1). Below this, ask the user. */
@@ -60,6 +65,16 @@ export interface LucyBridgeConfig {
 	 * more relevant than a just-in-time episodic query.
 	 */
 	transcendenceEngine?: TranscendenceEngineRef;
+	/** Optional async daemon-backed Transcendence query. Preferred over local engine. */
+	queryTranscendence?: (task: string, project: string) => Promise<{ entity: string; content: string; source: string } | null>;
+	/** Canonical engine session id for route resolution. */
+	sessionId?: string;
+	/** Consumer identity for engine-owned route resolution. */
+	consumer?: string;
+	/** Optional engine route class to enforce before Takumi execution. */
+	routeClass?: string;
+	/** Optional raw capability to enforce before Takumi execution. */
+	capability?: string;
 }
 
 /** Episode recorded after a Lucy Bridge execution. */
@@ -233,9 +248,14 @@ async function buildLucyContext(
 	config: LucyBridgeConfig,
 ): Promise<TakumiContext> {
 	const context: TakumiContext = {};
+	const freshMode = isFreshLucyMode(config);
 
 	// Priority 1: Transcendence pre-cached context (highest signal quality)
-	const transcendenceHit = config.transcendenceEngine?.fuzzyLookup(task) ?? null;
+	const transcendenceHit = freshMode
+		? null
+		: config.queryTranscendence
+			? await config.queryTranscendence(task, config.projectPath).catch(() => null)
+			: config.transcendenceEngine?.fuzzyLookup(task) ?? null;
 
 	const [episodic, decisions] = await Promise.all([
 		config.queryEpisodic?.(task, config.projectPath).catch(() => []) ?? Promise.resolve([]),
@@ -247,14 +267,22 @@ async function buildLucyContext(
 		? [`[Transcendence:${transcendenceHit.source}] ${transcendenceHit.content}`, ...episodic]
 		: episodic;
 
-	if (allEpisodic.length > 0) {
-		context.episodicHints = allEpisodic.slice(0, 5);
-	}
-	if (decisions.length > 0) {
-		context.recentDecisions = decisions.slice(0, 5);
-	}
+	context.episodicHints = await packLucyContextEntries("episodic hints", allEpisodic);
+	context.recentDecisions = await packLucyContextEntries("recent decisions", decisions);
 
 	return context;
+}
+
+async function packLucyContextEntries(label: string, entries: string[]): Promise<string[] | undefined> {
+	if (entries.length === 0) return undefined;
+	const trimmed = entries.map((entry) => entry.trim()).filter(Boolean).slice(0, 5);
+	if (trimmed.length === 0) return undefined;
+	const joined = trimmed.map((entry) => `- ${entry}`).join("\n");
+	const packed = await packContextWithFallback(joined);
+	if (!packed) return trimmed;
+	return [
+		`[PAKT packed ${label} | runtime=${packed.runtime} | savings=${packed.savings}% | original=${packed.originalLength}]\n${packed.packedText}`,
+	];
 }
 
 // ─── Execution ──────────────────────────────────────────────────────────────
@@ -272,6 +300,10 @@ async function executeWithContext(
 		task,
 		cwd: projectPath,
 		context,
+		sessionId: config.sessionId,
+		consumer: config.consumer,
+		routeClass: config.routeClass,
+		capability: config.capability,
 		onOutput: (chunk) => {
 			config.onEvent?.({
 				phase: "execute",
@@ -303,7 +335,7 @@ function extractFailureHint(output: string): string {
  */
 function shouldAutoFix(
 	result: ReturnType<typeof routeViaBridge> extends Promise<infer T> ? T : never,
-	_threshold: number,
+	threshold: number,
 ): boolean {
 	// Don't auto-fix if the process crashed (signal kill, timeout)
 	if (result.exitCode > 128) return false;
@@ -311,7 +343,24 @@ function shouldAutoFix(
 	// Don't auto-fix if no output (nothing to diagnose)
 	if (result.output.length < 10) return false;
 
-	return true;
+	const output = result.output.toLowerCase();
+	if (
+		output.includes("segmentation fault")
+		|| output.includes("permission denied")
+		|| output.includes("command not found")
+		|| output.includes("timed out")
+		|| output.includes("timeout")
+	) {
+		return false;
+	}
+
+	let confidence = 0;
+	if (hasTestFailures(result.output)) confidence += 0.45;
+	if (/assertionerror|expect\(|vitest|jest|failing test|tests?:\s+\d+\s+failed|\b\d+\s+failed\b/i.test(result.output)) confidence += 0.25;
+	if (result.bridgeResult?.testsRun && result.bridgeResult.testsRun.failed > 0) confidence += 0.2;
+	if (result.bridgeResult?.filesModified?.length) confidence += 0.1;
+
+	return confidence >= threshold;
 }
 
 // ─── Fix Task Builder ───────────────────────────────────────────────────────
@@ -388,4 +437,8 @@ function emit(
 	data?: Record<string, unknown>,
 ): void {
 	config.onEvent?.({ phase, message, data });
+}
+
+function isFreshLucyMode(config: Pick<LucyBridgeConfig, "noCache" | "fresh">): boolean {
+	return config.noCache === true || config.fresh === true;
 }

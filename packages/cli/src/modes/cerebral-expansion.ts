@@ -17,6 +17,7 @@
 import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
 import type { ToolHandler } from "@chitragupta/core";
 import type { AkashaFieldLike, SkillRegistryLike } from "./mcp-subsystems-types.js";
+import { persistAkashaField } from "../nervous-system-wiring.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -145,7 +146,7 @@ export class CerebralExpansion {
 		}
 
 		// Phase 1: Check Akasha cache for previously resolved gaps
-		const cached = this._checkAkashaCache(intent, akasha);
+		const cached = await this._checkAkashaCache(intent, akasha);
 		if (cached) {
 			return cached;
 		}
@@ -187,12 +188,12 @@ export class CerebralExpansion {
 	 * Looks for "solution" traces with matching topic keywords.
 	 * Only returns a cache hit if the trace has been reinforced (strength > 1).
 	 */
-	private _checkAkashaCache(
+	private async _checkAkashaCache(
 		intent: ExtractedIntent,
 		akasha: AkashaFieldLike,
-	): ExpansionResult | undefined {
+	): Promise<ExpansionResult | undefined> {
 		try {
-			const traces = akasha.query(intent.query, { type: "solution", limit: 5 });
+			const traces = await Promise.resolve(akasha.query(intent.query, { type: "solution", limit: 5 }));
 			if (!traces || traces.length === 0) return undefined;
 
 			// Find the strongest trace that matches our intent
@@ -300,12 +301,13 @@ export class CerebralExpansion {
 		akasha: AkashaFieldLike,
 	): void {
 		try {
-			akasha.leave(
+			void Promise.resolve(akasha.leave(
 				"cerebral-expansion",
 				"solution",
 				intent.query,
 				`skill:${skillName} source:${source} tokens:[${intent.tokens.join(",")}]`,
-			);
+			)).catch(() => { /* best-effort */ });
+			persistAkashaField(akasha);
 		} catch {
 			// Best-effort recording
 		}
@@ -316,12 +318,13 @@ export class CerebralExpansion {
 	 */
 	private _recordGapWarning(intent: ExtractedIntent, akasha: AkashaFieldLike): void {
 		try {
-			akasha.leave(
+			void Promise.resolve(akasha.leave(
 				"cerebral-expansion",
 				"warning",
 				intent.query,
 				`unresolved-gap tool:${intent.raw} tokens:[${intent.tokens.join(",")}]`,
-			);
+			)).catch(() => { /* best-effort */ });
+			persistAkashaField(akasha);
 		} catch {
 			// Best-effort recording
 		}

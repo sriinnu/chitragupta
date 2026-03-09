@@ -229,7 +229,9 @@ async function buildStatusPayload(router: RpcRouter): Promise<Record<string, unk
 	const users = [...new Set(instances.map((i) => i.username).filter((v): v is string => !!v))];
 
 	const [healthResult, dbResult, nidraResult] = await Promise.allSettled([
-		router.handle("daemon.health", {}),
+		router.has("health.status")
+			? router.handle("health.status", {}, { transport: "http", kind: "request" })
+			: router.handle("daemon.health", {}, { transport: "http", kind: "request" }),
 		router.handle("daemon.status", {}),
 		router.has("nidra.status") ? router.handle("nidra.status", {}) : Promise.resolve(null),
 	]);
@@ -248,13 +250,16 @@ async function buildStatusPayload(router: RpcRouter): Promise<Record<string, unk
 
 	return {
 		daemon: {
-			alive: true,
-			pid: health?.pid ?? process.pid,
-			uptime: health?.uptime ?? null,
-			memory: health?.memory ?? null,
-			connections: health?.connections ?? null,
+			alive: (health?.daemon as Record<string, unknown> | undefined)?.alive ?? true,
+			pid: (health?.daemon as Record<string, unknown> | undefined)?.pid ?? health?.pid ?? process.pid,
+			uptime: (health?.daemon as Record<string, unknown> | undefined)?.uptime ?? health?.uptime ?? null,
+			memory: (health?.daemon as Record<string, unknown> | undefined)?.memory ?? health?.memory ?? null,
+			connections: (health?.daemon as Record<string, unknown> | undefined)?.connections ?? health?.connections ?? null,
 			methods: health?.methods ?? null,
+			serverPush: (health?.daemon as Record<string, unknown> | undefined)?.serverPush ?? null,
 		},
+		runtime: health?.clients ?? null,
+		integrity: health?.live ?? null,
 		nidra,
 		db: db ? (db as Record<string, unknown>).counts ?? db : null,
 		links: {

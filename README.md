@@ -21,6 +21,13 @@ Chitragupta is an AI agent platform that treats cognition as a first-class engin
 
 It exposes a **CLI**, an **HTTP server**, an **MCP server**, a **web dashboard (Hub)**, and a **programmatic API**. It is designed to be consumed by other applications.
 
+Operationally, Chitragupta is the engine of the stack:
+
+- **Chitragupta** owns durable memory, canonical sessions, routing policy, and bridge auth.
+- **Vaayu** is the primary assistant consumer.
+- **Takumi** is a specialized coding consumer and executable capability.
+- **Lucy** and **Scarlett** are engine faculties, not separate products.
+
 Named after the divine scribe in Vedic tradition — the keeper of the hidden record — internally, every module carries a Sanskrit name that defines its purpose. Externally, everything speaks English.
 
 ### Visual Identity
@@ -53,7 +60,36 @@ No AI agent system in existence combines these capabilities:
 - **Information-theoretic compaction** — compacts by knowledge type, not just recency
 - **Hallucination grounding** — classifies claims as real, provisional, or contradicted
 
-Each is backed by Vedic source texts AND published research papers. Each maps to a concrete module. See [docs/ALGORITHMS.md](docs/ALGORITHMS.md) and [docs/VEDIC-MODELS.md](docs/VEDIC-MODELS.md) for the full details.
+Each maps to a concrete module and is grounded by a mix of direct algorithms, heuristic adaptations, and published research references. The research docs are meant to make that grounding inspectable, not to claim that every subsystem is a line-by-line implementation of a paper. See [docs/algorithms.md](docs/algorithms.md), [docs/research.md](docs/research.md), and [docs/vedic-models.md](docs/vedic-models.md) for the details.
+
+## Runtime Constitution
+
+The shortest correct mental model is:
+
+| Role | Meaning |
+| --- | --- |
+| Chitragupta | core engine and runtime authority |
+| Sabha | council / peer consultation |
+| Lucy | intuition / anticipation |
+| Scarlett | integrity / healing |
+| Vaayu | primary assistant consumer |
+| Takumi | coding consumer + executable capability |
+
+See [docs/runtime-constitution.md](docs/runtime-constitution.md) for the authoritative user-facing model.
+See [docs/current-status.md](docs/current-status.md) for the normalized runtime truth.
+See [docs/consumer-contract.md](docs/consumer-contract.md) for consumer and bridge boundaries.
+
+### Lineage and Research Posture
+
+Chitragupta sits in the same broad agent-tooling ecosystem as projects such as takumi, pi-mono, and some CLI, session, and operator-workflow ergonomics belong to that shared lineage.
+
+That lineage is narrower than the full architecture. The Sanskrit-named cognitive subsystems and runtime overlays such as Smriti, Akasha, Lucy, Scarlett, Nidra, and Buddhi are Chitragupta-specific compositions in this repo family.
+
+When this README points to research, it means one of three things:
+
+- a direct algorithmic primitive is implemented in code
+- a paper informed a heuristic or subsystem design
+- a paper is an external validation or taxonomy reference for the architectural shape
 
 ---
 
@@ -70,7 +106,7 @@ For external docs/onboarding, prefer the English names first.
 | Tool System | Yantra | Instrument |
 | Policy Engine | Dharma | Law |
 | Vision | Netra | Eye |
-| Workflow Engine | Vayu | Wind |
+| Workflow Engine | Prana | Life Force |
 | IPC / Actor Mesh | Sutra | Thread |
 | MCP Manager | Tantra | Technique |
 | Skill Discovery | Vidhya | Knowledge |
@@ -117,7 +153,27 @@ pnpm chitragupta -- serve
 pnpm chitragupta -- mcp
 ```
 
-See [GETTING_STARTED.md](GETTING_STARTED.md) for the full setup guide — providers, config, MCP, profiles, memory.
+See [docs/getting-started.md](docs/getting-started.md) for the full setup guide — providers, config, MCP, profiles, memory.
+
+## Build and Release Hygiene
+
+For root-level operator tasks, use the dependency-audited workspace pipeline:
+
+```bash
+pnpm run build:check
+pnpm run build
+pnpm run verify:engine
+pnpm run publish:dry
+```
+
+Subtree operators:
+
+```bash
+pnpm run subtree:split
+pnpm run subtree:push
+```
+
+Release and subtree details: [docs/release-hygiene.md](docs/release-hygiene.md)
 
 ---
 
@@ -228,7 +284,7 @@ On first visit, the browser must complete a **device pairing** — a novel 4-met
 | **Settings** | Budget config, provider preferences, skill discovery mode |
 | **Devices** | Paired browsers, revoke access, re-pair |
 
-See [docs/HUB.md](docs/HUB.md) for the full Hub guide.
+See [docs/hub.md](docs/hub.md) for the full Hub guide.
 
 ---
 
@@ -271,6 +327,19 @@ Once initialized, your AI agent automatically:
 | **Agent** | `coding_agent`, `swara_marga_decide` | Autonomous coding, model routing |
 | **Sync** | `chitragupta_sync_status`, `chitragupta_sync_export`, `chitragupta_sync_import`, `chitragupta_vidhis`, `chitragupta_consolidate` | Cross-device sync, consolidation |
 | **File & Shell** | `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `diff`, `watch`, `memory`, `session`, `project_analysis` | Full development toolkit |
+
+### Autonomous Coding
+
+`coding_agent` is the user-facing entrypoint for Chitragupta's coding workflow.
+
+Lucy and Scarlett are broader Chitragupta runtime concepts across the platform, not Takumi-only or MCP-only features. The `coding_agent` path is one user-facing surface that currently exposes part of that runtime.
+
+- `full` — Lucy context injection + Takumi bridge when available + CLI fallback
+- `plan-only` — returns a plan and context preview without executing
+- `cli` — skips Lucy/Takumi and routes directly to the best available coding CLI
+- `noCache` — bypasses predictive context hints and forces a fresh-memory execution path
+
+See [docs/coding-agent.md](docs/coding-agent.md) for the exact mode semantics, Takumi bridge behavior, CLI fallback order, and what is wired today versus optional/fallback behavior.
 
 ### Manual Setup (if you prefer)
 
@@ -433,7 +502,7 @@ Without it, every MCP session opens its own SQLite connection. Two Claude Code s
 │  └──────┬───────┘  └──────┬──────┘  └──────┬───────┘ │
 │         │                 │                │         │
 │  ┌──────┴─────────────────┴────────────────┴───────┐ │
-│  │              RPC Router (40+ methods)            │ │
+│  │            RPC Router (method registry)          │ │
 │  └──────┬──────────────┬───────────────┬───────────┘ │
 │         │              │               │             │
 │  ┌──────┴──────┐ ┌─────┴─────┐ ┌──────┴──────┐      │
@@ -449,13 +518,13 @@ Without it, every MCP session opens its own SQLite connection. Two Claude Code s
    └──────────┘   └───────────┘   └──────────┘
 ```
 
-**Two interfaces, same daemon:**
+**Two local interfaces, same daemon:**
 
-| Interface | Port/Path | Protocol | Clients |
-|-----------|-----------|----------|---------|
-| Unix Socket | `~/Library/Caches/chitragupta/daemon/chitragupta.sock` | JSON-RPC 2.0 over NDJSON | MCP sessions, CLI, Hub server |
-| HTTP Server | `127.0.0.1:3690` | REST (JSON) | macOS menubar, browser, curl |
-| Named Pipe | `\\.\pipe\chitragupta` (Windows) | JSON-RPC 2.0 | Same as Unix socket |
+| Interface | Port/Path | Protocol | Auth boundary | Clients |
+|-----------|-----------|----------|---------------|---------|
+| Unix Socket | `~/Library/Caches/chitragupta/daemon/chitragupta.sock` (platform-specific) | JSON-RPC 2.0 over NDJSON | Bridge token handshake (`auth.handshake`) + method scopes | MCP sessions, CLI, Hub server |
+| HTTP Server | `127.0.0.1:3690` | REST (JSON) | Loopback trust boundary (no bridge-token handshake) | macOS menubar, browser, curl |
+| Named Pipe | `\\.\pipe\chitragupta` (Windows) | JSON-RPC 2.0 | Bridge token handshake (`auth.handshake`) + method scopes | Same as Unix socket |
 
 ### Lifecycle
 
@@ -485,7 +554,7 @@ The daemon auto-spawns when any MCP client connects — you rarely need to start
 
 ### HTTP API (port 3690)
 
-Loopback-only. No auth needed — same trust boundary as the Unix socket.
+Loopback-only operations surface for local tooling. This interface currently does not use the daemon bridge-token handshake; keep it local to the host.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -558,6 +627,15 @@ Override with environment variables: `CHITRAGUPTA_SOCKET`, `CHITRAGUPTA_PID`, `C
 - **Signal handling** — SIGTERM/SIGINT for graceful shutdown, SIGHUP on Unix, `taskkill` on Windows
 - **Nidra consolidation** — cron at 2am, backfills missed days on startup, manual trigger via RPC
 
+### Production Readiness Boundaries
+
+- **Engine authority** — daemon is the single-writer authority for persistent state; treat direct writers as a failure mode.
+- **Degraded mode** — when the daemon is unreachable, CLI bridge fallback is read-only for a limited method set; write paths fail closed.
+- **Auth split is intentional** — daemon socket/pipe RPC is token+scope gated; daemon loopback HTTP is local-trust ops only.
+- **Lucy/Scarlett scope** — these are platform-wide internal runtime overlays; `coding_agent` and Takumi bridge behavior are one user-facing slice, not the full runtime.
+- **Sabha semantics** — Sabha is available as a structured deliberation surface, but full daemon-driven autonomous loops remain partially wired (see runtime-integrity docs).
+- **Release gate** — before shipping, run `pnpm run build:check`, `pnpm run build`, `pnpm run verify:engine`, and `pnpm test`.
+
 ### macOS Menubar App
 
 A native SwiftUI menubar app that monitors the daemon in real-time:
@@ -598,12 +676,12 @@ Build: `cd apps/macos-menubar && xcodegen && xcodebuild`
 | [`@chitragupta/hub`](./packages/hub) | Web Dashboard — Preact SPA, device pairing, real-time monitoring | — | — |
 | [`@chitragupta/netra`](./packages/netra) | Vision — image analysis, pixel diffing, screenshot capture, multimodal | Netra | Eye |
 | [`@chitragupta/tantra`](./packages/tantra) | MCP — server lifecycle, circuit breaker, capability aggregation, auto-restart | Tantra | Technique |
-| [`@chitragupta/vayu`](./packages/vayu) | Workflows — DAG execution, worker thread pool, parallel pipelines | Vayu | Wind |
+| [`@chitragupta/prana`](./packages/prana) | Workflows — DAG execution, worker thread pool, parallel pipelines | Prana | Life Force |
 | [`@chitragupta/yantra`](./packages/yantra) | Tools — 12+ built-in tools, sandbox, .env fortress, credential protection | Yantra | Instrument |
 
 > **npm:** Published as [`@yugenlab/chitragupta`](https://www.npmjs.com/package/@yugenlab/chitragupta) — `npm install -g @yugenlab/chitragupta`
 
-Build order: `core -> swara -> anina -> smriti -> ui -> yantra -> dharma -> netra -> vayu -> sutra -> tantra -> vidhya-skills -> niyanta -> daemon -> hub -> cli` · `darpana` (standalone, depends on core only)
+Build order: `core -> swara -> anina -> smriti -> ui -> yantra -> dharma -> netra -> prana -> sutra -> tantra -> vidhya-skills -> niyanta -> daemon -> hub -> cli` · `darpana` (standalone, depends on core only)
 
 ---
 
@@ -772,6 +850,10 @@ SWIM-based protocol: `alive` → `suspect` (no heartbeat) → `dead` (evicted). 
 
 Chitragupta's autonomous intelligence layer is named after the film _Lucy_ (2014) — the idea of a system gaining new cognitive abilities as more neural capacity comes online. Each module maps to a stage of cerebral expansion.
 
+Lucy and Scarlett are internal platform concepts first. They apply across Chitragupta's own runtime, memory, health, prediction, and self-healing flows. The Takumi bridge and external MCP-facing agent flows are only one public slice of that broader internal system.
+
+The Lucy/Scarlett framing is Chitragupta-specific. Related papers and future Takumi binding notes are research and planning inputs, not proof that this runtime layer was imported wholesale from another codebase or external spec.
+
 ### Architecture
 
 ```
@@ -819,6 +901,8 @@ Chitragupta's autonomous intelligence layer is named after the film _Lucy_ (2014
 | **Transcendence Engine** | 100% — Precognition | Predictive context pre-fetcher. Fuses 5 signal sources (trends, temporal patterns, session continuation, behavioral tendencies, co-occurrence) to predict what memory context will be needed before it is requested. |
 | **CPH4 Catalyst** | — | Named after the synthetic molecule that triggers neural expansion. Ensures tool_calls data survives snake_case/camelCase client boundaries so downstream learning pipelines receive complete data. |
 
+For the operator-facing behavior of the runtime integrity wiring, including Buddhi/Akasha/Nidra/Triguna/Lokapala links and autonomous MCP recovery, see [docs/runtime-integrity.md](docs/runtime-integrity.md).
+
 ### Research Basis
 
 - Neural Paging (ArXiv 2603.02228) — predictive memory pre-loading
@@ -827,9 +911,13 @@ Chitragupta's autonomous intelligence layer is named after the film _Lucy_ (2014
 - MemWeaver (ArXiv 2601.18204) — three-tier memory with prefetch
 - Zep/Graphiti (ArXiv 2501.13956) — bitemporal knowledge graphs
 
+These are representative research anchors for the Lucy-related runtime ideas. The current codebase mixes direct algorithms, heuristics, and platform-specific wiring on top of those references.
+
 ---
 
-## Performance
+## Performance Snapshot
+
+These numbers are reference snapshots, not formal SLO guarantees. Re-run the release gate above for current readiness on your branch.
 
 | Metric | Value |
 |--------|-------|
@@ -847,14 +935,21 @@ Chitragupta's autonomous intelligence layer is named after the film _Lucy_ (2014
 
 | Document | What It Covers |
 |----------|---------------|
-| [GETTING_STARTED.md](GETTING_STARTED.md) | Installation, configuration, CLI, API, MCP, providers, memory |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture, package graph, internal components, memory model, actor mesh |
-| [docs/ALGORITHMS.md](docs/ALGORITHMS.md) | Novel algorithms — Sinkhorn-Knopp, PageRank, Thompson Sampling, BOCPD, and more |
-| [docs/VEDIC-MODELS.md](docs/VEDIC-MODELS.md) | 17 Vedic cognitive models mapped to computational modules |
-| [docs/HUB.md](docs/HUB.md) | Hub web dashboard — device pairing, pages, API endpoints, architecture |
-| [docs/API.md](docs/API.md) | REST API, MCP tools/resources, CLI commands, Vayu DAG integration |
+| [docs/getting-started.md](docs/getting-started.md) | Installation, configuration, CLI, API, MCP, providers, memory |
+| [docs/architecture.md](docs/architecture.md) | System architecture, package graph, internal components, memory model, actor mesh |
+| [docs/component-responsibilities.md](docs/component-responsibilities.md) | Why each core faculty and consumer exists, what it owns, and what it must not own |
+| [docs/end-to-end-communication-flow.md](docs/end-to-end-communication-flow.md) | Human-readable flow of how clients, daemon, sessions, memory, Lucy/Scarlett, Nidra, Sabha, and semantic mirror communicate |
+| [docs/algorithms.md](docs/algorithms.md) | Novel algorithms — Sinkhorn-Knopp, PageRank, Thompson Sampling, BOCPD, and more |
+| [docs/vedic-models.md](docs/vedic-models.md) | 17 Vedic cognitive models mapped to computational modules |
+| [docs/hub.md](docs/hub.md) | Hub web dashboard — device pairing, pages, API endpoints, architecture |
+| [docs/api.md](docs/api.md) | REST API, MCP tools/resources, CLI commands, Prana workflow integration |
+| [docs/current-status.md](docs/current-status.md) | Current runtime truth: what is live, partial, and still open |
+| [docs/consumer-contract.md](docs/consumer-contract.md) | Integration contract for Vaayu, Takumi, and future consumers |
+| [docs/coding-agent.md](docs/coding-agent.md) | User-facing guide for coding_agent modes, noCache/fresh behavior, Takumi bridge routing, and CLI fallback |
+| [docs/runtime-integrity.md](docs/runtime-integrity.md) | Practical runtime contract for nervous-system wiring, integrity loops, and autonomous MCP recovery |
+| [docs/sabha-protocol.md](docs/sabha-protocol.md) | Sabha as the council layer: current deliberation engine and target protocol shape |
 | [docs/p2p-mesh.md](docs/p2p-mesh.md) | P2P actor mesh — Bitcoin-inspired network, TLS, anti-eclipse, peer discovery |
-| [docs/RESEARCH.md](docs/RESEARCH.md) | 30+ research papers backing every major module |
+| [docs/research.md](docs/research.md) | 30+ research papers backing every major module |
 | [CHANGELOG.md](CHANGELOG.md) | Release history (v0.1.0 — v0.5.0) |
 
 ---

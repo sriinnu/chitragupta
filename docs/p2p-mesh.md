@@ -1,7 +1,7 @@
 # P2P Actor Mesh — Network Architecture
 
 > Full documentation for Chitragupta's peer-to-peer distributed actor mesh.
-> For general architecture, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+> For general architecture, see [architecture.md](./architecture.md).
 > For communication primitives (CommHub, Samiti, Sabha), see the [Sutra README](../packages/sutra/README.md).
 
 ---
@@ -9,6 +9,11 @@
 ## Overview
 
 The P2P Actor Mesh extends Sutra's in-process actor model into a real distributed system. Multiple Chitragupta nodes form a self-organizing mesh network over WebSocket connections, enabling agents on different machines to communicate as naturally as local actors.
+
+Before full network bootstrap, the same ActorSystem still operates as a local mesh:
+- built-in local actors remain alive under gossip instead of aging into dead/suspect
+- capability routing works against local actors, not only remote peers
+- MCP mode upgrades into a real P2P node when `CHITRAGUPTA_MESH_*` config is supplied
 
 The design draws heavily from **Bitcoin's network layer** — the most battle-tested P2P protocol in existence — adapted for actor-based AI agent communication rather than transaction relay.
 
@@ -435,4 +440,4 @@ It continuously sends ask/reply traffic while restarting one worker node and rep
 
 ---
 
-[Back to Architecture](./ARCHITECTURE.md) | [Back to Sutra README](../packages/sutra/README.md) | [Back to root](../README.md)
+[Back to Architecture](./architecture.md) | [Back to Sutra README](../packages/sutra/README.md) | [Back to root](../README.md)

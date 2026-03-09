@@ -13,6 +13,34 @@ import type { ConsolidationEvent, ChitraguptaDaemonConfig } from "./chitragupta-
 /** Callback for emitting consolidation events. */
 export type EmitFn = (event: string, data: ConsolidationEvent | Error | string) => void;
 
+async function syncRemoteSemanticArtifacts(
+	emit: EmitFn,
+	date: string,
+	phase: string,
+	options: {
+		recentDailyLimit?: number;
+		recentPeriodicPerProject?: number;
+		dates?: string[];
+		projects?: string[];
+		periods?: string[];
+		levels?: Array<"daily" | "monthly" | "yearly">;
+	},
+): Promise<void> {
+	try {
+		const { syncRemoteSemanticMirror } = await import("@chitragupta/smriti");
+		const remote = await syncRemoteSemanticMirror(options);
+		if (!remote.status.enabled) return;
+		emit("consolidation", {
+			type: "progress",
+			date,
+			phase,
+			detail: `remote semantic mirror synced ${remote.synced} artifacts (${remote.status.collection})`,
+		});
+	} catch {
+		// best-effort
+	}
+}
+
 // ─── Date Formatting ────────────────────────────────────────────────────────
 
 /** Format a Date as YYYY-MM-DD. */
@@ -88,6 +116,11 @@ export async function consolidateLastMonth(emit: EmitFn): Promise<void> {
 				});
 			}
 		}
+		await syncRemoteSemanticArtifacts(emit, dateLabel, "monthly:remote-sync", {
+			levels: ["monthly"],
+			periods: [`${year}-${String(lastMonth).padStart(2, "0")}`],
+			projects: projectEntries.map((entry) => entry.project),
+		});
 		emit("consolidation", { type: "complete", date: dateLabel });
 	} catch (err) {
 		emit("consolidation", {
@@ -127,6 +160,11 @@ export async function consolidateLastYear(emit: EmitFn): Promise<void> {
 				});
 			}
 		}
+		await syncRemoteSemanticArtifacts(emit, dateLabel, "yearly:remote-sync", {
+			levels: ["yearly"],
+			periods: [String(lastYear)],
+			projects: projectEntries.map((entry) => entry.project),
+		});
 		emit("consolidation", { type: "complete", date: dateLabel });
 	} catch (err) {
 		emit("consolidation", {
@@ -173,6 +211,11 @@ export async function backfillPeriodicReports(
 			const { backfillConsolidationIndices } = await import("@chitragupta/smriti/consolidation-indexer");
 			await backfillConsolidationIndices();
 		} catch { /* best-effort */ }
+
+		await syncRemoteSemanticArtifacts(emit, formatDate(now), "backfill:remote-sync", {
+			recentDailyLimit: 30,
+			recentPeriodicPerProject: 6,
+		});
 
 		await archiveFn();
 	} catch {

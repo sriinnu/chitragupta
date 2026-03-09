@@ -129,7 +129,7 @@ export function createChitraguptaAPI(deps: ApiDeps, config?: ServerConfig): Chit
 		getTriguna: deps.getTriguna as () => { getState(): { sattva: number; rajas: number; tamas: number } } | undefined,
 	});
 
-	// Workflow engine (Vayu DAG)
+	// Workflow engine (Prana DAG)
 	mountWorkflowRoutes(server);
 
 	mountDynamicRoutes(server, deps, config);

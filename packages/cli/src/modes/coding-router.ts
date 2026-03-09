@@ -10,6 +10,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { platform } from "node:os";
+import { daemonCall } from "./daemon-bridge.js";
 import { TakumiBridge } from "./takumi-bridge.js";
 import type { TakumiContext, TakumiResponse } from "./takumi-bridge-types.js";
 
@@ -57,10 +58,81 @@ export interface BridgeRouteOptions {
 	cwd: string;
 	/** Optional context to inject into Takumi. */
 	context?: TakumiContext;
+	/** Force fresh inspection instead of predictive/cached context. */
+	noCache?: boolean;
+	/** Alias for noCache to make fresh-mode intent explicit. */
+	fresh?: boolean;
+	/** Canonical engine session id for route resolution. */
+	sessionId?: string;
+	/** Consumer identity for engine-owned route resolution. */
+	consumer?: string;
+	/** Optional engine route class to enforce before Takumi execution. */
+	routeClass?: string;
+	/** Optional capability for engine-owned route resolution. */
+	capability?: string;
 	/** Streaming callback for stdout/stderr chunks. */
 	onOutput?: (chunk: string) => void;
 	/** Optional abort signal. */
 	signal?: AbortSignal;
+}
+
+interface EngineRouteResolution {
+	routeClass?: { id?: string; capability?: string } | null;
+	request?: { capability?: string } | null;
+	selected?: { id?: string } | null;
+	reason?: string | null;
+	policyTrace?: string[];
+}
+
+interface ResolvedEngineBridgeRoute {
+	routeClass?: string;
+	capability?: string | null;
+	selectedCapabilityId?: string | null;
+	enforced?: boolean;
+	reason?: string | null;
+	policyTrace?: string[];
+}
+
+const STRICT_REVIEW_PATTERNS = [
+	/\breview\b/i,
+	/\baudit\b/i,
+	/\bsecurity\b/i,
+	/\bregression\b/i,
+	/\bthreat model\b/i,
+];
+
+const DEEP_REASONING_PATTERNS = [
+	/\brefactor\b/i,
+	/\barchitecture\b/i,
+	/\bdesign\b/i,
+	/\binvestigate\b/i,
+	/\bdebug\b/i,
+	/\broot cause\b/i,
+	/\banaly[sz]e\b/i,
+	/\bexplain\b/i,
+];
+
+const HIGH_TRUST_EXECUTION_PATTERNS = [
+	/\bmigrate\b/i,
+	/\bdeploy\b/i,
+	/\brelease\b/i,
+	/\bproduction\b/i,
+	/\bexecute\b/i,
+	/\bvalidate\b/i,
+	/\bverification\b/i,
+];
+
+export function inferCodingRouteClass(task: string): string {
+	if (STRICT_REVIEW_PATTERNS.some((pattern) => pattern.test(task))) {
+		return "coding.review.strict";
+	}
+	if (HIGH_TRUST_EXECUTION_PATTERNS.some((pattern) => pattern.test(task))) {
+		return "coding.validation-high-trust";
+	}
+	if (DEEP_REASONING_PATTERNS.some((pattern) => pattern.test(task))) {
+		return "coding.deep-reasoning";
+	}
+	return "coding.patch-cheap";
 }
 
 // ─── CLI Definitions (priority order) ────────────────────────────────────
@@ -70,7 +142,7 @@ const CODING_CLIS: CodingCli[] = [
 	{
 		name: "takumi",
 		command: "takumi",
-		buildArgs: (task, cwd) => ["--headless", "--cwd", cwd, task],
+		buildArgs: (task, cwd) => ["--print", "--cwd", cwd, task],
 		detect: () => commandExists("takumi"),
 	},
 	{
@@ -170,12 +242,51 @@ export function resetDetectionCache(): void {
 export async function routeViaBridge(
 	options: BridgeRouteOptions,
 ): Promise<CodingRouteResult & { bridgeResult?: TakumiResponse }> {
+	const requestedRouteClass = resolveRequestedEngineRouteClass(options);
+	const engineRouteRequested = requiresEngineRoute(options, requestedRouteClass);
+	const resolvedEngineRoute = await resolveEngineBridgeRoute(options);
+	const engineRoute = resolvedEngineRoute.route;
+	if (engineRouteRequested && !engineRoute) {
+		return {
+			cli: "engine-route",
+			output: resolvedEngineRoute.error
+				?? "Engine route resolution was requested but could not be completed.",
+			exitCode: 1,
+		};
+	}
+	if (engineRoute && !isTakumiCompatibleEngineLane(engineRoute)) {
+		if (engineRoute.selectedCapabilityId === "tool.coding_agent") {
+			return routeCodingTask({
+				task: options.task,
+				cwd: options.cwd,
+				signal: options.signal,
+				onOutput: options.onOutput,
+			});
+		}
+		const routeLabel = engineRoute.routeClass ?? engineRoute.capability ?? "coding";
+		const selected = engineRoute.selectedCapabilityId ?? "none";
+		return {
+			cli: "engine-route",
+			output: `Engine route '${routeLabel}' resolved to '${selected}'; the Takumi bridge will not override engine policy.`,
+			exitCode: 1,
+		};
+	}
+
 	const bridge = new TakumiBridge({ cwd: options.cwd });
+	const context = buildTakumiContext(options, engineRoute ?? undefined);
 
 	try {
 		const status = await bridge.detect();
 
 		if (status.mode === "unavailable") {
+			if (engineRouteRequested && engineRoute?.selectedCapabilityId === "adapter.takumi.executor") {
+				const routeLabel = engineRoute.routeClass ?? engineRoute.capability ?? "coding";
+				return {
+					cli: "engine-route",
+					output: `Engine route '${routeLabel}' requires 'adapter.takumi.executor', but the Takumi bridge is unavailable.`,
+					exitCode: 1,
+				};
+			}
 			// Fall back to generic CLI routing
 			return routeCodingTask({
 				task: options.task,
@@ -185,25 +296,119 @@ export async function routeViaBridge(
 			});
 		}
 
-		if (options.context) {
-			bridge.injectContext(options.context);
+		if (context) {
+			bridge.injectContext(context);
 		}
 
 		const result = await bridge.execute(
-			{ type: "task", task: options.task, context: options.context },
+			{ type: "task", task: options.task, context },
 			(event) => {
 				if (options.onOutput) options.onOutput(event.data);
 			},
 		);
 
-		return {
-			cli: `takumi (${status.mode})`,
-			output: result.output,
-			exitCode: result.exitCode,
-			bridgeResult: result,
-		};
+			return {
+				cli: `takumi (${result.modeUsed ?? status.mode})`,
+				output: result.output,
+				exitCode: result.exitCode,
+				bridgeResult: result,
+			};
 	} finally {
 		bridge.dispose();
+	}
+}
+
+function buildTakumiContext(
+	options: BridgeRouteOptions,
+	engineRoute?: ResolvedEngineBridgeRoute,
+): TakumiContext | undefined {
+	if (!options.context && options.noCache !== true && options.fresh !== true && !engineRoute) {
+		return undefined;
+	}
+	const noCache = options.context?.noCache === true || options.noCache === true;
+	const fresh = options.context?.fresh === true || options.fresh === true;
+	return {
+		...(options.context ?? {}),
+		...(noCache ? { noCache: true } : {}),
+		...(fresh ? { fresh: true } : {}),
+		...(engineRoute ? { engineRoute: { ...engineRoute, enforced: true } } : {}),
+	};
+}
+
+function isTakumiCompatibleEngineLane(route: ResolvedEngineBridgeRoute): boolean {
+	if (route.selectedCapabilityId === "adapter.takumi.executor") return true;
+
+	const selected = route.selectedCapabilityId ?? "";
+	if (selected.startsWith("discovery.model.")) return true;
+	if (selected.startsWith("engine.local.")) return true;
+
+	const capability = route.capability?.trim().toLowerCase();
+	if (!capability) return false;
+	return capability === "chat"
+		|| capability === "function_calling"
+		|| capability === "model.chat"
+		|| capability === "model.tool-use"
+		|| capability === "model.local.chat"
+		|| capability === "model.local.tool-use";
+}
+
+function resolveRequestedEngineRouteClass(
+	options: BridgeRouteOptions,
+): string | undefined {
+	if (typeof options.routeClass === "string" && options.routeClass.trim()) {
+		return options.routeClass.trim();
+	}
+	if (!options.sessionId || options.capability) return undefined;
+	return inferCodingRouteClass(options.task);
+}
+
+function requiresEngineRoute(
+	options: BridgeRouteOptions,
+	requestedRouteClass = resolveRequestedEngineRouteClass(options),
+): boolean {
+	return Boolean(options.sessionId && (requestedRouteClass || options.capability));
+}
+
+async function resolveEngineBridgeRoute(options: BridgeRouteOptions): Promise<{
+	route: ResolvedEngineBridgeRoute | null;
+	error?: string;
+}> {
+	const requestedRouteClass = resolveRequestedEngineRouteClass(options);
+	if (!requiresEngineRoute(options, requestedRouteClass)) return { route: null };
+	try {
+		const resolved = await daemonCall<EngineRouteResolution>("route.resolve", {
+			consumer: options.consumer ?? "cli:takumi-bridge",
+			sessionId: options.sessionId,
+			routeClass: requestedRouteClass,
+			capability: options.capability,
+			context: {
+				cwd: options.cwd,
+				surface: "cli:takumi-bridge",
+			},
+		});
+		return {
+			route: {
+				routeClass: typeof resolved.routeClass?.id === "string"
+					? resolved.routeClass.id
+					: requestedRouteClass,
+				capability: typeof resolved.request?.capability === "string"
+					? resolved.request.capability
+					: typeof resolved.routeClass?.capability === "string"
+						? resolved.routeClass.capability
+						: options.capability ?? null,
+				selectedCapabilityId: typeof resolved.selected?.id === "string" ? resolved.selected.id : null,
+				enforced: true,
+				reason: typeof resolved.reason === "string" ? resolved.reason : null,
+				policyTrace: Array.isArray(resolved.policyTrace)
+					? resolved.policyTrace.filter((value): value is string => typeof value === "string")
+				: [],
+			},
+		};
+	} catch (error) {
+		return {
+			route: null,
+			error: `Engine route resolution failed: ${error instanceof Error ? error.message : String(error)}`,
+		};
 	}
 }
 

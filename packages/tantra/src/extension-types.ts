@@ -43,7 +43,7 @@ export type ExtensionHookName =
 export interface SessionContext {
 	sessionId: string;
 	projectPath: string;
-	transport: "stdio" | "sse";
+	transport: "stdio" | "sse" | "streamable-http";
 	startedAt: number;
 }
 

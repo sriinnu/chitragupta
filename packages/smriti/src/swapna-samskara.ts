@@ -10,7 +10,7 @@
  */
 
 import { DatabaseManager } from "./db/index.js";
-import { parseToolCalls } from "./swapna-extraction.js";
+import { parseToolCalls, resolveSwapnaSessionIds } from "./swapna-extraction.js";
 import type { SwapnaConfig } from "./swapna-types.js";
 import type { PramanaType, SessionToolCall } from "./types.js";
 
@@ -181,17 +181,10 @@ export async function swapnaExtractSamskaras(
 	const start = performance.now();
 	const agentDb = db.get("agent");
 	const now = Date.now();
+	const sessionIds = resolveSwapnaSessionIds(agentDb, config);
+	const sessions = sessionIds.map((id) => ({ id })) as SessionRow[];
 
-	const sessions = agentDb
-		.prepare(
-			`SELECT id FROM sessions
-			 WHERE project = ?
-			 ORDER BY updated_at DESC
-			 LIMIT ?`,
-		)
-		.all(config.project, config.maxSessionsPerCycle) as SessionRow[];
-
-	if (sessions.length === 0) {
+	if (sessionIds.length === 0) {
 		return { samskarasProcessed: 0, sessionsProcessed: 0, durationMs: performance.now() - start };
 	}
 
@@ -256,4 +249,3 @@ export async function swapnaExtractSamskaras(
 		durationMs: performance.now() - start,
 	};
 }
-

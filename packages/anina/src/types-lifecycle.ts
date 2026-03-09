@@ -67,6 +67,8 @@ export interface NidraSnapshot {
 	consecutiveIdleDreamCycles: number;
 	/** Sessions processed since the last DEEP_SLEEP entry. */
 	sessionsProcessedSinceDeepSleep: number;
+	/** Total notifySession() calls since the last DEEP_SLEEP entry. */
+	sessionNotificationsSinceDeepSleep: number;
 	/** Session IDs pending multi-session consolidation in next DEEP_SLEEP. */
 	pendingSessionIds: readonly string[];
 }

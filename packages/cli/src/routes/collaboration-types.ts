@@ -79,13 +79,25 @@ export interface SabhaEngineLike {
 		topic: string,
 		convener: string,
 		participants: Array<{ id: string; role: string; expertise: number; credibility: number }>,
-	): SabhaLike;
-	getSabha(id: string): SabhaLike | undefined;
-	listActive(): SabhaLike[];
-	propose(sabhaId: string, proposerId: string, syllogism: Record<string, string>): unknown;
-	vote(sabhaId: string, participantId: string, position: string, reasoning: string): unknown;
-	conclude(sabhaId: string): SabhaLike;
-	explain(sabhaId: string): string;
+	): MaybePromise<SabhaLike>;
+	getSabha(id: string): MaybePromise<SabhaLike | undefined>;
+	listActive(): MaybePromise<SabhaLike[]>;
+	propose(sabhaId: string, proposerId: string, syllogism: Record<string, string>): MaybePromise<unknown>;
+	vote(sabhaId: string, participantId: string, position: string, reasoning: string): MaybePromise<unknown>;
+	submitPerspective?(
+		sabhaId: string,
+		params: {
+			participantId: string;
+			summary: string;
+			reasoning?: string;
+			position?: "support" | "oppose" | "abstain" | "observe";
+			recommendedAction?: string;
+			evidence?: Array<Record<string, unknown>>;
+			metadata?: Record<string, unknown>;
+		},
+	): MaybePromise<unknown>;
+	conclude(sabhaId: string): MaybePromise<SabhaLike>;
+	explain(sabhaId: string): MaybePromise<string>;
 }
 
 // ─── Lokapala ───────────────────────────────────────────────────────────────
@@ -135,27 +147,30 @@ export interface StigmergicTraceLike {
 	lastReinforcedAt: number;
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
 export interface AkashaLike {
 	query(
 		topic: string,
 		opts?: { type?: string; minStrength?: number; limit?: number },
-	): StigmergicTraceLike[];
+	): MaybePromise<StigmergicTraceLike[]>;
 	leave(
 		agentId: string,
 		type: string,
 		topic: string,
 		content: string,
 		metadata?: Record<string, unknown>,
-	): StigmergicTraceLike;
-	strongest(limit?: number): StigmergicTraceLike[];
-	stats(): {
+	): MaybePromise<StigmergicTraceLike>;
+	strongest(limit?: number): MaybePromise<StigmergicTraceLike[]>;
+	stats(): MaybePromise<{
 		totalTraces: number;
 		activeTraces: number;
 		byType: Record<string, number>;
 		avgStrength: number;
 		strongestTopic: string | null;
 		totalReinforcements: number;
-	};
+	}>;
+	setOnEvent?(handler: (event: { type: string; trace?: unknown }) => void): void;
 }
 
 // ─── Server ─────────────────────────────────────────────────────────────────

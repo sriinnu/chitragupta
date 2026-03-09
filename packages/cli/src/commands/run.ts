@@ -20,13 +20,7 @@ import path from "path";
 import { loadGlobalSettings, ChitraguptaError } from "@chitragupta/core";
 import { SteeringManager } from "@chitragupta/anina";
 import type { RunOptions, RunConfig, RunResult } from "./run-types.js";
-
-import {
-	createSession,
-	loadSession,
-	addTurn,
-} from "@chitragupta/smriti/session-store";
-import type { Session, SessionTurn } from "@chitragupta/smriti/types";
+import type { Session } from "@chitragupta/smriti/types";
 
 import {
 	bold,
@@ -51,6 +45,10 @@ import {
 	shouldContinue,
 	buildNextMessage,
 } from "./run-loop.js";
+import {
+	openSession as openSessionViaDaemon,
+	showSession as showSessionViaDaemon,
+} from "../modes/daemon-bridge.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -168,9 +166,9 @@ function executeDryRun(config: RunConfig, context: string): RunResult {
  * @returns The loaded session.
  * @throws {ChitraguptaError} If the session cannot be found.
  */
-function resumeSession(sessionId: string, projectPath: string): Session {
+async function resumeSession(sessionId: string, projectPath: string): Promise<Session> {
 	try {
-		const session = loadSession(sessionId, projectPath);
+		const session = await showSessionViaDaemon(sessionId, projectPath) as unknown as Session;
 		process.stdout.write(
 			"\n" + green(`  Resuming session: ${bold(session.meta.title)}`) + "\n" +
 			dim(`  ID: ${session.meta.id} | Turns: ${session.turns.length}`) + "\n\n",
@@ -226,7 +224,7 @@ async function runAgentLoop(
 			provider: config.provider,
 			model: config.model,
 			workingDir: config.projectPath,
-			sessionId: config.resumeId,
+			sessionId: session.meta.id,
 		});
 
 		// Build the initial prompt with context
@@ -250,23 +248,6 @@ async function runAgentLoop(
 			totalCost += turnResult.cost;
 			lastOutput = turnResult.text;
 
-			// Record the user turn
-			const userTurn: SessionTurn = {
-				turnNumber: session.turns.length + 1,
-				role: "user",
-				content: currentMessage,
-			};
-			await addTurn(session.meta.id, config.projectPath, userTurn);
-
-			// Record the assistant turn
-			const assistantTurn: SessionTurn = {
-				turnNumber: session.turns.length + 2,
-				role: "assistant",
-				content: turnResult.text,
-				model: config.model,
-			};
-			await addTurn(session.meta.id, config.projectPath, assistantTurn);
-
 			// Check abort after turn
 			if (turnResult.aborted || abortController.signal.aborted) break;
 
@@ -281,10 +262,17 @@ async function runAgentLoop(
 
 		process.stdout.write("\n\n");
 		await instance.destroy();
+		let refreshedMeta = session.meta;
+		try {
+			const refreshed = await showSessionViaDaemon(session.meta.id, config.projectPath) as unknown as Session;
+			refreshedMeta = refreshed.meta;
+		} catch {
+			// Keep the original session metadata if final refresh fails after a successful run.
+		}
 
 		return {
 			success: true,
-			session: session.meta,
+			session: refreshedMeta,
 			turnsExecuted,
 			durationMs: Date.now() - startTime,
 			totalCost,
@@ -400,16 +388,22 @@ export async function runRunCommand(
 	// Create or resume session
 	let session: Session;
 	if (config.resumeId) {
-		session = resumeSession(config.resumeId, projectPath);
+		session = await resumeSession(config.resumeId, projectPath);
 	} else {
-		session = createSession({
+		const opened = await openSessionViaDaemon({
 			project: projectPath,
 			agent: "chitragupta",
 			model: config.model,
-			provider: "chitragupta-run",
+			provider: config.provider,
 			title: config.task.slice(0, 80),
 			tags: ["run"],
+			consumer: "chitragupta",
+			surface: "cli",
+			channel: "terminal",
+			actorId: `run:${process.pid}`,
+			sessionReusePolicy: "isolated",
 		});
+		session = opened.session as unknown as Session;
 
 		process.stdout.write(
 			"\n" + green(`  Session created: ${dim(session.meta.id)}`) + "\n",

@@ -134,10 +134,10 @@ export class TuriyaRouter {
 		const x = this.contextToFeatures(context);
 
 		if (this.totalPlays < ALL_TIERS.length * 2) {
-			return this.heuristicClassify(context);
+			return this.applyPreferenceInfluence(this.heuristicClassify(context), preference);
 		}
 
-		const costWeight = preference?.costWeight ?? 0;
+		const costWeight = clamp((preference?.costWeight ?? 0) + (preference?.costWeightBias ?? 0));
 		const maxCost = this.tierCosts["opus"];
 		let bestTier = ALL_TIERS[0];
 		let bestScore = -Infinity;
@@ -174,14 +174,14 @@ export class TuriyaRouter {
 		const confidence = clamp(1 - bestUncertainty / (bestUncertainty + 1));
 		const armIndex = ALL_TIERS.indexOf(bestTier);
 
-		return {
+		return this.applyPreferenceInfluence({
 			tier: bestTier,
 			confidence,
 			costEstimate: this.tierCosts[bestTier],
 			context,
 			rationale: this.buildRationale(bestTier, context, bestExpected, bestUncertainty),
 			armIndex,
-		};
+		}, preference);
 	}
 
 	/**
@@ -255,6 +255,29 @@ export class TuriyaRouter {
 				0.01,
 			);
 		}
+	}
+
+	private applyPreferenceInfluence(
+		decision: TuriyaDecision,
+		preference?: TuriyaPreference,
+	): TuriyaDecision {
+		if (!preference) return decision;
+
+		let targetIndex = ALL_TIERS.indexOf(decision.tier);
+		const minimumIndex = preference.minimumTier ? ALL_TIERS.indexOf(preference.minimumTier) : -1;
+		const maximumIndex = preference.maximumTier ? ALL_TIERS.indexOf(preference.maximumTier) : -1;
+		if (minimumIndex >= 0) targetIndex = Math.max(targetIndex, minimumIndex);
+		if (maximumIndex >= 0) targetIndex = Math.min(targetIndex, maximumIndex);
+		const nextTier = ALL_TIERS[targetIndex] ?? decision.tier;
+		if (nextTier === decision.tier) return decision;
+
+		return {
+			...decision,
+			tier: nextTier,
+			costEstimate: this.tierCosts[nextTier],
+			armIndex: ALL_TIERS.indexOf(nextTier),
+			rationale: `${decision.rationale} [preference-adjusted -> ${nextTier}]`,
+		};
 	}
 
 	/** Get comprehensive routing statistics. */

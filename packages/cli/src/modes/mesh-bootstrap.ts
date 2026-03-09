@@ -13,7 +13,7 @@
  */
 
 import type { McpServer } from "@chitragupta/tantra";
-import { getActorSystem } from "./mcp-subsystems.js";
+import type { ActorSystemLike } from "./mcp-subsystems-types.js";
 import {
 	createMemoryActorBehavior,
 	createSkillsActorBehavior,
@@ -32,13 +32,18 @@ import type { ActorBehaviorSpec } from "./mesh-actors.js";
  * - sys:skills  — skill find, recommend, list via SkillRegistry + TVM
  * - sys:session — session list, show, handover via daemon-bridge
  */
-export async function bootstrapMeshAndSoul(_server: McpServer): Promise<void> {
+export async function ensureMeshAndSoulBootstrapped(options?: {
+	actorSystem?: ActorSystemLike;
+}): Promise<void> {
 	let actorsSpawned = 0;
 	let soulCreated = false;
 
 	// ─── 1. Spawn functional system actors ─────────────────────────
 	try {
-		const sys = await getActorSystem();
+		const sys =
+			options?.actorSystem
+			?? await import("./mcp-subsystems.js").then(({ getActorSystem }) => getActorSystem());
+		if (!sys) return;
 		const actors: Array<{ id: string; behavior: ActorBehaviorSpec }> = [
 			{ id: "sys:memory", behavior: createMemoryActorBehavior() },
 			{ id: "sys:skills", behavior: createSkillsActorBehavior() },
@@ -46,7 +51,7 @@ export async function bootstrapMeshAndSoul(_server: McpServer): Promise<void> {
 		];
 		for (const { id, behavior } of actors) {
 			try {
-				sys.spawn(id, behavior);
+				sys.spawn(id, { behavior });
 				actorsSpawned++;
 			} catch { /* actor already exists — idempotent */ }
 		}
@@ -73,4 +78,8 @@ export async function bootstrapMeshAndSoul(_server: McpServer): Promise<void> {
 	process.stderr.write(
 		`[mesh-bootstrap] actors: ${actorsSpawned}, soul: ${soulCreated ? "created" : "exists"}\n`,
 	);
+}
+
+export async function bootstrapMeshAndSoul(_server: McpServer): Promise<void> {
+	await ensureMeshAndSoulBootstrapped();
 }

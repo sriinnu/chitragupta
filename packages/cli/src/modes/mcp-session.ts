@@ -186,25 +186,34 @@ export class McpSessionRecorder {
 			};
 
 			if (shouldPersistSyntheticUserTurn(userContent)) {
-				await bridge.addTurn(sid, this.projectPath, {
-					turnNumber: 0,
-					role: "user",
-					content: userContent,
-					agent: "mcp-client",
-					model: "mcp",
-				});
-				this.turnCounter++;
+				try {
+					await bridge.addTurn(sid, this.projectPath, {
+						turnNumber: 0,
+						role: "user",
+						content: userContent,
+						agent: "mcp-client",
+						model: "mcp",
+					});
+					this.turnCounter++;
+				} catch (err) {
+					// Continue to assistant/tool-call persistence when possible.
+					if (err instanceof DaemonUnavailableError || isDaemonError(err)) throw err;
+				}
 			}
 
-			await bridge.addTurn(sid, this.projectPath, {
-				turnNumber: 0,
-				role: "assistant",
-				content: assistantContent,
-				agent: "mcp",
-				model: "mcp",
-				toolCalls: [toolCall],
-			});
-			this.turnCounter++;
+			try {
+				await bridge.addTurn(sid, this.projectPath, {
+					turnNumber: 0,
+					role: "assistant",
+					content: assistantContent,
+					agent: "mcp",
+					model: "mcp",
+					toolCalls: [toolCall],
+				});
+				this.turnCounter++;
+			} catch (err) {
+				if (err instanceof DaemonUnavailableError || isDaemonError(err)) throw err;
+			}
 
 			try {
 				const userText = this.extractUserText(info.args);

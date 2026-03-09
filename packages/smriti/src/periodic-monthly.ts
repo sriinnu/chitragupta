@@ -9,10 +9,20 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseManager } from "./db/index.js";
 import type { ConsolidationStats, ConsolidationReport, ConsolidationLogEntry } from "./periodic-consolidation.js";
+import { renderConsolidationMetadata } from "./consolidation-provenance.js";
+import type { PeriodicConsolidationMetadata } from "./consolidation-provenance.js";
 
 // ─── Internal Row Shapes ────────────────────────────────────────────────────
 
-interface SessionRow { id: string; title: string; turn_count: number; cost: number; tokens: number; created_at: number }
+interface SessionRow {
+	id: string;
+	title: string;
+	turn_count: number;
+	cost: number;
+	tokens: number;
+	created_at: number;
+	updated_at: number;
+}
 interface TurnRow { tool_calls: string | null }
 interface VasanaRow { name: string; description: string; strength: number; valence: string; stability: number }
 interface SamskaraRow { id: string; pattern_type: string; pattern_content: string; confidence: number; observation_count: number }
@@ -76,13 +86,23 @@ function buildMonthlyMarkdown(
 	project: string, period: string, stats: ConsolidationStats,
 	vasanas: VasanaRow[], vidhis: VidhiRow[], samskaras: SamskaraRow[],
 	tools: Set<string>, newNodes: number, newEdges: number, recommendations: string[],
+	metadata: PeriodicConsolidationMetadata,
 ): string {
 	const lines: string[] = [];
 	lines.push(`# Monthly Consolidation — ${project} — ${period}`, `> Generated: ${new Date().toISOString()}`, "");
+	lines.push(renderConsolidationMetadata(metadata), "");
 	lines.push("## Summary");
 	lines.push(`- **Sessions**: ${stats.sessions}`, `- **Turns**: ${stats.turns}`);
 	lines.push(`- **Tools Used**: ${tools.size > 0 ? [...tools].sort().join(", ") : "none"}`);
 	lines.push(`- **Total Tokens**: ${stats.tokens.toLocaleString()}`, `- **Estimated Cost**: $${stats.cost.toFixed(4)}`, "");
+	lines.push("## Source Provenance");
+	lines.push(`- **Source Sessions**: ${metadata.sourceSessionIds.length}`);
+	if (metadata.sourceSessionIds.length > 0) {
+		const preview = metadata.sourceSessionIds.slice(0, 10).join(", ");
+		const suffix = metadata.sourceSessionIds.length > 10 ? `, ... +${metadata.sourceSessionIds.length - 10} more` : "";
+		lines.push(`- **Session IDs**: ${preview}${suffix}`);
+	}
+	lines.push("");
 
 	lines.push("## Vasanas Crystallized");
 	if (vasanas.length === 0) { lines.push("_No vasanas crystallized this month._"); }
@@ -138,7 +158,7 @@ export async function buildMonthlyReport(
 	const graphDb = dbm.get("graph");
 
 	const sessions = agentDb
-		.prepare(`SELECT id, title, turn_count, cost, tokens, created_at FROM sessions WHERE project = ? AND created_at >= ? AND created_at < ? ORDER BY created_at ASC`)
+		.prepare(`SELECT id, title, turn_count, cost, tokens, created_at, updated_at FROM sessions WHERE project = ? AND created_at >= ? AND created_at < ? ORDER BY created_at ASC`)
 		.all(project, startMs, endMs) as SessionRow[];
 
 	const sessionIds = sessions.map((s) => s.id);
@@ -165,7 +185,21 @@ export async function buildMonthlyReport(
 
 	const stats: ConsolidationStats = { sessions: sessions.length, turns: totalTurns, tokens: totalTokens, cost: totalCost, vasanasCreated: vasanas.length, vidhisCreated: vidhis.length, samskarasActive: samskaras.length };
 	const recommendations = generateRecommendations(stats, vasanas, vidhis, samskaras, toolSet);
-	const markdown = buildMonthlyMarkdown(project, period, stats, vasanas, vidhis, samskaras, toolSet, newNodes, newEdges, recommendations);
+	const metadata: PeriodicConsolidationMetadata = {
+		kind: "monthly",
+		period,
+		project,
+		generatedAt: new Date().toISOString(),
+		sourceSessionIds: sessions.map((session) => session.id),
+		sourceSessions: sessions.map((session) => ({
+			id: session.id,
+			project,
+			title: session.title,
+			created: new Date(session.created_at).toISOString(),
+			updated: new Date(session.updated_at).toISOString(),
+		})),
+	};
+	const markdown = buildMonthlyMarkdown(project, period, stats, vasanas, vidhis, samskaras, toolSet, newNodes, newEdges, recommendations, metadata);
 
 	const filePath = getReportPath("monthly", period);
 	writeReport(filePath, markdown);

@@ -33,12 +33,24 @@ export interface MCPServerConfig {
 	id: string;
 	/** Human-readable display name. */
 	name: string;
-	/** Command to spawn (e.g., "npx", "node", "python"). */
-	command: string;
+	/** Transport type. Defaults to stdio. */
+	transport?: "stdio" | "sse" | "streamable-http";
+	/** Command to spawn for stdio transport (e.g., "npx", "node", "python"). */
+	command?: string;
 	/** Arguments passed to the command. */
 	args?: string[];
 	/** Additional environment variables for the spawned process. */
 	env?: Record<string, string>;
+	/** Remote URL for HTTP-based transports. */
+	url?: string;
+	/** Optional bearer token auth for HTTP-based transports. */
+	auth?: {
+		token: string;
+		headerName?: string;
+		queryParam?: string;
+	};
+	/** Connection timeout in milliseconds. */
+	timeout?: number;
 	/** Whether this server is enabled (default true). */
 	enabled?: boolean;
 }
@@ -107,15 +119,17 @@ function readConfigFile(filePath: string): MCPServerConfig[] {
 			return [];
 		}
 
-		// Validate each entry has at minimum id, name, command
+		// Validate stdio and HTTP server entries.
 		return parsed.mcpServers.filter(
-			(s) =>
-				typeof s.id === "string" &&
-				s.id.length > 0 &&
-				typeof s.name === "string" &&
-				s.name.length > 0 &&
-				typeof s.command === "string" &&
-				s.command.length > 0,
+			(s) => {
+				if (typeof s.id !== "string" || s.id.length === 0) return false;
+				if (typeof s.name !== "string" || s.name.length === 0) return false;
+				const transport = s.transport ?? "stdio";
+				if (transport === "stdio") {
+					return typeof s.command === "string" && s.command.length > 0;
+				}
+				return typeof s.url === "string" && s.url.length > 0;
+			},
 		);
 	} catch {
 		return [];
@@ -142,18 +156,22 @@ export async function startMCPServers(
 
 	const startPromises: Promise<ManagedServerInfo | void>[] = [];
 
-	for (const config of configs) {
-		// Convert to tantra's McpRemoteServerConfig format
-		const remoteConfig: McpRemoteServerConfig = {
-			id: config.id,
-			name: config.name,
-			transport: "stdio",
-			command: config.command,
-			args: config.args,
-			env: config.env,
-			autoRestart: true,
-			maxRestarts: 3,
-		};
+		for (const config of configs) {
+			// Convert to tantra's McpRemoteServerConfig format
+			const transport = config.transport ?? "stdio";
+			const remoteConfig: McpRemoteServerConfig = {
+				id: config.id,
+				name: config.name,
+				transport,
+				command: transport === "stdio" ? config.command : undefined,
+				args: transport === "stdio" ? config.args : undefined,
+				env: transport === "stdio" ? config.env : undefined,
+				url: transport === "stdio" ? undefined : config.url,
+				auth: transport === "stdio" ? undefined : config.auth,
+				timeout: config.timeout,
+				autoRestart: true,
+				maxRestarts: 3,
+			};
 
 		_startedServerIds.add(config.id);
 

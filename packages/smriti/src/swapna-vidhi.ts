@@ -8,7 +8,7 @@
 import { DatabaseManager } from "./db/index.js";
 import type { SessionToolCall, Vidhi, VidhiStep, VidhiParam } from "./types.js";
 import type { SwapnaConfig, ProceduralizeResult } from "./swapna-consolidation.js";
-import { parseToolCalls } from "./swapna-extraction.js";
+import { parseToolCalls, resolveSwapnaSessionIds } from "./swapna-extraction.js";
 import { slugify } from "./swapna-rules.js";
 
 // ─── FNV-1a Hash ────────────────────────────────────────────────────────────
@@ -170,10 +170,8 @@ export async function swapnaProceduralize(
 	const start = performance.now();
 	const agentDb = db.get("agent");
 	const createdVidhis: Vidhi[] = [];
-
-	const sessions = agentDb
-		.prepare(`SELECT id FROM sessions WHERE project = ? ORDER BY updated_at DESC LIMIT ?`)
-		.all(config.project, config.maxSessionsPerCycle) as Array<{ id: string }>;
+	const sessionIds = resolveSwapnaSessionIds(agentDb, config);
+	const sessions = sessionIds.map((id) => ({ id })) as Array<{ id: string }>;
 
 	if (sessions.length < 3) {
 		return { vidhisCreated: 0, vidhis: [], durationMs: performance.now() - start };

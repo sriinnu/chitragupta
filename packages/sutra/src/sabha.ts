@@ -18,18 +18,25 @@ import type {
 } from "./sabha-types.js";
 import {
 	DEFAULT_CONFIG,
-	HARD_CEILINGS,
 	fnv1a,
-	extractKeywords,
-	jaccardSimilarity,
-	containsAnyWord,
-	countMatchingWords,
-	clamp,
 	NEGATION_WORDS,
 	UNIVERSAL_WORDS,
 	PAST_INDICATORS,
 	FUTURE_INDICATORS,
+	clamp,
+	extractKeywords,
+	jaccardSimilarity,
+	containsAnyWord,
+	countMatchingWords,
 } from "./sabha-types.js";
+import {
+	buildSabhaConfig,
+	currentRound,
+	requireParticipant,
+	requireSabha,
+	tallyRound,
+	validateSyllogismFields,
+} from "./sabha-engine-helpers.js";
 import { detectFallacies } from "./sabha-fallacy.js";
 import { explainSabha } from "./sabha-queries.js";
 
@@ -53,6 +60,7 @@ export type {
 export class SabhaEngine {
 	private readonly config: SabhaConfig;
 	private readonly sabhas = new Map<string, Sabha>();
+	private conveneSequence = 0;
 
 	/**
 	 * Create a new SabhaEngine.
@@ -63,18 +71,7 @@ export class SabhaEngine {
 	 * @param config - Optional partial configuration overrides.
 	 */
 	constructor(config?: Partial<SabhaConfig>) {
-		const merged = { ...DEFAULT_CONFIG, ...config };
-		this.config = {
-			maxRounds: Math.min(merged.maxRounds, HARD_CEILINGS.maxRounds),
-			maxParticipants: Math.min(merged.maxParticipants, HARD_CEILINGS.maxParticipants),
-			consensusThreshold: clamp(
-				merged.consensusThreshold,
-				HARD_CEILINGS.consensusThreshold.min,
-				HARD_CEILINGS.consensusThreshold.max,
-			),
-			challengeTimeout: merged.challengeTimeout,
-			autoEscalate: merged.autoEscalate,
-		};
+		this.config = buildSabhaConfig(config);
 	}
 
 
@@ -111,8 +108,9 @@ export class SabhaEngine {
 			credibility: clamp(p.credibility, 0, 1),
 		}));
 
-		const now = Date.now();
-		const id = `sabha-${fnv1a(topic + convener + now.toString())}`;
+			const now = Date.now();
+			const sequence = this.conveneSequence++;
+			const id = `sabha-${fnv1a(`${topic}:${convener}:${now}:${sequence}`)}`;
 
 		const sabha: Sabha = {
 			id,
@@ -141,7 +139,7 @@ export class SabhaEngine {
 	 * @throws If Sabha not found, already concluded, max rounds reached, or proposer not a participant.
 	 */
 	propose(sabhaId: string, proposerId: string, syllogism: NyayaSyllogism): SabhaRound {
-		const sabha = this.requireSabha(sabhaId);
+			const sabha = requireSabha(this.sabhas, sabhaId);
 
 		if (sabha.status === "concluded" || sabha.status === "escalated") {
 			throw new Error(`Sabha ${sabhaId} has already ${sabha.status}. Cannot propose.`);
@@ -154,15 +152,9 @@ export class SabhaEngine {
 			);
 		}
 
-		this.requireParticipant(sabha, proposerId);
+			requireParticipant(sabha, proposerId);
 
-		// Validate syllogism fields are non-empty
-		const fields: (keyof NyayaSyllogism)[] = ["pratijna", "hetu", "udaharana", "upanaya", "nigamana"];
-		for (const field of fields) {
-			if (!syllogism[field] || syllogism[field].trim().length === 0) {
-				throw new Error(`Syllogism field '${field}' must not be empty.`);
-			}
-		}
+			validateSyllogismFields(syllogism);
 
 		const round: SabhaRound = {
 			roundNumber: sabha.rounds.length + 1,
@@ -194,15 +186,15 @@ export class SabhaEngine {
 		target: keyof NyayaSyllogism,
 		challenge: string,
 	): ChallengeRecord {
-		const sabha = this.requireSabha(sabhaId);
+			const sabha = requireSabha(this.sabhas, sabhaId);
 
 		if (sabha.status !== "deliberating") {
 			throw new Error(`Sabha ${sabhaId} is not in deliberating status. Current: ${sabha.status}.`);
 		}
 
-		this.requireParticipant(sabha, challengerId);
+			requireParticipant(sabha, challengerId);
 
-		const round = this.currentRound(sabha);
+			const round = currentRound(sabha);
 		if (!round) {
 			throw new Error(`Sabha ${sabhaId} has no active round. Submit a proposal first.`);
 		}
@@ -233,13 +225,13 @@ export class SabhaEngine {
 	 * @throws If Sabha not found, not deliberating, or index out of bounds.
 	 */
 	respond(sabhaId: string, recordIndex: number, response: string): void {
-		const sabha = this.requireSabha(sabhaId);
+			const sabha = requireSabha(this.sabhas, sabhaId);
 
 		if (sabha.status !== "deliberating") {
 			throw new Error(`Sabha ${sabhaId} is not in deliberating status. Current: ${sabha.status}.`);
 		}
 
-		const round = this.currentRound(sabha);
+			const round = currentRound(sabha);
 		if (!round) {
 			throw new Error(`Sabha ${sabhaId} has no active round.`);
 		}
@@ -274,21 +266,21 @@ export class SabhaEngine {
 		position: "support" | "oppose" | "abstain",
 		reasoning: string,
 	): SabhaVote {
-		const sabha = this.requireSabha(sabhaId);
+			const sabha = requireSabha(this.sabhas, sabhaId);
 
 		if (sabha.status !== "deliberating" && sabha.status !== "voting") {
 			throw new Error(`Sabha ${sabhaId} is not accepting votes. Current status: ${sabha.status}.`);
 		}
 
-		const participant = this.requireParticipant(sabha, participantId);
+			const participant = requireParticipant(sabha, participantId);
 
-		const round = this.currentRound(sabha);
+			const round = currentRound(sabha);
 		if (!round) {
 			throw new Error(`Sabha ${sabhaId} has no active round. Submit a proposal first.`);
 		}
 
 		// Prevent duplicate votes
-		const alreadyVoted = round.votes.some((v) => v.participantId === participantId);
+			const alreadyVoted = round.votes.some((vote: SabhaVote) => vote.participantId === participantId);
 		if (alreadyVoted) {
 			throw new Error(`Participant '${participantId}' has already voted in round ${round.roundNumber}.`);
 		}
@@ -321,7 +313,7 @@ export class SabhaEngine {
 	 * @throws If Sabha not found or already concluded.
 	 */
 	conclude(sabhaId: string): Sabha {
-		const sabha = this.requireSabha(sabhaId);
+			const sabha = requireSabha(this.sabhas, sabhaId);
 
 		if (sabha.status === "concluded" || sabha.status === "escalated") {
 			throw new Error(`Sabha ${sabhaId} has already ${sabha.status}.`);
@@ -330,7 +322,7 @@ export class SabhaEngine {
 		// Tally each round
 		for (const round of sabha.rounds) {
 			if (round.verdict !== null) continue;
-			round.verdict = this.tallyRound(round);
+				round.verdict = tallyRound(round, this.config.consensusThreshold);
 		}
 
 		// Determine final verdict: use the last round with a decisive result,
@@ -365,32 +357,43 @@ export class SabhaEngine {
 
 	// ─── Private: Voting ──────────────────────────────────────────────
 
-	/** Tally a single round's votes using weighted scoring. */
-	private tallyRound(round: SabhaRound): "accepted" | "rejected" | "no-consensus" {
-		if (round.votes.length === 0) return "no-consensus";
-
-		let weightedScore = 0;
-		let totalWeight = 0;
-
-		for (const vote of round.votes) {
-			const sign = vote.position === "support" ? 1 : vote.position === "oppose" ? -1 : 0;
-			weightedScore += vote.weight * sign;
-			totalWeight += Math.abs(vote.weight);
-		}
-
-		if (totalWeight === 0) return "no-consensus";
-
-		const normalizedScore = weightedScore / totalWeight;
-
-		if (normalizedScore >= this.config.consensusThreshold) return "accepted";
-		if (normalizedScore <= -this.config.consensusThreshold) return "rejected";
-		return "no-consensus";
-	}
-
 	// ─── Queries ──────────────────────────────────────────────────────
 
 	/** Get a Sabha by ID. */
 	getSabha(id: string): Sabha | undefined { return this.sabhas.get(id); }
+
+	/** Restore a previously persisted Sabha snapshot into the engine. */
+	restoreSabha(snapshot: Sabha): Sabha {
+		if (!snapshot.id || !snapshot.topic || !snapshot.convener) {
+			throw new Error("Persisted Sabha snapshot is missing required identity fields.");
+		}
+		if (snapshot.participants.length < 2) {
+			throw new Error("Persisted Sabha snapshot requires at least 2 participants.");
+		}
+		if (snapshot.participants.length > this.config.maxParticipants) {
+			throw new Error(
+				`Persisted Sabha exceeds maxParticipants (${this.config.maxParticipants}). ` +
+				`Provided: ${snapshot.participants.length}.`,
+			);
+		}
+		const ids = new Set(snapshot.participants.map((participant) => participant.id));
+		if (ids.size !== snapshot.participants.length) {
+			throw new Error("Persisted Sabha snapshot has duplicate participant IDs.");
+		}
+		const restored = structuredClone(snapshot);
+		this.sabhas.set(restored.id, restored);
+		return restored;
+	}
+
+	/** Remove all in-memory Sabha state. Intended for controlled resets and tests. */
+	clear(): void {
+		this.sabhas.clear();
+	}
+
+	/** Remove one Sabha snapshot from in-memory runtime state. Persisted state remains untouched. */
+	dropSabha(id: string): void {
+		this.sabhas.delete(id);
+	}
 
 	/** List all active Sabhas. */
 	listActive(): Sabha[] {
@@ -403,39 +406,9 @@ export class SabhaEngine {
 
 	/** Generate a human-readable deliberation summary. */
 	explain(sabhaId: string): string {
-		return explainSabha(this.requireSabha(sabhaId));
+			return explainSabha(requireSabha(this.sabhas, sabhaId));
 	}
 
 	// ─── Private: Helpers ─────────────────────────────────────────────
 
-	/**
-	 * Get a Sabha or throw if not found.
-	 */
-	private requireSabha(sabhaId: string): Sabha {
-		const sabha = this.sabhas.get(sabhaId);
-		if (!sabha) {
-			throw new Error(`Sabha '${sabhaId}' not found.`);
-		}
-		return sabha;
-	}
-
-	/**
-	 * Verify a participant exists in the Sabha, or throw.
-	 */
-	private requireParticipant(sabha: Sabha, participantId: string): SabhaParticipant {
-		const participant = sabha.participants.find((p) => p.id === participantId);
-		if (!participant) {
-			throw new Error(
-				`Participant '${participantId}' is not a member of Sabha '${sabha.id}'.`,
-			);
-		}
-		return participant;
-	}
-
-	/**
-	 * Get the current (most recent) round, or undefined if no rounds yet.
-	 */
-	private currentRound(sabha: Sabha): SabhaRound | undefined {
-		return sabha.rounds.length > 0 ? sabha.rounds[sabha.rounds.length - 1] : undefined;
-	}
 }

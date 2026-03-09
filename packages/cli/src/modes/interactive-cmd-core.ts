@@ -58,7 +58,7 @@ const HELP_ENTRIES: ReadonlyArray<[string, string]> = [
 	["/kartavya", "Kartavya auto-execution pipeline"],
 	["/kala", "Kala Chakra temporal awareness"],
 	["/atman", "Complete agent soul report"],
-	["/workflow [sub]", "Vayu DAG workflows (list/show/run/history)"],
+	["/workflow [sub]", "Prana workflows (list/show/run/history)"],
 	["/quit", "Exit Chitragupta"],
 	["/help", "Show this help"],
 ];

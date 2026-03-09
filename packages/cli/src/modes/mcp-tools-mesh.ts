@@ -8,7 +8,17 @@
  * @module
  */
 import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
-import { getActorSystem } from "./mcp-subsystems.js";
+import { formatMeshPeersSnapshot } from "../mesh-observability.js";
+import {
+	askMeshWithFallback,
+	findMeshCapabilityWithFallback,
+	getMeshGossipWithFallback,
+	getMeshPeersWithFallback,
+	getMeshStatusWithFallback,
+	getMeshTopologyWithFallback,
+	sendMeshMessageWithFallback,
+	spawnMeshActorWithFallback,
+} from "./mcp-tools-mesh-runtime.js";
 
 /** Create the `mesh_status` tool — get mesh system status. */
 export function createMeshStatusTool(): McpToolHandler {
@@ -22,24 +32,7 @@ export function createMeshStatusTool(): McpToolHandler {
 		},
 		async execute(): Promise<McpToolResult> {
 			try {
-				const sys = await getActorSystem();
-				const connMgr = sys.getConnectionManager();
-				const gossip = sys.getGossipProtocol();
-				const netGossip = sys.getNetworkGossip();
-				const capRouter = sys.getCapabilityRouter();
-
-				const status = {
-					running: sys.isRunning,
-					actorCount: sys.actorCount,
-					p2pBootstrapped: connMgr !== null,
-					nodeId: connMgr?.nodeId ?? null,
-					connectedPeers: connMgr?.connectedCount ?? 0,
-					totalPeers: connMgr?.peerCount ?? 0,
-					actorLocations: netGossip?.locationCount ?? 0,
-					gossipPeers: gossip?.findAlive().length ?? 0,
-					capabilityRouterActive: capRouter !== null,
-				};
-
+				const status = await getMeshStatusWithFallback();
 				return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
 			} catch (err) {
 				return {
@@ -91,13 +84,7 @@ export function createMeshSpawnTool(): McpToolHandler {
 				: undefined;
 
 			try {
-				const sys = await getActorSystem();
-				// Spawn with a CapableActorBehavior if capabilities are provided
-				const behavior = capabilities
-					? { capabilities, expertise, handle: () => { /* echo handler */ } }
-					: () => { /* default handler */ };
-
-				sys.spawn(actorId, behavior, { capabilities, expertise });
+				await spawnMeshActorWithFallback({ actorId, capabilities, expertise });
 
 				return {
 					content: [{ type: "text", text:
@@ -145,9 +132,12 @@ export function createMeshSendTool(): McpToolHandler {
 			}
 
 			try {
-				const sys = await getActorSystem();
-				const opts = args.priority != null ? { priority: Number(args.priority) } : undefined;
-				sys.tell(from, to, args.payload, opts);
+				await sendMeshMessageWithFallback({
+					from,
+					to,
+					payload: args.payload,
+					priority: args.priority != null ? Number(args.priority) : undefined,
+				});
 				return { content: [{ type: "text", text: `Message sent from "${from}" to "${to}".` }] };
 			} catch (err) {
 				return {
@@ -188,9 +178,12 @@ export function createMeshAskTool(): McpToolHandler {
 			}
 
 			try {
-				const sys = await getActorSystem();
-				const opts = args.timeout != null ? { timeout: Number(args.timeout) } : undefined;
-				const reply = await sys.ask(from, to, args.payload, opts);
+				const reply = await askMeshWithFallback({
+					from,
+					to,
+					payload: args.payload,
+					timeout: args.timeout != null ? Number(args.timeout) : undefined,
+				});
 				return { content: [{ type: "text", text: JSON.stringify(reply, null, 2) }] };
 			} catch (err) {
 				return {
@@ -237,37 +230,36 @@ export function createMeshFindCapabilityTool(): McpToolHandler {
 			}
 
 			try {
-				const sys = await getActorSystem();
-				const capRouter = sys.getCapabilityRouter();
 				const formatPeer = (p: { actorId: string; status: string; capabilities?: string[]; originNodeId?: string }) =>
 					`- ${p.actorId} (${p.status}) caps=[${(p.capabilities ?? []).join(",")}] node=${p.originNodeId ?? "local"}`;
-
-				// Fallback to gossip if no capability router
-				if (!capRouter) {
-					const gossip = sys.getGossipProtocol();
-					if (!gossip) return { content: [{ type: "text", text: "No capability router or gossip available." }] };
-					const peers = gossip.findByCapability(capabilities[0])
-						.filter((p) => capabilities.every((c) => p.capabilities?.includes(c)));
+				const strategy = String(args.strategy ?? "best");
+				const result = await findMeshCapabilityWithFallback({
+					capabilities,
+					strategy,
+					listAll: args.listAll === true,
+				});
+				const peers = (result.peers ?? []) as Array<{
+					actorId: string;
+					status: string;
+					capabilities?: string[];
+					originNodeId?: string;
+				}>;
+				if (args.listAll) {
 					return { content: [{ type: "text", text: peers.length
 						? `Matching peers (${peers.length}):\n${peers.map(formatPeer).join("\n")}`
-						: `No peers with capabilities: [${capabilities.join(", ")}]`,
-					}] };
-				}
-
-				if (args.listAll) {
-					const all = capRouter.findMatchingAll(capabilities);
-					return { content: [{ type: "text", text: all.length
-						? `Matching peers (${all.length}):\n${all.map(formatPeer).join("\n")}`
 						: `No peers with all capabilities: [${capabilities.join(", ")}]`,
 					}] };
 				}
-
-				const strategy = String(args.strategy ?? "best");
-				const best = capRouter.resolve({ capabilities, strategy });
+				const best = result.selected as {
+					actorId: string;
+					status: string;
+					capabilities?: string[];
+					originNodeId?: string;
+				} | null;
 				if (!best) return { content: [{ type: "text", text: `No peer for: [${capabilities.join(", ")}]` }] };
 				return { content: [{ type: "text", text:
 					`Best: ${best.actorId} (${best.status}) caps=[${(best.capabilities ?? []).join(",")}] ` +
-					`node=${best.originNodeId ?? "local"} strategy=${strategy}`,
+					`node=${best.originNodeId ?? "local"} strategy=${result.strategy ?? strategy}`,
 				}] };
 			} catch (err) {
 				return {
@@ -298,29 +290,9 @@ export function createMeshPeersTool(): McpToolHandler {
 		},
 		async execute(args: Record<string, unknown>): Promise<McpToolResult> {
 			try {
-				const sys = await getActorSystem();
-				const gossip = sys.getGossipProtocol();
-				const connMgr = sys.getConnectionManager();
 				const statusFilter = String(args.status ?? "all");
-
-				const sections: string[] = [];
-
-				if (gossip) {
-					let peers = gossip.getView();
-					if (statusFilter !== "all") peers = peers.filter((p) => p.status === statusFilter);
-					const lines = peers.map((p) =>
-						`  ${p.actorId} | ${p.status} | gen=${p.generation} | caps=[${(p.capabilities ?? []).join(",")}] | node=${p.originNodeId ?? "local"}`);
-					sections.push(peers.length ? `Gossip Peers (${peers.length}):\n${lines.join("\n")}` : "Gossip Peers: none");
-				}
-				if (connMgr) {
-					const conns = connMgr.getPeers();
-					const lines = conns.map((c) => `  ${c.peerId} | ${c.state} | ${c.outbound ? "out" : "in"} | ${c.endpoint}`);
-					sections.push(conns.length ? `P2P Connections (${conns.length}):\n${lines.join("\n")}` : "P2P Connections: none");
-				} else {
-					sections.push("P2P: not bootstrapped");
-				}
-
-				return { content: [{ type: "text", text: sections.join("\n\n") }] };
+				const status = await getMeshPeersWithFallback();
+				return { content: [{ type: "text", text: formatMeshPeersSnapshot(status, statusFilter) }] };
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: `mesh_peers failed: ${err instanceof Error ? err.message : String(err)}` }],
@@ -345,33 +317,7 @@ export function createMeshGossipTool(): McpToolHandler {
 		},
 		async execute(): Promise<McpToolResult> {
 			try {
-				const sys = await getActorSystem();
-				const gossip = sys.getGossipProtocol();
-				if (!gossip) {
-					return { content: [{ type: "text", text: "Gossip protocol not initialized." }] };
-				}
-
-				const view = gossip.getView();
-				const alive = view.filter((p) => p.status === "alive");
-				const suspect = view.filter((p) => p.status === "suspect");
-				const dead = view.filter((p) => p.status === "dead");
-
-				const summary = {
-					total: view.length,
-					alive: alive.length,
-					suspect: suspect.length,
-					dead: dead.length,
-					peers: view.map((p) => ({
-						actorId: p.actorId,
-						status: p.status,
-						generation: p.generation,
-						capabilities: p.capabilities ?? [],
-						expertise: p.expertise ?? [],
-						originNodeId: p.originNodeId ?? null,
-						lastSeen: new Date(p.lastSeen).toISOString(),
-					})),
-				};
-
+				const summary = await getMeshGossipWithFallback();
 				return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
 			} catch (err) {
 				return {
@@ -397,46 +343,7 @@ export function createMeshTopologyTool(): McpToolHandler {
 		},
 		async execute(): Promise<McpToolResult> {
 			try {
-				const sys = await getActorSystem();
-				const gossip = sys.getGossipProtocol();
-				const connMgr = sys.getConnectionManager();
-				const netGossip = sys.getNetworkGossip();
-
-				// Build capability map from gossip
-				const capMap = new Map<string, string[]>();
-				if (gossip) {
-					for (const peer of gossip.findAlive()) {
-						for (const cap of peer.capabilities ?? []) {
-							const actors = capMap.get(cap) ?? [];
-							actors.push(peer.actorId);
-							capMap.set(cap, actors);
-						}
-					}
-				}
-
-				// Actor locations from network gossip
-				const locations: Record<string, string> = {};
-				if (netGossip) {
-					for (const [actorId, nodeId] of netGossip.getLocations()) {
-						locations[actorId] = nodeId;
-					}
-				}
-
-				const topology = {
-					localNode: connMgr?.nodeId ?? "local-only",
-					actorCount: sys.actorCount,
-					p2pBootstrapped: connMgr !== null,
-					connections: connMgr?.getPeers().map((c) => ({
-						peerId: c.peerId, state: c.state, direction: c.outbound ? "outbound" : "inbound",
-					})) ?? [],
-					actorLocations: locations,
-					capabilityIndex: Object.fromEntries(capMap),
-					gossipStats: gossip ? {
-						alive: gossip.findAlive().length,
-						total: gossip.getView().length,
-					} : null,
-				};
-
+				const topology = await getMeshTopologyWithFallback();
 				return { content: [{ type: "text", text: JSON.stringify(topology, null, 2) }] };
 			} catch (err) {
 				return {

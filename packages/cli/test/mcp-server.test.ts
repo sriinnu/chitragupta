@@ -1,5 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const mockCreateDaemonServerAuth = vi.fn().mockReturnValue({
+	required: true,
+	requestRateLimit: {
+		maxRequests: 25,
+		windowMs: 60_000,
+		exemptMethods: ["initialize"],
+	},
+	validateToken: vi.fn((token: string) => token === "chg_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		? {
+			authenticated: true,
+			keyId: "key-local",
+			tenantId: "tenant-local",
+			scopes: ["read", "tools"],
+		}
+		: { authenticated: false, error: "bad token" }),
+});
+
 // Mock smriti modules to avoid file system access
 vi.mock("@chitragupta/smriti/search", () => ({
 	searchMemory: vi.fn().mockReturnValue([
@@ -97,6 +114,10 @@ vi.mock("@chitragupta/core", async () => {
 	};
 });
 
+vi.mock("@chitragupta/daemon", () => ({
+	createDaemonServerAuth: mockCreateDaemonServerAuth,
+}));
+
 describe("MCP Server Mode", () => {
 	describe("Tool creation", () => {
 		it("should create memory search tool that returns results", async () => {
@@ -114,6 +135,57 @@ describe("MCP Server Mode", () => {
 			const mod = await import("../src/modes/mcp-server.js");
 			// Verify the function accepts options
 			expect(mod.runMcpServerMode.length).toBeLessThanOrEqual(1);
+		});
+	});
+
+	describe("SSE auth wiring", () => {
+		it("should derive SSE auth config from daemon bridge auth", async () => {
+			const mod = await import("../src/modes/mcp-server.js");
+			const auth = mod.createMcpSseAuthConfig();
+			const ok = auth.validateToken("chg_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+			const bad = auth.validateToken("chg_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+
+			expect(mockCreateDaemonServerAuth).toHaveBeenCalled();
+			expect(auth.required).toBe(true);
+			expect(auth.rateLimit).toEqual({
+				maxRequests: 25,
+				windowMs: 60_000,
+				exemptMethods: ["initialize"],
+			});
+			expect(ok).toEqual({
+				authenticated: true,
+				keyId: "key-local",
+				tenantId: "tenant-local",
+				scopes: ["read", "tools"],
+				error: undefined,
+			});
+			expect(bad).toEqual({
+				authenticated: false,
+				keyId: undefined,
+				tenantId: undefined,
+				scopes: undefined,
+				error: "bad token",
+			});
+		});
+
+		it("should require tools scope for tools/call and read scope for discovery methods", async () => {
+			const mod = await import("../src/modes/mcp-server.js");
+			const auth = mod.createMcpSseAuthConfig();
+
+			expect(auth.authorizeMethod?.("tools/call", { scopes: ["read"] })).toEqual({
+				allowed: false,
+				requiredScope: "tools",
+			});
+			expect(auth.authorizeMethod?.("tools/call", { scopes: ["tools"] })).toEqual({
+				allowed: true,
+			});
+			expect(auth.authorizeMethod?.("prompts/get", { scopes: [] })).toEqual({
+				allowed: false,
+				requiredScope: "read",
+			});
+			expect(auth.authorizeMethod?.("prompts/get", { scopes: ["read"] })).toEqual({
+				allowed: true,
+			});
 		});
 	});
 

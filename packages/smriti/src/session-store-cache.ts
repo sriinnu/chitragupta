@@ -57,6 +57,28 @@ function cacheKey(id: string, project: string): string {
 	return `${id}:${project}`;
 }
 
+/**
+ * Clone a cached session before storing or returning it.
+ * Prevents in-memory caller mutations from leaking into the L1 cache.
+ */
+function cloneSession(session: Session): Session {
+	if (typeof structuredClone === "function") {
+		return structuredClone(session);
+	}
+
+	return {
+		meta: {
+			...session.meta,
+			tags: [...session.meta.tags],
+			metadata: session.meta.metadata ? { ...session.meta.metadata } : undefined,
+		},
+		turns: session.turns.map((turn) => ({
+			...turn,
+			toolCalls: turn.toolCalls?.map((toolCall) => ({ ...toolCall })),
+		})),
+	};
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /**
@@ -77,7 +99,7 @@ export function cacheGet(id: string, project: string): Session | undefined {
 	sessionCacheSizes.delete(key);
 	sessionCache.set(key, entry);
 	sessionCacheSizes.set(key, size);
-	return entry;
+	return cloneSession(entry);
 }
 
 /**
@@ -96,7 +118,8 @@ export function cachePut(id: string, project: string, session: Session): void {
 	sessionCacheSizes.delete(key);
 	sessionCacheBytes -= existingSize;
 
-	const newSize = estimateSessionBytes(session);
+	const cachedSession = cloneSession(session);
+	const newSize = estimateSessionBytes(cachedSession);
 
 	// Evict oldest entries while over count or byte budget
 	while (
@@ -111,7 +134,7 @@ export function cachePut(id: string, project: string, session: Session): void {
 		sessionCacheBytes -= evictedSize;
 	}
 
-	sessionCache.set(key, session);
+	sessionCache.set(key, cachedSession);
 	sessionCacheSizes.set(key, newSize);
 	sessionCacheBytes += newSize;
 }

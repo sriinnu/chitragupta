@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+echo "[release-verify] core engine readiness checks"
+pnpm run verify:engine --no-build-check
+
 echo "[release-verify] marga benchmark assertions"
 pnpm benchmark:marga -- \
 	--runs "${MARGA_RUNS:-80}" \

@@ -104,7 +104,61 @@ export interface McpPromptArgument {
 
 // ─── Transport ──────────────────────────────────────────────────────────────
 
-export type McpTransport = "stdio" | "sse";
+/**
+ * Supported MCP transports.
+ *
+ * `sse` is the legacy two-endpoint HTTP+SSE transport.
+ * `streamable-http` is the newer single-endpoint MCP transport.
+ */
+export type McpTransport = "stdio" | "sse" | "streamable-http";
+
+export interface McpAuthContext {
+	keyId?: string;
+	tenantId?: string;
+	scopes: string[];
+}
+
+export interface McpAuthResult {
+	authenticated: boolean;
+	keyId?: string;
+	tenantId?: string;
+	scopes?: string[];
+	error?: string;
+}
+
+export interface McpMethodAuthorization {
+	allowed: boolean;
+	requiredScope?: string;
+	error?: string;
+}
+
+export interface McpRateLimitConfig {
+	maxRequests: number;
+	windowMs: number;
+	exemptMethods?: string[];
+}
+
+/** Client-side bearer token config for SSE/HTTP MCP transports. */
+export interface McpClientAuthConfig {
+	token: string;
+	headerName?: string;
+	queryParam?: string;
+}
+
+/** Backward-compatible alias for older registry/client transport auth references. */
+export type McpTransportAuthConfig = McpClientAuthConfig;
+
+/** Server-side bridge auth + scope policy for SSE/HTTP MCP transports. */
+export interface McpServerAuthConfig {
+	required?: boolean;
+	headerName?: string;
+	bearerPrefix?: string;
+	queryParam?: string;
+	allowQueryToken?: boolean;
+	validateToken(token: string): McpAuthResult;
+	authorizeMethod?: (method: string, context: McpAuthContext) => McpMethodAuthorization;
+	rateLimit?: McpRateLimitConfig;
+}
 
 // ─── MCP Server Config ─────────────────────────────────────────────────────
 
@@ -112,8 +166,23 @@ export interface McpServerConfig {
 	name: string;
 	version: string;
 	transport: McpTransport;
-	/** Port for the SSE transport. Defaults to 3001. */
+	/** Port for the legacy HTTP+SSE transport. Defaults to 3001. */
 	ssePort?: number;
+	/** Host/interface for the legacy HTTP+SSE transport. Defaults to `127.0.0.1`. */
+	sseHost?: string;
+	/**
+	 * Explicit allow-list for browser `Origin` headers on the legacy HTTP+SSE transport.
+	 * Defaults to loopback origins only.
+	 */
+	sseAllowedOrigins?: string[];
+	/** Port for the streamable HTTP transport. Defaults to 3001. */
+	streamableHttpPort?: number;
+	/** Host/interface for the streamable HTTP transport. Defaults to `127.0.0.1`. */
+	streamableHttpHost?: string;
+	/** Explicit allow-list for browser `Origin` headers on the streamable HTTP transport. */
+	streamableHttpAllowedOrigins?: string[];
+	/** Optional transport auth for SSE/HTTP exposure. Ignored for stdio. */
+	auth?: McpServerAuthConfig;
 	tools?: McpToolHandler[];
 	resources?: McpResourceHandler[];
 	prompts?: McpPromptHandler[];
@@ -154,6 +223,8 @@ export interface McpClientConfig {
 	serverUrl?: string;
 	transport: McpTransport;
 	timeout?: number;
+	/** Optional transport auth for SSE/HTTP connections. Ignored for stdio. */
+	auth?: McpClientAuthConfig;
 }
 
 // ─── Connection State ───────────────────────────────────────────────────────

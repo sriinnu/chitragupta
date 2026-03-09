@@ -3,7 +3,7 @@
  *
  * Handles: /kala, /workflow.
  * These commands display temporal awareness (Kala Chakra multi-scale
- * relevance decay) and Vayu DAG workflow management.
+ * relevance decay) and Prana workflow management.
  *
  * @module
  */
@@ -91,11 +91,11 @@ export async function handleSystemCommand(
 
 			try {
 				if (!subCmd || subCmd === "list") {
-					const { listChitraguptaWorkflows, listWorkflows: listSavedWorkflows } = await import("@chitragupta/vayu");
+					const { listChitraguptaWorkflows, listWorkflows: listSavedWorkflows } = await import("@chitragupta/prana");
 					const builtIn = listChitraguptaWorkflows();
 					const saved = listSavedWorkflows();
 
-					stdout.write("\n" + bold("\u0935\u093E\u092F\u0941 Vayu") + dim(" \u2014 DAG Workflows") + "\n\n");
+					stdout.write("\n" + bold("\u092A\u094D\u0930\u093E\u0923 Prana") + dim(" \u2014 Workflow Graphs") + "\n\n");
 					if (builtIn.length > 0) {
 						stdout.write("  " + bold("Built-in Workflows:") + "\n");
 						for (const wf of builtIn) {
@@ -123,7 +123,7 @@ export async function handleSystemCommand(
 						stdout.write(yellow("\n  Usage: /workflow show <name>\n\n"));
 						return { handled: true };
 					}
-					const { getChitraguptaWorkflow, loadWorkflow, renderDAG } = await import("@chitragupta/vayu");
+					const { getChitraguptaWorkflow, loadWorkflow, renderDAG } = await import("@chitragupta/prana");
 					const workflow = getChitraguptaWorkflow(name) ?? loadWorkflow(name);
 					if (!workflow) {
 						stdout.write(red(`\n  Workflow not found: ${name}\n\n`));
@@ -141,7 +141,7 @@ export async function handleSystemCommand(
 					}
 					const {
 						getChitraguptaWorkflow, loadWorkflow, WorkflowExecutor, renderDAG, saveExecution,
-					} = await import("@chitragupta/vayu");
+					} = await import("@chitragupta/prana");
 					const workflow = getChitraguptaWorkflow(name) ?? loadWorkflow(name);
 					if (!workflow) {
 						stdout.write(red(`\n  Workflow not found: ${name}\n\n`));
@@ -171,7 +171,7 @@ export async function handleSystemCommand(
 					stdout.write("\n");
 
 				} else if (subCmd === "history") {
-					const { listChitraguptaWorkflows, listWorkflows: listSavedWorkflows, listExecutions } = await import("@chitragupta/vayu");
+					const { listChitraguptaWorkflows, listWorkflows: listSavedWorkflows, listExecutions } = await import("@chitragupta/prana");
 					const builtInIds = listChitraguptaWorkflows().map((w) => w.id);
 					const savedIds = listSavedWorkflows().map((w) => w.id);
 					const allIds = new Set([...builtInIds, ...savedIds]);
@@ -218,7 +218,7 @@ export async function handleSystemCommand(
 
 				} else {
 					const name = subCmd;
-					const { getChitraguptaWorkflow, loadWorkflow, renderDAG } = await import("@chitragupta/vayu");
+					const { getChitraguptaWorkflow, loadWorkflow, renderDAG } = await import("@chitragupta/prana");
 					const workflow = getChitraguptaWorkflow(name) ?? loadWorkflow(name);
 					if (workflow) {
 						stdout.write("\n");

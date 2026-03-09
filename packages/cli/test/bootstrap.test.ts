@@ -24,6 +24,11 @@ vi.mock("@chitragupta/core", async (importOriginal) => {
 
 vi.mock("@chitragupta/swara/providers", () => ({
 	registerBuiltinProviders: vi.fn(),
+	createLlamaCpp: vi.fn((config: any) => ({
+		id: "llama.cpp",
+		name: "llama.cpp",
+		baseUrl: config.baseUrl,
+	})),
 	createOpenAICompatProvider: vi.fn((config: any) => ({
 		id: config.id,
 		name: config.name,

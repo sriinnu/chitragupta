@@ -276,7 +276,7 @@ describe("createCodingAgentTool", () => {
 		const tool = createCodingAgentTool("/tmp/project");
 
 		expect(tool.definition.name).toBe("coding_agent");
-		expect(tool.definition.description).toContain("coding CLI");
+		expect(tool.definition.description).toContain("coding");
 		expect(tool.definition.inputSchema.required).toContain("task");
 	});
 
@@ -311,6 +311,512 @@ describe("createCodingAgentTool", () => {
 		);
 	});
 });
+
+describe("owned fix regressions", () => {
+	afterEach(() => {
+		vi.resetModules();
+		vi.doUnmock("../src/bootstrap.js");
+		vi.doUnmock("../src/main-serve-helpers.js");
+		vi.doUnmock("../src/mesh-bootstrap.js");
+		vi.doUnmock("../src/modes/coding-router.js");
+		vi.doUnmock("../src/modes/lucy-bridge.js");
+		vi.doUnmock("../src/modes/mcp-subsystems.js");
+		vi.doUnmock("@chitragupta/anina");
+	});
+
+	it("records skill gaps through the Akasha leave API", async () => {
+		const { wireSkillGapRecorder } = await import("../src/nervous-system-wiring.js");
+		const leave = vi.fn();
+		const recordGap = vi.fn();
+
+		const record = wireSkillGapRecorder({ leave }, { recordGap });
+		record("missing-tool");
+
+		expect(leave).toHaveBeenCalledWith(
+			"skill-gap-recorder",
+			"warning",
+			"skill-gap",
+			"Tool not found or failed: missing-tool",
+			{ toolName: "missing-tool" },
+		);
+		expect(recordGap).toHaveBeenCalledWith("missing-tool");
+	});
+
+	it("records Buddhi decisions from the actual tool:done payload shape", async () => {
+		const { wireBuddhiRecorder } = await import("../src/nervous-system-wiring.js");
+		const recordDecision = vi.fn();
+		const handler = wireBuddhiRecorder(
+			{ recordDecision },
+			{ kind: "db" },
+			"/tmp/project",
+			() => "serve-session-123",
+		);
+
+		handler?.("tool:done", {
+			name: "coding_agent",
+			id: "tool-1",
+			result: { isError: false },
+		});
+
+		expect(recordDecision).toHaveBeenCalledWith(
+			expect.objectContaining({
+				sessionId: "serve-session-123",
+				category: "tool-selection",
+				description: "Used coding_agent",
+				confidence: 0.8,
+			}),
+			{ kind: "db" },
+		);
+	});
+
+	it("touches Nidra and re-registers the same logical serve session on every prompt", async () => {
+		vi.resetModules();
+		vi.doMock("@chitragupta/anina", () => ({
+			Agent: class {
+				private config: Record<string, unknown>;
+				private provider: unknown;
+				private messages: unknown[] = [];
+				constructor(config: Record<string, unknown> = {}) {
+					this.config = config;
+				}
+				getConfig() {
+					return this.config;
+				}
+				getProvider() {
+					return this.provider ?? { id: "provider" };
+				}
+				setProvider(provider: unknown) {
+					this.provider = provider;
+				}
+				setOnEvent() {}
+				abort() {}
+				clearMessages() {
+					this.messages = [];
+				}
+				pushMessage(message: unknown) {
+					this.messages.push(message);
+				}
+				getModel() {
+					return "test-model";
+				}
+				async prompt(message: unknown) {
+					return {
+						content: [{ type: "text", text: "ok" }],
+					};
+				}
+			},
+			MemoryBridge: class {
+				constructor(public config: Record<string, unknown>) {
+					this.config = config;
+				}
+				async loadMemoryContext() {
+					return "";
+				}
+			},
+		}));
+		vi.doMock("../src/bootstrap.js", () => ({
+			resolvePreferredProvider: vi.fn(),
+		}));
+		vi.doMock("../src/main-serve-helpers.js", () => ({
+			createServerAgent: vi.fn(),
+			provisionTlsCerts: vi.fn(),
+			wireServePhaseModules: vi.fn(),
+		}));
+		vi.doMock("../src/mesh-bootstrap.js", () => ({
+			bootstrapMeshNetwork: vi.fn(),
+			buildMeshApiHandlers: vi.fn().mockReturnValue({}),
+			resolveMeshConfig: vi.fn(),
+		}));
+		vi.doMock("../src/nervous-system-wiring.js", async () => {
+			const actual = await vi.importActual("../src/nervous-system-wiring.js");
+			return {
+				...actual,
+				applyLucyLiveGuidance: vi.fn(async (message: string) => message),
+				createServeSessionScope: vi.fn(() => ({
+					runWithSession: (_sessionId: string, fn: () => Promise<unknown>) => fn(),
+					getSessionId: () => null,
+				})),
+			};
+		});
+		vi.doMock("../src/modes/daemon-bridge.js", () => ({
+			openSession: vi.fn().mockResolvedValue({
+				created: true,
+				session: { meta: { id: "serve-session-1" }, turns: [] },
+			}),
+			showSession: vi.fn().mockResolvedValue({
+				meta: { id: "serve-session-1" },
+				turns: [],
+			}),
+			addTurn: vi.fn().mockResolvedValue(undefined),
+		}));
+
+		const { buildServerHandlers } = await import("../src/main-serve-mode.js");
+		const touch = vi.fn();
+		const notifySession = vi.fn();
+		const prompt = vi.fn().mockResolvedValue({
+			content: [{ type: "text", text: "ok" }],
+		});
+
+		const handlers = buildServerHandlers({
+			serverAgent: {
+				prompt,
+				getConfig: () => ({ profile: { id: "chitragupta" }, systemPrompt: "base prompt" }),
+				getProvider: () => ({ id: "provider" }),
+				getModel: () => "test-model",
+			},
+			serverSession: null,
+			serveSessionScope: {
+				runWithSession: (_sessionId: string, fn: () => Promise<unknown>) => fn(),
+				getSessionId: () => null,
+			},
+			registry: { getAll: () => [] } as { getAll(): Array<{ id: string; name: string }> },
+			projectPath: "/tmp/project",
+			modules: {
+				vasanaEngine: undefined,
+				vidhiEngine: undefined,
+				servNidraDaemon: { touch, notifySession },
+				servTriguna: undefined,
+				servRtaEngine: undefined,
+				servBuddhi: undefined,
+				servDatabase: undefined,
+				servSamiti: undefined,
+				servSabhaEngine: undefined,
+				servLokapala: undefined,
+				servAkasha: undefined,
+				servKartavyaEngine: undefined,
+				servKalaChakra: undefined,
+				servVidyaOrchestrator: undefined,
+			},
+			pairingEngine: {
+				generateChallenge: vi.fn(),
+				getTerminalDisplay: vi.fn().mockReturnValue(""),
+			},
+			budgetTracker: {},
+			meshActorSystem: undefined,
+			getMeshBootstrapResult: () => undefined,
+		});
+
+		expect(await handlers.prompt?.("first")).toBe("ok");
+		expect(await handlers.prompt?.("second")).toBe("ok");
+		expect(touch).toHaveBeenCalledTimes(2);
+		expect(notifySession).toHaveBeenCalledTimes(2);
+		expect(notifySession.mock.calls[0][0]).toMatch(/^serve-chat:/);
+		expect(notifySession.mock.calls[1][0]).toBe(notifySession.mock.calls[0][0]);
+	});
+
+	it("prefers the live agent triguna over the stale serve placeholder", async () => {
+		vi.resetModules();
+		vi.doMock("@chitragupta/anina", () => ({
+			Agent: class {
+				private messages: unknown[] = [];
+				constructor(private config: Record<string, unknown> = {}) {}
+				getConfig() {
+					return this.config;
+				}
+				getProvider() {
+					return { id: "provider" };
+				}
+				setProvider() {}
+				setOnEvent() {}
+				abort() {}
+				clearMessages() {
+					this.messages = [];
+				}
+				pushMessage(message: unknown) {
+					this.messages.push(message);
+				}
+				getModel() {
+					return "test-model";
+				}
+				async prompt(message: unknown) {
+					return {
+						content: [{ type: "text", text: "ok" }],
+					};
+				}
+			},
+			MemoryBridge: class {
+				constructor(public config: Record<string, unknown>) {
+					this.config = config;
+				}
+				async loadMemoryContext() {
+					return "";
+				}
+			},
+		}));
+		vi.doMock("../src/bootstrap.js", () => ({
+			resolvePreferredProvider: vi.fn(),
+		}));
+		vi.doMock("../src/main-serve-helpers.js", () => ({
+			createServerAgent: vi.fn(),
+			provisionTlsCerts: vi.fn(),
+			wireServePhaseModules: vi.fn(),
+		}));
+		vi.doMock("../src/mesh-bootstrap.js", () => ({
+			bootstrapMeshNetwork: vi.fn(),
+			buildMeshApiHandlers: vi.fn().mockReturnValue({}),
+			resolveMeshConfig: vi.fn(),
+		}));
+		vi.doMock("../src/nervous-system-wiring.js", async () => {
+			const actual = await vi.importActual("../src/nervous-system-wiring.js");
+			return {
+				...actual,
+				applyLucyLiveGuidance: vi.fn(async (message: string) => message),
+				createServeSessionScope: vi.fn(() => ({
+					runWithSession: (_sessionId: string, fn: () => Promise<unknown>) => fn(),
+					getSessionId: () => null,
+				})),
+			};
+		});
+		vi.doMock("../src/modes/daemon-bridge.js", () => ({
+			openSession: vi.fn(),
+			showSession: vi.fn(),
+			addTurn: vi.fn(),
+		}));
+
+		const liveTriguna = { getState: vi.fn().mockReturnValue({ sattva: 0.7, rajas: 0.2, tamas: 0.1 }) };
+		const staleTriguna = { getState: vi.fn().mockReturnValue({ sattva: 0.1, rajas: 0.2, tamas: 0.7 }) };
+		const { buildServerHandlers } = await import("../src/main-serve-mode.js");
+		const handlers = buildServerHandlers({
+			serverAgent: {
+				getChetana: () => ({ getTriguna: () => liveTriguna }),
+			},
+			serverSession: null,
+			serveSessionScope: {
+				runWithSession: (_sessionId: string, fn: () => Promise<unknown>) => fn(),
+				getSessionId: () => null,
+			},
+			registry: { getAll: () => [] } as { getAll(): Array<{ id: string; name: string }> },
+			projectPath: "/tmp/project",
+			modules: {
+				vasanaEngine: undefined,
+				vidhiEngine: undefined,
+				servNidraDaemon: undefined,
+				servTriguna: staleTriguna,
+				servRtaEngine: undefined,
+				servBuddhi: undefined,
+				servDatabase: undefined,
+				servSamiti: undefined,
+				servSabhaEngine: undefined,
+				servLokapala: undefined,
+				servAkasha: undefined,
+				servKartavyaEngine: undefined,
+				servKalaChakra: undefined,
+				servVidyaOrchestrator: undefined,
+			},
+			pairingEngine: {
+				generateChallenge: vi.fn(),
+				getTerminalDisplay: vi.fn().mockReturnValue(""),
+			},
+			budgetTracker: {},
+			meshActorSystem: undefined,
+			getMeshBootstrapResult: () => undefined,
+		});
+
+		expect(handlers.getTriguna?.()).toBe(liveTriguna);
+	});
+
+	it("does not execute Lucy or CLI routing in plan-only mode", async () => {
+		vi.resetModules();
+		const routeCodingTaskSpy = vi.fn();
+		const detectCodingClisSpy = vi.fn().mockResolvedValue([{ name: "codex" }]);
+		const executeLucySpy = vi.fn();
+
+		vi.doMock("../src/modes/coding-router.js", () => ({
+			routeCodingTask: routeCodingTaskSpy,
+			detectCodingClis: detectCodingClisSpy,
+		}));
+		vi.doMock("../src/modes/lucy-bridge.js", () => ({
+			executeLucy: executeLucySpy,
+		}));
+		vi.doMock("../src/modes/mcp-subsystems.js", () => ({
+			getAkasha: vi.fn().mockResolvedValue({
+				query: vi.fn().mockReturnValue([]),
+				leave: vi.fn(),
+			}),
+			getTranscendence: vi.fn().mockResolvedValue({
+				fuzzyLookup: vi.fn().mockReturnValue(null),
+			}),
+			persistAkasha: vi.fn(),
+		}));
+
+		const { createCodingAgentTool } = await import("../src/modes/mcp-tools-coding.js");
+		const tool = createCodingAgentTool("/tmp/project");
+		const result = await tool.execute({ task: "fix login bug", mode: "plan-only" });
+
+		expect(executeLucySpy).not.toHaveBeenCalled();
+		expect(routeCodingTaskSpy).not.toHaveBeenCalled();
+		expect(result.isError).toBe(false);
+		expect(result.content[0]).toEqual(
+			expect.objectContaining({
+				type: "text",
+				text: expect.stringContaining("Plan-only mode: no commands were executed."),
+			}),
+		);
+		expect(result._metadata).toEqual(
+			expect.objectContaining({
+				mode: "plan-only",
+				executed: false,
+			}),
+		);
+	});
+
+	it("uses the real Akasha query and leave signatures in Lucy callbacks", async () => {
+		vi.resetModules();
+		const query = vi.fn().mockReturnValue([{ content: "Prefer narrow fixes" }]);
+		const leave = vi.fn();
+		const persistAkasha = vi.fn().mockResolvedValue(undefined);
+		const executeLucySpy = vi.fn(async (_task: string, config: {
+			queryAkasha?: (task: string) => Promise<string[]>;
+			depositAkasha?: (trace: { type: "solution" | "warning"; topics: string[]; content: string }) => Promise<void>;
+		}) => {
+			await expect(config.queryAkasha?.("login bug")).resolves.toEqual(["Prefer narrow fixes"]);
+			await config.depositAkasha?.({
+				type: "solution",
+				topics: ["auth"],
+				content: "Keep auth changes localized",
+			});
+			return {
+				success: true,
+				output: "planned",
+				filesModified: [],
+				autoFixAttempts: 0,
+				durationMs: 12,
+				cli: "mock",
+			};
+		});
+
+		vi.doMock("../src/modes/lucy-bridge.js", () => ({
+			executeLucy: executeLucySpy,
+		}));
+		vi.doMock("../src/modes/coding-router.js", () => ({
+			routeCodingTask: vi.fn(),
+			detectCodingClis: vi.fn().mockResolvedValue([{ name: "mock" }]),
+		}));
+		vi.doMock("../src/modes/mcp-subsystems.js", () => ({
+			getAkasha: vi.fn().mockResolvedValue({ query, leave }),
+			persistAkasha,
+			getTranscendence: vi.fn().mockResolvedValue({
+				fuzzyLookup: vi.fn().mockReturnValue(null),
+			}),
+		}));
+
+		const { createCodingAgentTool } = await import("../src/modes/mcp-tools-coding.js");
+		const tool = createCodingAgentTool("/tmp/project");
+		const result = await tool.execute({ task: "fix auth bug" });
+
+		expect(query).toHaveBeenCalledWith("login bug", { limit: 5 });
+		expect(leave).toHaveBeenCalledWith(
+			"lucy-bridge",
+			"solution",
+			"auth",
+			"Keep auth changes localized",
+			{ topics: ["auth"] },
+		);
+		expect(persistAkasha).toHaveBeenCalledTimes(1);
+		expect(result.isError).toBe(false);
+	});
+
+		it("passes explicit engine route inputs into Lucy for strict engine-lane execution", async () => {
+			vi.resetModules();
+			const executeLucySpy = vi.fn(async (_task: string, config: {
+				sessionId?: string;
+			consumer?: string;
+			routeClass?: string;
+			capability?: string;
+		}) => {
+			expect(config.sessionId).toBe("sess-123");
+			expect(config.consumer).toBe("mcp:test");
+			expect(config.routeClass).toBe("coding.review.strict");
+			expect(config.capability).toBe("coding.review");
+			return {
+				success: true,
+				output: "strict route",
+				filesModified: [],
+				autoFixAttempts: 0,
+				durationMs: 10,
+				cli: "mock",
+			};
+		});
+
+		vi.doMock("../src/modes/lucy-bridge.js", () => ({
+			executeLucy: executeLucySpy,
+		}));
+		vi.doMock("../src/modes/coding-router.js", () => ({
+			routeCodingTask: vi.fn(),
+			detectCodingClis: vi.fn().mockResolvedValue([{ name: "mock" }]),
+		}));
+		vi.doMock("../src/modes/mcp-subsystems.js", () => ({
+			getAkasha: vi.fn().mockResolvedValue({
+				query: vi.fn().mockReturnValue([]),
+				leave: vi.fn(),
+			}),
+			persistAkasha: vi.fn(),
+			getTranscendence: vi.fn().mockResolvedValue({
+				fuzzyLookup: vi.fn().mockReturnValue(null),
+			}),
+		}));
+
+		const { createCodingAgentTool } = await import("../src/modes/mcp-tools-coding.js");
+		const tool = createCodingAgentTool("/tmp/project");
+		const result = await tool.execute({
+			task: "review auth flow",
+			sessionId: "sess-123",
+			consumer: "mcp:test",
+			routeClass: "coding.review.strict",
+			capability: "coding.review",
+		});
+
+			expect(executeLucySpy).toHaveBeenCalledTimes(1);
+			expect(result.isError).toBe(false);
+		});
+
+		it("uses tool-level session and consumer defaults when explicit args omit them", async () => {
+			vi.resetModules();
+			const executeLucySpy = vi.fn(async (_task: string, config: {
+				sessionId?: string;
+				consumer?: string;
+			}) => {
+				expect(config.sessionId).toBe("sess-tool-default");
+				expect(config.consumer).toBe("agent:coding_agent");
+				return {
+					success: true,
+					output: "default route",
+					filesModified: [],
+					autoFixAttempts: 0,
+					durationMs: 5,
+					cli: "mock",
+				};
+			});
+
+			vi.doMock("../src/modes/lucy-bridge.js", () => ({
+				executeLucy: executeLucySpy,
+			}));
+			vi.doMock("../src/modes/coding-router.js", () => ({
+				routeCodingTask: vi.fn(),
+				detectCodingClis: vi.fn().mockResolvedValue([{ name: "mock" }]),
+			}));
+			vi.doMock("../src/modes/mcp-subsystems.js", () => ({
+				getAkasha: vi.fn().mockResolvedValue({
+					query: vi.fn().mockReturnValue([]),
+					leave: vi.fn(),
+				}),
+				persistAkasha: vi.fn(),
+				getTranscendence: vi.fn().mockResolvedValue({
+					fuzzyLookup: vi.fn().mockReturnValue(null),
+				}),
+			}));
+
+			const { createCodingAgentTool } = await import("../src/modes/mcp-tools-coding.js");
+			const tool = createCodingAgentTool("/tmp/project", {
+				sessionIdResolver: () => "sess-tool-default",
+				consumer: "agent:coding_agent",
+			});
+			const result = await tool.execute({ task: "patch auth flow" });
+
+			expect(executeLucySpy).toHaveBeenCalledTimes(1);
+			expect(result.isError).toBe(false);
+		});
+	});
 
 describe("formatOrchestratorResult", () => {
 	it("should be exported from mcp-tools-introspection", async () => {

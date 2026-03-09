@@ -12,6 +12,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+GIT_TOP="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+IS_SUBTREE_REPO=false
+if [[ -n "$GIT_TOP" && "$GIT_TOP" != "$ROOT" ]]; then
+	IS_SUBTREE_REPO=true
+fi
 
 # ── Defaults ──────────────────────────────────────────────────────────
 DRY_RUN=true
@@ -137,9 +142,13 @@ pnpm run clean 2>/dev/null || true
 ok "Clean"
 
 # ── Build all packages with tsc ──────────────────────────────────────
-info "Building all packages (tsc)..."
-pnpm -r run build
-ok "All packages built"
+info "Validating workspace build graph..."
+pnpm run build:check
+ok "Workspace build graph valid"
+
+info "Building workspace in dependency order..."
+pnpm run build
+ok "Workspace build complete"
 
 # ── Bundle with esbuild ──────────────────────────────────────────────
 info "Bundling with esbuild..."
@@ -190,7 +199,7 @@ if [[ "$SKIP_TESTS" == true ]]; then
 	warn "Skipping tests (--skip-tests)"
 else
 	info "Running tests..."
-	if npx vitest run; then
+	if pnpm run test; then
 		ok "All tests passed"
 	else
 		warn "Some tests failed — review output above"
@@ -215,7 +224,10 @@ if [[ "$DRY_RUN" == true ]]; then
 	info "=== DRY RUN ==="
 	echo ""
 	info "Package contents:"
-	npm pack --dry-run "$ROOT/dist" 2>&1 | head -50
+	(
+		cd "$ROOT/dist"
+		npm pack --dry-run 2>&1 | head -50
+	)
 	echo ""
 	ok "Dry run complete. Use --real to publish for real."
 else
@@ -223,14 +235,28 @@ else
 	echo ""
 
 	# Publish from dist/
-	npm publish "$ROOT/dist"
+	(
+		cd "$ROOT/dist"
+		npm publish
+	)
 	ok "@yugenlab/chitragupta@$VERSION published!"
 
 	# Git tag
 	TAG="v$VERSION"
-	info "Creating git tag: $TAG"
-	git tag "$TAG"
-	ok "Tagged $TAG"
+	if [[ "${SKIP_GIT_TAG:-0}" == "1" ]]; then
+		warn "SKIP_GIT_TAG=1 set — skipping git tag $TAG"
+	elif [[ "$IS_SUBTREE_REPO" == true && "${ALLOW_SUBTREE_GIT_TAG:-0}" != "1" ]]; then
+		warn "Repository root differs from package root ($GIT_TOP)."
+		warn "Skipping tag by default in subtree mode. Set ALLOW_SUBTREE_GIT_TAG=1 to force tagging."
+	else
+		info "Creating git tag: $TAG"
+		if [[ -n "$GIT_TOP" ]]; then
+			git -C "$GIT_TOP" tag "$TAG"
+		else
+			git tag "$TAG"
+		fi
+		ok "Tagged $TAG"
+	fi
 
 	echo ""
 	ok "Done! Run 'git push && git push --tags' to push."

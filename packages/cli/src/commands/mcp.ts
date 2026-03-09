@@ -12,7 +12,7 @@ import path from "path";
 import { getChitraguptaHome } from "@chitragupta/core";
 import {
 	McpClient,
-	type McpRemoteServerConfig,
+	type McpClientConfig,
 } from "@chitragupta/tantra";
 import {
 	bold,
@@ -99,7 +99,12 @@ export async function list(): Promise<void> {
 				`    ${dim("id:")} ${server.id}\n`,
 			);
 			process.stdout.write(
-				`    ${dim("command:")} ${server.command}${server.args ? " " + server.args.join(" ") : ""}\n`,
+				`    ${dim("transport:")} ${server.transport ?? "stdio"}\n`,
+			);
+			process.stdout.write(
+				server.transport && server.transport !== "stdio"
+					? `    ${dim("url:")} ${server.url ?? gray("(missing)")}\n`
+					: `    ${dim("command:")} ${server.command ?? gray("(missing)")}${server.args ? " " + server.args.join(" ") : ""}\n`,
 			);
 
 			if (server.env && Object.keys(server.env).length > 0) {
@@ -128,12 +133,17 @@ export async function list(): Promise<void> {
 			process.stdout.write(
 				`  ${bold(server.name)}${statusTag}\n`,
 			);
-			process.stdout.write(
-				`    ${dim("id:")} ${server.id}\n`,
-			);
-			process.stdout.write(
-				`    ${dim("command:")} ${server.command}${server.args ? " " + server.args.join(" ") : ""}\n`,
-			);
+		process.stdout.write(
+			`    ${dim("id:")} ${server.id}\n`,
+		);
+		process.stdout.write(
+			`    ${dim("transport:")} ${server.transport ?? "stdio"}\n`,
+		);
+		process.stdout.write(
+			server.transport && server.transport !== "stdio"
+				? `    ${dim("url:")} ${server.url ?? gray("(missing)")}\n`
+				: `    ${dim("command:")} ${server.command ?? gray("(missing)")}${server.args ? " " + server.args.join(" ") : ""}\n`,
+		);
 
 			process.stdout.write("\n");
 		}
@@ -282,16 +292,25 @@ export async function test(id: string): Promise<void> {
 	process.stdout.write(
 		"\n" + dim(`  Testing MCP server "${serverConfig.name}"...`) + "\n",
 	);
+	const transport = serverConfig.transport ?? "stdio";
 	process.stdout.write(
-		dim(`  Command: ${serverConfig.command}${serverConfig.args ? " " + serverConfig.args.join(" ") : ""}`) + "\n\n",
+		transport === "stdio"
+			? dim(`  Command: ${serverConfig.command ?? gray("(missing)")}${serverConfig.args ? " " + serverConfig.args.join(" ") : ""}`) + "\n\n"
+			: dim(`  URL: ${serverConfig.url ?? gray("(missing)")}`) + "\n\n",
 	);
 
-	const client = new McpClient({
-		transport: "stdio",
-		serverCommand: serverConfig.command,
-		serverArgs: serverConfig.args,
-		timeout: 15_000,
-	});
+	const clientConfig: McpClientConfig = {
+		transport,
+		timeout: serverConfig.timeout ?? 15_000,
+	};
+	if (transport === "stdio") {
+		clientConfig.serverCommand = serverConfig.command;
+		clientConfig.serverArgs = serverConfig.args;
+	} else {
+		clientConfig.serverUrl = serverConfig.url;
+		clientConfig.auth = serverConfig.auth;
+	}
+	const client = new McpClient(clientConfig);
 
 	try {
 		// Connect and handshake

@@ -8,6 +8,17 @@
 import fs from "fs";
 import path from "path";
 import { getDaysRoot, getDayFilePath } from "./day-consolidation.js";
+import {
+	parseConsolidationMetadata,
+	stripConsolidationMetadata,
+	type DayConsolidationMetadata,
+} from "./consolidation-provenance.js";
+
+function readDayFileRaw(date: string): string | null {
+	const dayPath = getDayFilePath(date);
+	if (!fs.existsSync(dayPath)) return null;
+	return fs.readFileSync(dayPath, "utf-8");
+}
 
 // ─── Query API ──────────────────────────────────────────────────────────────
 
@@ -18,9 +29,18 @@ import { getDaysRoot, getDayFilePath } from "./day-consolidation.js";
  * @returns The day file content, or null if not consolidated yet.
  */
 export function readDayFile(date: string): string | null {
-	const dayPath = getDayFilePath(date);
-	if (!fs.existsSync(dayPath)) return null;
-	return fs.readFileSync(dayPath, "utf-8");
+	const raw = readDayFileRaw(date);
+	return raw ? stripConsolidationMetadata(raw) : null;
+}
+
+/**
+ * Read machine-readable provenance metadata from a consolidated day file.
+ */
+export function readDayFileMetadata(date: string): DayConsolidationMetadata | null {
+	const raw = readDayFileRaw(date);
+	if (!raw) return null;
+	const metadata = parseConsolidationMetadata(raw);
+	return metadata?.kind === "day" ? metadata : null;
 }
 
 /**
@@ -70,17 +90,27 @@ export function listDayFiles(): string[] {
 export function searchDayFiles(
 	query: string,
 	options?: { limit?: number },
-): Array<{ date: string; matches: Array<{ line: number; text: string }> }> {
+): Array<{
+	date: string;
+	matches: Array<{ line: number; text: string }>;
+	sourceSessionIds?: string[];
+}> {
 	const limit = options?.limit ?? 10;
 	const dates = listDayFiles();
-	const results: Array<{ date: string; matches: Array<{ line: number; text: string }> }> = [];
+	const results: Array<{
+		date: string;
+		matches: Array<{ line: number; text: string }>;
+		sourceSessionIds?: string[];
+	}> = [];
 	const queryLower = query.toLowerCase();
 
 	for (const date of dates) {
 		if (results.length >= limit) break;
 
-		const content = readDayFile(date);
-		if (!content) continue;
+		const raw = readDayFileRaw(date);
+		if (!raw) continue;
+		const content = stripConsolidationMetadata(raw);
+		const metadata = parseConsolidationMetadata(raw);
 
 		const lines = content.split("\n");
 		const matches: Array<{ line: number; text: string }> = [];
@@ -92,7 +122,11 @@ export function searchDayFiles(
 		}
 
 		if (matches.length > 0) {
-			results.push({ date, matches: matches.slice(0, 5) }); // Max 5 matches per day
+			results.push({
+				date,
+				matches: matches.slice(0, 5),
+				sourceSessionIds: metadata?.kind === "day" ? metadata.sourceSessionIds : undefined,
+			}); // Max 5 matches per day
 		}
 	}
 

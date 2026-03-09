@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MemoryBridgeConfig, MemoryBridgePersistence } from "../src/memory-bridge.js";
 import { MemoryBridge } from "../src/memory-bridge.js";
-import type { MemoryBridgeConfig } from "../src/memory-bridge.js";
 
 // ─── Mock @chitragupta/smriti ──────────────────────────────────────────────────
 
@@ -19,40 +19,43 @@ vi.mock("@chitragupta/smriti", () => ({
 	addTurn: vi.fn(),
 	getMemory: vi.fn(() => null),
 	appendMemory: vi.fn(),
-	GraphRAGEngine: vi.fn().mockImplementation(function(this: any) {
+	GraphRAGEngine: vi.fn().mockImplementation(function (this: any) {
 		this.indexSession = vi.fn().mockResolvedValue(undefined);
 	}),
-	RecallEngine: vi.fn().mockImplementation(function(this: any) {
+	RecallEngine: vi.fn().mockImplementation(function (this: any) {
 		this.indexSession = vi.fn().mockResolvedValue(undefined);
 	}),
-	HybridSearchEngine: vi.fn().mockImplementation(function(this: any) {
+	HybridSearchEngine: vi.fn().mockImplementation(function (this: any) {
 		this.search = vi.fn().mockResolvedValue([]);
 		this.gatedSearch = vi.fn().mockResolvedValue([]);
 	}),
 	extractSignals: vi.fn().mockReturnValue({ identity: [], projects: [], tasks: [], flow: [] }),
-	StreamManager: vi.fn().mockImplementation(function(this: any) {
+	StreamManager: vi.fn().mockImplementation(function (this: any) {
 		this.append = vi.fn();
 		this.readContent = vi.fn().mockReturnValue("");
 	}),
 	configureRecallScoring: vi.fn(),
-	EmbeddingService: vi.fn().mockImplementation(function(this: any) {
+	EmbeddingService: vi.fn().mockImplementation(function (this: any) {
 		this.getEmbedding = vi.fn().mockResolvedValue(new Array(384).fill(0));
 		this.resetAvailability = vi.fn();
 		this.clearCache = vi.fn();
 	}),
-	SmaranStore: vi.fn().mockImplementation(function(this: any) {
+	SmaranStore: vi.fn().mockImplementation(function (this: any) {
 		this.remember = vi.fn().mockReturnValue({ id: "mem-1", content: "test", category: "fact", confidence: 1.0 });
 		this.forget = vi.fn().mockReturnValue(true);
 		this.forgetByContent = vi.fn().mockReturnValue(1);
 		this.recall = vi.fn().mockReturnValue([]);
+		this.recallScored = vi.fn().mockReturnValue([]);
+		this.proactiveRecall = vi.fn().mockReturnValue([]);
 		this.listByCategory = vi.fn().mockReturnValue([]);
 		this.listAll = vi.fn().mockReturnValue([]);
 		this.buildContextSection = vi.fn().mockReturnValue("");
+		this.buildProactiveContextSection = vi.fn().mockReturnValue({ section: "", surfacedIds: [] });
 		this.decayConfidence = vi.fn();
 		this.prune = vi.fn().mockReturnValue(0);
 	}),
 	detectMemoryIntent: vi.fn().mockReturnValue(null),
-	IdentityContext: vi.fn().mockImplementation(function(this: any) {
+	IdentityContext: vi.fn().mockImplementation(function (this: any) {
 		this.load = vi.fn().mockReturnValue("");
 		this.loadUserPreferences = vi.fn().mockReturnValue("");
 		this.hasIdentityFiles = vi.fn().mockReturnValue(false);
@@ -61,13 +64,7 @@ vi.mock("@chitragupta/smriti", () => ({
 	}),
 }));
 
-import {
-	createSession,
-	loadSession,
-	addTurn,
-	getMemory,
-	appendMemory,
-} from "@chitragupta/smriti";
+import { addTurn, appendMemory, createSession, getMemory, loadSession } from "@chitragupta/smriti";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -77,6 +74,52 @@ function makeConfig(overrides?: Partial<MemoryBridgeConfig>): MemoryBridgeConfig
 		project: "/test/project",
 		enableGraphRAG: false,
 		enableHybridSearch: false,
+		...overrides,
+	};
+}
+
+function makePersistence(overrides?: Partial<MemoryBridgePersistence>): MemoryBridgePersistence {
+	return {
+		createSession: vi.fn(async (opts) => ({
+			meta: {
+				id: "daemon-session-id",
+				title: opts.title ?? "Session",
+				created: new Date().toISOString(),
+				updated: new Date().toISOString(),
+				agent: opts.agent ?? "agent",
+				model: opts.model ?? "model",
+				project: opts.project,
+				parent: opts.parentSessionId ?? null,
+				branch: opts.branch ?? null,
+				tags: opts.tags ?? [],
+				totalCost: 0,
+				totalTokens: 0,
+				metadata: opts.metadata,
+			},
+			turns: [],
+		})),
+		addTurn: vi.fn(async () => undefined),
+		loadSession: vi.fn(async (sessionId, project) => ({
+			meta: {
+				id: sessionId,
+				title: "Session",
+				created: new Date().toISOString(),
+				updated: new Date().toISOString(),
+				agent: "agent",
+				model: "model",
+				project,
+				parent: null,
+				branch: null,
+				tags: [],
+				totalCost: 0,
+				totalTokens: 0,
+			},
+			turns: [
+				{ turnNumber: 1, role: "user", content: "do something" },
+				{ turnNumber: 2, role: "assistant", content: "I found the issue in src/main.ts" },
+			],
+		})),
+		appendMemory: vi.fn(async () => undefined),
 		...overrides,
 	};
 }
@@ -104,17 +147,34 @@ describe("MemoryBridge", () => {
 		it("calls createSession with correct params", async () => {
 			const bridge = new MemoryBridge(makeConfig());
 			await bridge.initSession("agent-1", "chitragupta", "claude-3", "/project");
-			expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
-				project: "/project",
-				agent: "agent-1",
-				model: "claude-3",
-			}));
+			expect(createSession).toHaveBeenCalledWith(
+				expect.objectContaining({
+					project: "/project",
+					agent: "agent-1",
+					model: "claude-3",
+				}),
+			);
 		});
 
 		it("sets internal sessionId accessible via getSessionId", async () => {
 			const bridge = new MemoryBridge(makeConfig());
 			await bridge.initSession("agent-1", "chitragupta", "claude-3", "/project");
 			expect(bridge.getSessionId()).toBe("mock-session-id");
+		});
+
+		it("uses a custom persistence adapter when provided", async () => {
+			const persistence = makePersistence();
+			const bridge = new MemoryBridge(makeConfig({ persistence }));
+			const id = await bridge.initSession("agent-1", "chitragupta", "claude-3", "/project");
+			expect(id).toBe("daemon-session-id");
+			expect(persistence.createSession).toHaveBeenCalledWith(
+				expect.objectContaining({
+					project: "/project",
+					agent: "agent-1",
+					model: "claude-3",
+				}),
+			);
+			expect(createSession).not.toHaveBeenCalled();
 		});
 
 		it("resets turn counter on each init", async () => {
@@ -135,11 +195,15 @@ describe("MemoryBridge", () => {
 			const bridge = new MemoryBridge(makeConfig());
 			await bridge.initSession("a", "p", "m", "/proj");
 			await bridge.recordUserTurn("mock-session-id", "Hello");
-			expect(addTurn).toHaveBeenCalledWith("mock-session-id", "/test/project", expect.objectContaining({
-				role: "user",
-				content: "Hello",
-				turnNumber: 1,
-			}));
+			expect(addTurn).toHaveBeenCalledWith(
+				"mock-session-id",
+				"/test/project",
+				expect.objectContaining({
+					role: "user",
+					content: "Hello",
+					turnNumber: 1,
+				}),
+			);
 		});
 
 		it("does nothing when disabled", async () => {
@@ -170,6 +234,24 @@ describe("MemoryBridge", () => {
 			await bridge.recordUserTurn("mock-session-id", "First");
 			expect(loadSession).toHaveBeenCalledWith("mock-session-id", "/test/project");
 		});
+
+		it("uses custom persistence for turns and snapshot refresh", async () => {
+			const persistence = makePersistence();
+			const bridge = new MemoryBridge(makeConfig({ persistence }));
+			await bridge.initSession("a", "p", "m", "/proj");
+			await bridge.recordUserTurn("daemon-session-id", "Hello");
+			expect(persistence.addTurn).toHaveBeenCalledWith(
+				"daemon-session-id",
+				"/test/project",
+				expect.objectContaining({
+					role: "user",
+					content: "Hello",
+					turnNumber: 1,
+				}),
+			);
+			expect(persistence.loadSession).toHaveBeenCalledWith("daemon-session-id", "/test/project");
+			expect(addTurn).not.toHaveBeenCalled();
+		});
 	});
 
 	// ── recordAssistantTurn ─────────────────────────────────────────────
@@ -179,10 +261,14 @@ describe("MemoryBridge", () => {
 			const bridge = new MemoryBridge(makeConfig());
 			await bridge.initSession("a", "p", "m", "/proj");
 			await bridge.recordAssistantTurn("mock-session-id", "I can help.");
-			expect(addTurn).toHaveBeenCalledWith("mock-session-id", "/test/project", expect.objectContaining({
-				role: "assistant",
-				content: "I can help.",
-			}));
+			expect(addTurn).toHaveBeenCalledWith(
+				"mock-session-id",
+				"/test/project",
+				expect.objectContaining({
+					role: "assistant",
+					content: "I can help.",
+				}),
+			);
 		});
 
 		it("does nothing when disabled", async () => {
@@ -267,6 +353,44 @@ describe("MemoryBridge", () => {
 			expect(ctx).toBe("");
 		});
 
+		// ── recallForQuery ───────────────────────────────────────────────────
+
+		describe("recallForQuery", () => {
+			it("returns proactive section first, then standard recall context", () => {
+				const bridge = new MemoryBridge(makeConfig());
+				const store = bridge.getSmaranStore() as any;
+				store.buildProactiveContextSection.mockReturnValue({
+					section: "## Proactive Memory Hints\n\n- [instruction] use pnpm",
+					surfacedIds: ["smr-1"],
+				});
+				store.buildContextSection.mockReturnValue("## User Memory (Smaran)\n\n- [fact] monorepo");
+
+				const out = bridge.recallForQuery("which package manager?");
+				expect(out).toContain("## Proactive Memory Hints");
+				expect(out).toContain("## User Memory (Smaran)");
+			});
+
+			it("passes surfaced IDs to context builder exclude list", () => {
+				const bridge = new MemoryBridge(makeConfig());
+				const store = bridge.getSmaranStore() as any;
+				store.buildProactiveContextSection.mockReturnValue({
+					section: "## Proactive Memory Hints",
+					surfacedIds: ["smr-abc"],
+				});
+				store.buildContextSection.mockReturnValue("");
+
+				bridge.recallForQuery("query");
+
+				expect(store.buildContextSection).toHaveBeenCalledWith(
+					"query",
+					1100,
+					expect.objectContaining({ excludeIds: expect.any(Set) }),
+				);
+				const opts = store.buildContextSection.mock.calls[0][2];
+				expect(opts.excludeIds.has("smr-abc")).toBe(true);
+			});
+		});
+
 		it("returns only memory capabilities when all memory scopes are null", async () => {
 			const bridge = new MemoryBridge(makeConfig());
 			const ctx = await bridge.loadMemoryContext("/proj", "agent-1");
@@ -342,9 +466,11 @@ describe("MemoryBridge", () => {
 		it("passes parentSessionId to createSession", async () => {
 			const bridge = new MemoryBridge(makeConfig());
 			await bridge.createSubSession("parent-1", "review", "sub-1", "claude-3", "/proj");
-			expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
-				parentSessionId: "parent-1",
-			}));
+			expect(createSession).toHaveBeenCalledWith(
+				expect.objectContaining({
+					parentSessionId: "parent-1",
+				}),
+			);
 		});
 	});
 
@@ -380,6 +506,18 @@ describe("MemoryBridge", () => {
 				expect.anything(),
 				expect.stringContaining("I found the issue in src/main.ts"),
 			);
+		});
+
+		it("uses custom persistence when bubbling findings", async () => {
+			const persistence = makePersistence();
+			const bridge = new MemoryBridge(makeConfig({ persistence }));
+			await bridge.bubbleUpFindings("sub-1", "parent-1", "/proj");
+			expect(persistence.loadSession).toHaveBeenCalledWith("sub-1", "/proj");
+			expect(persistence.appendMemory).toHaveBeenCalledWith(
+				{ type: "project", path: "/proj" },
+				expect.stringContaining("Sub-agent finding"),
+			);
+			expect(appendMemory).not.toHaveBeenCalled();
 		});
 	});
 

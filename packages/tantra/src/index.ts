@@ -23,6 +23,8 @@ export {
 export { StdioServerTransport, StdioClientTransport } from "./transport/stdio.js";
 /** SSE-based transport for MCP server and client over HTTP. */
 export { SSEServerTransport, SSEClientTransport } from "./transport/sse.js";
+/** Streamable HTTP transport for MCP server and client over HTTP. */
+export { StreamableHttpServerTransport, StreamableHttpClientTransport } from "./transport/streamable-http.js";
 /** MCP server that exposes tools, resources, and prompts over JSON-RPC. */
 export { McpServer } from "./server.js";
 /** MCP client that connects to remote servers and invokes their tools. */

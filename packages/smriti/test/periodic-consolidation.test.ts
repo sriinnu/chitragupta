@@ -13,6 +13,7 @@ import path from "path";
 import { DatabaseManager } from "@chitragupta/smriti/db/database";
 import { initAllSchemas } from "@chitragupta/smriti/db/schema";
 import { PeriodicConsolidation } from "../src/periodic-consolidation.js";
+import { parseConsolidationMetadata } from "../src/consolidation-provenance.js";
 import type {
 	PeriodicConfig,
 	ConsolidationReport,
@@ -890,6 +891,9 @@ describe("PeriodicConsolidation", () => {
 			expect(report.markdown).toMatch(/^# Monthly Consolidation/);
 			expect(report.markdown).toContain(PROJECT);
 			expect(report.markdown).toContain("2025-01");
+			const metadata = parseConsolidationMetadata(report.markdown);
+			expect(metadata?.kind).toBe("monthly");
+			expect(metadata?.sourceSessionIds).toEqual(["s1"]);
 		});
 
 		it("should have correct yearly report title", async () => {
@@ -902,6 +906,8 @@ describe("PeriodicConsolidation", () => {
 			expect(report.markdown).toMatch(/^# Yearly Consolidation/);
 			expect(report.markdown).toContain(PROJECT);
 			expect(report.markdown).toContain("2025");
+			const metadata = parseConsolidationMetadata(report.markdown);
+			expect(metadata?.kind).toBe("yearly");
 		});
 
 		it("should include Generated timestamp", async () => {

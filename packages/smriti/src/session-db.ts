@@ -17,7 +17,7 @@ import path from "path";
 import crypto from "crypto";
 import type BetterSqlite3 from "better-sqlite3";
 import { getChitraguptaHome } from "@chitragupta/core";
-import type { SessionMeta, SessionTurn } from "./types.js";
+import type { Session, SessionMeta, SessionTurn } from "./types.js";
 import { DatabaseManager } from "./db/database.js";
 import { initAgentSchema } from "./db/schema.js";
 
@@ -103,14 +103,21 @@ export function _getDbStatus(): { initialized: boolean; error: string | null } {
  * @param filePath - The relative file path for storage.
  * @returns An object suitable for SQLite INSERT/UPDATE.
  */
-export function sessionMetaToRow(meta: SessionMeta, filePath: string) {
+export function sessionMetaToRow(meta: SessionMeta, filePath: string, turnCount = 0) {
+	const metadata = meta.metadata ? { ...meta.metadata } : undefined;
+	if (meta.provider && metadata?.provider !== meta.provider) {
+		if (metadata) metadata.provider = meta.provider;
+	}
+	const metadataPayload = meta.provider && !metadata
+		? { provider: meta.provider }
+		: metadata;
 	return {
 		id: meta.id,
 		project: meta.project,
 		title: meta.title,
 		created_at: new Date(meta.created).getTime(),
 		updated_at: new Date(meta.updated).getTime(),
-		turn_count: 0,
+		turn_count: turnCount,
 		model: meta.model,
 		agent: meta.agent,
 		cost: meta.totalCost,
@@ -119,7 +126,7 @@ export function sessionMetaToRow(meta: SessionMeta, filePath: string) {
 		file_path: filePath,
 		parent_id: meta.parent,
 		branch: meta.branch,
-		metadata: meta.metadata ? JSON.stringify(meta.metadata) : null,
+		metadata: metadataPayload ? JSON.stringify(metadataPayload) : null,
 	};
 }
 
@@ -159,6 +166,17 @@ export function rowToSessionMeta(row: Record<string, unknown>): SessionMeta {
 	};
 }
 
+export function getSessionMetaFromDb(sessionId: string): SessionMeta | undefined {
+	try {
+		const db = getAgentDb();
+		const row = db.prepare("SELECT * FROM sessions WHERE id = ?").get(sessionId) as Record<string, unknown> | undefined;
+		return row ? rowToSessionMeta(row) : undefined;
+	} catch (err) {
+		process.stderr.write(`[chitragupta] session metadata lookup failed for ${sessionId}: ${err instanceof Error ? err.message : err}\n`);
+		return undefined;
+	}
+}
+
 // ─── Write-Through Helpers ──────────────────────────────────────────────────
 
 /**
@@ -168,16 +186,38 @@ export function rowToSessionMeta(row: Record<string, unknown>): SessionMeta {
  * @param meta - The session metadata to upsert.
  * @param filePath - The relative file path for storage.
  */
-export function upsertSessionToDb(meta: SessionMeta, filePath: string): void {
+export function upsertSessionToDb(meta: SessionMeta, filePath: string, turnCount = 0): void {
 	try {
 		const db = getAgentDb();
-		const row = sessionMetaToRow(meta, filePath);
+		const normalizedFilePath = path.isAbsolute(filePath)
+			? path.relative(getChitraguptaHome(), filePath)
+			: filePath;
+		let writeMeta = meta;
+		if (!meta.metadata || !meta.provider) {
+			const existingMeta = getSessionMetaFromDb(meta.id);
+			if (existingMeta) {
+				let mergedMetadata = meta.metadata
+					? structuredClone(meta.metadata)
+					: structuredClone(existingMeta.metadata);
+				const provider = meta.provider ?? existingMeta.provider;
+				if (provider && mergedMetadata?.provider !== provider) {
+					mergedMetadata = { ...(mergedMetadata ?? {}), provider };
+				}
+				writeMeta = {
+					...meta,
+					provider,
+					metadata: mergedMetadata,
+				};
+			}
+		}
+		const row = sessionMetaToRow(writeMeta, normalizedFilePath, turnCount);
 		db.prepare(`
-			INSERT INTO sessions (id, project, title, created_at, updated_at, turn_count, model, agent, cost, tokens, tags, file_path, parent_id, branch, metadata)
-			VALUES (@id, @project, @title, @created_at, @updated_at, @turn_count, @model, @agent, @cost, @tokens, @tags, @file_path, @parent_id, @branch, @metadata)
-			ON CONFLICT(id) DO UPDATE SET
+				INSERT INTO sessions (id, project, title, created_at, updated_at, turn_count, model, agent, cost, tokens, tags, file_path, parent_id, branch, metadata)
+				VALUES (@id, @project, @title, @created_at, @updated_at, @turn_count, @model, @agent, @cost, @tokens, @tags, @file_path, @parent_id, @branch, @metadata)
+				ON CONFLICT(id) DO UPDATE SET
 				title = @title, updated_at = @updated_at, turn_count = @turn_count,
-				model = @model, cost = @cost, tokens = @tokens, tags = @tags, metadata = @metadata
+				model = @model, agent = @agent, cost = @cost, tokens = @tokens, tags = @tags,
+				file_path = @file_path, parent_id = @parent_id, branch = @branch, metadata = @metadata
 		`).run(row);
 	} catch (err) {
 		// SQLite write-through is best-effort — .md file is the source of truth
@@ -241,6 +281,8 @@ export interface TurnInsertContext {
 	filePath: string;
 }
 
+export type TurnInsertStatus = "inserted" | "duplicate" | "error";
+
 /**
  * Insert a turn into the SQLite turns table + FTS5 index.
  * Also bumps the session turn_count and updated_at.
@@ -257,10 +299,11 @@ export function insertTurnToDb(
 	sessionId: string,
 	turn: SessionTurn,
 	context?: TurnInsertContext,
-): void {
+): TurnInsertStatus {
 	try {
 		const db = getAgentDb();
 		const now = Date.now();
+		let insertStatus: TurnInsertStatus = "duplicate";
 
 		// Wrap turn insert + FTS5 index + session update in a transaction
 		const writeTurn = db.transaction(() => {
@@ -280,26 +323,26 @@ export function insertTurnToDb(
 
 			// Index into FTS5
 			if (result.changes > 0) {
+				insertStatus = "inserted";
 				db.prepare("INSERT OR IGNORE INTO turns_fts (rowid, content) VALUES (?, ?)").run(
 					result.lastInsertRowid,
 					turn.content,
 				);
+				db.prepare(
+					"UPDATE sessions SET turn_count = turn_count + 1, updated_at = ? WHERE id = ?",
+				).run(now, sessionId);
 			}
-
-			// Update session turn count + timestamp
-			db.prepare(
-				"UPDATE sessions SET turn_count = turn_count + 1, updated_at = ? WHERE id = ?",
-			).run(now, sessionId);
 		});
 		try {
 			writeTurn();
-			return;
+			return insertStatus;
 		} catch (err) {
 			// Self-heal: if SQLite session row is missing, recreate a minimal row and retry once.
 			if (context && isRecoverableSessionConstraintError(err)) {
 				seedSessionRowForTurn(sessionId, context.project, context.filePath);
+				insertStatus = "duplicate";
 				writeTurn();
-				return;
+				return insertStatus;
 			}
 			throw err;
 		}
@@ -311,6 +354,65 @@ export function insertTurnToDb(
 		process.stderr.write(
 			`[chitragupta] turn insert failed for session ${sessionId} (turn=${turn.turnNumber}, role=${turn.role}, code=${code}): ${err instanceof Error ? err.message : err}\n`,
 		);
+		return "error";
+	}
+}
+
+/**
+ * Rebuild SQLite session metadata, turns, and FTS rows from markdown state.
+ * Used when write-through drifts from the markdown source of truth.
+ */
+export function reconcileSessionToDb(session: Session, filePath: string): boolean {
+	try {
+		const db = getAgentDb();
+		const now = Date.now();
+		const existingRows = db
+			.prepare("SELECT id, turn_number, created_at FROM turns WHERE session_id = ? ORDER BY turn_number ASC")
+			.all(session.meta.id) as Array<{ id: number; turn_number: number; created_at: number }>;
+		const createdAtByTurn = new Map(existingRows.map((row) => [row.turn_number, row.created_at]));
+
+		db.transaction(() => {
+			upsertSessionToDb(session.meta, filePath, session.turns.length);
+
+			for (const row of existingRows) {
+				db.prepare("DELETE FROM turns_fts WHERE rowid = ?").run(row.id);
+			}
+			db.prepare("DELETE FROM turns WHERE session_id = ?").run(session.meta.id);
+
+			for (const turn of session.turns) {
+				const result = db.prepare(`
+					INSERT INTO turns (session_id, turn_number, role, content, agent, model, tool_calls, created_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				`).run(
+					session.meta.id,
+					turn.turnNumber,
+					turn.role,
+					turn.content,
+					turn.agent ?? null,
+					turn.model ?? null,
+					turn.toolCalls ? JSON.stringify(turn.toolCalls) : null,
+					createdAtByTurn.get(turn.turnNumber) ?? now,
+				);
+
+				db.prepare("INSERT OR IGNORE INTO turns_fts (rowid, content) VALUES (?, ?)").run(
+					result.lastInsertRowid,
+					turn.content,
+				);
+			}
+
+			db.prepare("UPDATE sessions SET turn_count = ?, updated_at = ? WHERE id = ?").run(
+				session.turns.length,
+				new Date(session.meta.updated).getTime(),
+				session.meta.id,
+			);
+		})();
+
+		return true;
+	} catch (err) {
+		process.stderr.write(
+			`[chitragupta] session reconcile failed for ${session.meta.id}: ${err instanceof Error ? err.message : err}\n`,
+		);
+		return false;
 	}
 }
 
@@ -334,3 +436,7 @@ export function getMaxTurnNumber(sessionId: string): number {
 		return 0;
 	}
 }
+
+// ─── Takumi C8 Observation / Pattern / Prediction / Heal Helpers ───────────
+
+// C8 observation/pattern/prediction/heal helpers live in session-db-c8.ts.

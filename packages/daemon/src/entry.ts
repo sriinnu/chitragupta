@@ -10,15 +10,27 @@
  */
 
 import { createLogger } from "@chitragupta/core";
+import { createDaemonServerAuth } from "./auth.js";
 import { resolvePaths, ensureDirs } from "./paths.js";
 import { writePid, installSignalHandlers } from "./process.js";
 import { RpcRouter } from "./rpc-router.js";
 import { startServer, type DaemonServer } from "./server.js";
 import { startHttpServer, type DaemonHttpServer } from "./http-server.js";
 import { registerServices } from "./services.js";
+import { getSharedAkasha, persistSharedAkasha } from "./services-knowledge-state.js";
 import { startInternalScarlett, stopInternalScarlett } from "./scarlett-internal.js";
+import { clearLiveRegressionEntity, getLucyLiveEngine, recordLiveRegressionSignal, type SharedRegressionSignal } from "./lucy-live-state.js";
+import { injectCycleSignals } from "./scarlett-signal-bridge.js";
 
 const log = createLogger("daemon:entry");
+
+const SCARLETT_PROBE_ENTITY: Readonly<Record<string, string>> = {
+	"smriti-db": "smriti",
+	"nidra-heartbeat": "nidra",
+	"consolidation-queue": "consolidation",
+	"memory-pressure": "memory",
+	"semantic-sync": "semantic-memory",
+};
 
 // ─── Process-Level Resilience ────────────────────────────────────────────────
 
@@ -82,7 +94,7 @@ async function main(): Promise<void> {
 	// Start socket server
 	let server: DaemonServer;
 	try {
-		server = await startServer({ paths, router });
+		server = await startServer({ paths, router, auth: createDaemonServerAuth(paths) });
 	} catch (err) {
 		log.fatal("Failed to start server", err instanceof Error ? err : undefined);
 		process.exit(1);
@@ -117,19 +129,115 @@ async function main(): Promise<void> {
 	// Start InternalScarlett — watches smriti DB, heap, nidra heartbeat, consolidation queue
 	try {
 		const internalScarlett = startInternalScarlett({ nidra: nidraInstance });
-		internalScarlett.on("probe-result", (r) => {
-			if (!r.healthy) {
-				log.warn("InternalScarlett probe unhealthy", {
-					probe: r.probe, severity: r.severity, summary: r.summary,
+			internalScarlett.on("probe-result", (r) => {
+				if (!r.healthy) {
+					log.warn("InternalScarlett probe unhealthy", {
+						probe: r.probe, severity: r.severity, summary: r.summary,
+					});
+					router.notify("anomaly_alert", {
+						type: "internal_probe",
+						severity: r.severity,
+						details: {
+							probe: r.probe,
+							entity: SCARLETT_PROBE_ENTITY[r.probe] ?? r.probe,
+							summary: r.summary,
+							healthy: r.healthy,
+						},
+						suggestion: `Investigate internal subsystem ${r.probe} before trusting cached guidance`,
+					});
+				}
+			});
+			internalScarlett.on("recovery-ok", (probe, detail) => {
+				log.info("InternalScarlett recovery ok", { probe, detail });
+				router.notify("heal_reported", {
+					anomalyType: "internal_probe",
+					actionTaken: probe,
+					entity: SCARLETT_PROBE_ENTITY[probe] ?? probe,
+					outcome: "success",
+					detail,
 				});
-			}
-		});
-		internalScarlett.on("recovery-ok", (probe, detail) => {
-			log.info("InternalScarlett recovery ok", { probe, detail });
-		});
-		internalScarlett.on("recovery-failed", (probe, detail) => {
-			log.warn("InternalScarlett recovery failed", { probe, detail });
-		});
+			});
+			internalScarlett.on("recovery-failed", (probe, detail) => {
+				log.warn("InternalScarlett recovery failed", { probe, detail });
+				router.notify("heal_reported", {
+					anomalyType: "internal_probe",
+					actionTaken: probe,
+					entity: SCARLETT_PROBE_ENTITY[probe] ?? probe,
+					outcome: "failure",
+					detail,
+				});
+			});
+
+		// Wire 6: Scarlett → Lucy live feedback loop
+		// Internal Scarlett persists warnings/corrections into Akasha and updates
+		// the daemon-shared live intuition state that lucy.live_context reads.
+			try {
+				const akasha = await getSharedAkasha();
+
+					internalScarlett.on("cycle-complete", (results) => {
+						injectCycleSignals(results, getLucyLiveEngine());
+						let wroteTrace = false;
+						for (const result of results) {
+							if (result.healthy || result.severity === "ok") continue;
+						const entity = SCARLETT_PROBE_ENTITY[result.probe] ?? result.probe;
+						recordLiveRegressionSignal({
+							errorSignature: entity,
+							description: `[${result.severity}] ${result.summary}`,
+							currentOccurrences: result.severity === "critical" ? 5 : result.severity === "warn" ? 3 : 1,
+							previousOccurrences: 0,
+							severity: result.severity === "critical" ? "critical" : result.severity === "warn" ? "warning" : "info",
+							lastSeenBefore: new Date(Math.max(0, Date.now() - 60_000)).toISOString(),
+							detectedAt: new Date().toISOString(),
+						} satisfies SharedRegressionSignal);
+						const trace = akasha.leave(
+						"scarlett-internal",
+						"warning",
+						entity,
+						`[${result.severity}] ${result.summary}`,
+								{
+									probe: result.probe,
+									severity: result.severity,
+									scope: "global",
+										source: "internal-scarlett",
+								},
+							);
+						wroteTrace = true;
+						router.notify("akasha.trace_added", { type: "trace_added", trace });
+					}
+						if (wroteTrace) {
+							void persistSharedAkasha().catch(() => {
+								/* best-effort */
+							});
+						}
+					});
+						internalScarlett.on("recovery-ok", (probe, detail) => {
+							const entity = SCARLETT_PROBE_ENTITY[probe] ?? probe;
+							clearLiveRegressionEntity(entity);
+							const trace = akasha.leave(
+								"scarlett-internal",
+								"correction",
+								entity,
+								`[recovered] ${detail}`,
+								{
+									probe,
+									entity,
+									outcome: "success",
+									cleared: true,
+									scope: "global",
+									source: "internal-scarlett",
+								},
+							);
+						router.notify("akasha.trace_added", { type: "trace_added", trace });
+						void persistSharedAkasha().catch(() => {
+							/* best-effort */
+						});
+					});
+					log.info("Wire 6: Scarlett→Lucy live feedback loop active");
+			} catch (err) {
+			log.debug("Lucy live state unavailable — Wire 6 inactive", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
 	} catch (err) {
 		log.warn("InternalScarlett failed to start — running without it", {
 			error: err instanceof Error ? err.message : String(err),
@@ -232,7 +340,10 @@ async function startNidra(router: RpcRouter): Promise<{ stop: () => Promise<void
 		maxBackfillDays: 7,
 		consolidateOnIdle: true,
 		backfillOnStartup: true,
-	});
+	}) as import("@chitragupta/anina").ChitraguptaDaemon & {
+		notifySession(sessionId: string): void;
+		wake(): void;
+	};
 
 	nidra.on("consolidation", (event: { type: string; date: string; detail?: string }) => {
 		log.info("Nidra consolidation", { type: event.type, date: event.date, detail: event.detail });
@@ -293,6 +404,23 @@ async function startNidra(router: RpcRouter): Promise<{ stop: () => Promise<void
 		await nidra.consolidateToday();
 		return { consolidated: "today" };
 	}, "Trigger manual consolidation");
+
+	router.register("nidra.touch", async () => {
+		nidra.touch();
+		return { touched: true };
+	}, "Signal live activity to Nidra");
+
+	router.register("nidra.notify_session", async (params) => {
+		const sessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : "";
+		if (!sessionId) throw new Error("Missing sessionId");
+		nidra.notifySession(sessionId);
+		return { notified: true, sessionId };
+	}, "Register a logical session with Nidra");
+
+	router.register("nidra.wake", async () => {
+		nidra.wake();
+		return { woken: true };
+	}, "Wake Nidra into listening state");
 
 	await nidra.start();
 	log.info("Nidra consolidation active");

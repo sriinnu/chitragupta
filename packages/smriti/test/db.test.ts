@@ -192,16 +192,69 @@ describe("Schema initialization", () => {
 			expect(cols).toContain("project");
 		});
 
-		it("should create akasha_traces table", () => {
-			const db = dbm.get("agent");
-			const info = db.prepare("PRAGMA table_info(akasha_traces)").all() as Array<{ name: string }>;
-			const cols = info.map((r) => r.name);
-			expect(cols).toContain("id");
-			expect(cols).toContain("agent_id");
-			expect(cols).toContain("trace_type");
-			expect(cols).toContain("topic");
-			expect(cols).toContain("strength");
-		});
+			it("should create akasha_traces table", () => {
+				const db = dbm.get("agent");
+				const info = db.prepare("PRAGMA table_info(akasha_traces)").all() as Array<{ name: string }>;
+				const cols = info.map((r) => r.name);
+				expect(cols).toContain("id");
+				expect(cols).toContain("agent_id");
+				expect(cols).toContain("trace_type");
+				expect(cols).toContain("topic");
+				expect(cols).toContain("strength");
+			});
+
+			it("should create C8 observation/pattern/prediction/heal tables", () => {
+				const db = dbm.get("agent");
+				const tables = [
+					"tool_usage",
+					"error_resolutions",
+					"edit_patterns",
+					"user_corrections",
+					"preferences",
+					"detected_patterns",
+					"markov_transitions",
+					"heal_outcomes",
+				];
+
+				for (const table of tables) {
+					const row = db.prepare(
+						"SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+					).get(table) as { name?: string } | undefined;
+					expect(row?.name).toBe(table);
+				}
+			});
+
+			it("should create sabha_state durability table", () => {
+				const db = dbm.get("agent");
+				const info = db.prepare("PRAGMA table_info(sabha_state)").all() as Array<{ name: string }>;
+				const cols = info.map((row) => row.name);
+				expect(cols).toContain("id");
+				expect(cols).toContain("revision");
+				expect(cols).toContain("sabha_json");
+				expect(cols).toContain("client_bindings_json");
+				expect(cols).toContain("perspectives_json");
+			});
+
+			it("should create sabha_event_log durability table", () => {
+				const db = dbm.get("agent");
+				const info = db.prepare("PRAGMA table_info(sabha_event_log)").all() as Array<{ name: string }>;
+				const cols = info.map((row) => row.name);
+				expect(cols).toContain("sabha_id");
+				expect(cols).toContain("event_id");
+				expect(cols).toContain("revision");
+				expect(cols).toContain("parent_revision");
+				expect(cols).toContain("event_type");
+				expect(cols).toContain("event_json");
+				expect(cols).toContain("created_at");
+			});
+
+			it("should add nidra notification counter column", () => {
+				const db = dbm.get("agent");
+				const info = db.prepare("PRAGMA table_info(nidra_state)").all() as Array<{ name: string }>;
+				const cols = info.map((row) => row.name);
+				expect(cols).toContain("session_notifications_since_deep_sleep");
+				expect(cols).toContain("preserve_pending_sessions_on_listening");
+			});
 
 		it("should allow inserting and querying sessions", () => {
 			const db = dbm.get("agent");
@@ -352,21 +405,21 @@ describe("Schema initialization", () => {
 		});
 	});
 
-	describe("schema versioning", () => {
-		it("should track schema versions", () => {
-			initAgentSchema(dbm);
-			const db = dbm.get("agent");
-			const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-			expect(row.version).toBe(6);
-		});
+		describe("schema versioning", () => {
+			it("should track schema versions", () => {
+				initAgentSchema(dbm);
+				const db = dbm.get("agent");
+				const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
+				expect(row.version).toBe(15);
+			});
 
-		it("should skip re-initialization when version matches", () => {
-			initAgentSchema(dbm);
-			// Second call should be a no-op
-			initAgentSchema(dbm);
-			const db = dbm.get("agent");
-			const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-			expect(row.version).toBe(6);
+			it("should skip re-initialization when version matches", () => {
+				initAgentSchema(dbm);
+				// Second call should be a no-op
+				initAgentSchema(dbm);
+				const db = dbm.get("agent");
+				const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
+				expect(row.version).toBe(15);
+			});
 		});
 	});
-});

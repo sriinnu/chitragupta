@@ -93,14 +93,14 @@ describe("Package Imports", () => {
 		expect(netra.captureTerminal).toBeDefined();
 	});
 
-	it("should import @chitragupta/vayu", async () => {
-		const vayu = await import("@chitragupta/vayu");
-		expect(vayu.WorkflowExecutor).toBeDefined();
-		expect(vayu.WorkflowBuilder).toBeDefined();
-		expect(vayu.validateDAG).toBeDefined();
-		expect(vayu.topologicalSort).toBeDefined();
-		expect(vayu.WorkerPool).toBeDefined();
-		expect(vayu.CODE_REVIEW_WORKFLOW).toBeDefined();
+	it("should import @chitragupta/prana", async () => {
+		const prana = await import("@chitragupta/prana");
+		expect(prana.WorkflowExecutor).toBeDefined();
+		expect(prana.WorkflowBuilder).toBeDefined();
+		expect(prana.validateDAG).toBeDefined();
+		expect(prana.topologicalSort).toBeDefined();
+		expect(prana.WorkerPool).toBeDefined();
+		expect(prana.CODE_REVIEW_WORKFLOW).toBeDefined();
 	});
 
 	it("should import @chitragupta/sutra", async () => {

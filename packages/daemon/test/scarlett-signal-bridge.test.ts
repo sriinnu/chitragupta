@@ -67,6 +67,7 @@ describe("injectProbeSignal", () => {
 			["nidra-heartbeat", "nidra"],
 			["consolidation-queue", "consolidation"],
 			["memory-pressure", "memory"],
+			["semantic-sync", "semantic-memory"],
 		];
 
 		for (const [probe, expectedEntity] of probeToEntity) {

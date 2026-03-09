@@ -15,10 +15,30 @@ function createJobRunner(deps: ApiDeps): (
 	message: string,
 	onEvent: (type: string, data: unknown) => void,
 	signal: AbortSignal,
+	metadata?: Record<string, unknown>,
 ) => Promise<string> {
-	return async (message, onEvent, signal) => {
+	return async (message, onEvent, signal, metadata) => {
 		if (deps.prompt) {
-			return deps.prompt(message, onEvent, signal);
+			let sessionId: string | undefined;
+			if (deps.openSession) {
+				const opened = await deps.openSession({
+					sessionId: typeof metadata?.sessionId === "string" ? metadata.sessionId : undefined,
+					title: typeof metadata?.title === "string" ? metadata.title : undefined,
+					clientKey: typeof metadata?.clientKey === "string" ? metadata.clientKey : undefined,
+					sessionLineageKey: typeof metadata?.sessionLineageKey === "string" ? metadata.sessionLineageKey : undefined,
+					sessionReusePolicy:
+						metadata?.sessionReusePolicy === "same_day" || metadata?.sessionReusePolicy === "isolated"
+							? metadata.sessionReusePolicy
+							: undefined,
+					consumer: typeof metadata?.consumer === "string" ? metadata.consumer : undefined,
+					surface: typeof metadata?.surface === "string" ? metadata.surface : undefined,
+					channel: typeof metadata?.channel === "string" ? metadata.channel : undefined,
+					actorId: typeof metadata?.actorId === "string" ? metadata.actorId : undefined,
+				});
+				sessionId = opened.id;
+				if (metadata) metadata.sessionId = opened.id;
+			}
+			return deps.prompt(message, { onEvent, signal, sessionId });
 		}
 		const agent = deps.getAgent() as Record<string, unknown> | null;
 		if (!agent || typeof agent.run !== "function") {
@@ -37,7 +57,12 @@ export function mountJobRoutes(
 	server: ChitraguptaServer,
 	deps: ApiDeps,
 	config?: ServerConfig,
-): (message: string, onEvent: (type: string, data: unknown) => void, signal: AbortSignal) => Promise<string> {
+): (
+	message: string,
+	onEvent: (type: string, data: unknown) => void,
+	signal: AbortSignal,
+	metadata?: Record<string, unknown>,
+) => Promise<string> {
 	const jobRunner = createJobRunner(deps);
 	const jobQueue = new JobQueue(jobRunner, config?.jobQueue);
 

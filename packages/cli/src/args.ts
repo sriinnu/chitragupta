@@ -216,7 +216,7 @@ Subcommands:
   sync status|export|import     Cross-machine sync for days/memory
   daemon start|stop|status|restart  Manage background daemon
   serve [--port N] [--host H] [--no-tls]  Start HTTP API server (TLS on by default)
-  mcp-server [--sse] [--port N] [--agent]  Run as MCP server
+  mcp-server [--stdio|--sse|--streamable-http] [--port N] [--agent]  Run as MCP server
 
 Interactive shortcuts:
   Ctrl+C                        Clear editor (twice to quit)

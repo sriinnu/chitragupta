@@ -1,237 +1,139 @@
-# Chitragupta Integration Guide for Vaayu
+# Vaayu Integration
 
-> **⛩ Chitragupta** — The divine scribe who records all deeds.
-> This document is the handshake protocol between **Vaayu** (personal AI assistant) and **Chitragupta** (the AI agent platform).
+Vaayu is the primary personal-assistant consumer of Chitragupta.
 
----
+This document describes the user-facing integration contract as it exists today:
 
-## What is Chitragupta?
-
-Chitragupta is a **14-package TypeScript monorepo** — an AI agent orchestration platform that provides:
-
-- **Memory** (Smriti): GraphRAG with bi-temporal edges, vector search, session persistence
-- **Intelligence** (Anina): Agent lifecycle, consciousness layer, emotional/cognitive awareness
-- **Routing** (Swara): Multi-provider cost-optimized LLM routing (Claude, GPT, Gemini, local)
-- **Tools** (Yantra): 12 sandboxed system tools (file, bash, grep, git, http, etc.)
-- **Policy** (Dharma): 20 security rules, sandbox enforcement, credential protection
-- **Skills** (Vidhya): Autonomous skill learning, evolution, trait-vector matching
-- **MCP** (Tantra): Pluggable MCP server management with health monitoring
-- **IPC** (Sutra): Inter-agent communication hub
-- **Orchestration** (Niyanta): Bandit-driven strategy selection, agent tree lifecycle
-
-All packages live under `@chitragupta/*` npm scope.
+- Chitragupta is the engine and authority.
+- Vaayu is a consumer of that engine.
+- Durable sessions, memory, routing policy, and bridge auth belong to Chitragupta.
+- Vaayu can remain specialized in assistant UX, channels, and install suggestions.
 
 ---
 
-## How Vaayu Connects
+## Ownership Model
 
-### Bridge Pattern (In-Process)
-
-The primary integration is via `ChitraguptaBridge` in Vaayu's gateway:
-
-```
-vaayu/apps/gateway/src/chitragupta-bridge/bridge.ts
-```
-
-**Key principle**: Chitragupta is **optional**. Vaayu runs at full capacity without it. The bridge:
-- Uses dynamic `import()` with fallback chain
-- Never throws — returns `null` or `[]` on failure
-- All methods are fire-and-forget
-
-### Bridge Methods
-
-| Method | Purpose | Returns |
-|--------|---------|---------|
-| `recommend(query)` | Get skill recommendations for user message | `string[]` |
-| `onSkillExecuted(name, success, latencyMs)` | Report tool execution outcome | `void` |
-| `onSkillRejected(rejected, chosen)` | Report when LLM chose differently | `void` |
-| `onSessionEnd(sessionId)` | Flush session skill data | `void` |
-| `dispose()` | Persist state and release resources | `void` |
-
-### Data Flow
-
-```
-User Message → Vaayu Agent Loop
-                 ↓
-         bridge.recommend(msg)  ← Chitragupta TVM matching (< 0.1ms)
-                 ↓
-         LLM selects tools (with Chitragupta's recommendations as context)
-                 ↓
-         Tool executes
-                 ↓
-         bridge.onSkillExecuted(name, success, latency)  → Chitragupta learns
-                 ↓
-         Session ends → bridge.onSessionEnd(id)  → state persisted
-```
+| Concern | Owner | Notes |
+| --- | --- | --- |
+| Durable memory | Chitragupta | Global, project, agent, and session continuity stay engine-owned. |
+| Canonical session ledger | Chitragupta | Vaayu can attach its own metadata, but it should not fork session truth. |
+| Provider and CLI routing | Chitragupta | Vaayu asks for capability; the engine decides the lane. |
+| Bridge auth and scopes | Chitragupta | Use bridge identity and scoped access, not ad hoc app-local keys. |
+| Assistant UX and channel behavior | Vaayu | Vaayu remains the primary user-facing product surface. |
+| Install suggestions and onboarding hints | Vaayu | Vaayu may suggest tools or providers, but the engine still registers and governs them. |
 
 ---
 
-## API Surfaces
+## Runtime Shape
 
-### 1. REST HTTP (port 3141)
+Current recommended integration path:
 
-**Core:**
-- `GET /api/health` — health check
-- `GET /api/sessions` — list sessions
-- `POST /api/chat` — send message
+1. Vaayu talks to the Chitragupta daemon.
+2. Vaayu opens or resumes an engine-owned session.
+3. Vaayu reports observations and turn activity back to the daemon.
+4. Chitragupta returns memory, recall, prediction, and health context.
 
-**Memory:**
-- `GET /api/memory/:scope` — read memory (global/project/agent)
-- `PUT /api/memory/:scope` — write memory
-- `GET /api/memory/search?q=...` — GraphRAG search
-
-**Agent Tree:**
-- `GET /api/agents` — list all agents
-- `POST /api/agents/:id/spawn` — spawn child agent
-- `POST /api/agents/:id/abort` — abort agent (cascading)
-- `POST /api/agents/:id/prompt` — send prompt to specific agent
-
-**Job Queue (async):**
-- `POST /api/jobs` — submit job (returns 202 + job ID)
-- `GET /api/jobs/:id` — poll for result
-- `DELETE /api/jobs/:id` — cancel
-
-**Skills:**
-- `GET /api/skills` — list all skills
-- `GET /api/skills/ecosystem` — ecosystem stats
-- `POST /api/skills/learn` — trigger autonomous learning
-
-**Intelligence Layer:**
-- `GET /api/intelligence/turiya` — multi-layer reasoning
-- `GET /api/intelligence/triguna` — three-quality health
-- `GET /api/intelligence/buddhi` — decision framework
-
-**Collaboration:**
-- `GET /api/collaboration/samiti` — ambient channels
-- `GET /api/collaboration/sabha` — deliberation/consensus
-- `GET /api/collaboration/akasha` — shared knowledge field
-
-**Autonomy:**
-- `GET /api/autonomy/kartavya` — auto-execution triggers
-- `GET /api/autonomy/kala-chakra` — temporal awareness
-
-### 2. WebSocket (ws://localhost:3141/ws)
-
-- JWT or token auth via query param
-- Subscribe to events: `agent:*`, `stream:*`, `tool:*`, `job:*`, `memory:*`
-- Real-time streaming of agent output
-- Heartbeat with configurable interval
-
-### 3. MCP (stdio or SSE)
-
-Run: `node chitragupta/packages/cli/dist/mcp-entry.js --agent`
-
-**Tools:** 12 yantra tools + `memory_search` + `session_list` + `session_show` + `agent_prompt`
-**Resources:** `chitragupta://memory/project`, `chitragupta://memory/global`
-**Prompts:** `code_review`, `architectural_analysis`
+This keeps Vaayu thin where continuity matters and specialized where UX matters.
 
 ---
 
-## Memory Architecture
+## What Vaayu Should Ask For
 
-```
-Scopes:
-  global  → ~/.chitragupta/memory/global.md        (cross-project patterns)
-  project → ~/.chitragupta/memory/projects/{hash}/  (per-project knowledge)
-  agent   → ~/.chitragupta/memory/agents/{id}.md    (per-agent state)
-  session → stored in session markdown files        (conversation turns)
+Vaayu should ask for capabilities, not vendor names.
 
-GraphRAG:
-  Entities extracted via NER → graph nodes
-  Relations via bi-temporal edges (validTime + recordTime)
-  Vector search via Ollama nomic-embed-text (fallback: char-frequency hash)
-  Hybrid scoring: Thompson Sampling weights + temporal decay + MMR diversity
-```
+Examples:
 
----
+| Vaayu intent | Engine decides |
+| --- | --- |
+| `assistant.reply` | local tool, local model, or cloud provider based on policy |
+| `memory.recall` | daemon-backed recall path |
+| `session.create` / `turn.add` | canonical session persistence |
+| `predict.next` | Lucy intuition / anticipation |
+| `health.status` | Scarlett integrity / healing state |
+| `sabha.ask` | future council / peer-consultation path |
 
-## Auth (Kavach)
-
-- **JWT**: RS256 tokens, configurable expiry
-- **RBAC**: 4 roles (user/admin/service/guest), 16 permissions
-- **OAuth**: Google, Apple, GitHub token exchange
-- **Multi-tenant**: Org-scoped data isolation
-- All in `@chitragupta/core/auth/` — zero external dependencies
+This prevents Vaayu from becoming a second routing authority.
 
 ---
 
-## Configuration
+## Data Boundaries
 
-Chitragupta uses cascading config: `global → workspace → project → session`
+| Data type | Where it belongs |
+| --- | --- |
+| user identity and preferences | Chitragupta |
+| cross-project memory | Chitragupta |
+| project memory | Chitragupta |
+| session turns and transcripts | Chitragupta |
+| Vaayu UI state | Vaayu |
+| transient presentation state | Vaayu |
+| install recommendations | Vaayu, with engine registration afterward |
 
-**Vaayu gateway config** (`vaayu.config.json`):
-```json
-{
-  "chitragupta": {
-    "enabled": false,
-    "mcpTransport": "stdio",
-    "mcpCommand": "npx",
-    "mcpArgs": ["chitragupta", "mcp-server"]
-  }
-}
-```
-
-**MCP config** (`.mcp.json`):
-```json
-{
-  "mcpServers": {
-    "chitragupta": {
-      "command": "node",
-      "args": ["chitragupta/packages/cli/dist/mcp-entry.js", "--agent"],
-      "env": {
-        "CHITRAGUPTA_MCP_AGENT": "true",
-        "CHITRAGUPTA_MCP_PROJECT": "/path/to/project"
-      }
-    }
-  }
-}
-```
+Session-scoped content is not a standalone memory file. It lives in the session ledger and is accessed through session APIs.
 
 ---
 
-## Performance Guarantees
+## Auth Boundary
 
-| Operation | Latency | Notes |
-|-----------|---------|-------|
-| Skill recommendation | < 0.1ms | TVM matching, zero LLM calls |
-| Memory search | 5-50ms | GraphRAG + vector similarity |
-| Job submission | 1-2ms | Async, non-blocking |
-| WebSocket message | 2-5ms | Per-frame encoding |
-| Health check | < 1ms | In-memory counters |
-| Load test baseline | p99 < 1.2ms at 500 RPS | Token bucket rate limiting |
+Current engine model:
 
----
+| Surface | Auth shape |
+| --- | --- |
+| daemon socket / named pipe | `auth.handshake` bridge token + method scopes |
+| serve HTTP | serve auth surface (pairing/JWT/API auth), separate from daemon socket auth |
+| MCP HTTP/SSE | bridge token family + scope checks |
 
-## Error Handling Contract
-
-1. **Bridge never throws** — all methods catch and return safe defaults
-2. **HTTP errors are structured** — JSON `{ error, message, statusCode }`
-3. **WebSocket errors are events** — `{ type: "error", data: { ... } }`
-4. **MCP errors use protocol** — standard MCP error codes
-5. **Degradation is graceful** — Vaayu operates fully without Chitragupta
+Vaayu should identify itself as a bridge client with explicit scopes instead of relying on implicit local trust beyond loopback.
 
 ---
 
-## Package Map
+## Failure Model
 
-| Package | Sanskrit | Purpose |
-|---------|----------|---------|
-| core | मूल | Types, config, auth, observability |
-| swara | स्वर | AI provider routing, cost optimization |
-| anina | आनिन | Agent lifecycle, consciousness (Chetana) |
-| smriti | स्मृति | Memory, GraphRAG, sessions, consolidation |
-| ui | दर्शन | Terminal UI, themes, ANSI rendering |
-| yantra | यन्त्र | 12 sandboxed tools |
-| dharma | धर्म | Policy engine, security rules |
-| netra | नेत्र | Vision, screenshot analysis |
-| vayu | वायु | Workflow DAG engine |
-| sutra | सूत्र | IPC, inter-agent messaging |
-| tantra | तन्त्र | MCP server management |
-| vidhya-skills | विद्या | Skill discovery, evolution, learning |
-| niyanta | नियन्ता | Orchestrator, bandit strategies |
-| cli | ⛩ Chitragupta | Entry point, HTTP server, MCP server |
+| Condition | Expected behavior |
+| --- | --- |
+| daemon healthy | Vaayu uses daemon-backed sessions, memory, and recall |
+| daemon degraded | read-only fallback may exist for limited flows, but writes fail closed by default |
+| daemon unavailable and local fallback not enabled | Vaayu should surface degraded mode, not silently create a second durable truth |
+| local fallback explicitly enabled | fallback is an override, not the default contract |
+
+The important rule is fail closed on writes unless the operator has deliberately opted into local fallback.
 
 ---
 
-*This document is the single source of truth for Vaayu-Chitragupta integration.
-Updated: 2026-02-09*
+## Lucy and Scarlett in Vaayu
+
+Vaayu consumes the engine's internal nervous system rather than re-implementing it.
+
+| Runtime faculty | What Vaayu should consume |
+| --- | --- |
+| Lucy | recall, prediction, live context hints, fresh/no-cache behavior |
+| Scarlett | health, anomaly, heal-report, degradation signals |
+| Sabha | future peer consultation and council-style coordination |
+
+Vaayu should render or act on these signals, not become the source of truth for them.
+
+---
+
+## Current Status
+
+| Capability | Current state |
+| --- | --- |
+| daemon-owned sessions and memory | live |
+| serve memory routes through daemon | live |
+| daemon-backed memory/session writes in main runtime surfaces | live |
+| local fallback only by explicit opt-in | live |
+| Takumi-style dedicated adapter protocol reused by Vaayu | not the current path; Vaayu should use the engine contract directly |
+
+---
+
+## Recommended Integration Pattern
+
+1. Connect Vaayu to the daemon, not to raw Smriti files.
+2. Treat Chitragupta as the authority for session ids, memory, provider/CLI policy, and health.
+3. Keep Vaayu specialized in experience, channels, and user workflow.
+4. Let Vaayu suggest installs and preferences, then hand authority back to the engine.
+
+That keeps the architecture aligned:
+
+- Chitragupta = engine
+- Vaayu = primary consumer
+- Takumi = specialized consumer + executable capability

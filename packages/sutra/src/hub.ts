@@ -24,7 +24,6 @@ import type {
 import { LockManager, BarrierManager, SemaphoreManager } from "./hub-sync.js";
 import { SharedMemoryManager } from "./hub-memory.js";
 import type { RegionChangeHandler } from "./hub-memory.js";
-
 /** Default hub configuration values. */
 const DEFAULTS: Required<HubConfig> = {
 	maxChannels: 100,
