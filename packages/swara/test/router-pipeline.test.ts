@@ -104,6 +104,25 @@ describe("MargaPipeline", () => {
 			expect(order[decision.complexity]).toBeGreaterThanOrEqual(order["complex"]);
 		});
 
+		it("should let routingInfluence disable skipLLM and raise complexity", () => {
+			const registry = createMockRegistry(["ollama", "anthropic"]);
+			const pipeline = new MargaPipeline({ registry, bindings: HYBRID_BINDINGS });
+			const decision = pipeline.classify(
+				ctx("search for files containing errors"),
+				{
+					routingInfluence: {
+						minimumComplexity: "complex",
+						avoidSkipLLM: true,
+						rationale: "tamas elevated",
+					},
+				},
+			);
+
+			expect(decision.skipLLM).toBe(false);
+			expect(decision.complexity).toBe("complex");
+			expect(decision.rationale).toContain("tamas elevated");
+		});
+
 		it("should compute confidence as geometric mean of both classifiers", () => {
 			const registry = createMockRegistry(["ollama", "anthropic"]);
 			const pipeline = new MargaPipeline({ registry, bindings: HYBRID_BINDINGS });

@@ -181,47 +181,54 @@ export async function handleMetaCommand(
 			const buddhiArgs = parts.slice(2);
 
 			try {
-				const { Buddhi } = await import("@chitragupta/anina");
-				const { DatabaseManager } = await import("@chitragupta/smriti");
-				const buddhi = new Buddhi();
-				const db = DatabaseManager.instance();
+				const { createDaemonBuddhiProxy } = await import("../runtime-daemon-proxies.js");
+				const buddhi = createDaemonBuddhiProxy();
 				const project = ctx.projectPath ?? process.cwd();
 
 				if (buddhiSubCmd === "explain" && buddhiArgs.length > 0) {
 					const decisionId = buddhiArgs.join(" ");
-					const explanation = buddhi.explainDecision(decisionId, db);
+					const explanation = await buddhi.explainDecision(decisionId);
 					stdout.write("\n" + bold("\u092C\u0941\u0926\u094D\u0927\u093F Buddhi") + dim(" \u2014 Decision Explanation") + "\n\n");
 
 					if (!explanation) {
 						stdout.write(red(`  Decision not found: ${decisionId}\n\n`));
 					} else {
-						const decision = buddhi.getDecision(decisionId, db);
+						const decision = await buddhi.getDecision(decisionId) as Record<string, unknown> | null;
 						if (decision) {
-							const confPct = Math.round(decision.confidence * 100);
-							const confColor = decision.confidence >= 0.8 ? green : decision.confidence >= 0.5 ? yellow : red;
-							stdout.write("  " + bold("Decision:") + " " + decision.description + "\n");
-							stdout.write("  " + bold("Category:") + " " + cyan(decision.category) +
+							const confidence = Number(decision.confidence ?? 0);
+							const confPct = Math.round(confidence * 100);
+							const confColor = confidence >= 0.8 ? green : confidence >= 0.5 ? yellow : red;
+							const reasoning = (decision.reasoning ?? {}) as Record<string, unknown>;
+							const alternatives = Array.isArray(decision.alternatives)
+								? decision.alternatives as Array<Record<string, unknown>>
+								: [];
+							const outcome = typeof decision.outcome === "object" && decision.outcome !== null
+								? decision.outcome as Record<string, unknown>
+								: null;
+							stdout.write("  " + bold("Decision:") + " " + String(decision.description ?? "") + "\n");
+							stdout.write("  " + bold("Category:") + " " + cyan(String(decision.category ?? "")) +
 								" | " + bold("Confidence:") + " " + confColor(confPct + "%") + "\n\n");
 
 							stdout.write("  " + bold("--- Nyaya Reasoning (Panchavayava) ---") + "\n");
-							stdout.write("  " + cyan("1. Pratij\u00f1a (Thesis):") + "     " + decision.reasoning.thesis + "\n");
-							stdout.write("  " + cyan("2. Hetu (Reason):") + "         " + decision.reasoning.reason + "\n");
-							stdout.write("  " + cyan("3. Udaharana (Example):") + "   " + decision.reasoning.example + "\n");
-							stdout.write("  " + cyan("4. Upanaya (Application):") + " " + decision.reasoning.application + "\n");
-							stdout.write("  " + cyan("5. Nigamana (Conclusion):") + " " + decision.reasoning.conclusion + "\n");
+							stdout.write("  " + cyan("1. Pratij\u00f1a (Thesis):") + "     " + String(reasoning.thesis ?? "") + "\n");
+							stdout.write("  " + cyan("2. Hetu (Reason):") + "         " + String(reasoning.reason ?? "") + "\n");
+							stdout.write("  " + cyan("3. Udaharana (Example):") + "   " + String(reasoning.example ?? "") + "\n");
+							stdout.write("  " + cyan("4. Upanaya (Application):") + " " + String(reasoning.application ?? "") + "\n");
+							stdout.write("  " + cyan("5. Nigamana (Conclusion):") + " " + String(reasoning.conclusion ?? "") + "\n");
 
-							if (decision.alternatives.length > 0) {
+							if (alternatives.length > 0) {
 								stdout.write("\n  " + bold("Alternatives Considered:") + "\n");
-								for (const alt of decision.alternatives) {
-									stdout.write(`    ${dim("\u2022")} ${alt.description}: ${dim(alt.reason_rejected)}\n`);
+								for (const alt of alternatives) {
+									stdout.write(`    ${dim("\u2022")} ${String(alt.description ?? "")}: ${dim(String(alt.reason_rejected ?? ""))}\n`);
 								}
 							}
 
 							stdout.write("\n  " + bold("Outcome:") + " ");
-							if (decision.outcome) {
-								const outcomeColor = decision.outcome.success ? green : red;
-								stdout.write(outcomeColor(decision.outcome.success ? "Success" : "Failure"));
-								if (decision.outcome.feedback) stdout.write(" \u2014 " + dim(decision.outcome.feedback));
+							if (outcome) {
+								const success = Boolean(outcome.success);
+								const outcomeColor = success ? green : red;
+								stdout.write(outcomeColor(success ? "Success" : "Failure"));
+								if (typeof outcome.feedback === "string" && outcome.feedback) stdout.write(" \u2014 " + dim(outcome.feedback));
 							} else {
 								stdout.write(dim("Pending"));
 							}
@@ -229,24 +236,28 @@ export async function handleMetaCommand(
 						}
 					}
 				} else {
-					const decisions = buddhi.listDecisions({ project, limit: 10 }, db);
+					const decisions = await buddhi.listDecisions({ project, limit: 10 }) as Array<Record<string, unknown>>;
 					stdout.write("\n" + bold("\u092C\u0941\u0926\u094D\u0927\u093F Buddhi") + dim(` \u2014 Recent Decisions (${project.split("/").pop()})`) + "\n\n");
 					if (decisions.length === 0) {
 						stdout.write(dim("  No decisions recorded yet. Buddhi logs agent decisions with formal Nyaya reasoning.\n\n"));
 					} else {
 						for (const d of decisions) {
-							const confPct = Math.round(d.confidence * 100);
-							const confColor = d.confidence >= 0.8 ? green : d.confidence >= 0.5 ? yellow : red;
-							const age = formatAge(d.timestamp);
-							const outcomeIcon = d.outcome
-								? (d.outcome.success ? green("\u2713") : red("\u2717"))
+							const confidence = Number(d.confidence ?? 0);
+							const confPct = Math.round(confidence * 100);
+							const confColor = confidence >= 0.8 ? green : confidence >= 0.5 ? yellow : red;
+							const age = formatAge(Number(d.timestamp ?? Date.now()));
+							const outcome = typeof d.outcome === "object" && d.outcome !== null
+								? d.outcome as Record<string, unknown>
+								: null;
+							const outcomeIcon = outcome
+								? (Boolean(outcome.success) ? green("\u2713") : red("\u2717"))
 								: dim("\u25CB");
 							stdout.write(
-								`  ${outcomeIcon} ${confColor(confPct + "%")} ${bold(d.category.padEnd(16))} ` +
-								`${d.description.slice(0, 50)}${d.description.length > 50 ? "\u2026" : ""} ` +
+								`  ${outcomeIcon} ${confColor(confPct + "%")} ${bold(String(d.category ?? "").padEnd(16))} ` +
+								`${String(d.description ?? "").slice(0, 50)}${String(d.description ?? "").length > 50 ? "\u2026" : ""} ` +
 								`${dim(age + " ago")}\n`
 							);
-							stdout.write(dim(`    id: ${d.id}\n`));
+							stdout.write(dim(`    id: ${String(d.id ?? "")}\n`));
 						}
 						stdout.write("\n" + dim("  Use /buddhi explain <id> for full Nyaya reasoning.\n\n"));
 					}

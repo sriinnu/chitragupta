@@ -38,7 +38,7 @@ pnpm run check
 Packages must compile in dependency order:
 
 ```
-core -> swara -> anina -> smriti -> ui -> yantra -> dharma -> netra -> vayu -> sutra -> tantra -> vidhya-skills -> niyanta -> cli
+core -> swara -> anina -> smriti -> ui -> yantra -> dharma -> netra -> prana -> sutra -> tantra -> vidhya-skills -> niyanta -> cli
 ```
 
 `pnpm run build` handles this automatically.
@@ -69,7 +69,7 @@ Chitragupta is a TypeScript ESM monorepo with 15 packages under `packages/`:
 | `yantra` | Tools — 12+ built-in tools, sandbox, credential protection | Yantra (Instrument) |
 | `dharma` | Policy — security rules, rate limiting, approval gates | Dharma (Law) |
 | `netra` | Vision — image analysis, pixel diffing, multimodal | Netra (Eye) |
-| `vayu` | Workflows — DAG execution, worker thread pool, pipelines | Vayu (Wind) |
+| `prana` | Workflows — DAG execution, worker thread pool, pipelines | Prana (Life Force) |
 | `sutra` | IPC — P2P actor mesh, gossip protocol, pub/sub | Sutra (Thread) |
 | `tantra` | MCP — server lifecycle, circuit breaker, auto-restart | Tantra (Technique) |
 | `vidhya-skills` | Skills — trait vector matching, evolution, autonomous learning | Vidhya (Knowledge) |

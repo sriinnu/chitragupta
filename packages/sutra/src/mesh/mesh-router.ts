@@ -20,34 +20,11 @@ import { randomUUID } from "node:crypto";
 import type {
 	AskOptions,
 	MeshEnvelope,
-	MeshPriority,
 	MessageReceiver,
 	MessageSender,
 	PeerChannel,
-	SendOptions,
 } from "./types.js";
-
-// ─── Event system ───────────────────────────────────────────────────────────
-
-type RouterEvent =
-	| { type: "delivered"; envelope: MeshEnvelope }
-	| { type: "undeliverable"; envelope: MeshEnvelope; reason: string }
-	| { type: "broadcast"; envelope: MeshEnvelope; recipientCount: number };
-
-type RouterEventHandler = (event: RouterEvent) => void;
-
-// ─── Pending ask tracker ────────────────────────────────────────────────────
-
-interface PendingAsk {
-	resolve: (envelope: MeshEnvelope) => void;
-	reject: (error: Error) => void;
-	timer: ReturnType<typeof setTimeout>;
-}
-
-// ─── Router ─────────────────────────────────────────────────────────────────
-
-const DEFAULT_TTL = 30_000;
-const DEFAULT_ASK_TIMEOUT = 10_000;
+import { type PendingAsk, type RouterEvent, type RouterEventHandler, DEFAULT_ASK_TIMEOUT, DEFAULT_TTL } from "./mesh-router-shared.js";
 
 /**
  * Distributed message router for the actor mesh.
@@ -69,6 +46,8 @@ export class MeshRouter implements MessageSender {
 	private peerChannelResolver: ((actorId: string) => PeerChannel | undefined) | null = null;
 	/** Capability-based resolver: capabilities[] → PeerChannel. */
 	private capabilityResolver: ((caps: string[]) => PeerChannel | undefined) | null = null;
+	/** Local capability-based resolver: capabilities[] → local actorId. */
+	private capabilityActorResolver: ((caps: string[]) => string | undefined) | null = null;
 	/** Reply routes for cross-node ask/reply — maps correlationId → originating channel. */
 	private readonly replyRoutes = new Map<string, { channel: PeerChannel; timer: ReturnType<typeof setTimeout> }>();
 
@@ -93,6 +72,11 @@ export class MeshRouter implements MessageSender {
 	/** Set a resolver for capability-based routing (capabilities[] → PeerChannel). */
 	setCapabilityResolver(fn: (caps: string[]) => PeerChannel | undefined): void {
 		this.capabilityResolver = fn;
+	}
+
+	/** Set a resolver for capability-based routing to local actors. */
+	setCapabilityActorResolver(fn: (caps: string[]) => string | undefined): void {
+		this.capabilityActorResolver = fn;
 	}
 
 	/** Register a reply route for cross-node ask/reply correlation. */
@@ -322,19 +306,34 @@ export class MeshRouter implements MessageSender {
 		}
 
 		// 2.5 Capability-based routing
-		if (this.capabilityResolver) {
+		if (this.capabilityResolver || this.capabilityActorResolver) {
 			const caps = envelope.to.startsWith("capability:")
 				? [envelope.to.slice(11)]
 				: envelope.requiredCapabilities;
 			if (caps?.length) {
-				const channel = this.capabilityResolver(caps);
-				if (channel) {
-					channel.receive(envelope);
-					this.emit({ type: "delivered", envelope });
-					return;
+					if (this.capabilityActorResolver) {
+						const actorId = this.capabilityActorResolver(caps);
+						const actor = actorId ? this.actors.get(actorId) : undefined;
+						if (actor) {
+							actor.receive({
+								...envelope,
+								to: actor.actorId,
+								requiredCapabilities: caps,
+							});
+							this.emit({ type: "delivered", envelope });
+							return;
+						}
+					}
+					if (this.capabilityResolver) {
+						const channel = this.capabilityResolver(caps);
+						if (channel) {
+							channel.receive(envelope);
+							this.emit({ type: "delivered", envelope });
+							return;
+						}
+					}
 				}
 			}
-		}
 
 		// 3. P2P mesh: peer channel resolver (actorId → PeerChannel directly)
 		if (this.peerChannelResolver) {

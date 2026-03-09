@@ -184,28 +184,28 @@ export function createSabhaDeliberateTool(): McpToolHandler {
 					credibility: 0.85 - i * 0.05,
 				}));
 
-				const session = sabha.convene(proposal, "mcp-client", participants);
+					const session = await sabha.convene(proposal, "mcp-client", participants);
 
-				sabha.propose(session.id, agentIds[0], {
-					pratijna: proposal,
-					hetu: `Because the current analysis suggests this is the optimal course of action.`,
-					udaharana: `Wherever similar conditions exist, this approach has yielded positive outcomes, as in comparable projects.`,
-					upanaya: `The current project exhibits these conditions.`,
-					nigamana: `Therefore, ${proposal.toLowerCase().replace(/\?$/, "")}.`,
-				});
+					await sabha.propose(session.id, agentIds[0], {
+						pratijna: proposal,
+						hetu: `Because the current analysis suggests this is the optimal course of action.`,
+						udaharana: `Wherever similar conditions exist, this approach has yielded positive outcomes, as in comparable projects.`,
+						upanaya: `The current project exhibits these conditions.`,
+						nigamana: `Therefore, ${proposal.toLowerCase().replace(/\?$/, "")}.`,
+					});
 
-				for (const participant of participants) {
+					for (const participant of participants) {
 					const position =
 						participant.role === "proposer"
 							? ("support" as const)
 							: participant.role === "challenger"
 								? ("oppose" as const)
 								: ("abstain" as const);
-					sabha.vote(session.id, participant.id, position, `${participant.role} perspective on: ${proposal}`);
-				}
+						await sabha.vote(session.id, participant.id, position, `${participant.role} perspective on: ${proposal}`);
+					}
 
-				const result = sabha.conclude(session.id);
-				const explanation = sabha.explain(session.id);
+					const result = await sabha.conclude(session.id);
+					const explanation = await sabha.explain(session.id);
 
 				return {
 					content: [
@@ -266,7 +266,7 @@ export function createAkashaTracesTool(): McpToolHandler {
 
 			try {
 				const akasha = await getAkasha();
-				const traces = akasha.query(query, { type: traceType, limit });
+				const traces = await Promise.resolve(akasha.query(query, { type: traceType, limit }));
 
 				if (traces.length === 0) {
 					return { content: [{ type: "text", text: "No matching traces found in the Akasha field." }] };
@@ -349,7 +349,7 @@ export function createAkashaDepositTool(): McpToolHandler {
 			try {
 				const akasha = await getAkasha();
 				const topic = topics.join(" ");
-				const trace = akasha.leave("mcp-client", depositType, topic, content);
+				const trace = await Promise.resolve(akasha.leave("mcp-client", depositType, topic, content));
 				await persistAkasha();
 				return { content: [{ type: "text", text: `Trace deposited. ID: ${trace.id}` }] };
 			} catch (err) {

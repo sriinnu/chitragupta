@@ -36,14 +36,13 @@ import { createProviderRegistry } from "@chitragupta/swara/provider-registry";
 
 import { Agent } from "@chitragupta/anina";
 import type { AgentConfig, AgentMessage, ToolHandler } from "@chitragupta/anina";
-
-import {
-	createSession,
-	loadSession,
-} from "@chitragupta/smriti/session-store";
+import type { Session } from "@chitragupta/smriti/types";
 
 import { detectProject } from "./project-detector.js";
 import { loadContextFiles } from "./context-files.js";
+import { createDaemonBuddhiProxy } from "./runtime-daemon-proxies.js";
+import { enrichFromTranscendence } from "./nervous-system-wiring.js";
+import { wireBuddhiRecorder, wireSkillGapRecorder } from "./nervous-system-wiring.js";
 import { buildSystemPrompt } from "./personality.js";
 
 import {
@@ -57,6 +56,7 @@ import {
 
 import { wireApiInfrastructure } from "./api-wiring.js";
 import { buildInstance } from "./api-instance.js";
+import { openSession as openSessionViaDaemon, showSession as showSessionViaDaemon } from "./modes/daemon-bridge.js";
 import { createToolNotFoundResolver } from "./shared-factories.js";
 
 // ─── Re-export public types from sub-modules ────────────────────────────────
@@ -177,12 +177,30 @@ export async function createChitragupta(
 	const tools: ToolHandler[] = getBuiltinTools();
 
 	// ─── 7. Create session ────────────────────────────────────────────
-	let session;
+	let session: Session;
 	if (options.sessionId) {
-		try { session = loadSession(options.sessionId, projectPath); }
-		catch { session = createSession({ project: projectPath, agent: profile.id, model: modelId, title: "API Session" }); }
+		try {
+			session = await showSessionViaDaemon(options.sessionId, projectPath) as unknown as Session;
+		} catch (error) {
+			throw new Error(
+				`Failed to resume requested session ${options.sessionId}: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
 	} else {
-		session = createSession({ project: projectPath, agent: profile.id, model: modelId, title: "API Session" });
+			const opened = await openSessionViaDaemon({
+				project: projectPath,
+				agent: profile.id,
+				model: modelId,
+				title: "API Session",
+				consumer: "chitragupta",
+				surface: "api",
+				channel: "programmatic",
+				actorId: `api:${process.pid}`,
+				sessionReusePolicy: "isolated",
+			});
+		session = opened.session as unknown as Session;
 	}
 
 	// ─── 8. Wire infrastructure ───────────────────────────────────────
@@ -200,12 +218,27 @@ export async function createChitragupta(
 		: wiring.skillContext;
 
 	const contextFiles = loadContextFiles(projectPath);
-	const systemPrompt = buildSystemPrompt({
+	let systemPrompt = buildSystemPrompt({
 		profile, project, contextFiles,
 		memoryContext: enrichedMemoryContext,
 		identityContext: wiring.identityContext,
 		tools,
 	});
+	systemPrompt += await enrichFromTranscendence(projectPath);
+	let sharedAkasha: unknown;
+	try {
+		const { getAkasha } = await import("./modes/mcp-subsystems.js");
+		sharedAkasha = await getAkasha();
+	} catch {
+		sharedAkasha = undefined;
+	}
+	const skillGapRecorder = wireSkillGapRecorder(sharedAkasha, wiring.vidyaOrchestrator);
+	const buddhiRecorder = wireBuddhiRecorder(
+		createDaemonBuddhiProxy(),
+		undefined,
+		projectPath,
+		() => session.meta.id,
+	);
 
 	// ─── 11. Create the agent ─────────────────────────────────────────
 	const home = getChitraguptaHome();
@@ -214,13 +247,16 @@ export async function createChitragupta(
 		workingDirectory: projectPath, policyEngine: wiring.policyAdapter,
 		embeddingProvider: wiring.embeddingProvider,
 		enableMemory: !options.noMemory, project: projectPath,
+		memoryBridge: wiring.memoryBridge,
 		commHub: wiring.commHub, samiti: wiring.samiti,
 		lokapala: wiring.lokapala, kaala: wiring.kaala,
+		onEvent: buddhiRecorder,
 		// Wire 4: Persist learning-loop state across sessions
 		learningPersistPath: path.join(home, "learning", "session-state.json"),
 		// Wire 2: Record skill gaps for SkillLearner analysis
 		onSkillGap: (toolName: string) => {
 			process.stderr.write(`[skill-gap] ${toolName}\n`);
+			skillGapRecorder(toolName);
 		},
 		onToolNotFound: createToolNotFoundResolver({
 			tools,

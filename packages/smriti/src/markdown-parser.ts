@@ -8,6 +8,10 @@
 import { SessionError } from "@chitragupta/core";
 import type { Session, SessionMeta, SessionTurn, SessionToolCall } from "./types.js";
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /**
  * Parse YAML frontmatter between --- delimiters into a key-value map.
  * Handles simple scalar values, arrays (both inline and multi-line), and null.
@@ -80,7 +84,11 @@ function parseScalar(value: string): string | number | boolean | null {
 
 	// Quoted strings — unescape \" inside double-quoted values (written by writeFrontmatter)
 	if (value.startsWith('"') && value.endsWith('"')) {
-		return value.slice(1, -1).replace(/\\"/g, '"');
+		try {
+			return JSON.parse(value) as string;
+		} catch {
+			return value.slice(1, -1).replace(/\\"/g, '"');
+		}
 	}
 	if (value.startsWith("'") && value.endsWith("'")) {
 		return value.slice(1, -1);
@@ -136,6 +144,23 @@ export function parseSessionMarkdown(content: string): Session {
  * Build a SessionMeta from parsed frontmatter key-value pairs.
  */
 function buildSessionMeta(raw: Record<string, unknown>): SessionMeta {
+	let metadata: Record<string, unknown> | undefined;
+	if (typeof raw.metadataJson === "string" && raw.metadataJson.trim().length > 0) {
+		try {
+			const parsed = JSON.parse(raw.metadataJson);
+			if (isPlainObject(parsed)) metadata = parsed;
+		} catch {
+			/* ignore invalid metadata payloads */
+		}
+	}
+	const provider = typeof raw.provider === "string" && raw.provider.trim().length > 0
+		? raw.provider
+		: typeof metadata?.provider === "string" && metadata.provider.trim().length > 0
+			? metadata.provider
+			: undefined;
+	if (provider && metadata?.provider !== provider) {
+		metadata = { ...(metadata ?? {}), provider };
+	}
 	return {
 		id: String(raw.id ?? ""),
 		title: String(raw.title ?? "Untitled Session"),
@@ -143,12 +168,14 @@ function buildSessionMeta(raw: Record<string, unknown>): SessionMeta {
 		updated: String(raw.updated ?? new Date().toISOString()),
 		agent: String(raw.agent ?? "chitragupta"),
 		model: String(raw.model ?? "unknown"),
+		provider,
 		project: String(raw.project ?? ""),
 		parent: raw.parent != null ? String(raw.parent) : null,
 		branch: raw.branch != null ? String(raw.branch) : null,
 		tags: Array.isArray(raw.tags) ? raw.tags.map(String) : [],
 		totalCost: Number(raw.totalCost ?? 0),
 		totalTokens: Number(raw.totalTokens ?? 0),
+		metadata,
 	};
 }
 
@@ -197,7 +224,7 @@ function parseTurns(body: string): SessionTurn[] {
 		}
 
 		// Separate content from tool calls
-		const { content, toolCalls } = parseContentAndToolCalls(rawContent);
+		const { content, toolCalls, contentParts } = parseContentAndToolCalls(rawContent);
 
 		// Unescape escaped turn boundaries in content
 		const unescapedContent = content
@@ -210,6 +237,7 @@ function parseTurns(body: string): SessionTurn[] {
 			role: m.role,
 			content: unescapedContent,
 		};
+		if (contentParts) turn.contentParts = contentParts;
 		if (agent) turn.agent = agent;
 		if (model) turn.model = model;
 		if (toolCalls.length > 0) turn.toolCalls = toolCalls;
@@ -242,7 +270,11 @@ function stripFooter(body: string): string {
  * Separate turn content from tool call sections.
  * Tool calls begin with `### Tool: <name>`.
  */
-function parseContentAndToolCalls(raw: string): { content: string; toolCalls: SessionToolCall[] } {
+function parseContentAndToolCalls(raw: string): {
+	content: string;
+	toolCalls: SessionToolCall[];
+	contentParts?: Array<Record<string, unknown>>;
+} {
 	const toolPattern = /^### Tool: (.+)$/gm;
 	const toolMatches: { index: number; name: string }[] = [];
 
@@ -252,11 +284,12 @@ function parseContentAndToolCalls(raw: string): { content: string; toolCalls: Se
 	}
 
 	if (toolMatches.length === 0) {
-		return { content: raw, toolCalls: [] };
+		const extracted = extractEmbeddedContentParts(raw);
+		return { content: extracted.content, toolCalls: [], contentParts: extracted.contentParts };
 	}
 
 	// Content is everything before the first tool section
-	const content = raw.slice(0, toolMatches[0].index).trim();
+	const extracted = extractEmbeddedContentParts(raw.slice(0, toolMatches[0].index).trim());
 	const toolCalls: SessionToolCall[] = [];
 
 	for (let i = 0; i < toolMatches.length; i++) {
@@ -269,7 +302,31 @@ function parseContentAndToolCalls(raw: string): { content: string; toolCalls: Se
 		toolCalls.push(parseToolCallSection(tm.name, section));
 	}
 
-	return { content, toolCalls };
+	return { content: extracted.content, toolCalls, contentParts: extracted.contentParts };
+}
+
+function extractEmbeddedContentParts(raw: string): {
+	content: string;
+	contentParts?: Array<Record<string, unknown>>;
+} {
+	const match = raw.match(/\n?<!-- contentPartsBase64: ([A-Za-z0-9+/=]+) -->\s*$/);
+	if (!match) return { content: raw };
+
+	let contentParts: Array<Record<string, unknown>> | undefined;
+	try {
+		const decoded = Buffer.from(match[1], "base64").toString("utf-8");
+		const parsed = JSON.parse(decoded);
+		if (Array.isArray(parsed) && parsed.every((entry) => isPlainObject(entry))) {
+			contentParts = parsed;
+		}
+	} catch {
+		/* ignore invalid embedded content-parts payloads */
+	}
+
+	return {
+		content: raw.slice(0, match.index).trimEnd(),
+		contentParts,
+	};
 }
 
 /**

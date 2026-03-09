@@ -13,11 +13,8 @@
  */
 
 import { EventEmitter } from "node:events";
-import fs from "node:fs";
-import path from "node:path";
-import { getChitraguptaHome } from "@chitragupta/core";
 import { NidraDaemon } from "./nidra-daemon.js";
-import type { NidraConfig, NidraState, NidraSnapshot } from "./types.js";
+import type { NidraSnapshot } from "./types.js";
 import {
 	formatDate, scheduleLongTimeout,
 	consolidateLastMonth as runMonthlyConsolidation,
@@ -25,114 +22,25 @@ import {
 	backfillPeriodicReports as runPeriodicBackfill,
 	archiveOldDayFiles as runArchiveOldDayFiles,
 } from "./daemon-periodic.js";
+import {
+	acquireDateLock,
+	DEFAULT_DAEMON_CONFIG,
+	type ChitraguptaDaemonConfig,
+	type ConsolidationEvent,
+	type DaemonState,
+} from "./chitragupta-daemon-support.js";
 
 // Re-export helpers for backward compatibility
 export { formatDate } from "./daemon-periodic.js";
+export type {
+	ChitraguptaDaemonConfig,
+	ConsolidationEvent,
+	DaemonState,
+} from "./chitragupta-daemon-support.js";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-/** Daemon configuration. */
-export interface ChitraguptaDaemonConfig {
-	nidra?: Partial<NidraConfig>;
-	/** Hour of day (0-23) to run full consolidation. Default: 2. */
-	consolidationHour: number;
-	/** Maximum days to backfill on startup. Default: 7. */
-	maxBackfillDays: number;
-	/** Whether to run consolidation on idle. Default: true. */
-	consolidateOnIdle: boolean;
-	/** Whether to run backfill on startup. Default: true. */
-	backfillOnStartup: boolean;
-	/** Hour for monthly consolidation (1st of month). Default: 3. */
-	monthlyConsolidationHour: number;
-	/** Hour for yearly consolidation (Jan 1). Default: 4. */
-	yearlyConsolidationHour: number;
-	/** Retain day files for this many months before archiving. Default: 6. */
-	dayFileRetentionMonths: number;
-}
-
-/** Daemon state snapshot. */
-export interface DaemonState {
-	running: boolean;
-	nidraState: NidraState;
-	lastConsolidation: string | null;
-	lastBackfill: string | null;
-	consolidatedDates: string[];
-	uptime: number;
-}
-
-/** Consolidation event emitted during processing. */
-export interface ConsolidationEvent {
-	type: "start" | "progress" | "complete" | "error";
-	date: string;
-	phase?: string;
-	detail?: string;
-	durationMs?: number;
-}
-
-// ─── Constants ──────────────────────────────────────────────────────────────
-
-const DEFAULT_CONFIG: ChitraguptaDaemonConfig = {
-	consolidationHour: 2,
-	maxBackfillDays: 7,
-	consolidateOnIdle: true,
-	backfillOnStartup: true,
-	monthlyConsolidationHour: 3,
-	yearlyConsolidationHour: 4,
-	dayFileRetentionMonths: 6,
-};
-
-const CONSOLIDATION_LOCK_STALE_MS = 2 * 60 * 60 * 1000; // 2h
-
-function getConsolidationLockPath(date: string): string {
-	const safeDate = date.replace(/[^0-9-]/g, "");
-	return path.join(getChitraguptaHome(), "consolidation", "locks", `${safeDate}.lock`);
-}
-
-function readLockPid(lockPath: string): number | null {
-	try {
-		const firstLine = fs.readFileSync(lockPath, "utf-8").split("\n")[0]?.trim() ?? "";
-		const pid = parseInt(firstLine, 10);
-		return Number.isFinite(pid) && pid > 0 ? pid : null;
-	} catch {
-		return null;
-	}
-}
-
-function isProcessAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-function acquireDateLock(date: string): (() => void) | null {
-	const lockPath = getConsolidationLockPath(date);
-	const dir = path.dirname(lockPath);
-	fs.mkdirSync(dir, { recursive: true });
-
-	try {
-		const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
-		fs.writeSync(fd, `${process.pid}\n${Date.now()}\n`);
-		fs.closeSync(fd);
-		return () => {
-			try { fs.unlinkSync(lockPath); } catch { /* best-effort */ }
-		};
-	} catch (err) {
-		if ((err as NodeJS.ErrnoException).code !== "EEXIST") return null;
-		try {
-			const stat = fs.statSync(lockPath);
-			const ageMs = Date.now() - stat.mtimeMs;
-			if (ageMs <= CONSOLIDATION_LOCK_STALE_MS) return null;
-			const holderPid = readLockPid(lockPath);
-			if (holderPid !== null && isProcessAlive(holderPid)) return null;
-			fs.unlinkSync(lockPath);
-			return acquireDateLock(date);
-		} catch {
-			return null;
-		}
-	}
+interface SwapnaProjectScope {
+	project: string;
+	sessionIds?: string[];
 }
 
 // ─── Daemon ─────────────────────────────────────────────────────────────────
@@ -162,7 +70,7 @@ export class ChitraguptaDaemon extends EventEmitter {
 
 	constructor(config?: Partial<ChitraguptaDaemonConfig>) {
 		super();
-		this.config = { ...DEFAULT_CONFIG, ...config };
+		this.config = { ...DEFAULT_DAEMON_CONFIG, ...config };
 	}
 
 	// ─── Lifecycle ────────────────────────────────────────────────────
@@ -176,6 +84,9 @@ export class ChitraguptaDaemon extends EventEmitter {
 		this.nidra = new NidraDaemon(this.config.nidra);
 		this.nidra.onDream(async (_progress) => {
 			if (this.config.consolidateOnIdle) await this.consolidateToday();
+		});
+		this.nidra.onDeepSleepConsolidation(async (sessionIds) => {
+			return this.consolidateProjectsForSessions(sessionIds);
 		});
 		this.nidra.start();
 
@@ -207,6 +118,12 @@ export class ChitraguptaDaemon extends EventEmitter {
 
 	/** Signal user activity (resets idle timer). */
 	touch(): void { this.nidra?.touch(); }
+
+	/** Register a logical session with Nidra for sleep-cycle accounting. */
+	notifySession(sessionId: string): void { this.nidra?.notifySession(sessionId); }
+
+	/** Wake Nidra out of dreaming/deep-sleep state. */
+	wake(): void { this.nidra?.wake(); }
 
 	/** Get current daemon state. */
 	getState(): DaemonState {
@@ -262,37 +179,18 @@ export class ChitraguptaDaemon extends EventEmitter {
 				return;
 			}
 
-			// Run Swapna consolidation per project
-			const { listSessionsByDate } = await import("@chitragupta/smriti/session-store");
-			const sessions = listSessionsByDate(date);
-			const projects = new Set(sessions.map((s: { project: string }) => s.project));
-
-			for (const project of projects) {
-				try {
-					const { SwapnaConsolidation } = await import("@chitragupta/smriti/swapna-consolidation");
-					const swapna = new SwapnaConsolidation({
-						project, maxSessionsPerCycle: 50,
-						surpriseThreshold: 0.7, minPatternFrequency: 3,
-						minSequenceLength: 2, minSuccessRate: 0.8,
-					});
-					await swapna.run((phase: string, progress: number) => {
-						this.emit("consolidation", {
-							type: "progress", date, phase: `swapna:${phase}`,
-							detail: `${project} (${(progress * 100).toFixed(0)}%)`,
-						});
-					});
-				} catch (err) {
-					this.emit("consolidation", {
-						type: "error", date, phase: "swapna",
-						detail: `${project}: ${err instanceof Error ? err.message : String(err)}`,
-					});
-				}
-			}
+				// Run Swapna consolidation per project
+				const { listSessionsByDate } = await import("@chitragupta/smriti/session-store");
+				const sessions = listSessionsByDate(date);
+					await this.runSwapnaForProjects(
+						[...new Set(sessions.map((s: { project: string }) => s.project))].map((project) => ({ project })),
+						date,
+					);
 
 			// Persist extracted facts to global memory
-			if (result.extractedFacts.length > 0) {
+				if (result.extractedFacts.length > 0) {
 				try {
-					const { appendMemory } = await import("@chitragupta/smriti/memory-store");
+						const { appendMemory } = await import("@chitragupta/smriti/memory-store");
 					for (const fact of result.extractedFacts) {
 						await appendMemory({ type: "global" }, `[${date}] ${fact}`);
 					}
@@ -300,10 +198,28 @@ export class ChitraguptaDaemon extends EventEmitter {
 						type: "progress", date, phase: "facts",
 						detail: `${result.extractedFacts.length} facts persisted`,
 					});
-				} catch { /* best-effort */ }
-			}
+					} catch { /* best-effort */ }
+				}
 
-			this.consolidatedDates.add(date);
+				try {
+					const { syncRemoteSemanticMirror } = await import("@chitragupta/smriti");
+					const remote = await syncRemoteSemanticMirror({
+						levels: ["daily"],
+						dates: [date],
+					});
+					if (remote.status.enabled) {
+						this.emit("consolidation", {
+							type: "progress",
+							date,
+							phase: "remote-sync",
+							detail: `remote semantic mirror synced ${remote.synced} daily artifacts`,
+						});
+					}
+				} catch {
+					/* best-effort */
+				}
+
+				this.consolidatedDates.add(date);
 			this.lastConsolidationDate = date;
 			this.emit("consolidation", {
 				type: "complete", date, durationMs: result.durationMs,
@@ -318,6 +234,136 @@ export class ChitraguptaDaemon extends EventEmitter {
 			this.consolidating = false;
 			releaseDateLock();
 		}
+	}
+
+	private async consolidateProjectsForSessions(sessionIds: readonly string[]): Promise<string[]> {
+		if (sessionIds.length === 0) return [];
+
+		const label = "deep-sleep";
+		this.emit("consolidation", {
+			type: "progress",
+			date: label,
+			phase: "deep-sleep:resolve",
+			detail: `${sessionIds.length} pending sessions`,
+		});
+
+		const sessions = await this.resolveSessionProjects(sessionIds);
+		const resolvedIds = new Set(sessions.map((session) => session.id));
+		const missingCount = sessionIds.reduce(
+			(count, id) => count + (resolvedIds.has(id) ? 0 : 1),
+			0,
+		);
+		const projects = new Map<string, string[]>();
+
+		for (const session of sessions) {
+			const existing = projects.get(session.project);
+			if (existing) existing.push(session.id);
+			else projects.set(session.project, [session.id]);
+		}
+
+		if (missingCount > 0) {
+			this.emit("consolidation", {
+				type: "progress",
+				date: label,
+				phase: "deep-sleep:resolve",
+				detail: `${missingCount} sessions missing from Smriti`,
+			});
+		}
+
+		if (projects.size === 0) {
+			this.emit("consolidation", {
+				type: "progress",
+				date: label,
+				phase: "deep-sleep:resolve",
+				detail: "no matching projects for pending sessions",
+			});
+			return [];
+		}
+
+		const processedSessionIds = await this.runSwapnaForProjects(
+			[...projects.entries()].map(([project, scopedSessionIds]) => ({
+				project,
+				sessionIds: scopedSessionIds,
+			})),
+			label,
+			"deep-sleep:swapna",
+		);
+
+		if (processedSessionIds.length !== sessionIds.length) {
+			const processed = new Set(processedSessionIds);
+			const deferred = sessionIds.filter((id) => !processed.has(id));
+			if (deferred.length > 0) {
+				this.emit("consolidation", {
+					type: "progress",
+					date: label,
+					phase: "deep-sleep:swapna",
+					detail: `${deferred.length} pending sessions deferred for retry`,
+				});
+			}
+		}
+
+		return processedSessionIds;
+	}
+
+	private async resolveSessionProjects(sessionIds: readonly string[]): Promise<Array<{ id: string; project: string }>> {
+		try {
+			const { DatabaseManager } = await import("@chitragupta/smriti");
+			const db = DatabaseManager.instance().get("agent");
+			const placeholders = sessionIds.map(() => "?").join(",");
+			if (!placeholders) return [];
+			return db.prepare(
+				`SELECT id, project FROM sessions WHERE id IN (${placeholders}) ORDER BY updated_at DESC`,
+			).all(...sessionIds) as Array<{ id: string; project: string }>;
+		} catch {
+			const { listSessions } = await import("@chitragupta/smriti/session-store");
+			const wanted = new Set(sessionIds);
+			return listSessions()
+				.filter((session) => wanted.has(session.id))
+				.map((session) => ({ id: session.id, project: session.project }));
+		}
+	}
+
+	private async runSwapnaForProjects(
+		projects: Iterable<SwapnaProjectScope>,
+		date: string,
+		phasePrefix = "swapna",
+	): Promise<string[]> {
+		const { SwapnaConsolidation } = await import("@chitragupta/smriti");
+		const processedSessionIds: string[] = [];
+
+		for (const scope of projects) {
+			const { project, sessionIds } = scope;
+			try {
+				const swapnaConfig = {
+					project,
+					sessionIds,
+					maxSessionsPerCycle: 50,
+					surpriseThreshold: 0.7,
+					minPatternFrequency: 3,
+					minSequenceLength: 2,
+					minSuccessRate: 0.8,
+				} as ConstructorParameters<typeof SwapnaConsolidation>[0] & { sessionIds?: string[] };
+				const swapna = new SwapnaConsolidation(swapnaConfig);
+				await swapna.run((phase: string, progress: number) => {
+					this.emit("consolidation", {
+						type: "progress",
+						date,
+						phase: `${phasePrefix}:${phase}`,
+						detail: `${project} (${(progress * 100).toFixed(0)}%)`,
+					});
+				});
+				if (sessionIds?.length) processedSessionIds.push(...sessionIds);
+			} catch (err) {
+				this.emit("consolidation", {
+					type: "error",
+					date,
+					phase: phasePrefix,
+					detail: `${project}: ${err instanceof Error ? err.message : String(err)}`,
+				});
+			}
+		}
+
+		return [...new Set(processedSessionIds)];
 	}
 
 	/** Backfill any days that have sessions but no day file. */

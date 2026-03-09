@@ -182,7 +182,7 @@ Last exchange:
 
 ## Project Context
 - Architecture: TypeScript monorepo, 11 published packages
-- No file > 450 LOC, strict TypeScript
+- Strict TypeScript; runtime files are being actively split toward the 450 LOC design target
 ...
 
 ## Recent Sessions

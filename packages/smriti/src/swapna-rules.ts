@@ -7,6 +7,7 @@
 
 import { DatabaseManager } from "./db/index.js";
 import type { SwapnaConfig, CrystallizeResult } from "./swapna-consolidation.js";
+import { resolveSwapnaSessionIds } from "./swapna-extraction.js";
 
 // ─── FNV-1a Hash ────────────────────────────────────────────────────────────
 
@@ -87,6 +88,13 @@ export async function swapnaCrystallize(
 	const agentDb = db.get("agent");
 	let vasanasCreated = 0;
 	let vasanasReinforced = 0;
+	const scopedSessionIds = resolveSwapnaSessionIds(agentDb, config);
+
+	if (scopedSessionIds.length === 0) {
+		return { vasanasCreated: 0, vasanasReinforced: 0, durationMs: performance.now() - start };
+	}
+
+	const placeholders = scopedSessionIds.map(() => "?").join(",");
 
 	const samskaras = agentDb
 		.prepare(
@@ -94,14 +102,15 @@ export async function swapnaCrystallize(
 			        observation_count, confidence, pramana_type, project
 			 FROM samskaras
 			 WHERE (project = ? OR project IS NULL)
+			   AND session_id IN (${placeholders})
 			   AND observation_count >= ?
 			   AND confidence > 0.5
 			 ORDER BY confidence DESC`,
 		)
-		.all(config.project, config.minPatternFrequency) as Array<{
-			id: string; session_id: string; pattern_type: string; pattern_content: string;
-			observation_count: number; confidence: number; pramana_type: string | null; project: string | null;
-		}>;
+		.all(config.project, ...scopedSessionIds, config.minPatternFrequency) as Array<{
+				id: string; session_id: string; pattern_type: string; pattern_content: string;
+				observation_count: number; confidence: number; pramana_type: string | null; project: string | null;
+			}>;
 
 	if (samskaras.length === 0) {
 		return { vasanasCreated: 0, vasanasReinforced: 0, durationMs: performance.now() - start };
@@ -183,12 +192,12 @@ export async function swapnaCrystallize(
 					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				)
 				.run(
-					tendency, cluster.representative, valence,
-					Math.min(1.0, cluster.maxConfidence),
-					cluster.sessionIds.size / config.maxSessionsPerCycle,
-					JSON.stringify(cluster.samskaraIds), config.project,
-					now, now, now, 1,
-				);
+						tendency, cluster.representative, valence,
+						Math.min(1.0, cluster.maxConfidence),
+						cluster.sessionIds.size / scopedSessionIds.length,
+						JSON.stringify(cluster.samskaraIds), config.project,
+						now, now, now, 1,
+					);
 			vasanasCreated++;
 		}
 	}

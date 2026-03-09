@@ -39,6 +39,34 @@ export interface MemoryScopeInfo {
 	displayName: string;
 }
 
+/** Convert a MemoryScope into the HTTP-facing scope-info shape. */
+export function toMemoryScopeInfo(scope: MemoryScope): MemoryScopeInfo {
+	switch (scope.type) {
+		case "global":
+			return {
+				type: "global",
+				displayName: "Global Memory",
+			};
+		case "project":
+			return {
+				type: "project",
+				identifier: scope.path,
+				displayName: `Project: ${scope.path}`,
+			};
+		case "agent":
+			return {
+				type: "agent",
+				identifier: scope.agentId,
+				displayName: `Agent: ${scope.agentId}`,
+			};
+		default:
+			return {
+				type: "unknown",
+				displayName: "Unknown scope",
+			};
+	}
+}
+
 // ─── Scope Parsing & Serialization ───────────────────────────────────────────
 
 /**
@@ -160,34 +188,5 @@ export function getMemoryEntry(scope: MemoryScope): MemoryEntry {
  */
 export function listAllScopes(): MemoryScopeInfo[] {
 	const scopes = listMemoryScopes();
-
-	return scopes.map((scope): MemoryScopeInfo => {
-		switch (scope.type) {
-			case "global":
-				return {
-					type: "global",
-					displayName: "Global Memory",
-				};
-
-			case "project":
-				return {
-					type: "project",
-					identifier: scope.path,
-					displayName: `Project: ${scope.path}`,
-				};
-
-			case "agent":
-				return {
-					type: "agent",
-					identifier: scope.agentId,
-					displayName: `Agent: ${scope.agentId}`,
-				};
-
-			default:
-				return {
-					type: "unknown",
-					displayName: "Unknown scope",
-				};
-		}
-	});
+	return scopes.map((scope): MemoryScopeInfo => toMemoryScopeInfo(scope));
 }

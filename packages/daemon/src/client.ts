@@ -12,14 +12,26 @@
  */
 
 import net from "node:net";
+import { parseBridgeKey } from "@chitragupta/core";
+import { resolveDaemonClientToken } from "./auth.js";
+import {
+	DaemonUnavailableError,
+	type NotificationHandler,
+	type PendingRequest,
+	sleep,
+} from "./client-shared.js";
 import { resolvePaths } from "./paths.js";
-import { createRequest, parseMessage, serialize, type RpcResponse } from "./protocol.js";
+import { createRequest, parseMessage, serialize, type RpcNotification, type RpcResponse } from "./protocol.js";
 import { HealthMonitor, HealthState, type CircuitBreakerConfig } from "./resilience.js";
+
+export { DaemonUnavailableError } from "./client-shared.js";
 
 /** Client configuration. */
 export interface DaemonClientConfig {
 	/** Override socket path (default: auto-resolve). */
 	socketPath?: string;
+	/** Bridge auth token for daemon socket connections. */
+	apiKey?: string;
 	/** Request timeout in ms (default: 10_000). */
 	timeout?: number;
 	/** Auto-start daemon if not running (default: true). */
@@ -32,22 +44,18 @@ export interface DaemonClientConfig {
 	heartbeat?: boolean;
 }
 
-/** Pending request waiting for a response. */
-interface PendingRequest {
-	resolve: (result: unknown) => void;
-	reject: (error: Error) => void;
-	timer: ReturnType<typeof setTimeout>;
-}
-
 /** Client connection to the chitragupta daemon. */
 export class DaemonClient {
 	private socket: net.Socket | null = null;
 	private buffer = "";
 	private readonly pending = new Map<string | number, PendingRequest>();
 	private readonly socketPath: string;
+	private readonly explicitApiKey?: string;
 	private readonly timeout: number;
 	private readonly autoStart: boolean;
 	private readonly maxRetries: number;
+	private readonly notificationHandlers = new Map<string, Set<NotificationHandler>>();
+	private readonly wildcardNotificationHandlers = new Set<NotificationHandler>();
 	private connected = false;
 	private healing = false;
 
@@ -56,6 +64,7 @@ export class DaemonClient {
 
 	constructor(config: DaemonClientConfig = {}) {
 		this.socketPath = config.socketPath ?? resolvePaths().socket;
+		this.explicitApiKey = config.apiKey;
 		this.timeout = config.timeout ?? 10_000;
 		this.autoStart = config.autoStart ?? true;
 		this.maxRetries = config.maxRetries ?? 5;
@@ -243,6 +252,24 @@ export class DaemonClient {
 		}
 	}
 
+	/** Subscribe to daemon-push notifications. Use `*` to receive every notification. */
+	onNotification(method: string, handler: NotificationHandler): () => void {
+		if (method === "*") {
+			this.wildcardNotificationHandlers.add(handler);
+			return () => { this.wildcardNotificationHandlers.delete(handler); };
+		}
+		const handlers = this.notificationHandlers.get(method) ?? new Set<NotificationHandler>();
+		handlers.add(handler);
+		this.notificationHandlers.set(method, handlers);
+		return () => {
+			const current = this.notificationHandlers.get(method);
+			current?.delete(handler);
+			if (current && current.size === 0) {
+				this.notificationHandlers.delete(method);
+			}
+		};
+	}
+
 	/** Disconnect from the daemon. */
 	disconnect(): void {
 		for (const [, pending] of this.pending) {
@@ -294,12 +321,23 @@ export class DaemonClient {
 			const socket = net.createConnection(this.socketPath);
 			let settled = false;
 
-			socket.on("connect", () => {
-				settled = true;
+			socket.on("connect", async () => {
 				this.socket = socket;
 				this.connected = true;
 				this.buffer = "";
-				resolve();
+				try {
+					await this.performHandshakeIfNeeded();
+					settled = true;
+					resolve();
+				} catch (err) {
+					this.connected = false;
+					this.socket = null;
+					socket.destroy();
+					if (!settled) {
+						settled = true;
+						reject(err);
+					}
+				}
 			});
 
 			socket.on("data", (chunk) => {
@@ -330,7 +368,12 @@ export class DaemonClient {
 			if (!line) continue;
 
 			const msg = parseMessage(line);
-			if (!msg || !("id" in msg)) continue;
+			if (!msg) continue;
+			if ("method" in msg && !("id" in msg)) {
+				this.dispatchNotification(msg as RpcNotification);
+				continue;
+			}
+			if (!("id" in msg)) continue;
 
 			const resp = msg as RpcResponse;
 			const pending = this.pending.get(resp.id);
@@ -343,6 +386,38 @@ export class DaemonClient {
 				pending.reject(new Error(`${resp.error.message} (code: ${resp.error.code})`));
 			} else {
 				pending.resolve(resp.result);
+			}
+		}
+	}
+
+	private async performHandshakeIfNeeded(): Promise<void> {
+		const apiKey = this.explicitApiKey ?? resolveDaemonClientToken();
+		if (!apiKey) return;
+		const result = await this.sendRequest("auth.handshake", { apiKey: parseBridgeKey(apiKey) }) as {
+			authenticated?: boolean;
+		};
+		if (result?.authenticated !== true) {
+			throw new Error("Daemon bridge authentication failed");
+		}
+	}
+
+	private dispatchNotification(msg: RpcNotification): void {
+		const params = (msg.params ?? {}) as Record<string, unknown>;
+		const handlers = this.notificationHandlers.get(msg.method);
+		if (handlers) {
+			for (const handler of handlers) {
+				try {
+					handler(params, msg.method);
+				} catch {
+					// Best-effort — notification consumers must not break the client.
+				}
+			}
+		}
+		for (const handler of this.wildcardNotificationHandlers) {
+			try {
+				handler(params, msg.method);
+			} catch {
+				// Best-effort — notification consumers must not break the client.
 			}
 		}
 	}
@@ -364,19 +439,6 @@ export class DaemonClient {
 			}
 		}
 	}
-}
-
-/** Error thrown when daemon is unreachable and circuit is open. */
-export class DaemonUnavailableError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "DaemonUnavailableError";
-	}
-}
-
-/** Helper: sleep for ms. */
-function sleep(ms: number): Promise<void> {
-	return new Promise((r) => setTimeout(r, ms));
 }
 
 /** Convenience: create a connected client. */

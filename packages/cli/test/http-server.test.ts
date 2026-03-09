@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ChitraguptaServer, createChitraguptaAPI } from "../src/http-server.js";
 import type { ServerConfig } from "../src/http-server.js";
+import { PairingEngine } from "../src/pairing-engine.js";
+import { mountPairingRoutes } from "../src/routes/pairing.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -28,6 +30,19 @@ function makeDeps() {
 		getAgent: () => null,
 		getSession: () => null,
 		listSessions: () => [],
+		openSession: async (_options?: Record<string, unknown>) => ({
+			id: "session-test-1",
+			created: true,
+		}),
+		openSharedSession: async (_options?: Record<string, unknown>) => ({
+			id: "session-shared-1",
+			created: true,
+			session: {
+				meta: {
+					id: "session-shared-1",
+				},
+			},
+		}),
 	};
 }
 
@@ -137,7 +152,22 @@ describe("ChitraguptaServer", () => {
 				body: { title: "test" },
 			});
 			expect(status).toBe(201);
-			expect(body.title).toBe("test");
+			expect(body.sessionId).toBe("session-test-1");
+			expect(body.created).toBe(true);
+		});
+
+		it("should allow pairing bootstrap routes without auth headers", async () => {
+			const pairingEngine = new PairingEngine({
+				port: 0,
+				jwtSecret: "test-secret-for-http-server-auth-exemption",
+			});
+			pairingEngine.generateChallenge();
+			mountPairingRoutes(server as unknown as Parameters<typeof mountPairingRoutes>[0], () => pairingEngine);
+
+			const port = await server.start();
+			const { status, body } = await req(port, "/api/pair/challenge");
+			expect(status).toBe(200);
+			expect(body.challengeId).toBeTruthy();
 		});
 	});
 
@@ -273,6 +303,19 @@ describe("ChitraguptaServer", () => {
 				body: { title: "no-auth" },
 			});
 			expect(status).toBe(201);
+		});
+
+		it("should open explicit shared collaboration sessions", async () => {
+			const port = await server.start();
+			const { status, body } = await req(port, "/api/sessions/collaborate", {
+				method: "POST",
+				body: { title: "collab", sessionLineageKey: "lineage-alpha" },
+			});
+			expect(status).toBe(201);
+			expect(body.sessionId).toBe("session-shared-1");
+			expect(body.created).toBe(true);
+			expect(body.lineageKey).toBe("lineage-alpha");
+			expect(body.sessionReusePolicy).toBe("same_day");
 		});
 	});
 

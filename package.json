@@ -2,7 +2,7 @@
 	"name": "chitragupta-monorepo",
 	"private": true,
 	"type": "module",
-	"version": "0.1.26",
+	"version": "0.1.27",
 	"license": "MIT",
 	"description": "The Autonomous AI Agent Platform — 17-package TypeScript monorepo with zero-LLM cognitive layer, GraphRAG memory, bi-temporal knowledge graph, centralized daemon, and self-evolving skills",
 	"keywords": [
@@ -34,16 +34,22 @@
 		"clean": "npm run clean --workspaces --if-present && rm -rf dist",
 		"clean:all": "find packages -name node_modules -type d -prune -exec rm -rf {} + && rm -rf node_modules && find packages -name dist -type d -prune -exec rm -rf {} + && rm -rf dist",
 		"nuke": "find packages -name node_modules -type d -prune -exec rm -rf {} + ; find packages -name dist -type d -prune -exec rm -rf {} + ; find . -name '*.tsbuildinfo' -not -path '*/node_modules/*' -delete ; rm -rf node_modules dist ; echo 'chitragupta: nuked dist + node_modules + tsbuildinfo'",
-		"build": "pnpm -r run build",
-		"build:bundle": "pnpm -r run build && node scripts/bundle.mjs && node scripts/build-types.mjs",
-		"dev": "concurrently --names \"core,swara,anina,smriti,ui,yantra,dharma,netra,vayu,sutra,cli\" \"cd packages/core && npm run dev\" \"cd packages/swara && npm run dev\" \"cd packages/anina && npm run dev\" \"cd packages/smriti && npm run dev\" \"cd packages/ui && npm run dev\" \"cd packages/yantra && npm run dev\" \"cd packages/dharma && npm run dev\" \"cd packages/netra && npm run dev\" \"cd packages/vayu && npm run dev\" \"cd packages/sutra && npm run dev\" \"cd packages/cli && npm run dev\"",
+		"build": "node scripts/build-workspace.mjs",
+		"build:check": "node scripts/build-workspace.mjs --check",
+		"build:dry-run": "node scripts/build-workspace.mjs --dry-run",
+		"build:legacy": "pnpm -r run build",
+		"build:bundle": "pnpm run build && node scripts/bundle.mjs && node scripts/build-types.mjs",
+		"dev": "concurrently --names \"core,swara,anina,smriti,ui,yantra,dharma,netra,prana,sutra,cli\" \"cd packages/core && npm run dev\" \"cd packages/swara && npm run dev\" \"cd packages/anina && npm run dev\" \"cd packages/smriti && npm run dev\" \"cd packages/ui && npm run dev\" \"cd packages/yantra && npm run dev\" \"cd packages/dharma && npm run dev\" \"cd packages/netra && npm run dev\" \"cd packages/prana && npm run dev\" \"cd packages/sutra && npm run dev\" \"cd packages/cli && npm run dev\"",
 		"check": "biome check --write --error-on-warnings .",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",
+		"test:live-server": "CHITRAGUPTA_RUN_LIVE_SERVER_TESTS=1 vitest run",
+		"test:load": "CHITRAGUPTA_RUN_LIVE_SERVER_TESTS=1 vitest run packages/cli/test/load/load-test.test.ts",
 		"benchmark:consolidation": "tsx scripts/benchmark-consolidation.ts",
 		"benchmark:marga": "tsx scripts/benchmark-marga-routing.ts",
 		"benchmark:mesh-soak": "tsx scripts/soak-sutra-mesh.ts",
+		"verify:engine": "bash scripts/verify-engine-readiness.sh",
 		"release:verify": "bash scripts/release-verify.sh",
 		"chitragupta": "tsx packages/cli/src/cli.ts",
 		"daemon": "pnpm --filter @chitragupta/daemon build && tsx packages/cli/src/cli.ts daemon start",
@@ -54,6 +60,8 @@
 		"start:serve": "tsx packages/cli/src/cli.ts serve --port 3141 --host 127.0.0.1",
 		"start:mcp": "tsx packages/cli/src/cli.ts mcp-server --transport sse --port 3001",
 		"proxy": "tsx packages/darpana/src/bin/darpana.ts",
+		"subtree:split": "bash scripts/subtree-sync.sh",
+		"subtree:push": "bash scripts/subtree-sync.sh --push",
 		"publish:dry": "bash scripts/publish.sh",
 		"publish:real": "bash scripts/publish.sh --real"
 	},
@@ -73,7 +81,10 @@
 	"pnpm": {
 		"onlyBuiltDependencies": [
 			"better-sqlite3",
-			"esbuild"
+			"esbuild",
+			"onnxruntime-node",
+			"protobufjs",
+			"sharp"
 		],
 		"ignoredBuiltDependencies": [
 			"onnxruntime-node",

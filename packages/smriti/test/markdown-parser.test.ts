@@ -108,6 +108,8 @@ tags:
   - typescript
 totalCost: 0.0523
 totalTokens: 15000
+provider: "claude-code"
+metadataJson: "{\"provider\":\"claude-code\",\"clientKey\":\"tab-1\",\"sessionLineageKey\":\"lineage-a\"}"
 ---`;
 
 		it("parses tags as array", () => {
@@ -133,6 +135,16 @@ totalTokens: 15000
 		it("parses totalTokens as number", () => {
 			const session = parseSessionMarkdown(full);
 			expect(session.meta.totalTokens).toBe(15000);
+		});
+
+		it("parses provider and metadata payload", () => {
+			const session = parseSessionMarkdown(full);
+			expect(session.meta.provider).toBe("claude-code");
+			expect(session.meta.metadata).toEqual({
+				provider: "claude-code",
+				clientKey: "tab-1",
+				sessionLineageKey: "lineage-a",
+			});
 		});
 	});
 

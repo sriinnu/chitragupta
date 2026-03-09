@@ -10,6 +10,14 @@
 import { createLogger } from "@chitragupta/core";
 import type { RpcRouter } from "./rpc-router.js";
 import { registerTelemetryMethods } from "./services-telemetry.js";
+import { registerBindingMethods } from "./services-binding.js";
+import { registerKnowledgeMethods } from "./services-knowledge.js";
+import { registerContractMethods } from "./services-contract.js";
+import { registerCollaborationMethods } from "./services-collaboration.js";
+import { registerMeshMethods } from "./services-mesh.js";
+import { registerCompressionMethods } from "./services-compression.js";
+import { registerDiscoveryMethods } from "./services-discovery.js";
+import { registerSemanticMethods } from "./services-semantic.js";
 import {
 	registerReadMethods,
 	registerDaemonMethods,
@@ -20,9 +28,15 @@ import {
 	normalizeParams,
 	parseNonNegativeInt,
 	parseLimit,
-	normalizeProjectPath,
-	resolveProjectKey
 } from "./services-helpers.js";
+import {
+	findReusableSessionId,
+	knownProjectsFromDb,
+	localDatePrefix,
+	normalizeSessionMetadata,
+	resolveLineageKey,
+	resolveProjectAgainstKnown,
+} from "./services-session-helpers.js";
 
 const log = createLogger("daemon:services");
 
@@ -42,35 +56,21 @@ export async function registerServices(router: RpcRouter): Promise<void> {
 	registerReadMethods(router);
 	registerWriteMethods(router);
 	registerKnowledgeMethods(router, sessionStore);
+	registerContractMethods(router);
+	registerCollaborationMethods(router);
+	registerMeshMethods(router);
+	registerCompressionMethods(router);
+	registerDiscoveryMethods(router);
+	registerSemanticMethods(router);
 	registerDaemonMethods(router, sessionDb);
 	registerTelemetryMethods(router);
+	registerBindingMethods(router);
 
 	log.info("Services registered", { methods: router.listMethods().length });
 }
 
-function knownProjectsFromDb(
-	agentDb: { prepare: (sql: string) => { all: () => Array<Record<string, unknown>> } },
-): string[] {
-	try {
-		const rows = agentDb
-			.prepare("SELECT DISTINCT project FROM sessions WHERE project IS NOT NULL AND project != ''")
-			.all();
-		return rows
-			.map((row) => (typeof row.project === "string" ? row.project : ""))
-			.filter((project) => project.length > 0);
-	} catch {
-		return [];
-	}
-}
-
-function resolveProjectAgainstKnown(project: string, knownProjects: readonly string[]): string {
-	const normalized = normalizeProjectPath(project);
-	if (!normalized) return "";
-	return resolveProjectKey(normalized, knownProjects);
-}
-
 /** Session CRUD methods. */
-function registerSessionMethods(
+export function registerSessionMethods(
 	router: RpcRouter,
 	store: typeof import("@chitragupta/smriti/session-store"),
 	_db: typeof import("@chitragupta/smriti/session-db"),
@@ -90,7 +90,18 @@ function registerSessionMethods(
 		return store.loadSession(id, project);
 	}, "Load a session by ID and project");
 
-	router.register("session.create", async (params) => {
+	router.register("session.open", async (params) => {
+		const id = typeof params.id === "string" ? params.id.trim() : "";
+		if (id) {
+			const project = resolveProjectAgainstKnown(String(params.project ?? ""), knownProjectsFromStore(store));
+			if (!project) throw new Error("Missing project");
+			return {
+				session: store.loadSession(id, project),
+				created: false,
+			};
+		}
+
+		const metadata = normalizeSessionMetadata(params);
 		const opts = {
 			project: String(params.project ?? ""),
 			title: typeof params.title === "string" ? params.title : undefined,
@@ -100,10 +111,82 @@ function registerSessionMethods(
 			branch: typeof params.branch === "string" ? params.branch : undefined,
 			parentSessionId: typeof params.parentSessionId === "string" ? params.parentSessionId : undefined,
 			tags: Array.isArray(params.tags) ? params.tags.filter((v): v is string => typeof v === "string") : undefined,
-			metadata: (typeof params.metadata === "object" && params.metadata !== null && !Array.isArray(params.metadata))
-				? params.metadata as Record<string, unknown>
-				: undefined,
+			metadata,
 		};
+		opts.project = resolveProjectAgainstKnown(opts.project, knownProjectsFromStore(store));
+		if (!opts.project) throw new Error("Missing project");
+		const lineageKey = resolveLineageKey(params, metadata);
+		const reusableSessionId = findReusableSessionId(store, opts.project, lineageKey);
+		if (reusableSessionId) {
+			return {
+				session: store.loadSession(reusableSessionId, opts.project),
+				created: false,
+			};
+		}
+		const session = store.createSession(opts);
+		return {
+			session,
+			created: true,
+		};
+	}, "Open an existing session or create a new one");
+
+	router.register("session.collaborate", async (params) => {
+		const metadata = normalizeSessionMetadata(params) ?? {};
+		const lineageKey = resolveLineageKey(params, metadata);
+		if (!lineageKey) throw new Error("Missing sessionLineageKey or lineageKey");
+		const opts = {
+			project: String(params.project ?? ""),
+			title: typeof params.title === "string" ? params.title : "Shared Collaboration Session",
+			agent: typeof params.agent === "string" ? params.agent : undefined,
+			model: typeof params.model === "string" ? params.model : undefined,
+			provider: typeof params.provider === "string" ? params.provider : undefined,
+			branch: typeof params.branch === "string" ? params.branch : undefined,
+			parentSessionId: typeof params.parentSessionId === "string" ? params.parentSessionId : undefined,
+			tags: Array.isArray(params.tags) ? params.tags.filter((v): v is string => typeof v === "string") : undefined,
+			consumer: typeof params.consumer === "string" ? params.consumer : "chitragupta",
+			surface: typeof params.surface === "string" ? params.surface : "collaboration",
+			channel: typeof params.channel === "string" ? params.channel : "shared",
+			actorId: typeof params.actorId === "string" ? params.actorId : undefined,
+			metadata: {
+				...metadata,
+				sessionLineageKey: lineageKey,
+				sessionReusePolicy: "same_day",
+				collaboration: true,
+			},
+		};
+		opts.project = resolveProjectAgainstKnown(opts.project, knownProjectsFromStore(store));
+		if (!opts.project) throw new Error("Missing project");
+		const reusableSessionId = findReusableSessionId(store, opts.project, lineageKey);
+		if (reusableSessionId) {
+			return {
+				session: store.loadSession(reusableSessionId, opts.project),
+				created: false,
+				lineageKey,
+				sessionReusePolicy: "same_day",
+			};
+		}
+		const session = store.createSession(opts);
+		const created = !reusableSessionId && session.meta.id.startsWith(localDatePrefix());
+		return {
+			session,
+			created,
+			lineageKey,
+			sessionReusePolicy: "same_day",
+		};
+	}, "Open or reuse an explicit shared collaboration session for a lineage key");
+
+	router.register("session.create", async (params) => {
+			const opts = {
+				project: String(params.project ?? ""),
+				title: typeof params.title === "string" ? params.title : undefined,
+				agent: typeof params.agent === "string" ? params.agent : undefined,
+				model: typeof params.model === "string" ? params.model : undefined,
+				provider: typeof params.provider === "string" ? params.provider : undefined,
+				branch: typeof params.branch === "string" ? params.branch : undefined,
+				parentSessionId: typeof params.parentSessionId === "string" ? params.parentSessionId : undefined,
+				tags: Array.isArray(params.tags) ? params.tags.filter((v): v is string => typeof v === "string") : undefined,
+				metadata: normalizeSessionMetadata(params),
+			};
 		opts.project = resolveProjectAgainstKnown(opts.project, knownProjectsFromStore(store));
 		if (!opts.project) throw new Error("Missing project");
 		const session = store.createSession(opts);
@@ -130,6 +213,19 @@ function registerSessionMethods(
 		return { projects: store.listSessionProjects() };
 	}, "List projects with session counts");
 
+	router.register("session.lineage_policy", async () => {
+		return {
+			defaultReusePolicy: "isolated",
+			explicitReusePolicy: "same_day",
+			headers: {
+				lineage: "x-chitragupta-lineage",
+				client: "x-chitragupta-client",
+			},
+			bodyFields: ["sessionLineageKey", "lineageKey", "sessionReusePolicy", "consumer", "surface", "channel", "actorId"],
+			guidance: "Use isolated sessions by default. Reuse a lineage key only for intentional same-thread collaboration across tabs, agents, or surfaces.",
+		};
+	}, "Describe the canonical session-lineage policy and headers for consumers");
+
 	router.register("session.modified_since", async (rawParams) => {
 		const params = normalizeParams(rawParams);
 		const project = resolveProjectAgainstKnown(String(params.project ?? ""), knownProjectsFromStore(store));
@@ -148,7 +244,7 @@ function registerSessionMethods(
 }
 
 /** Turn read/write methods. */
-function registerTurnMethods(
+export function registerTurnMethods(
 	router: RpcRouter,
 	store: typeof import("@chitragupta/smriti/session-store"),
 ): void {
@@ -162,7 +258,7 @@ function registerTurnMethods(
 	 * tool_calls sent as snake_case are silently dropped, starving the
 	 * Swapna consolidation pipeline of tool usage data.
 	 */
-	router.register("turn.add", async (rawParams) => {
+	const addTurnHandler = async (rawParams: Record<string, unknown>) => {
 		const params = normalizeParams(rawParams);
 		const sessionId = String(params.sessionId ?? "");
 		const project = resolveWithStore(String(params.project ?? ""));
@@ -186,7 +282,10 @@ function registerTurnMethods(
 
 		await store.addTurn(sessionId, project, turn as unknown as Parameters<typeof store.addTurn>[2]);
 		return { added: true };
-	}, "Add a turn to a session");
+	};
+
+	router.register("turn.add", addTurnHandler, "Add a turn to a session");
+	router.register("session.turn", addTurnHandler, "Consumer-friendly alias for adding a turn to a session");
 
 	router.register("turn.list", async (rawParams) => {
 		const params = normalizeParams(rawParams);
@@ -255,16 +354,21 @@ function registerMemoryMethods(
 		const scopePath = scopeType === "project" && scopePathRaw
 			? resolveProjectAgainstKnown(scopePathRaw, knownProjectsFromDb(agentDb))
 			: scopePathRaw;
+		const agentId = typeof params.agentId === "string" ? params.agentId.trim() : undefined;
 		const entry = String(params.entry ?? "").trim();
 		if (!entry) throw new Error("Missing entry");
 
 		const memStore = await import("@chitragupta/smriti/memory-store");
 		const scope = scopeType === "global"
 			? { type: "global" as const }
-			: { type: "project" as const, path: scopePath ?? "" };
+			: scopeType === "agent"
+				? { type: "agent" as const, agentId: agentId ?? scopePath ?? "" }
+				: { type: "project" as const, path: scopePath ?? "" };
+		if (scope.type === "project" && !scope.path) throw new Error("Missing scopePath for project memory");
+		if (scope.type === "agent" && !scope.agentId) throw new Error("Missing agentId for agent memory");
 		await memStore.appendMemory(scope, entry, { dedupe: true });
 		return { appended: true };
-	}, "Append entry to memory (project or global scope)");
+	}, "Append entry to memory (global, project, or agent scope)");
 
 	router.register("memory.recall", async (params) => {
 		const query = String(params.query ?? "");
@@ -295,95 +399,3 @@ function registerMemoryMethods(
 		return { results: rows, query, project };
 	}, "Recall memories relevant to a query");
 }
-
-/** Knowledge lifecycle methods (Vidhis + consolidation) via single-writer daemon. */
-function registerKnowledgeMethods(
-	router: RpcRouter,
-	store: typeof import("@chitragupta/smriti/session-store"),
-): void {
-	const resolveWithStore = (project: string): string =>
-		resolveProjectAgainstKnown(project, knownProjectsFromStore(store));
-
-	router.register("vidhi.list", async (params) => {
-		const project = resolveWithStore(String(params.project ?? ""));
-		const limit = parseLimit(params.limit, 10, 100);
-		if (!project) throw new Error("Missing project");
-		const { VidhiEngine } = await import("@chitragupta/smriti");
-		const engine = new VidhiEngine({ project });
-		return { vidhis: engine.getVidhis(project, limit) };
-	}, "List learned procedures (vidhis) for a project");
-
-	router.register("vidhi.match", async (params) => {
-		const project = resolveWithStore(String(params.project ?? ""));
-		const query = String(params.query ?? "");
-		if (!project) throw new Error("Missing project");
-		if (!query) throw new Error("Missing query");
-		const { VidhiEngine } = await import("@chitragupta/smriti");
-		const engine = new VidhiEngine({ project });
-		return { match: engine.match(query) ?? null };
-	}, "Match a learned procedure (vidhi) for a query");
-
-	router.register("consolidation.run", async (params) => {
-		const project = resolveWithStore(String(params.project ?? ""));
-		const sessionCount = parseLimit(params.sessionCount, 10, 100);
-		if (!project) throw new Error("Missing project");
-
-		const { ConsolidationEngine, VidhiEngine } = await import("@chitragupta/smriti");
-		const consolidator = new ConsolidationEngine();
-		consolidator.load();
-
-		const recentMetas = store.listSessions(project).slice(0, sessionCount);
-		const sessions: Array<Record<string, unknown>> = [];
-		for (const meta of recentMetas) {
-			try {
-				const loaded = store.loadSession(String(meta.id), project);
-				if (loaded) sessions.push(loaded as unknown as Record<string, unknown>);
-			} catch {
-				// Skip unreadable sessions in consolidation pass.
-			}
-		}
-
-		if (sessions.length === 0) {
-			return {
-				sessionsAnalyzed: 0,
-				newRulesCount: 0,
-				reinforcedRulesCount: 0,
-				weakenedRulesCount: 0,
-				patternsDetectedCount: 0,
-				newRulesPreview: [] as string[],
-				vidhisNewCount: 0,
-				vidhisReinforcedCount: 0,
-			};
-		}
-
-		const result = consolidator.consolidate(
-			sessions as unknown as import("@chitragupta/smriti/types").Session[],
-		);
-		consolidator.decayRules();
-		consolidator.pruneRules();
-		consolidator.save();
-
-		let vidhisNewCount = 0;
-		let vidhisReinforcedCount = 0;
-		try {
-			const vidhiEngine = new VidhiEngine({ project });
-			const vidhiResult = vidhiEngine.extract();
-			vidhisNewCount = vidhiResult.newVidhis.length;
-			vidhisReinforcedCount = vidhiResult.reinforced.length;
-		} catch {
-			// Optional — consolidation still succeeds without vidhi extraction.
-		}
-
-		return {
-			sessionsAnalyzed: result.sessionsAnalyzed,
-			newRulesCount: result.newRules.length,
-			reinforcedRulesCount: result.reinforcedRules.length,
-			weakenedRulesCount: result.weakenedRules.length,
-			patternsDetectedCount: result.patternsDetected.length,
-			newRulesPreview: result.newRules.slice(0, 20).map((rule) => `[${rule.category}] ${rule.rule}`),
-			vidhisNewCount,
-			vidhisReinforcedCount,
-		};
-	}, "Run Swapna consolidation and Vidhi extraction for a project");
-}
-

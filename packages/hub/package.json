@@ -21,7 +21,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --config ../../vitest.config.ts packages/hub/test/"
+    "test": "sh -lc 'cd ../.. && pnpm exec vitest run --config vitest.config.ts packages/hub/test/*.test.ts'"
   },
   "dependencies": {
     "preact": "^10.25.0",

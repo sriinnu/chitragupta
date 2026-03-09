@@ -315,10 +315,10 @@ export class ServerDiscovery {
 	private _isValidConfig(config: McpRemoteServerConfig): boolean {
 		if (!config.id || typeof config.id !== "string") return false;
 		if (!config.name || typeof config.name !== "string") return false;
-		if (config.transport !== "stdio" && config.transport !== "sse") return false;
+		if (config.transport !== "stdio" && config.transport !== "sse" && config.transport !== "streamable-http") return false;
 
 		if (config.transport === "stdio" && !config.command) return false;
-		if (config.transport === "sse" && !config.url) return false;
+		if ((config.transport === "sse" || config.transport === "streamable-http") && !config.url) return false;
 
 		return true;
 	}

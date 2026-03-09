@@ -22,15 +22,21 @@ const readSource = (rel: string) =>
 
 const syncToolsSource = readSource("../src/modes/mcp-tools-sync.ts");
 const mcpServerSource = readSource("../src/modes/mcp-server.ts");
+const mcpServerToolingSource = readSource("../src/modes/mcp-server-tooling.ts");
 const mcpDaemonWiringSource = (() => { try { return readSource("../src/modes/mcp-daemon-wiring.ts"); } catch { return ""; } })();
 const mcpSessionSource = readSource("../src/modes/mcp-session.ts");
 const mcpSessionHelpersSource = readSource("../src/modes/mcp-session-helpers.ts");
 const servicesSource = readSource("../../daemon/src/services.ts");
 const servicesReadSource = readSource("../../daemon/src/services-read.ts");
-const allServicesSource = servicesSource + servicesReadSource;
+const servicesKnowledgeSource = readSource("../../daemon/src/services-knowledge.ts");
+const allServicesSource = servicesSource + servicesReadSource + servicesKnowledgeSource;
 const servicesHelpersSource = readSource("../../daemon/src/services-helpers.ts");
 const fallbackSource = readSource("../src/modes/daemon-bridge-fallback.ts");
-const bridgeSource = readSource("../src/modes/daemon-bridge.ts");
+const bridgeSource = [
+	readSource("../src/modes/daemon-bridge-core.ts"),
+	readSource("../src/modes/daemon-bridge-sessions.ts"),
+	readSource("../src/modes/daemon-bridge-collective.ts"),
+].join("\n");
 
 // ─── Issue 1: Single-Writer Guarantee ───────────────────────────────────────
 
@@ -64,20 +70,20 @@ describe("Issue 1: Single-writer guarantee", () => {
 
 	describe("daemon services.ts runs VidhiEngine/ConsolidationEngine", () => {
 		it("registers vidhi.list method", () => {
-			expect(servicesSource).toContain('"vidhi.list"');
+			expect(servicesKnowledgeSource).toContain('"vidhi.list"');
 		});
 
 		it("registers vidhi.match method", () => {
-			expect(servicesSource).toContain('"vidhi.match"');
+			expect(servicesKnowledgeSource).toContain('"vidhi.match"');
 		});
 
 		it("registers consolidation.run method", () => {
-			expect(servicesSource).toContain('"consolidation.run"');
+			expect(servicesKnowledgeSource).toContain('"consolidation.run"');
 		});
 
 		it("consolidation.run calls consolidator.save() inside daemon process", () => {
-			const consolRunIdx = servicesSource.indexOf('"consolidation.run"');
-			const saveIdx = servicesSource.indexOf("consolidator.save()", consolRunIdx);
+			const consolRunIdx = servicesKnowledgeSource.indexOf('"consolidation.run"');
+			const saveIdx = servicesKnowledgeSource.indexOf("consolidator.save()", consolRunIdx);
 			expect(saveIdx).toBeGreaterThan(consolRunIdx);
 		});
 
@@ -144,11 +150,11 @@ describe("Issue 2: Conversation capture wiring", () => {
 	});
 
 	it("recorder is created from McpSessionRecorder", () => {
-		expect(mcpServerSource).toContain("new McpSessionRecorder(projectPath)");
+		expect(mcpServerToolingSource).toContain("new McpSessionRecorder(projectPath)");
 	});
 
 	it("record_conversation tool is registered on the server", () => {
-		expect(mcpServerSource).toContain("recorder.createRecordConversationTool()");
+		expect(mcpServerToolingSource).toContain("recorder.createRecordConversationTool()");
 	});
 
 	it("McpSessionRecorder has recordToolCall method", () => {
@@ -269,16 +275,16 @@ describe("Issue 4: Numeric parameter validation", () => {
 		});
 
 		it("vidhi.list uses parseLimit", () => {
-			const methodIdx = servicesSource.indexOf('"vidhi.list"');
-			const nextMethodIdx = servicesSource.indexOf("router.register", methodIdx + 1);
-			const methodBody = servicesSource.slice(methodIdx, nextMethodIdx);
+			const methodIdx = servicesKnowledgeSource.indexOf('"vidhi.list"');
+			const nextMethodIdx = servicesKnowledgeSource.indexOf("router.register", methodIdx + 1);
+			const methodBody = servicesKnowledgeSource.slice(methodIdx, nextMethodIdx);
 			expect(methodBody).toContain("parseLimit(params.limit");
 		});
 
 		it("consolidation.run uses parseLimit for sessionCount", () => {
-			const methodIdx = servicesSource.indexOf('"consolidation.run"');
-			const nextMethodIdx = servicesSource.indexOf("router.register", methodIdx + 1);
-			const methodBody = servicesSource.slice(methodIdx, nextMethodIdx > -1 ? nextMethodIdx : undefined);
+			const methodIdx = servicesKnowledgeSource.indexOf('"consolidation.run"');
+			const nextMethodIdx = servicesKnowledgeSource.indexOf("router.register", methodIdx + 1);
+			const methodBody = servicesKnowledgeSource.slice(methodIdx, nextMethodIdx > -1 ? nextMethodIdx : undefined);
 			expect(methodBody).toContain("parseLimit(params.sessionCount");
 		});
 	});
@@ -379,9 +385,9 @@ describe("Issue 5: Fallback runtime behavior", () => {
 			expect(orphan).toEqual([]);
 		});
 
-		it("total fallback methods count is 19", () => {
+		it("total fallback methods count is 20", () => {
 			const methods = extractFallbackMethods();
-			expect(methods.length).toBe(19);
+			expect(methods.length).toBe(20);
 		});
 	});
 

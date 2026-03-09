@@ -11,9 +11,10 @@
  */
 
 import type { DatabaseManager } from "./database.js";
+import { applyAdvancedAgentMigrations } from "./schema-agent-advanced.js";
 
 // Current schema versions — bump when adding migrations
-const AGENT_SCHEMA_VERSION = 6;
+const AGENT_SCHEMA_VERSION = 15;
 const GRAPH_SCHEMA_VERSION = 1;
 const VECTORS_SCHEMA_VERSION = 1;
 
@@ -310,13 +311,15 @@ export function initAgentSchema(dbm: DatabaseManager): void {
 	// ─── Phase 6 migration: Rename svapna → swapna in consolidation_log ──
 	if (currentVersion < 6) {
 		db.exec(`
-			UPDATE consolidation_log SET cycle_type = 'swapna' WHERE cycle_type = 'svapna';
-			UPDATE consolidation_log SET cycle_id = REPLACE(cycle_id, 'svapna-', 'swapna-')
-				WHERE cycle_id LIKE 'svapna-%';
-		`);
+				UPDATE consolidation_log SET cycle_type = 'swapna' WHERE cycle_type = 'svapna';
+				UPDATE consolidation_log SET cycle_id = REPLACE(cycle_id, 'svapna-', 'swapna-')
+					WHERE cycle_id LIKE 'svapna-%';
+			`);
 	}
 
-	setSchemaVersion(db, "agent", AGENT_SCHEMA_VERSION);
+		applyAdvancedAgentMigrations(db, currentVersion);
+
+		setSchemaVersion(db, "agent", AGENT_SCHEMA_VERSION);
 }
 
 /**

@@ -102,6 +102,12 @@ export interface MargaPipelineConfig {
 	minComplexityOverrides?: Partial<Record<TaskType, TaskComplexity>>;
 }
 
+interface RoutingInfluence {
+	minimumComplexity?: TaskComplexity;
+	avoidSkipLLM?: boolean;
+	rationale?: string;
+}
+
 // ─── Escalation Chain ───────────────────────────────────────────────────────
 
 /**
@@ -156,7 +162,10 @@ export class MargaPipeline {
 	 * - WHICH model handles this best? (binding lookup)
 	 * - Can we skip the LLM entirely? (search, BM25)
 	 */
-	classify(context: Context, options?: StreamOptions): PipelineDecision {
+	classify(
+		context: Context,
+		options?: StreamOptions & { routingInfluence?: RoutingInfluence },
+	): PipelineDecision {
 		// Step 1: Detect task type (Pravritti)
 		const taskTypeResult = classifyTaskType(context, options);
 
@@ -169,13 +178,22 @@ export class MargaPipeline {
 		if (minOverride && COMPLEXITY_ORDER[effectiveComplexity] < COMPLEXITY_ORDER[minOverride]) {
 			effectiveComplexity = minOverride;
 		}
+		const routingInfluence = options?.routingInfluence;
+		if (
+			routingInfluence?.minimumComplexity &&
+			COMPLEXITY_ORDER[effectiveComplexity] < COMPLEXITY_ORDER[routingInfluence.minimumComplexity]
+		) {
+			effectiveComplexity = routingInfluence.minimumComplexity;
+		}
 
 		// Step 4: Find the binding for this task type
 		const binding = this.bindings.find((b) => b.taskType === taskTypeResult.type);
 
 		// Step 5: Determine if we can skip LLM (tool-only, local-compute, or embedding)
 		const resolution = taskTypeResult.resolution;
-		const skipLLM = resolution === "tool-only" || resolution === "local-compute";
+		const skipLLM = routingInfluence?.avoidSkipLLM === true
+			? false
+			: resolution === "tool-only" || resolution === "local-compute";
 
 		// Step 6: Select provider/model
 		let providerId = binding?.providerId ?? "ollama";
@@ -191,6 +209,9 @@ export class MargaPipeline {
 				modelId = upgrade.modelId;
 				rationale = `Complexity upgrade (${effectiveComplexity}): ${upgrade.rationale}`;
 			}
+		}
+		if (routingInfluence?.rationale) {
+			rationale = `${rationale} [${routingInfluence.rationale}]`;
 		}
 
 		// Step 8: Identity temperature adjustment

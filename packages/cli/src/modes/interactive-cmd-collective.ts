@@ -72,16 +72,22 @@ export async function handleCollectiveCommand(
 			return { handled: true };
 		}
 
-		case "/sabha": {
-			try {
-				const { SabhaEngine } = await import("@chitragupta/sutra");
-				const agentAny = ctx.agent as unknown as Record<string, unknown>;
-				let engine: InstanceType<typeof SabhaEngine> | undefined;
-				if (agentAny._sabhaEngine && agentAny._sabhaEngine instanceof SabhaEngine) engine = agentAny._sabhaEngine;
-				else if (agentAny.sabhaEngine && agentAny.sabhaEngine instanceof SabhaEngine) engine = agentAny.sabhaEngine;
-				if (!engine) engine = new SabhaEngine();
-
-				const active = engine.listActive();
+			case "/sabha": {
+				try {
+					const { createDaemonSabhaProxy } = await import("../runtime-daemon-proxies.js");
+					const engine = createDaemonSabhaProxy();
+					const active = await engine.listActive() as Array<{
+						topic: string;
+						status: string;
+						createdAt: number;
+						participants: Array<unknown>;
+						rounds: Array<{
+							roundNumber: number;
+							votes: Array<unknown>;
+							challenges: Array<unknown>;
+							verdict: string | null;
+						}>;
+					}>;
 
 				stdout.write("\n" + bold("\u0938\u092D\u093E Sabha") + dim(" \u2014 Multi-Agent Deliberation Protocol") + "\n\n");
 				if (active.length === 0) {
@@ -186,23 +192,18 @@ export async function handleCollectiveCommand(
 
 		case "/akasha": {
 			try {
-				const { AkashaField } = await import("@chitragupta/smriti");
-				const agentAny = ctx.agent as unknown as Record<string, unknown>;
-				let field: InstanceType<typeof AkashaField> | undefined;
-				if (agentAny._akasha && agentAny._akasha instanceof AkashaField) field = agentAny._akasha;
-				else if (agentAny.akasha && agentAny.akasha instanceof AkashaField) field = agentAny.akasha;
-				if (!field) field = new AkashaField();
-
-				const akashaStats = field.stats();
-				const strongest = field.strongest(5);
+				const { getAkasha } = await import("./mcp-subsystems.js");
+				const field = await getAkasha();
+				const akashaStats = await Promise.resolve(field.stats?.() ?? {});
+				const strongest = await Promise.resolve(field.strongest?.(5) ?? []);
 
 				stdout.write("\n" + bold("\u0906\u0915\u093E\u0936 Akasha") + dim(" \u2014 Shared Knowledge Field (Stigmergy)") + "\n\n");
-				stdout.write("  " + bold("Total Traces:") + " " + cyan(String(akashaStats.totalTraces)) +
-					"  " + bold("Active:") + " " + cyan(String(akashaStats.activeTraces)) +
-					"  " + bold("Avg Strength:") + " " + dim(akashaStats.avgStrength.toFixed(3)) +
-					"  " + bold("Reinforcements:") + " " + dim(String(akashaStats.totalReinforcements)) + "\n\n");
+				stdout.write("  " + bold("Total Traces:") + " " + cyan(String(akashaStats.totalTraces ?? 0)) +
+					"  " + bold("Active:") + " " + cyan(String(akashaStats.activeTraces ?? 0)) +
+					"  " + bold("Avg Strength:") + " " + dim(Number(akashaStats.avgStrength ?? 0).toFixed(3)) +
+					"  " + bold("Reinforcements:") + " " + dim(String(akashaStats.totalReinforcements ?? 0)) + "\n\n");
 
-				const typeEntries = Object.entries(akashaStats.byType).filter(([, count]) => count > 0);
+				const typeEntries = Object.entries((akashaStats.byType ?? {}) as Record<string, number>).filter(([, count]) => count > 0);
 				if (typeEntries.length > 0) {
 					stdout.write("  " + bold("By Type:") + " ");
 					stdout.write(typeEntries.map(([type, count]) => {
@@ -215,15 +216,18 @@ export async function handleCollectiveCommand(
 				if (strongest.length > 0) {
 					stdout.write("  " + bold("Strongest Traces:") + "\n");
 					for (const trace of strongest) {
-						const strengthBar = renderMiniBar(trace.strength, 0, 1, 12, dim, green);
-						const typeColor = trace.traceType === "warning" ? yellow
-							: trace.traceType === "solution" ? green
-							: trace.traceType === "correction" ? red : cyan;
-						const age = formatAge(trace.createdAt);
+						const t = trace as Record<string, unknown>;
+						const strength = Number(t.strength ?? 0);
+						const traceType = String(t.traceType ?? "");
+						const strengthBar = renderMiniBar(strength, 0, 1, 12, dim, green);
+						const typeColor = traceType === "warning" ? yellow
+							: traceType === "solution" ? green
+							: traceType === "correction" ? red : cyan;
+						const age = formatAge(Number(t.createdAt ?? Date.now()));
 						stdout.write(
-							`    ${strengthBar} ${typeColor(`[${trace.traceType}]`)} ` +
-							`${bold(trace.topic.slice(0, 35))} ` +
-							`${dim(`str:${trace.strength.toFixed(2)} +${trace.reinforcements}`)} ` +
+							`    ${strengthBar} ${typeColor(`[${traceType}]`)} ` +
+							`${bold(String(t.topic ?? "").slice(0, 35))} ` +
+							`${dim(`str:${strength.toFixed(2)} +${String(t.reinforcements ?? 0)}`)} ` +
 							`${dim(age + " ago")}\n`
 						);
 					}
@@ -231,7 +235,7 @@ export async function handleCollectiveCommand(
 					stdout.write(dim("  No traces deposited yet. Agents leave traces as they solve problems.\n"));
 				}
 
-				if (akashaStats.strongestTopic) {
+				if (typeof akashaStats.strongestTopic === "string" && akashaStats.strongestTopic) {
 					stdout.write("\n  " + bold("Strongest Topic:") + " " + cyan(akashaStats.strongestTopic) + "\n");
 				}
 				stdout.write("\n");

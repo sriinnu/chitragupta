@@ -171,10 +171,10 @@ export async function handleIntrospectionCommand(
 				}
 
 				if (subCmd === "wake") {
-					daemonInstance.wake();
+					await Promise.resolve(daemonInstance.wake());
 					stdout.write(green("\n  Nidra daemon forced to LISTENING state.\n\n"));
 				} else if (subCmd === "history") {
-					const snap = daemonInstance.snapshot();
+					const snap = await Promise.resolve(daemonInstance.snapshot());
 					stdout.write("\n" + bold("\u0928\u093F\u0926\u094D\u0930\u093E Nidra Consolidation History") + "\n\n");
 					if (snap.lastConsolidationStart) {
 						stdout.write(`  Last consolidation started: ${new Date(snap.lastConsolidationStart).toLocaleString()}\n`);
@@ -188,7 +188,7 @@ export async function handleIntrospectionCommand(
 					}
 					stdout.write("\n");
 				} else {
-					const snap = daemonInstance.snapshot();
+					const snap = await Promise.resolve(daemonInstance.snapshot());
 					const stateColor = snap.state === "LISTENING" ? green : snap.state === "DREAMING" ? yellow : cyan;
 					stdout.write("\n" + bold("\u0928\u093F\u0926\u094D\u0930\u093E Nidra Daemon") + dim(" \u2014 Sleep Cycle Manager") + "\n\n");
 					stdout.write(`  State:      ${stateColor(bold(snap.state))}\n`);

@@ -8,6 +8,13 @@
 
 Tantra implements the Model Context Protocol (MCP), enabling Chitragupta to both expose its tools as an MCP server and consume external MCP tool servers as a client. It includes a full JSON-RPC 2.0 implementation, two transport layers (stdio and SSE), and a bridge that converts between Chitragupta's native `ToolHandler` interface and the MCP tool format. The `AutonomousMcpManager` provides self-healing server management with circuit breakers, quarantine, and health-driven load balancing. This means any MCP-compatible tool ecosystem plugs directly into Chitragupta, and any Chitragupta tool can be served to external MCP clients.
 
+Tantra is the MCP-facing part of a broader internal runtime story. Lucy/Scarlett is not only an outer-agent or external MCP concept; Tantra contributes the MCP recovery and quarantine side of that platform-wide self-healing layer.
+
+Related docs:
+
+- Runtime integrity wiring: [../../docs/runtime-integrity.md](../../docs/runtime-integrity.md)
+- System placement: [../../docs/architecture.md#current-runtime-wiring](../../docs/architecture.md#current-runtime-wiring)
+
 ---
 
 ## Key Features

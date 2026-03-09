@@ -26,9 +26,13 @@ export type DeepSleepHandler = () => Promise<void>;
 /**
  * Async handler invoked during DEEP_SLEEP for multi-session Swapna consolidation.
  * Receives the array of session IDs accumulated since the last DEEP_SLEEP.
+ * It may return the exact subset of IDs that were successfully consolidated.
+ * When it returns `undefined`, Nidra assumes every passed ID was consumed.
  * When registered, it replaces the legacy `DeepSleepHandler` for DEEP_SLEEP runs.
  */
-export type DeepSleepConsolidationHandler = (sessionIds: readonly string[]) => Promise<void>;
+export type DeepSleepConsolidationHandler = (
+	sessionIds: readonly string[],
+) => Promise<readonly string[] | void>;
 
 /** Internal daemon state bag passed to persistence functions. */
 export interface NidraDaemonState {
@@ -45,8 +49,12 @@ export interface NidraDaemonState {
 	consecutiveIdleDreamCycles: number;
 	/** Session count accumulated since last DEEP_SLEEP. */
 	sessionsProcessedSinceDeepSleep: number;
+	/** Total notifySession calls accumulated since last DEEP_SLEEP. */
+	sessionNotificationsSinceDeepSleep: number;
 	/** Pending session IDs for multi-session DEEP_SLEEP consolidation. */
 	pendingSessionIds: string[];
+	/** Whether pending session IDs should be retained on the next LISTENING transition. */
+	preservePendingSessionsOnListening: boolean;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -69,13 +77,22 @@ export function persistNidraState(s: NidraDaemonState): void {
 			INSERT OR REPLACE INTO nidra_state
 				(id, current_state, last_state_change, last_heartbeat,
 				 last_consolidation_start, last_consolidation_end,
-				 consolidation_phase, consolidation_progress, updated_at)
-			VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
-		`).run(
-			s.state, s.lastStateChange, s.lastHeartbeat,
-			s.lastConsolidationStart ?? null, s.lastConsolidationEnd ?? null,
-			s.consolidationPhase ?? null, s.consolidationProgress, now,
-		);
+				 consolidation_phase, consolidation_progress,
+				 consecutive_idle_dream_cycles, sessions_processed_since_deep_sleep,
+				 session_notifications_since_deep_sleep, pending_session_ids,
+				 preserve_pending_sessions_on_listening, updated_at)
+				VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`).run(
+				s.state, s.lastStateChange, s.lastHeartbeat,
+				s.lastConsolidationStart ?? null, s.lastConsolidationEnd ?? null,
+				s.consolidationPhase ?? null, s.consolidationProgress,
+				s.consecutiveIdleDreamCycles,
+				s.sessionsProcessedSinceDeepSleep,
+				s.sessionNotificationsSinceDeepSleep,
+				JSON.stringify(s.pendingSessionIds),
+				s.preservePendingSessionsOnListening ? 1 : 0,
+				now,
+			);
 	} catch (err) {
 		log.warn("Failed to persist nidra state", { error: String(err) });
 	}
@@ -87,18 +104,26 @@ export function restoreNidraState(s: NidraDaemonState): void {
 		const db = DatabaseManager.instance().get("agent");
 		const row = db.prepare(
 			"SELECT current_state, last_state_change, last_heartbeat, " +
-			"last_consolidation_start, last_consolidation_end, " +
-			"consolidation_phase, consolidation_progress " +
-			"FROM nidra_state WHERE id = 1"
-		).get() as {
+				"last_consolidation_start, last_consolidation_end, " +
+				"consolidation_phase, consolidation_progress, " +
+				"consecutive_idle_dream_cycles, sessions_processed_since_deep_sleep, " +
+				"session_notifications_since_deep_sleep, " +
+				"pending_session_ids, preserve_pending_sessions_on_listening " +
+				"FROM nidra_state WHERE id = 1"
+			).get() as {
 			current_state: NidraState;
 			last_state_change: number;
 			last_heartbeat: number;
 			last_consolidation_start: number | null;
 			last_consolidation_end: number | null;
 			consolidation_phase: string | null;
-			consolidation_progress: number;
-		} | undefined;
+				consolidation_progress: number;
+				consecutive_idle_dream_cycles?: number | null;
+				sessions_processed_since_deep_sleep?: number | null;
+				session_notifications_since_deep_sleep?: number | null;
+				pending_session_ids?: string | null;
+				preserve_pending_sessions_on_listening?: number | null;
+			} | undefined;
 
 		if (row) {
 			s.state = row.current_state;
@@ -107,7 +132,17 @@ export function restoreNidraState(s: NidraDaemonState): void {
 			s.lastConsolidationStart = row.last_consolidation_start ?? undefined;
 			s.lastConsolidationEnd = row.last_consolidation_end ?? undefined;
 			s.consolidationPhase = row.consolidation_phase as SwapnaPhase | undefined;
-			s.consolidationProgress = row.consolidation_progress;
+				s.consolidationProgress = row.consolidation_progress;
+				s.consecutiveIdleDreamCycles = row.consecutive_idle_dream_cycles ?? 0;
+				s.sessionsProcessedSinceDeepSleep = row.sessions_processed_since_deep_sleep ?? 0;
+				s.sessionNotificationsSinceDeepSleep = row.session_notifications_since_deep_sleep ?? 0;
+				try {
+					const parsed = row.pending_session_ids ? JSON.parse(row.pending_session_ids) : [];
+					s.pendingSessionIds = Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+			} catch {
+				s.pendingSessionIds = [];
+			}
+			s.preservePendingSessionsOnListening = row.preserve_pending_sessions_on_listening === 1;
 			log.debug(`Restored nidra state: ${s.state}`);
 		}
 	} catch (err) {
@@ -146,6 +181,7 @@ export function buildNidraSnapshot(s: NidraDaemonState): NidraSnapshot {
 		uptime: s.running ? now - s.startedAt : 0,
 		consecutiveIdleDreamCycles: s.consecutiveIdleDreamCycles,
 		sessionsProcessedSinceDeepSleep: s.sessionsProcessedSinceDeepSleep,
+		sessionNotificationsSinceDeepSleep: s.sessionNotificationsSinceDeepSleep,
 		pendingSessionIds: [...s.pendingSessionIds],
 	};
 }

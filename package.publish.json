@@ -1,6 +1,6 @@
 {
 	"name": "@yugenlab/chitragupta",
-	"version": "0.1.26",
+	"version": "0.1.27",
 	"description": "AI agent memory and observability platform — sessions, GraphRAG, hybrid search, temporal trending, predictive pre-fetching, dream-cycle consolidation, 60+ MCP tools",
 	"type": "module",
 	"author": "Srinivas Pendela",
@@ -51,9 +51,9 @@
 			"types": "./yantra.d.ts",
 			"import": "./yantra.js"
 		},
-		"./vayu": {
-			"types": "./vayu.d.ts",
-			"import": "./vayu.js"
+		"./prana": {
+			"types": "./prana.d.ts",
+			"import": "./prana.js"
 		},
 		"./niyanta": {
 			"types": "./niyanta.d.ts",
@@ -94,6 +94,10 @@
 	],
 	"dependencies": {
 		"better-sqlite3": "^12.6.2"
+	},
+	"optionalDependencies": {
+		"@aws-sdk/client-bedrock": "^3.1004.0",
+		"onnxruntime-node": "^1.21.0"
 	},
 	"repository": {
 		"type": "git",

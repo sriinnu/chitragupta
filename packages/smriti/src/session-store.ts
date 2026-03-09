@@ -4,225 +4,112 @@
  * Lifecycle: create, save, load, delete, addTurn, migrate.
  */
 import fs from "fs";
-import { renameSync as nodeRenameSync } from "node:fs";
 import path from "path";
 import { SessionError } from "@chitragupta/core";
 import type { Session, SessionMeta, SessionOpts, SessionTurn } from "./types.js";
-import { stripAnsi } from "./provider-labels.js";
 import { parseSessionMarkdown } from "./markdown-parser.js";
 import { writeSessionMarkdown, writeTurnMarkdown } from "./markdown-writer.js";
 import {
-	hashProject,
 	getSessionsRoot,
-	getProjectSessionDir,
 	getAgentDb,
-	sessionMetaToRow,
+	getSessionMetaFromDb,
 	upsertSessionToDb,
 	insertTurnToDb,
 	getMaxTurnNumber as getMaxTurnNumberDb,
+	reconcileSessionToDb,
 } from "./session-db.js";
+import { cacheGet, cachePut, cacheInvalidate } from "./session-store-cache.js";
 import {
-	cacheGet,
-	cachePut,
-	cacheInvalidate,
-} from "./session-store-cache.js";
-
-// Re-exports from sub-modules
+	atomicRename,
+	generateSessionId,
+	localDateString,
+	patchFrontmatterUpdated,
+	readMetadataString,
+	resolveMcpClientKey,
+	resolveSessionLineageKey,
+	resolveSessionPath,
+	resolveSessionReusePolicy,
+	sanitizeTurnForPersistence,
+} from "./session-store-helpers.js";
+import { updateSessionMeta as updateSessionMetaDb } from "./session-queries.js";
 
 export { _resetSessionCache } from "./session-store-cache.js";
 export { _resetDbInit, _getDbStatus, getMaxTurnNumber } from "./session-db.js";
 export {
 	listSessions,
+	listSessionsByIds,
 	listSessionsByDate,
 	listSessionsByDateRange,
 	listSessionDates,
 	listSessionProjects,
 	listTurnsWithTimestamps,
 	findSessionByMetadata,
-	updateSessionMeta,
 	getTurnsSince,
 	getSessionsModifiedSince,
 } from "./session-queries.js";
 
-/**
- * Atomic rename: uses node:fs (bypasses test mocks on bare "fs").
- * Falls back to direct write if renameSync fails.
- */
-function atomicRename(tmpPath: string, targetPath: string): void {
-	try {
-		nodeRenameSync(tmpPath, targetPath);
-	} catch (err: unknown) {
-		// Fallback: direct write (non-atomic but still correct)
-		if (!process.env.VITEST) {
-			process.stderr.write(`[smriti:session-store] atomic rename failed, using direct write: ${err instanceof Error ? err.message : String(err)}\n`);
-		}
-		fs.writeFileSync(targetPath, fs.readFileSync(tmpPath, "utf-8"), "utf-8");
-		try { fs.unlinkSync(tmpPath); } catch { /* intentional: orphan tmp cleanup is best-effort */ }
+function mergeLegacySessionMetaFromDb(markdownMeta: SessionMeta, dbMeta?: SessionMeta): SessionMeta {
+	if (!dbMeta) return markdownMeta;
+
+	let metadata = markdownMeta.metadata;
+	if (!metadata && dbMeta.metadata) {
+		metadata = structuredClone(dbMeta.metadata);
 	}
+
+	const provider = markdownMeta.provider ?? dbMeta.provider;
+	if (provider && metadata?.provider !== provider) {
+		metadata = { ...(metadata ?? {}), provider };
+	}
+
+	return {
+		...markdownMeta,
+		provider,
+		metadata,
+	};
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-function localDateString(now: Date = new Date()): string {
-	const yyyy = now.getFullYear().toString();
-	const mm = (now.getMonth() + 1).toString().padStart(2, "0");
-	const dd = now.getDate().toString().padStart(2, "0");
-	return `${yyyy}-${mm}-${dd}`;
+function turnsAreEquivalent(left: SessionTurn, right: SessionTurn): boolean {
+	return left.turnNumber === right.turnNumber
+		&& left.role === right.role
+		&& left.content === right.content
+		&& (left.agent ?? null) === (right.agent ?? null)
+		&& (left.model ?? null) === (right.model ?? null)
+		&& JSON.stringify(left.contentParts ?? null) === JSON.stringify(right.contentParts ?? null)
+		&& JSON.stringify(left.toolCalls ?? null) === JSON.stringify(right.toolCalls ?? null);
 }
 
-function resolveMcpClientKey(opts: SessionOpts): string | undefined {
-	if ((opts.agent ?? "chitragupta") !== "mcp") return undefined;
-	const fromMetadata = opts.metadata?.clientKey;
-	if (typeof fromMetadata === "string" && fromMetadata.trim()) {
-		return fromMetadata.trim();
-	}
-	for (const key of [
-		"CHITRAGUPTA_CLIENT_KEY",
-		"CODEX_THREAD_ID",
-		"CLAUDE_CODE_SESSION_ID",
-		"CLAUDE_SESSION_ID",
-	]) {
-		const value = process.env[key];
-		if (typeof value === "string" && value.trim()) return value.trim();
-	}
-	return undefined;
+function turnsAreEquivalentIgnoringTurnNumber(left: SessionTurn, right: SessionTurn): boolean {
+	return left.role === right.role
+		&& left.content === right.content
+		&& (left.agent ?? null) === (right.agent ?? null)
+		&& (left.model ?? null) === (right.model ?? null)
+		&& JSON.stringify(left.contentParts ?? null) === JSON.stringify(right.contentParts ?? null)
+		&& JSON.stringify(left.toolCalls ?? null) === JSON.stringify(right.toolCalls ?? null);
 }
 
-function findReusableMcpSession(project: string, clientKey: string): Session | null {
+function findReusableLineageSession(
+	project: string,
+	lineageKey: string,
+): Session | null {
 	try {
 		const db = getAgentDb();
 		const todayPrefix = `session-${localDateString()}-`;
 		const row = db.prepare(
 			`SELECT id FROM sessions
 			 WHERE project = ?
-			   AND agent = 'mcp'
 			   AND id LIKE ?
-			   AND json_extract(metadata, '$.clientKey') = ?
+			   AND (
+				    json_extract(metadata, '$.sessionLineageKey') = ?
+				    OR json_extract(metadata, '$.clientKey') = ?
+			   )
 			 ORDER BY updated_at DESC
 			 LIMIT 1`,
-		).get(project, `${todayPrefix}%`, clientKey) as { id?: unknown } | undefined;
+		).get(project, `${todayPrefix}%`, lineageKey, lineageKey) as { id?: unknown } | undefined;
 		if (typeof row?.id !== "string" || row.id.length === 0) return null;
 		return loadSession(row.id, project);
 	} catch {
 		return null;
 	}
-}
-
-/**
- * Generate a date-based session ID: session-YYYY-MM-DD-<projhash>[-N]
- *
- * Includes a project hash (8 chars) to ensure global uniqueness
- * across projects in the shared SQLite table.
- * Handles multiple sessions per day by appending a counter.
- */
-function generateSessionId(project: string): { id: string; filePath: string } {
-	const now = new Date();
-	const yyyy = now.getFullYear().toString();
-	const mm = (now.getMonth() + 1).toString().padStart(2, "0");
-	const dateStr = localDateString(now);
-	const projHash = hashProject(project).slice(0, 8);
-	const baseId = `session-${dateStr}-${projHash}`;
-
-	const projectDir = getProjectSessionDir(project);
-	const yearMonthDir = path.join(projectDir, yyyy, mm);
-	fs.mkdirSync(yearMonthDir, { recursive: true });
-
-	// Check for existing sessions today
-	const basePath = path.join(yearMonthDir, `${baseId}.md`);
-	if (!fs.existsSync(basePath)) {
-		return {
-			id: baseId,
-			filePath: path.join("sessions", hashProject(project), yyyy, mm, `${baseId}.md`),
-		};
-	}
-
-	// Find next available counter
-	let counter = 2;
-	while (fs.existsSync(path.join(yearMonthDir, `${baseId}-${counter}.md`))) {
-		counter++;
-	}
-
-	const id = `${baseId}-${counter}`;
-	return {
-		id,
-		filePath: path.join("sessions", hashProject(project), yyyy, mm, `${id}.md`),
-	};
-}
-
-/**
- * Resolve the full filesystem path for a session file.
- * Supports both old-style (flat) and new-style (YYYY/MM/) layouts.
- */
-function resolveSessionPath(id: string, project: string): string {
-	const projectDir = getProjectSessionDir(project);
-
-	// New-style: YYYY/MM/session-YYYY-MM-DD-<hash>[-N].md
-	const dateMatch = id.match(/^session-(\d{4})-(\d{2})-\d{2}/);
-	if (dateMatch) {
-		const newPath = path.join(projectDir, dateMatch[1], dateMatch[2], `${id}.md`);
-		if (fs.existsSync(newPath)) return newPath;
-	}
-
-	// Old-style: flat directory
-	const oldPath = path.join(projectDir, `${id}.md`);
-	if (fs.existsSync(oldPath)) return oldPath;
-
-	// For new sessions, prefer new-style path
-	if (dateMatch) {
-		return path.join(projectDir, dateMatch[1], dateMatch[2], `${id}.md`);
-	}
-
-	return oldPath;
-}
-
-/**
- * Update only the `updated:` field in YAML frontmatter.
- *
- * Keeps addTurn append-only for turns while ensuring filesystem fallback ordering
- * remains correct when SQLite write-through is unavailable.
- */
-function patchFrontmatterUpdated(content: string, updatedIso: string): string {
-	const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-	if (!fmMatch) return content;
-
-	const frontmatter = fmMatch[1];
-	if (!/^updated:\s/m.test(frontmatter)) return content;
-
-	const patchedFrontmatter = frontmatter.replace(
-		/^updated:\s.*$/m,
-		`updated: ${updatedIso}`,
-	);
-	if (patchedFrontmatter === frontmatter) return content;
-
-	return `---\n${patchedFrontmatter}\n---${content.slice(fmMatch[0].length)}`;
-}
-
-/**
- * Normalize a turn before writing to markdown/SQLite.
- * Keeps transcript fidelity while removing terminal artifacts and null bytes.
- */
-function sanitizeTurnForPersistence(turn: SessionTurn): SessionTurn {
-	const cleanedContent = stripAnsi(turn.content)
-		.replace(/\r\n/g, "\n")
-		.replace(/\u0000/g, "")
-		.replace(/[ \t]+$/gm, "")
-		.trim();
-
-	if (!cleanedContent) {
-		throw new SessionError("Turn content is empty after normalization.");
-	}
-
-	const cleanedToolCalls = turn.toolCalls?.map((tc) => ({
-		...tc,
-		input: stripAnsi(tc.input).replace(/\u0000/g, "").trim(),
-		result: stripAnsi(tc.result).replace(/\u0000/g, "").trim(),
-	}));
-
-	return {
-		...turn,
-		content: cleanedContent,
-		toolCalls: cleanedToolCalls,
-	};
 }
 
 /**
@@ -233,8 +120,11 @@ function sanitizeTurnForPersistence(turn: SessionTurn): SessionTurn {
  */
 export function createSession(opts: SessionOpts): Session {
 	const clientKey = resolveMcpClientKey(opts);
-	if (clientKey) {
-		const existing = findReusableMcpSession(opts.project, clientKey);
+	const lineageKey = resolveSessionLineageKey(opts, clientKey);
+	const reusePolicy = resolveSessionReusePolicy(opts, lineageKey);
+	const agent = opts.agent ?? "chitragupta";
+	if (reusePolicy === "same_day" && lineageKey) {
+		const existing = findReusableLineageSession(opts.project, lineageKey);
 		if (existing) return existing;
 	}
 
@@ -242,13 +132,27 @@ export function createSession(opts: SessionOpts): Session {
 	const { id, filePath } = generateSessionId(opts.project);
 	const metadata = { ...(opts.metadata ?? {}) };
 	if (clientKey) metadata.clientKey = clientKey;
+	if (lineageKey) metadata.sessionLineageKey = lineageKey;
+	if (metadata.sessionReusePolicy === undefined) metadata.sessionReusePolicy = reusePolicy;
+	if (typeof opts.consumer === "string" && opts.consumer.trim() && metadata.consumer === undefined) {
+		metadata.consumer = opts.consumer.trim();
+	}
+	if (typeof opts.surface === "string" && opts.surface.trim() && metadata.surface === undefined) {
+		metadata.surface = opts.surface.trim();
+	}
+	if (typeof opts.channel === "string" && opts.channel.trim() && metadata.channel === undefined) {
+		metadata.channel = opts.channel.trim();
+	}
+	if (typeof opts.actorId === "string" && opts.actorId.trim() && metadata.actorId === undefined) {
+		metadata.actorId = opts.actorId.trim();
+	}
 
 	const meta: SessionMeta = {
 		id,
 		title: opts.title ?? "New Session",
 		created: now,
 		updated: now,
-		agent: opts.agent ?? "chitragupta",
+		agent,
 		model: opts.model ?? "unknown",
 		provider: opts.provider,
 		project: opts.project,
@@ -270,7 +174,7 @@ export function createSession(opts: SessionOpts): Session {
 	saveSession(session);
 
 	// Write-through to SQLite
-	upsertSessionToDb(meta, filePath);
+	upsertSessionToDb(meta, filePath, 0);
 
 	return session;
 }
@@ -286,7 +190,14 @@ export function saveSession(session: Session): void {
 
 	try {
 		fs.mkdirSync(dir, { recursive: true });
-		session.meta.updated = new Date().toISOString();
+		const mergedMeta = mergeLegacySessionMetaFromDb(
+			session.meta,
+			getSessionMetaFromDb(session.meta.id),
+		);
+		session.meta = {
+			...mergedMeta,
+			updated: new Date().toISOString(),
+		};
 		const markdown = writeSessionMarkdown(session);
 		// Atomic write: write to temp file then rename (rename is atomic on POSIX).
 		// Prevents half-written files if the process crashes mid-write.
@@ -295,9 +206,50 @@ export function saveSession(session: Session): void {
 		atomicRename(tmpPath, filePath);
 		// Write-through: update L1 cache
 		cachePut(session.meta.id, session.meta.project, session);
+		// Keep SQLite metadata aligned with the markdown source of truth.
+		upsertSessionToDb(session.meta, filePath, session.turns.length);
 	} catch (err) {
 		throw new SessionError(
 			`Failed to save session ${session.meta.id} at ${filePath}: ${(err as Error).message}`,
+		);
+	}
+}
+
+export function updateSessionMeta(
+	sessionId: string,
+	updates: Partial<Pick<SessionMeta, "title" | "model" | "metadata" | "tags">>,
+): void {
+	updateSessionMetaDb(sessionId, updates);
+
+	const dbMeta = getSessionMetaFromDb(sessionId);
+	if (!dbMeta) return;
+
+	const filePath = resolveSessionPath(sessionId, dbMeta.project);
+	if (!fs.existsSync(filePath)) return;
+
+	try {
+		const session = parseSessionMarkdown(fs.readFileSync(filePath, "utf-8"));
+		let metadata = updates.metadata !== undefined
+			? structuredClone(updates.metadata)
+			: session.meta.metadata;
+		const provider = session.meta.provider
+			?? dbMeta.provider
+			?? (typeof metadata?.provider === "string" ? metadata.provider : undefined);
+		if (provider && metadata?.provider !== provider) {
+			metadata = { ...(metadata ?? {}), provider };
+		}
+		session.meta = {
+			...session.meta,
+			title: updates.title ?? session.meta.title,
+			model: updates.model ?? session.meta.model,
+			tags: updates.tags ?? session.meta.tags,
+			provider,
+			metadata,
+		};
+		saveSession(session);
+	} catch (err: unknown) {
+		process.stderr.write(
+			`[smriti:session-store] updateSessionMeta markdown sync failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}\n`,
 		);
 	}
 }
@@ -322,6 +274,11 @@ export function loadSession(id: string, project: string): Session {
 	try {
 		const content = fs.readFileSync(filePath, "utf-8");
 		const session = parseSessionMarkdown(content);
+		session.meta = mergeLegacySessionMetaFromDb(
+			session.meta,
+			getSessionMetaFromDb(session.meta.id),
+		);
+		reconcileSessionToDb(session, filePath);
 		cachePut(id, project, session);
 		return session;
 	} catch (err) {
@@ -377,7 +334,7 @@ export function deleteSession(id: string, project: string): void {
 	}
 }
 /** Per-session write queue to prevent concurrent write races. */
-const sessionWriteQueues=new Map();
+const sessionWriteQueues = new Map<string, Promise<void>>();
 
 
 /**
@@ -392,7 +349,7 @@ const sessionWriteQueues=new Map();
  */
 export function addTurn(sessionId: string, project: string, turn: SessionTurn): Promise<void> {
 	const key = `${sessionId}:${project}`;
-	const prev = sessionWriteQueues.get(key) ?? Promise.resolve();
+	const prev = sessionWriteQueues.get(key)?.catch(() => undefined) ?? Promise.resolve();
 	const next = prev.then(() => {
 		const filePath = resolveSessionPath(sessionId, project);
 		const sanitizedTurn = sanitizeTurnForPersistence(turn);
@@ -405,12 +362,39 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 
 		// Read current turn count from file to assign turn number.
 		// Fall back to SQLite if markdown is corrupted (prevents permanently stuck sessions).
+		let parsedSession: Session | undefined;
 		if (!sanitizedTurn.turnNumber) {
 			try {
-				const session = parseSessionMarkdown(fileContent);
-				sanitizedTurn.turnNumber = session.turns.length + 1;
+				parsedSession = parseSessionMarkdown(fileContent);
+				const lastTurn = parsedSession.turns.at(-1);
+				if (lastTurn && turnsAreEquivalentIgnoringTurnNumber(lastTurn, sanitizedTurn)) {
+					reconcileSessionToDb(parsedSession, filePath);
+					return;
+				}
+				sanitizedTurn.turnNumber = parsedSession.turns.length + 1;
 			} catch {
 				sanitizedTurn.turnNumber = getMaxTurnNumberDb(sessionId) + 1;
+			}
+		} else {
+			try {
+				parsedSession = parseSessionMarkdown(fileContent);
+			} catch {
+				parsedSession = undefined;
+			}
+		}
+
+		if (parsedSession) {
+			const existingTurn = parsedSession.turns.find(
+				(existing) => existing.turnNumber === sanitizedTurn.turnNumber,
+			);
+			if (existingTurn) {
+				if (turnsAreEquivalent(existingTurn, sanitizedTurn)) {
+					reconcileSessionToDb(parsedSession, filePath);
+					return;
+				}
+				throw new SessionError(
+					`Turn ${sanitizedTurn.turnNumber} already exists for session ${sessionId} with different content.`,
+				);
 			}
 		}
 
@@ -429,7 +413,11 @@ export function addTurn(sessionId: string, project: string, turn: SessionTurn): 
 		cacheInvalidate(sessionId, project);
 
 		// Write-through to SQLite (self-heals missing session rows in SQLite).
-		insertTurnToDb(sessionId, sanitizedTurn, { project, filePath });
+		const insertStatus = insertTurnToDb(sessionId, sanitizedTurn, { project, filePath });
+		if (insertStatus !== "inserted") {
+			const reconciledSession = parseSessionMarkdown(fs.readFileSync(filePath, "utf-8"));
+			reconcileSessionToDb(reconciledSession, filePath);
+		}
 	}).catch((err: unknown) => {
 		throw err;
 	}).finally(() => {

@@ -97,19 +97,16 @@ export function normalizeProjectPath(project: string): string {
 	return normalized;
 }
 
-function suffix(project: string, segments = 2): string {
-	const parts = normalizeProjectPath(project).split(/[\\/]+/).filter(Boolean);
-	return parts.slice(-segments).join("/").toLowerCase();
-}
-
 /**
  * Resolve a requested project path against known stored project keys.
  *
  * Resolution order:
  * 1) exact normalized match
- * 2) unique basename match (repo moved, same folder name)
- * 3) unique 2-segment suffix match
- * 4) fall back to normalized requested path
+ * 2) fall back to normalized requested path
+ *
+ * The daemon intentionally avoids basename/suffix fuzzy matching here.
+ * For similarly named repositories, fuzzy resolution can bind reads or
+ * writes to the wrong project and create cross-project memory/session drift.
  */
 export function resolveProjectKey(
 	requestedProject: string,
@@ -129,18 +126,6 @@ export function resolveProjectKey(
 
 	const exact = normalizedToStored.get(requested);
 	if (exact) return exact;
-
-	const requestedBase = path.basename(requested).toLowerCase();
-	const baseMatches = [...normalizedToStored.entries()].filter(
-		([normalized]) => path.basename(normalized).toLowerCase() === requestedBase,
-	);
-	if (baseMatches.length === 1) return baseMatches[0][1];
-
-	if (baseMatches.length > 1) {
-		const wantedSuffix = suffix(requested, 2);
-		const suffixMatches = baseMatches.filter(([normalized]) => suffix(normalized, 2) === wantedSuffix);
-		if (suffixMatches.length === 1) return suffixMatches[0][1];
-	}
 
 	return requested;
 }

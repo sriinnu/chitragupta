@@ -10,6 +10,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SessionMeta, SessionTurn } from "../src/types.js";
+import { renderConsolidationMetadata } from "../src/consolidation-provenance.js";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -93,6 +94,7 @@ import {
 	getDayFilePath,
 	consolidateDay,
 	readDayFile,
+	readDayFileMetadata,
 	listDayFiles,
 	searchDayFiles,
 	isDayConsolidated,
@@ -263,10 +265,33 @@ describe("consolidateDay", () => {
 		expect(result.sessionsProcessed).toBe(3);
 		expect(result.projectCount).toBe(2);
 		expect(result.totalTurns).toBe(3);
+		expect(result.sourceSessionIds).toEqual([
+			"session-2025-06-15-abc1",
+			"session-2025-06-15-abc2",
+			"session-2025-06-15-abc3",
+		]);
 
 		const content = fsModule.__store.get(result.filePath)!;
 		expect(content).toContain("Project: /project/alpha");
 		expect(content).toContain("Project: /project/beta");
+	});
+
+	it("should persist structured provenance metadata for source sessions", async () => {
+		const meta1 = makeMeta({ id: "session-a", project: "/project/alpha", branch: "main" });
+		const meta2 = makeMeta({ id: "session-b", project: "/project/beta", branch: "feat/x" });
+		const turns = [makeTurn("user", "Discuss architecture", 1, Date.parse("2025-06-15T09:00:00Z"))];
+
+		await consolidateDay("2025-06-15", {
+			loadSessions: async () => [makeSession(meta1, turns), makeSession(meta2, turns)],
+		});
+
+		const metadata = readDayFileMetadata("2025-06-15");
+		expect(metadata?.kind).toBe("day");
+		expect(metadata?.sourceSessionIds).toEqual(["session-a", "session-b"]);
+		expect(metadata?.projects).toEqual([
+			{ project: "/project/alpha", sessionIds: ["session-a"] },
+			{ project: "/project/beta", sessionIds: ["session-b"] },
+		]);
 	});
 
 	it("should extract tool calls from turn content and populate tools used section", async () => {
@@ -458,6 +483,49 @@ describe("consolidateDay", () => {
 		expect(content).not.toContain("/stale");
 	});
 
+	it("should honor session counts from provenance metadata when compact day files have fewer session sections", async () => {
+		const dayPath = "/home/test/.chitragupta/days/2025/06/15.md";
+		fsModule.__store.set(dayPath, [
+			"# 2025-06-15 — Sunday",
+			"",
+			renderConsolidationMetadata({
+				kind: "day",
+				formatVersion: 4,
+				date: "2025-06-15",
+				generatedAt: "2025-06-15T12:00:00Z",
+				sessionCount: 3,
+				projectCount: 1,
+				sourceSessionIds: ["session-a", "session-b", "session-c"],
+				sourceSessions: [
+					{ id: "session-a", project: "/test/cached", title: "A", created: "2025-06-15T10:00:00Z", updated: "2025-06-15T10:00:00Z" },
+					{ id: "session-b", project: "/test/cached", title: "B", created: "2025-06-15T10:05:00Z", updated: "2025-06-15T10:05:00Z" },
+					{ id: "session-c", project: "/test/cached", title: "C", created: "2025-06-15T10:10:00Z", updated: "2025-06-15T10:10:00Z" },
+				],
+				projects: [{ project: "/test/cached", sessionIds: ["session-a", "session-b", "session-c"] }],
+			}),
+			"",
+			"## Project: /test/cached",
+			"",
+			"### Compact Sessions",
+			"",
+			"- `session-a` | 10:00 | claude | 1 turns | discussion",
+			"- `session-b` | 10:05 | claude | 1 turns | discussion",
+			"- `session-c` | 10:10 | claude | 1 turns | discussion",
+			"",
+			"---",
+			"*Consolidated by Chitragupta at 2025-06-15T12:00:00Z | format v4*",
+			"",
+		].join("\n"));
+
+		const loadSessions = vi.fn(async () => []);
+		const result = await consolidateDay("2025-06-15", { loadSessions });
+
+		expect(loadSessions).not.toHaveBeenCalled();
+		expect(result.sessionsProcessed).toBe(3);
+		expect(result.projectCount).toBe(1);
+		expect(result.sourceSessionIds).toEqual(["session-a", "session-b", "session-c"]);
+	});
+
 	it("should create directories for the day file path", async () => {
 		const meta = makeMeta({ id: "session-2025-06-15-abc1", project: "/test/dirs" });
 		const turns = [makeTurn("user", "Test", 1, Date.parse("2025-06-15T10:00:00Z"))];
@@ -618,6 +686,38 @@ describe("Markdown output format", () => {
 
 		const content = fsModule.__store.get("/home/test/.chitragupta/days/2025/06/15.md")!;
 		expect(content).toContain("### Session: session-2025-06-15-abc1");
+	});
+
+	it("should compact low-signal sessions while keeping them in source listings", async () => {
+		const compactA = makeMeta({ id: "session-compact-a", project: "/project/alpha" });
+		const compactB = makeMeta({ id: "session-compact-b", project: "/project/alpha" });
+		const expanded = makeMeta({ id: "session-expanded", project: "/project/alpha" });
+		const compactTurnsA = [makeTurn("user", "quick checkin", 1, Date.parse("2025-06-15T09:00:00Z"))];
+		const compactTurnsB = [
+			makeTurn("user", "what next", 1, Date.parse("2025-06-15T09:05:00Z")),
+			makeTurn("assistant", "continue with the api cleanup", 2, Date.parse("2025-06-15T09:05:30Z")),
+		];
+		const expandedTurns = [
+			makeTurn("user", "We decided to migrate the auth flow today", 1, Date.parse("2025-06-15T10:00:00Z")),
+			makeTurn("assistant", "Decision captured and rollout plan outlined", 2, Date.parse("2025-06-15T10:01:00Z")),
+		];
+
+		await consolidateDay("2025-06-15", {
+			loadSessions: async () => [
+				makeSession(compactA, compactTurnsA),
+				makeSession(compactB, compactTurnsB),
+				makeSession(expanded, expandedTurns),
+			],
+		});
+
+		const content = fsModule.__store.get("/home/test/.chitragupta/days/2025/06/15.md")!;
+		expect(content).toContain("### Compact Sessions");
+		expect(content).toContain("session-compact-a");
+		expect(content).toContain("session-compact-b");
+		expect(content).toContain("compacted in day view");
+		expect(content).not.toContain("### Session: session-compact-a");
+		expect(content).not.toContain("### Session: session-compact-b");
+		expect(content).toContain("### Session: session-expanded");
 	});
 
 	it("should contain Files Modified count in project metadata", async () => {

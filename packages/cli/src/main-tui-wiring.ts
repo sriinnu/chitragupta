@@ -21,7 +21,7 @@ import type { AgentProfile, ThinkingLevel } from "@chitragupta/core";
 import { KaalaBrahma } from "@chitragupta/anina";
 import { SoulManager } from "@chitragupta/anina";
 import { AgentReflector } from "@chitragupta/anina";
-import { MemoryBridge } from "@chitragupta/anina";
+import type { MemoryBridge } from "@chitragupta/anina";
 import type { AgentConfig, ToolHandler } from "@chitragupta/anina";
 
 import { ApprovalGate } from "@chitragupta/dharma";
@@ -43,6 +43,8 @@ import {
 	createEmbeddingProviderInstance,
 	loadProjectMemory,
 } from "./bootstrap.js";
+import { allowLocalRuntimeFallback, createDaemonNidraProxy, type DaemonNidraProxyLike } from "./runtime-daemon-proxies.js";
+import { createDaemonBackedMemoryBridge } from "./runtime-daemon-memory-bridge.js";
 import { resolveAgentLimits } from "./agent-limits.js";
 
 const log = createLogger("cli:main-tui");
@@ -73,7 +75,7 @@ export interface TuiWiringResult {
 	sandeshaRouter?: { destroy(): void };
 	kaala?: InstanceType<typeof KaalaBrahma>;
 	trigunaActuator?: import("@chitragupta/anina").TrigunaActuator;
-	nidraDaemon?: InstanceType<typeof import("@chitragupta/anina").NidraDaemon>;
+	nidraDaemon?: DaemonNidraProxyLike;
 	soulManager?: InstanceType<typeof SoulManager>;
 	soulPrompt?: string;
 	reflector?: InstanceType<typeof AgentReflector>;
@@ -101,6 +103,12 @@ export async function wireTuiInfrastructure(
 		tools: getBuiltinTools(),
 		mcpSkillWatcherCleanups: [],
 	};
+
+	void import("./modes/mcp-subsystems.js")
+		.then(({ primeLucyScarlettRuntime }) => primeLucyScarlettRuntime())
+		.catch(() => {
+			// Best-effort: daemon-backed Lucy/Scarlett bridge should not block startup.
+		});
 
 	// ── MCP tools ──
 	await wireMcpTools(result);
@@ -271,11 +279,9 @@ async function wireCommHub(result: TuiWiringResult): Promise<void> {
 
 async function wireActorSystem(result: TuiWiringResult): Promise<void> {
 	try {
-		const { ActorSystem } = await import("@chitragupta/sutra");
-		const system = new ActorSystem({ maxMailboxSize: 5_000, gossipIntervalMs: 5_000, defaultAskTimeout: 5_000 });
-		system.start();
+		const { ensureSharedMeshRuntime } = await import("./shared-mesh-runtime.js");
+		const system = await ensureSharedMeshRuntime();
 		result.actorSystem = system as unknown as import("@chitragupta/anina").MeshActorSystem;
-		result.actorSystemShutdown = () => system.shutdown();
 	} catch (e) { log.debug("ActorSystem unavailable", { error: String(e) }); }
 }
 
@@ -331,11 +337,20 @@ async function wireTrigunaActuator(result: TuiWiringResult): Promise<void> {
 
 async function wireNidraDaemon(result: TuiWiringResult, projectPath: string): Promise<void> {
 	try {
+		const { getNidraStatusViaDaemon } = await import("./modes/daemon-bridge.js");
+		await getNidraStatusViaDaemon();
+		result.nidraDaemon = createDaemonNidraProxy();
+		return;
+	} catch {
+		// Fall through to local best-effort owner when daemon is unavailable.
+	}
+	if (!allowLocalRuntimeFallback()) return;
+	try {
 		const { NidraDaemon: NidraCls } = await import("@chitragupta/anina");
 		result.nidraDaemon = new NidraCls({
 			idleTimeoutMs: 300_000, dreamDurationMs: 600_000,
 			deepSleepDurationMs: 1_800_000, project: projectPath,
-		});
+		}) as unknown as DaemonNidraProxyLike;
 
 		result.nidraDaemon.onDream(async (progress) => {
 			try {
@@ -414,7 +429,7 @@ async function wireMemory(result: TuiWiringResult, projectPath: string, noMemory
 	result.memoryContext = loadProjectMemory(projectPath);
 	try {
 		const embeddingProvider = await createEmbeddingProviderInstance();
-		result.memoryBridge = new MemoryBridge({
+		result.memoryBridge = createDaemonBackedMemoryBridge({
 			enabled: true, project: projectPath, enableSmaran: true,
 			identityPath: projectPath, enableGraphRAG: true,
 			enableHybridSearch: true, embeddingProvider,

@@ -7,6 +7,10 @@
 
 import type { Session, SessionTurn, SessionToolCall, SessionMeta } from "./types.js";
 
+function writeQuotedScalar(value: string): string {
+	return JSON.stringify(value);
+}
+
 /**
  * Generate YAML frontmatter string from SessionMeta.
  */
@@ -19,6 +23,7 @@ function writeFrontmatter(meta: SessionMeta): string {
 	lines.push(`updated: ${meta.updated}`);
 	lines.push(`agent: ${meta.agent}`);
 	lines.push(`model: ${meta.model}`);
+	lines.push(`provider: ${meta.provider ? writeQuotedScalar(meta.provider) : "null"}`);
 	lines.push(`project: ${meta.project}`);
 	lines.push(`parent: ${meta.parent ?? "null"}`);
 	lines.push(`branch: ${meta.branch ?? "null"}`);
@@ -34,6 +39,7 @@ function writeFrontmatter(meta: SessionMeta): string {
 
 	lines.push(`totalCost: ${meta.totalCost}`);
 	lines.push(`totalTokens: ${meta.totalTokens}`);
+	lines.push(`metadataJson: ${meta.metadata ? writeQuotedScalar(JSON.stringify(meta.metadata)) : "null"}`);
 	lines.push("---");
 	return lines.join("\n");
 }
@@ -87,6 +93,12 @@ function writeTurn(turn: SessionTurn): string {
 		.replace(/^---$/gm, '\\---')
 		.replace(/<\/(details|summary)>/gi, '\\</$1>');
 	lines.push(escaped);
+
+	if (turn.contentParts && turn.contentParts.length > 0) {
+		const encoded = Buffer.from(JSON.stringify(turn.contentParts), "utf-8").toString("base64");
+		lines.push("");
+		lines.push(`<!-- contentPartsBase64: ${encoded} -->`);
+	}
 
 	// Append tool calls if present
 	if (turn.toolCalls && turn.toolCalls.length > 0) {

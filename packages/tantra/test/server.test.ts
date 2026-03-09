@@ -388,6 +388,45 @@ describe("McpServer", () => {
 		});
 	});
 
+	describe("legacy HTTP+SSE routing", () => {
+		it("should send SSE responses only to the originating client", async () => {
+			server = createServer({ transport: "sse" });
+			const send = vi.fn();
+			const broadcast = vi.fn();
+			(server as any)._sseTransport = { send, broadcast, stop: vi.fn() };
+
+			await (server as any)._onMessage(createRequest("ping", undefined, 70), "client-123");
+
+			expect(send).toHaveBeenCalledWith(
+				expect.objectContaining({
+					id: 70,
+					result: {},
+				}),
+				"client-123",
+			);
+			expect(broadcast).not.toHaveBeenCalled();
+		});
+
+		it("should keep notifications broadcast-based on the SSE transport", () => {
+			server = createServer({ transport: "sse" });
+			const send = vi.fn();
+			const broadcast = vi.fn();
+			(server as any)._sseTransport = { send, broadcast, stop: vi.fn() };
+
+			server.sendNotification({
+				jsonrpc: "2.0",
+				method: "notifications/tools/list_changed",
+			});
+
+			expect(send).not.toHaveBeenCalled();
+			expect(broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({
+					method: "notifications/tools/list_changed",
+				}),
+			);
+		});
+	});
+
   // ═══════════════════════════════════════════════════════════════════════
   // Prompts
   // ═══════════════════════════════════════════════════════════════════════
@@ -445,6 +484,21 @@ describe("McpServer", () => {
       const res = await handleRequest(server, req);
       expect(res.error).toBeUndefined();
       expect(res.result).toEqual({});
+    });
+  });
+
+  describe("SSE response routing", () => {
+    it("should route SSE responses back to the originating client", async () => {
+      const sseServer = createServer({ transport: "sse" });
+      const send = vi.fn();
+      (sseServer as any)._sseTransport = { send, broadcast: vi.fn() };
+
+      await (sseServer as any)._onMessage(createRequest("ping", undefined, 41), "client-123");
+
+      expect(send).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 41, jsonrpc: "2.0" }),
+        "client-123",
+      );
     });
   });
 

@@ -45,6 +45,8 @@
 	"dependencies": {
 		"@chitragupta/core": "workspace:*",
 		"@chitragupta/swara": "workspace:*",
+		"@chitragupta/tantra": "workspace:*",
+		"@sriinnu/pakt": "^0.4.3",
 		"better-sqlite3": "^12.6.2"
 	},
 	"files": [

@@ -20,10 +20,11 @@ import type { SessionToolCall, PramanaType, ConsolidationLogEntry } from "./type
 import { sinkhornAccelerated } from "./sinkhorn-accelerated.js";
 import type { SessionChunk } from "./sinkhorn-accelerated.js";
 import { estimateTokens } from "./graphrag-scoring.js";
-import { swapnaReplay, swapnaRecombine, parseToolCalls } from "./swapna-extraction.js";
+import { swapnaReplay, swapnaRecombine, parseToolCalls, resolveSwapnaSessionIds } from "./swapna-extraction.js";
 import { swapnaCrystallize } from "./swapna-rules.js";
 import { swapnaProceduralize } from "./swapna-vidhi.js";
 import { swapnaExtractSamskaras } from "./swapna-samskara.js";
+import { packCuratedSummaryText } from "./pakt-compression.js";
 import { DEFAULT_CONFIG, PRAMANA_PRESERVATION } from "./swapna-types.js";
 import type {
 	SwapnaConfig,
@@ -74,7 +75,10 @@ export class SwapnaConsolidation {
 	 * @param config - Partial configuration; unset fields use defaults.
 	 * @param db - Optional DatabaseManager instance (uses singleton if omitted).
 	 */
-	constructor(config: Partial<SwapnaConfig> & { project: string }, db?: DatabaseManager) {
+	constructor(
+		config: Partial<SwapnaConfig> & { project: string; sessionIds?: string[] },
+		db?: DatabaseManager,
+	) {
 		this.config = { ...DEFAULT_CONFIG, ...config };
 		this.db = db ?? DatabaseManager.instance();
 		this.cycleId = `swapna-${new Date().toISOString()}`;
@@ -96,6 +100,8 @@ export class SwapnaConsolidation {
 		this.logCycle("running");
 
 		try {
+			const scopedSessionIds = resolveSwapnaSessionIds(this.db.get("agent"), this.config);
+
 			report("REPLAY", 0);
 			const replayResult = await this.replay();
 			report("REPLAY", 1);
@@ -118,17 +124,18 @@ export class SwapnaConsolidation {
 
 			const totalDurationMs = performance.now() - cycleStart;
 
-			const result: SwapnaResult = {
-				phases: {
+				const result: SwapnaResult = {
+					phases: {
 					replay: { turnsScored: replayResult.turnsScored, highSurprise: replayResult.highSurprise, durationMs: replayResult.durationMs },
 					recombine: { associations: recombineResult.associations.length, crossSessions: recombineResult.crossSessions, durationMs: recombineResult.durationMs },
 					crystallize: { vasanasCreated: crystallizeResult.vasanasCreated, vasanasReinforced: crystallizeResult.vasanasReinforced, durationMs: crystallizeResult.durationMs },
 					proceduralize: { vidhisCreated: proceduralizeResult.vidhisCreated, durationMs: proceduralizeResult.durationMs },
 					compress: { tokensCompressed: compressResult.tokensCompressed, compressionRatio: compressResult.compressionRatio, durationMs: compressResult.durationMs },
-				},
-				totalDurationMs,
-				cycleId: this.cycleId,
-			};
+					},
+					totalDurationMs,
+					cycleId: this.cycleId,
+					sourceSessionIds: scopedSessionIds,
+				};
 
 			this.logCycle("success", result);
 			return result;
@@ -173,16 +180,13 @@ export class SwapnaConsolidation {
 	async compress(): Promise<CompressResult> {
 		const start = performance.now();
 		const agentDb = this.db.get("agent");
-
-		const sessions = agentDb
-			.prepare(`SELECT id FROM sessions WHERE project = ? ORDER BY updated_at DESC LIMIT ?`)
-			.all(this.config.project, this.config.maxSessionsPerCycle) as Array<{ id: string }>;
+		const sessionIds = resolveSwapnaSessionIds(agentDb, this.config);
+		const sessions = sessionIds.map((id) => ({ id })) as Array<{ id: string }>;
 
 		if (sessions.length === 0) {
 			return { tokensCompressed: 0, compressionRatio: 1.0, durationMs: performance.now() - start };
 		}
 
-		const sessionIds = sessions.map((s) => s.id);
 		const placeholders = sessionIds.map(() => "?").join(",");
 
 		const turns = agentDb
@@ -201,6 +205,7 @@ export class SwapnaConsolidation {
 
 		// Build session chunks with Pramana-weighted importance
 		const chunks: SessionChunk[] = [];
+		const eligibleTurns: typeof turns = [];
 		const now = Date.now();
 		const maxAge = 30 * 24 * 60 * 60 * 1000;
 		let totalOriginalTokens = 0;
@@ -216,6 +221,7 @@ export class SwapnaConsolidation {
 			const preservation = PRAMANA_PRESERVATION[pramana];
 			const age = now - turn.created_at;
 			const recency = Math.max(0, 1 - age / maxAge);
+			eligibleTurns.push(turn);
 
 			chunks.push({
 				id: `turn-${turn.id}`, recency, relevance: preservation,
@@ -229,9 +235,19 @@ export class SwapnaConsolidation {
 		}
 
 		// Build Pramana-weighted affinity matrix and compress
-		const { compressedTotal } = this.applyCompression(chunks, turns, totalOriginalTokens);
+		const { compressedTotal, compactionSummaryText } = this.applyCompression(chunks, eligibleTurns, totalOriginalTokens);
 		const compressionRatio = totalOriginalTokens > 0 ? compressedTotal / totalOriginalTokens : 1.0;
-		return { tokensCompressed: totalOriginalTokens, compressionRatio, durationMs: performance.now() - start };
+		const compression = compactionSummaryText
+			? await packCuratedSummaryText(compactionSummaryText)
+			: null;
+		return {
+			tokensCompressed: totalOriginalTokens,
+			compressionRatio,
+			durationMs: performance.now() - start,
+			summaryText: compactionSummaryText || undefined,
+			packedSummaryText: compression?.packedText,
+			compression: compression ?? undefined,
+		};
 	}
 
 	// ─── Private Helpers ──────────────────────────────────────────────────
@@ -241,7 +257,7 @@ export class SwapnaConsolidation {
 		chunks: SessionChunk[],
 		turns: Array<{ id: number; session_id: string; content: string; tool_calls: string | null; created_at: number }>,
 		totalOriginalTokens: number,
-	): { compressedTotal: number } {
+	): { compressedTotal: number; compactionSummaryText: string } {
 		const n = chunks.length;
 		const affinity: number[][] = [];
 
@@ -271,12 +287,12 @@ export class SwapnaConsolidation {
 		let compressedTotal = 0;
 
 		const agentDb = this.db.get("agent");
-		const updateStmt = agentDb.prepare(`UPDATE turns SET content = ? WHERE id = ?`);
 		const insertRuleStmt = agentDb.prepare(
 			`INSERT INTO consolidation_rules
 			 (project, category, rule_text, source_sessions, confidence, created_at, updated_at)
 			 VALUES (?, 'abstraction', ?, ?, ?, ?, ?)`,
 		);
+		const compactionSummaryLines: string[] = [];
 
 		const compressBatch = agentDb.transaction(() => {
 			for (let i = 0; i < n; i++) {
@@ -289,8 +305,10 @@ export class SwapnaConsolidation {
 					const turn = turns[i];
 					const gist = this.generateGist(turn.content, allocated);
 					const cueAnchors = this.extractCueAnchors(turn.content);
+					compactionSummaryLines.push(
+						`- ${turn.session_id}: ${evidenceDetailForSummary(gist)}`,
+					);
 
-					updateStmt.run(gist, turn.id);
 					insertRuleStmt.run(this.config.project, gist, JSON.stringify([turn.session_id]), chunks[i].relevance, Date.now(), Date.now());
 
 					if (cueAnchors.length > 0) {
@@ -311,7 +329,10 @@ export class SwapnaConsolidation {
 		});
 
 		try { compressBatch(); } catch { /* Compression write-back is best-effort */ }
-		return { compressedTotal };
+		return {
+			compressedTotal,
+			compactionSummaryText: this.buildCompactionSummaryText(compactionSummaryLines),
+		};
 	}
 
 	/** Generate a compressed gist (abstraction) of turn content. */
@@ -332,6 +353,15 @@ export class SwapnaConsolidation {
 		if (words.length > wordBudget) gist = words.slice(0, wordBudget).join(" ") + "...";
 
 		return `[compressed] ${gist}`;
+	}
+
+	private buildCompactionSummaryText(lines: string[]): string {
+		if (lines.length === 0) return "";
+		return [
+			`Swapna compaction summary for ${this.config.project}`,
+			`Cycle: ${this.cycleId}`,
+			...lines.slice(0, 24),
+		].join("\n");
 	}
 
 	/** Extract cue anchors (trigger phrases) from turn content. */
@@ -405,4 +435,10 @@ export class SwapnaConsolidation {
 				Date.now(),
 			);
 	}
+}
+
+function evidenceDetailForSummary(value: string, maxLength = 180): string {
+	const compact = value.replace(/\s+/g, " ").trim();
+	if (compact.length <= maxLength) return compact;
+	return `${compact.slice(0, maxLength - 1).trimEnd()}…`;
 }

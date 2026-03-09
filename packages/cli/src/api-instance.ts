@@ -16,12 +16,13 @@ import type { AgentProfile } from "@chitragupta/core";
 
 import {
 	saveSession,
-	addTurn,
 } from "@chitragupta/smriti/session-store";
-import { searchMemory } from "@chitragupta/smriti/search";
 import type { Session } from "@chitragupta/smriti/types";
 
 import type { ApiWiringResult } from "./api-wiring.js";
+import { addTurn as addTurnViaDaemon, showSession as showSessionViaDaemon, unifiedRecall } from "./modes/daemon-bridge.js";
+import { applyLucyLiveGuidance } from "./nervous-system-wiring.js";
+import { allowLocalRuntimeFallback } from "./runtime-daemon-proxies.js";
 
 // ─── Public Types ───────────────────────────────────────────────────────────
 
@@ -130,11 +131,14 @@ export function buildInstance(params: BuildInstanceParams): ChitraguptaInstance 
 	let destroyed = false;
 	let cumulativeCost = 0;
 	const maxCost = params.maxSessionCost;
+	let conversationQueue: Promise<void> = Promise.resolve();
 
 	// Wire user event handler
 	if (params.onEvent) {
 		const userHandler = params.onEvent;
+		const previousOnEvent = agent.getConfig().onEvent;
 		agent.setOnEvent((event: AgentEventType, data: unknown) => {
+			previousOnEvent?.(event, data);
 			userHandler(event, data);
 		});
 	}
@@ -150,30 +154,53 @@ export function buildInstance(params: BuildInstanceParams): ChitraguptaInstance 
 		} catch { /* best-effort */ }
 	};
 
-	const persistTurn = async (turn: {
-		role: "user" | "assistant"; content: string;
-		agent?: string; model?: string;
-		contentParts?: Array<Record<string, unknown>>;
-	}) => {
-		const turnNumber = session.turns.length + 1;
-		session.turns.push({ ...turn, turnNumber });
-		try {
-			await addTurn(session.meta.id, projectPath, { ...turn, turnNumber });
-		} catch {
-			try { saveSession(session); } catch { /* best-effort */ }
-		}
+	/**
+	 * Serialize prompt()/stream() conversation writes so turn numbering and
+	 * session persistence stay coherent when callers invoke methods concurrently.
+	 */
+	const acquireConversationLock = async (): Promise<() => void> => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const prior = conversationQueue;
+		conversationQueue = prior.then(() => gate);
+		await prior;
+		return () => { release(); };
 	};
 
 	const persistExchange = async (p: {
 		userMessage: string; assistantText: string;
 		assistantContentParts?: Array<Record<string, unknown>>;
 	}) => {
-		await persistTurn({ role: "user", content: p.userMessage });
-		await persistTurn({
-			role: "assistant", agent: profile.id, model: modelId,
-			content: p.assistantText, contentParts: p.assistantContentParts,
-		});
-		if (wiring.nidraDaemon) { try { wiring.nidraDaemon.touch(); } catch { /* best-effort */ } }
+		try {
+			await addTurnViaDaemon(session.meta.id, projectPath, {
+				turnNumber: 0,
+				role: "user",
+				content: p.userMessage,
+			});
+			await addTurnViaDaemon(session.meta.id, projectPath, {
+				turnNumber: 0,
+				role: "assistant",
+				agent: profile.id,
+				model: modelId,
+				content: p.assistantText,
+				contentParts: p.assistantContentParts,
+			});
+			session = await showSessionViaDaemon(session.meta.id, projectPath) as unknown as Session;
+		} catch (err) {
+			if (!allowLocalRuntimeFallback()) throw err;
+			const nextTurnNumber = session.turns.length + 1;
+			session.turns.push({ turnNumber: nextTurnNumber, role: "user", content: p.userMessage });
+			session.turns.push({
+				turnNumber: nextTurnNumber + 1,
+				role: "assistant",
+				agent: profile.id,
+				model: modelId,
+				content: p.assistantText,
+				contentParts: p.assistantContentParts,
+			});
+			try { saveSession(session); } catch { /* best-effort */ }
+		}
+		if (wiring.nidraDaemon) { try { await Promise.resolve(wiring.nidraDaemon.touch()); } catch { /* best-effort */ } }
 		await saveCheckpoint();
 	};
 
@@ -181,92 +208,102 @@ export function buildInstance(params: BuildInstanceParams): ChitraguptaInstance 
 		agent,
 
 		async prompt(message: string): Promise<string> {
-			if (destroyed) throw new Error("ChitraguptaInstance has been destroyed");
-			if (maxCost !== undefined && cumulativeCost >= maxCost) {
-				throw new Error(`Session cost limit exceeded: $${cumulativeCost.toFixed(4)} >= $${maxCost.toFixed(4)}`);
+			const releaseConversation = await acquireConversationLock();
+			try {
+				if (destroyed) throw new Error("ChitraguptaInstance has been destroyed");
+				if (maxCost !== undefined && cumulativeCost >= maxCost) {
+					throw new Error(`Session cost limit exceeded: $${cumulativeCost.toFixed(4)} >= $${maxCost.toFixed(4)}`);
+				}
+					const promptInput = await applyLucyLiveGuidance(message, message, projectPath);
+				const response = await agent.prompt(promptInput);
+				const text = extractText(response);
+				if (response.cost) { cumulativeCost += response.cost.total; }
+				await persistExchange({
+					userMessage: message, assistantText: text,
+					assistantContentParts: response.content as unknown as Array<Record<string, unknown>>,
+				});
+				return text;
+			} finally {
+				releaseConversation();
 			}
-			const response = await agent.prompt(message);
-			const text = extractText(response);
-			if (response.cost) { cumulativeCost += response.cost.total; }
-			await persistExchange({
-				userMessage: message, assistantText: text,
-				assistantContentParts: response.content as unknown as Array<Record<string, unknown>>,
-			});
-			return text;
 		},
 
 		async *stream(message: string): AsyncGenerator<StreamChunk, void, undefined> {
-			if (destroyed) throw new Error("ChitraguptaInstance has been destroyed");
-			if (maxCost !== undefined && cumulativeCost >= maxCost) {
-				throw new Error(`Session cost limit exceeded: $${cumulativeCost.toFixed(4)} >= $${maxCost.toFixed(4)}`);
-			}
-
-			let streamError: Error | null = null;
-			let resolveChunk: ((chunk: StreamChunk | null) => void) | null = null;
-			const chunkQueue: (StreamChunk | null)[] = [];
-
-			const pushChunk = (chunk: StreamChunk | null) => {
-				if (resolveChunk) { const r = resolveChunk; resolveChunk = null; r(chunk); }
-				else { chunkQueue.push(chunk); }
-			};
-			const nextChunk = (): Promise<StreamChunk | null> => {
-				if (chunkQueue.length > 0) return Promise.resolve(chunkQueue.shift()!);
-				return new Promise<StreamChunk | null>((resolve) => { resolveChunk = resolve; });
-			};
-
-			const previousOnEvent = agent.getConfig().onEvent;
-			let fullText = "";
-			const restoreEventHandler = () => { if (previousOnEvent) { agent.setOnEvent(previousOnEvent); } };
-
-			agent.setOnEvent((event: AgentEventType, data: unknown) => {
-				const d = data as Record<string, unknown>;
-				switch (event) {
-					case "stream:text": fullText += d.text as string; pushChunk({ type: "text", data: d.text }); break;
-					case "stream:thinking": pushChunk({ type: "thinking", data: d.text }); break;
-					case "tool:start": pushChunk({ type: "tool_start", data: { name: d.name, id: d.id } }); break;
-					case "tool:done": pushChunk({ type: "tool_done", data: { name: d.name, id: d.id, result: d.result } }); break;
-					case "tool:error": pushChunk({ type: "tool_error", data: { name: d.name, error: d.error } }); break;
-					case "stream:usage": pushChunk({ type: "usage", data: d.usage }); break;
-					case "stream:done": pushChunk({ type: "done", data: { stopReason: d.stopReason, cost: d.cost } }); break;
-				}
-				previousOnEvent?.(event, data);
-			});
-
-			const promptDone = agent.prompt(message).then(async (response) => {
-				if (response.cost) { cumulativeCost += response.cost.total; }
-				const assistantText = fullText.length > 0 ? fullText : extractText(response);
-				await persistExchange({
-					userMessage: message, assistantText,
-					assistantContentParts: response.content as unknown as Array<Record<string, unknown>>,
-				});
-				pushChunk(null);
-			}).catch((err) => {
-				streamError = err instanceof Error ? err : new Error(String(err));
-				pushChunk(null);
-			});
-
+			const releaseConversation = await acquireConversationLock();
 			try {
-				while (true) {
-					const chunk = await nextChunk();
-					if (chunk === null) break;
-					yield chunk;
+				if (destroyed) throw new Error("ChitraguptaInstance has been destroyed");
+				if (maxCost !== undefined && cumulativeCost >= maxCost) {
+					throw new Error(`Session cost limit exceeded: $${cumulativeCost.toFixed(4)} >= $${maxCost.toFixed(4)}`);
 				}
-				await promptDone;
-			} finally { restoreEventHandler(); }
 
-			if (streamError) { throw streamError; }
+				let streamError: Error | null = null;
+				let resolveChunk: ((chunk: StreamChunk | null) => void) | null = null;
+				const chunkQueue: (StreamChunk | null)[] = [];
+
+				const pushChunk = (chunk: StreamChunk | null) => {
+					if (resolveChunk) { const r = resolveChunk; resolveChunk = null; r(chunk); }
+					else { chunkQueue.push(chunk); }
+				};
+				const nextChunk = (): Promise<StreamChunk | null> => {
+					if (chunkQueue.length > 0) return Promise.resolve(chunkQueue.shift()!);
+					return new Promise<StreamChunk | null>((resolve) => { resolveChunk = resolve; });
+				};
+
+				const previousOnEvent = agent.getConfig().onEvent;
+				let fullText = "";
+				const restoreEventHandler = () => { if (previousOnEvent) { agent.setOnEvent(previousOnEvent); } };
+
+				agent.setOnEvent((event: AgentEventType, data: unknown) => {
+					const d = data as Record<string, unknown>;
+					switch (event) {
+						case "stream:text": fullText += d.text as string; pushChunk({ type: "text", data: d.text }); break;
+						case "stream:thinking": pushChunk({ type: "thinking", data: d.text }); break;
+						case "tool:start": pushChunk({ type: "tool_start", data: { name: d.name, id: d.id } }); break;
+						case "tool:done": pushChunk({ type: "tool_done", data: { name: d.name, id: d.id, result: d.result } }); break;
+						case "tool:error": pushChunk({ type: "tool_error", data: { name: d.name, error: d.error } }); break;
+						case "stream:usage": pushChunk({ type: "usage", data: d.usage }); break;
+						case "stream:done": pushChunk({ type: "done", data: { stopReason: d.stopReason, cost: d.cost } }); break;
+					}
+					previousOnEvent?.(event, data);
+				});
+
+					const promptInput = await applyLucyLiveGuidance(message, message, projectPath);
+				const promptDone = agent.prompt(promptInput).then(async (response) => {
+					if (response.cost) { cumulativeCost += response.cost.total; }
+					const assistantText = fullText.length > 0 ? fullText : extractText(response);
+					await persistExchange({
+						userMessage: message, assistantText,
+						assistantContentParts: response.content as unknown as Array<Record<string, unknown>>,
+					});
+					pushChunk(null);
+				}).catch((err) => {
+					streamError = err instanceof Error ? err : new Error(String(err));
+					pushChunk(null);
+				});
+
+				try {
+					while (true) {
+						const chunk = await nextChunk();
+						if (chunk === null) break;
+						yield chunk;
+					}
+					await promptDone;
+				} finally { restoreEventHandler(); }
+
+				if (streamError) { throw streamError; }
+			} finally {
+				releaseConversation();
+			}
 		},
 
 		async searchMemory(query: string, limit?: number): Promise<MemorySearchResult[]> {
 			if (destroyed) throw new Error("ChitraguptaInstance has been destroyed");
-			const results = searchMemory(query);
-			const limited = limit ? results.slice(0, limit) : results;
-			return limited.map((r) => ({
-				content: r.content, score: r.relevance ?? 0,
-				source: r.scope.type === "project" ? `project:${r.scope.path}`
-					: r.scope.type === "global" ? "global"
-					: r.scope.type === "agent" ? `agent:${r.scope.agentId}`
-					: `session:${r.scope.sessionId}`,
+			const results = await unifiedRecall(query, { project: projectPath, limit: limit ?? 10 });
+			return results.map((r) => ({
+				content: String(r.content ?? ""),
+				score: Number(r.score ?? 0),
+				source: typeof r.source === "string" ? r.source : "unknown",
+				timestamp: r.timestamp == null ? undefined : Number(r.timestamp),
 			}));
 		},
 
@@ -280,6 +317,7 @@ export function buildInstance(params: BuildInstanceParams): ChitraguptaInstance 
 
 		async saveSession(): Promise<void> {
 			if (destroyed) throw new Error("ChitraguptaInstance has been destroyed");
+			if (!allowLocalRuntimeFallback()) return;
 			saveSession(session);
 		},
 
@@ -304,7 +342,9 @@ export function buildInstance(params: BuildInstanceParams): ChitraguptaInstance 
 			if (wiring.nidraDaemon) { try { await wiring.nidraDaemon.stop(); } catch { /* best-effort */ } }
 			if (wiring.commHubDestroy) { try { wiring.commHubDestroy(); } catch { /* best-effort */ } }
 			if (mcpShutdown) { try { await mcpShutdown(); } catch { /* best-effort */ } }
-			try { saveSession(session); } catch { /* best-effort */ }
+			if (allowLocalRuntimeFallback()) {
+				try { saveSession(session); } catch { /* best-effort */ }
+			}
 		},
 	};
 

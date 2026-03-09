@@ -93,8 +93,13 @@ For the `mesh_status` tool:
 |-------|------|-------------|
 | `running` | `boolean` | Whether the actor system is running |
 | `actorCount` | `number` | Number of active actors |
-| `gossipAlive` | `number` | Alive peers in gossip |
-| `peersConnected` | `number` | Connected P2P peers |
+| `localActorsAlive` | `number` | Alive local actors registered in the mesh |
+| `gossipPeers` | `number` | Alive remote gossip peers |
+| `connectedPeers` | `number` | Connected P2P peers |
+| `totalPeers` | `number` | Total known P2P peers in the connection manager |
+| `actorLocations` | `number` | Number of network actor-location mappings |
+| `capabilityRouterActive` | `boolean` | Whether capability routing is available |
+| `p2pBootstrapped` | `boolean` | Whether network mesh bootstrap is active |
 | `nodeId` | `string \| null` | This node's ID |
 
 ### Consuming `_metadata.typed`

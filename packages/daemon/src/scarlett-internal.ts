@@ -4,11 +4,12 @@
  * Named after Black Widow fighting from inside — not just guarding the door
  * (ScarlettWatchdog), but monitoring every subsystem within the daemon itself.
  *
- * Runs inside the daemon and probes 4 internal subsystems on a schedule:
+ * Runs inside the daemon and probes internal subsystems on a schedule:
  * 1. SmritiDb     — SQLite WAL bloat + integrity check
  * 2. Memory       — V8 heap pressure, GC hint on threshold breach
  * 3. NidraHeart   — Detects stale heartbeat / stuck NidraDaemon state
  * 4. ConsolidationQueue — Consolidation backlog depth in agent.db
+ * 5. SemanticSync — Curated consolidation artifacts mirrored into vectors.db
  *
  * Probe implementations live in scarlett-probes.ts (extracted for LOC limit).
  *
@@ -17,11 +18,13 @@
 
 import { EventEmitter } from "node:events";
 import { createLogger } from "@chitragupta/core";
+import { DatabaseManager } from "@chitragupta/smriti/db/database";
 import {
 	SmritiDbProbe,
 	MemoryPressureProbe,
 	NidraHeartbeatProbe,
 	ConsolidationQueueProbe,
+	SemanticSyncProbe,
 } from "./scarlett-probes.js";
 import type {
 	ProbeResult,
@@ -36,6 +39,7 @@ export {
 	MemoryPressureProbe,
 	NidraHeartbeatProbe,
 	ConsolidationQueueProbe,
+	SemanticSyncProbe,
 } from "./scarlett-probes.js";
 export type {
 	ProbeSeverity,
@@ -108,6 +112,7 @@ export class InternalScarlett extends EventEmitter<InternalScarlettEvents> {
 		this.probes = [
 			new SmritiDbProbe(getDb),
 			new MemoryPressureProbe(),
+			new SemanticSyncProbe(),
 			...(nidra ? [new NidraHeartbeatProbe(nidra), new ConsolidationQueueProbe(getDb, nidra)] : [new ConsolidationQueueProbe(getDb)]),
 		];
 	}
@@ -209,16 +214,9 @@ export class InternalScarlett extends EventEmitter<InternalScarlettEvents> {
 
 // ─── Default DB accessor ─────────────────────────────────────────────────────
 
-/** Lazily imports DatabaseManager singleton — avoids circular dep at module load. */
+/** Returns the existing DatabaseManager singleton already opened by the daemon. */
 function defaultGetDb(): DbManagerLike {
-	// Dynamic require so the module loads without DB initialization at import time.
-	// DatabaseManager.instance() returns the existing singleton (already opened by daemon).
-	// biome-ignore lint/style/noRestrictedGlobals: intentional dynamic require
-	// biome-ignore lint/suspicious/noExplicitAny: dynamic import bridge
-	const { DatabaseManager } = require("@chitragupta/smriti/db") as {
-		DatabaseManager: { instance(): DbManagerLike };
-	};
-	return DatabaseManager.instance();
+	return DatabaseManager.instance() as unknown as DbManagerLike;
 }
 
 // ─── Convenience API ─────────────────────────────────────────────────────────

@@ -243,7 +243,7 @@ function buildPluginInfo(
  */
 export function createSystemConfigResource(
 	projectPath: string,
-	transport: "stdio" | "sse" = "stdio",
+	transport: "stdio" | "sse" | "streamable-http" = "stdio",
 ): McpResourceHandler {
 	return {
 		definition: {

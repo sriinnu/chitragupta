@@ -161,6 +161,12 @@ export interface TuriyaRouterConfig {
 export interface TuriyaPreference {
 	/** 0 = don't care about cost (maximize quality), 1 = minimize cost. */
 	costWeight: number;
+	/** Optional additive bias to the cost dial, clamped into [0, 1]. */
+	costWeightBias?: number;
+	/** Raise the selected tier to at least this level. */
+	minimumTier?: TuriyaTier;
+	/** Cap the selected tier at this level. */
+	maximumTier?: TuriyaTier;
 }
 
 /**

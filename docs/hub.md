@@ -253,4 +253,4 @@ The Hub connects to `ws://localhost:<port>/ws` for real-time updates. Ensure the
 
 ---
 
-*See also: [API.md](./API.md) | [ARCHITECTURE.md](./ARCHITECTURE.md) | [../GETTING_STARTED.md](../GETTING_STARTED.md)*
+*See also: [api.md](./api.md) | [architecture.md](./architecture.md) | [getting-started.md](./getting-started.md)*

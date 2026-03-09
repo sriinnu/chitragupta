@@ -104,6 +104,25 @@ export class GossipProtocol {
 	}
 
 	/**
+	 * Refresh an existing peer's liveness.
+	 *
+	 * Updates `lastSeen` and, if the peer had degraded to suspect/dead,
+	 * revives it back to alive with a newer generation so local truth wins
+	 * during future merges.
+	 */
+	touch(actorId: string): boolean {
+		const peer = this.peers.get(actorId);
+		if (!peer) return false;
+
+		peer.lastSeen = Date.now();
+		if (peer.status !== "alive") {
+			peer.status = "alive";
+			peer.generation++;
+		}
+		return true;
+	}
+
+	/**
 	 * Remove a peer from the local view.
 	 */
 	unregister(actorId: string): void {
@@ -139,6 +158,20 @@ export class GossipProtocol {
 			if (remote.generation > local.generation) {
 				this.peers.set(remote.actorId, { ...remote });
 				changed.push(remote);
+				continue;
+			}
+
+			// Same-generation alive traffic should still refresh freshness.
+			if (
+				remote.generation === local.generation
+				&& remote.status === "alive"
+				&& remote.lastSeen >= local.lastSeen
+			) {
+				local.lastSeen = remote.lastSeen;
+				local.status = "alive";
+				if (remote.originNodeId) local.originNodeId = remote.originNodeId;
+				if (remote.capabilities) local.capabilities = remote.capabilities;
+				if (remote.expertise) local.expertise = remote.expertise;
 			}
 		}
 

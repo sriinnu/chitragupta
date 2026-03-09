@@ -4,7 +4,7 @@
 
 <h1 align="center">@yugenlab/chitragupta</h1>
 
-<p align="center"><strong>AI agent memory and observability platform — sessions, GraphRAG, hybrid search, temporal trending, predictive pre-fetching, 60+ MCP tools</strong></p>
+<p align="center"><strong>AI agent memory and observability platform — sessions, GraphRAG, hybrid search, temporal trending, predictive pre-fetching, and MCP tooling</strong></p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@yugenlab/chitragupta"><img src="https://img.shields.io/npm/v/@yugenlab/chitragupta" alt="npm" /></a>
@@ -14,9 +14,16 @@
 
 ---
 
-Chitragupta gives AI agents **persistent memory**. Your coding assistant forgets everything between sessions — Chitragupta fixes that.
+Chitragupta is the core engine for durable agent memory, sessions, routing policy, and runtime integrity.
 
 It works as an **MCP server**, a **CLI**, or a **library** you import directly.
+
+Consumer model:
+
+- **Chitragupta** is the authority for durable memory and sessions.
+- **Vaayu** is the primary assistant consumer.
+- **Takumi** is a specialized coding consumer and executable capability.
+- **Lucy** and **Scarlett** are platform-wide runtime faculties inside the engine.
 
 ## Install
 
@@ -33,7 +40,7 @@ Give any AI agent (Claude Code, Codex, etc.) persistent memory across sessions.
 npx chitragupta init
 ```
 
-This creates `.mcp.json` and teaches the agent when to use Chitragupta's 60+ tools — memory search, recall, fact extraction, handover, temporal trending, predictive pre-fetching, P2P mesh, skill discovery, and more.
+This creates `.mcp.json` and teaches the agent when to use Chitragupta's tool surface — memory search, recall, fact extraction, handover, temporal trending, predictive pre-fetching, P2P mesh, skill discovery, and more.
 
 ### Manual MCP setup
 
@@ -96,7 +103,7 @@ import { ... } from "@yugenlab/chitragupta/anina"    // Agent runtime, conscious
 import { ... } from "@yugenlab/chitragupta/tantra"   // MCP server/client
 import { ... } from "@yugenlab/chitragupta/dharma"   // Policy, security rules
 import { ... } from "@yugenlab/chitragupta/yantra"   // Tool system
-import { ... } from "@yugenlab/chitragupta/vayu"     // Workflow DAG engine
+import { ... } from "@yugenlab/chitragupta/prana"     // Workflow DAG engine
 import { ... } from "@yugenlab/chitragupta/sutra"    // IPC, actor mesh
 import { ... } from "@yugenlab/chitragupta/niyanta"  // Orchestrator
 import { ... } from "@yugenlab/chitragupta/netra"    // Vision
@@ -111,6 +118,7 @@ import { ... } from "@yugenlab/chitragupta/vidhya-skills" // Skill discovery
 - **Unified recall** — single query searches FTS5, GraphRAG, day files, Akasha traces, and memory
 - **Real-time fact extraction** — detects personal facts from conversations at zero LLM cost
 - **Day consolidation** — daily summaries across all projects and providers
+- **Provenance-aware consolidation** — day/month/year summaries keep raw sessions canonical and carry `sourceSessionIds` for drill-down recall
 - **GraphRAG** — knowledge graph with bi-temporal edges and personalized PageRank
 - **Hybrid search** — BM25 + vector + graph + Pramana + temporal fusion with Thompson Sampling learned weights
 - **Natasha Observer** — temporal trending engine with trend detection, error regression alerts, and velocity tracking across 4 time windows
@@ -119,7 +127,20 @@ import { ... } from "@yugenlab/chitragupta/vidhya-skills" // Skill discovery
 - **Behavioral crystallization** — stable habits detected via Bayesian change-point detection (Vasana Engine)
 - **Multi-agent deliberation** — structured councils (Sabha) with Nyaya-style reasoning and fallacy detection
 - **Extension system** — install extensions from npm, git, or local paths with hot-reload
-- **60+ MCP tools** — memory, sessions, search, Akasha, mesh, skills, file ops, shell, health, and self-awareness
+- **MCP tools** — memory, sessions, search, Akasha, mesh, skills, file ops, shell, health, and self-awareness
+
+## Runtime and Operations Boundaries
+
+- **Daemon-first authority** — persistent writes are daemon-owned (single writer).
+- **Socket auth** — daemon RPC over socket/pipe requires a bridge token handshake and scoped methods.
+- **Fallback behavior** — if daemon connectivity drops, direct fallback is read-only for a narrow method subset; writes fail closed.
+- **Lucy/Scarlett scope** — runtime overlays are platform-wide internal concepts; coding-agent/Takumi behavior is only one exposed path.
+- **Deep-sleep scope** — Nidra groups exact pending sessions by project before running Swapna; deep sleep does not silently broaden to unrelated recent sessions.
+- **Readiness check (repo source builds)** — run `pnpm run build:check`, `pnpm run build`, `pnpm run verify:engine`, and `pnpm test`.
+
+See [docs/runtime-constitution.md](https://github.com/sriinnu/chitragupta/blob/main/docs/runtime-constitution.md) for the user-facing engine model.
+See [docs/current-status.md](https://github.com/sriinnu/chitragupta/blob/main/docs/current-status.md) for the normalized runtime truth.
+See [docs/consumer-contract.md](https://github.com/sriinnu/chitragupta/blob/main/docs/consumer-contract.md) for consumer and bridge boundaries.
 
 ## Requirements
 
@@ -129,8 +150,10 @@ import { ... } from "@yugenlab/chitragupta/vidhya-skills" // Skill discovery
 ## Links
 
 - [GitHub](https://github.com/sriinnu/chitragupta)
-- [Getting Started](https://github.com/sriinnu/chitragupta/blob/main/GETTING_STARTED.md)
-- [Architecture](https://github.com/sriinnu/chitragupta/blob/main/docs/ARCHITECTURE.md)
+- [Getting Started](https://github.com/sriinnu/chitragupta/blob/main/docs/getting-started.md)
+- [Architecture](https://github.com/sriinnu/chitragupta/blob/main/docs/architecture.md)
+- [Current Status](https://github.com/sriinnu/chitragupta/blob/main/docs/current-status.md)
+- [Consumer Contract](https://github.com/sriinnu/chitragupta/blob/main/docs/consumer-contract.md)
 - [Changelog](https://github.com/sriinnu/chitragupta/blob/main/CHANGELOG.md)
 
 ## License

@@ -61,9 +61,9 @@ function validateConfig(config: McpRemoteServerConfig): void {
 		throw new McpProtocolError("Server config must have a non-empty 'name'");
 	if (config.transport === "stdio" && !config.command)
 		throw new McpProtocolError(`Server "${config.id}": stdio transport requires 'command'`);
-	if (config.transport === "sse" && !config.url)
-		throw new McpProtocolError(`Server "${config.id}": SSE transport requires 'url'`);
-	if (config.transport !== "stdio" && config.transport !== "sse")
+	if ((config.transport === "sse" || config.transport === "streamable-http") && !config.url)
+		throw new McpProtocolError(`Server "${config.id}": ${config.transport} transport requires 'url'`);
+	if (config.transport !== "stdio" && config.transport !== "sse" && config.transport !== "streamable-http")
 		throw new McpProtocolError(`Server "${config.id}": unknown transport "${config.transport}"`);
 }
 
@@ -203,6 +203,7 @@ export class ServerLifecycleManager {
 				serverCommand: config.command,
 				serverArgs: config.args,
 				serverUrl: config.url,
+				auth: config.auth,
 				timeout,
 			});
 			info.client = client;

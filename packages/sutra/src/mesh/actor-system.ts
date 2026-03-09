@@ -18,7 +18,7 @@ import type { PeerNetworkConfig } from "./peer-types.js";
 import type { PeerConnectionManager } from "./peer-connection.js";
 import type { NetworkGossip } from "./network-gossip.js";
 import type { PeerAddrDb } from "./peer-addr-db.js";
-import type { CapabilityRouter } from "./capability-router.js";
+import { CapabilityRouter } from "./capability-router.js";
 import { CapabilityLearner } from "./capability-learner.js";
 const DEFAULTS: Required<ActorSystemConfig> = {
 	maxMailboxSize: 10_000,
@@ -85,11 +85,14 @@ export class ActorSystem {
 	private readonly actors = new Map<string, Actor>();
 	private readonly eventHandlers: SystemEventHandler[] = [];
 	private running = false;
+	private localHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 	constructor(config?: ActorSystemConfig) {
 		this.config = { ...DEFAULTS, ...config };
 		this.router = new MeshRouter(this.config.defaultTTL, this.config.defaultAskTimeout);
 		this.gossip = new GossipProtocol(this.config);
 		this.capabilityLearner = new CapabilityLearner(this.gossip);
+		this.capabilityRouter = new CapabilityRouter(this.gossip);
+		this.router.setCapabilityActorResolver((caps) => this.resolveLocalCapabilityActor(caps));
 		// Wire router events to system events
 		this.router.on((event) => {
 			if (event.type === "delivered") {
@@ -121,6 +124,9 @@ export class ActorSystem {
 	}
 	/** Spawn a new actor. Auto-extracts capabilities from CapableActorBehavior. */
 	spawn(id: string, options: SpawnOptions): ActorRef {
+		if (!options || typeof options !== "object" || !("behavior" in options)) {
+			throw new Error(`Actor "${id}" requires spawn options in the form { behavior, ... }.`);
+		}
 		if (this.actors.has(id)) {
 			throw new Error(`Actor "${id}" already exists in this system.`);
 		}
@@ -231,7 +237,7 @@ export class ActorSystem {
 	findByCapability(capability: string): PeerView[] {
 		return this.gossip.findByCapability(capability);
 	}
-	/** Get the capability router (null if P2P not bootstrapped). */
+	/** Get the capability router (local-only by default, P2P-aware when bootstrapped). */
 	getCapabilityRouter(): CapabilityRouter | null { return this.capabilityRouter; }
 	private connectionManager: PeerConnectionManager | null = null;
 	private networkGossip: NetworkGossip | null = null;
@@ -241,6 +247,9 @@ export class ActorSystem {
 	private peerAddrDbSaveTimer: ReturnType<typeof setInterval> | null = null;
 	private capabilityRouter: CapabilityRouter | null = null;
 		async bootstrapP2P(networkConfig: PeerNetworkConfig): Promise<number> {
+		if (this.connectionManager) {
+			return this.connectionManager.start();
+		}
 		const { PeerConnectionManager: ConnMgr } = await import("./peer-connection.js");
 		const { NetworkGossip: NetGossip } = await import("./network-gossip.js");
 		const { PeerAddrDb: AddrDb } = await import("./peer-addr-db.js");
@@ -283,10 +292,9 @@ export class ActorSystem {
 				ch.peerId === nodeId || ch.remoteNodeInfo?.nodeId === nodeId,
 			);
 		});
-		// Wire capability-based routing (dynamic import to avoid circular deps)
-		const { CapabilityRouter: CapRouter } = await import("./capability-router.js");
+		// Wire capability-based routing for remote peers as well.
 		const guard = this.connectionManager.guard;
-		this.capabilityRouter = new CapRouter(this.gossip, guard);
+		this.capabilityRouter = new CapabilityRouter(this.gossip, guard);
 		this.router.setCapabilityResolver((caps) => {
 			const peer = this.capabilityRouter!.resolve({ capabilities: caps });
 			if (!peer?.originNodeId) return undefined;
@@ -326,15 +334,20 @@ export class ActorSystem {
 		getConnectionManager(): PeerConnectionManager | null { return this.connectionManager; }
 		getRouter(): MeshRouter { return this.router; }
 		getGossipProtocol(): GossipProtocol { return this.gossip; }
-		start(): void {
+	start(): void {
 		if (this.running) return;
 		this.running = true;
 		this.gossip.start();
 		this.capabilityLearner.start();
+		this.startLocalHeartbeats();
 	}
 	async shutdown(): Promise<void> {
 		if (!this.running) return;
 		this.running = false;
+		if (this.localHeartbeatTimer) {
+			clearInterval(this.localHeartbeatTimer);
+			this.localHeartbeatTimer = null;
+		}
 		if (this.networkGossip) {
 			this.networkGossip.destroy();
 			this.networkGossip = null;
@@ -384,5 +397,30 @@ export class ActorSystem {
 			// Non-fatal: mesh must continue even if persistence fails.
 			process.stderr.write(`[mesh:actor-system] peer addr DB save failed: ${err instanceof Error ? err.message : String(err)}\n`);
 		}
+	}
+
+	private startLocalHeartbeats(): void {
+		if (this.localHeartbeatTimer) {
+			clearInterval(this.localHeartbeatTimer);
+		}
+		const intervalMs = Math.max(
+			250,
+			Math.min(this.config.gossipIntervalMs, Math.floor(this.config.suspectTimeoutMs / 2)),
+		);
+		this.localHeartbeatTimer = setInterval(() => {
+			for (const actorId of this.actors.keys()) {
+				this.gossip.touch(actorId);
+			}
+		}, intervalMs);
+	}
+
+	private resolveLocalCapabilityActor(caps: string[]): string | undefined {
+		if (caps.length === 0 || !this.capabilityRouter) return undefined;
+		const peer = this.capabilityRouter.resolve({ capabilities: caps });
+		if (!peer) return undefined;
+		if (peer.originNodeId && this.connectionManager && peer.originNodeId !== this.connectionManager.nodeId) {
+			return undefined;
+		}
+		return this.actors.has(peer.actorId) ? peer.actorId : undefined;
 	}
 }

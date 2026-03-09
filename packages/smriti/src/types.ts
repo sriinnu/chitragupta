@@ -83,6 +83,13 @@ export interface SessionOpts {
 	branch?: string;
 	parentSessionId?: string;
 	tags?: string[];
+	clientKey?: string;
+	sessionLineageKey?: string;
+	sessionReusePolicy?: "isolated" | "same_day";
+	consumer?: string;
+	surface?: string;
+	channel?: string;
+	actorId?: string;
 	/** Arbitrary metadata from external systems (e.g. Vaayu session fields). */
 	metadata?: Record<string, unknown>;
 }

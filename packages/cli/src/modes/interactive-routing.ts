@@ -17,6 +17,22 @@ import { buildNoLlmTemplateResponse } from "./no-llm-template.js";
 
 const log = createLogger("cli:interactive-routing");
 
+interface LocalTrigunaState {
+	sattva: number;
+	rajas: number;
+	tamas: number;
+}
+
+interface LocalTrigunaRoutingInfluence {
+	dominant: "sattva" | "rajas" | "tamas";
+	costWeightBias: number;
+	minimumTier?: "no-llm" | "haiku" | "sonnet" | "opus";
+	maximumTier?: "no-llm" | "haiku" | "sonnet" | "opus";
+	minimumComplexity?: "trivial" | "simple" | "medium" | "complex" | "expert";
+	avoidSkipLLM: boolean;
+	rationale: string;
+}
+
 /** Mutable routing state shared across turns. */
 export interface RoutingState {
 	currentModel: string;
@@ -105,6 +121,7 @@ export function routeModelForTurn(
 ): { noLlmTemplateResponse?: string } {
 	routing.lastTuriyaDecision = undefined;
 	let noLlmTemplateResponse: string | undefined;
+	const trigunaInfluence = getTrigunaRoutingInfluence(agent);
 
 	// Path 1: Manas + Turiya (preferred)
 	if (options.manas && options.turiyaRouter && !options.userExplicitModel) {
@@ -117,7 +134,12 @@ export function routeModelForTurn(
 			agentMessages.push({ role: "user", content: [{ type: "text", text: message }] });
 
 				const ctx = options.turiyaRouter.extractContext(agentMessages);
-				const decision = options.turiyaRouter.classify(ctx);
+				const decision = options.turiyaRouter.classify(ctx, trigunaInfluence ? {
+					costWeight: 0,
+					costWeightBias: trigunaInfluence.costWeightBias,
+					minimumTier: trigunaInfluence.minimumTier,
+					maximumTier: trigunaInfluence.maximumTier,
+				} : undefined);
 				routing.lastTuriyaDecision = decision;
 				if (decision.tier === "no-llm") {
 					// Safety net: if the template returns null, the message
@@ -164,7 +186,11 @@ export function routeModelForTurn(
 				}
 
 				stdout.write(
-					dim(`  [${classification.intent} → ${decision.tier} (${(decision.confidence * 100).toFixed(0)}%) ~$${decision.costEstimate.toFixed(4)}]\n`),
+					dim(
+						`  [${classification.intent} → ${decision.tier} ` +
+						`(${(decision.confidence * 100).toFixed(0)}%) ~$${decision.costEstimate.toFixed(4)}` +
+						`${trigunaInfluence ? ` | ${trigunaInfluence.dominant}` : ""}]\n`,
+					),
 				);
 			} catch {
 				// Manas/Turiya classification failed — continue with current model
@@ -178,7 +204,13 @@ export function routeModelForTurn(
 			const decision = options.margaPipeline.classify({
 				messages: [{ role: "user", content: [{ type: "text", text: message }] }],
 				systemPrompt: undefined,
-			});
+			}, trigunaInfluence ? {
+				routingInfluence: {
+					minimumComplexity: trigunaInfluence.minimumComplexity,
+					avoidSkipLLM: trigunaInfluence.avoidSkipLLM,
+					rationale: trigunaInfluence.rationale,
+				},
+			} : undefined);
 			if (decision.skipLLM) {
 				const templateResult = buildNoLlmTemplateResponse(message, decision.taskType);
 				if (templateResult !== null) {
@@ -202,7 +234,10 @@ export function routeModelForTurn(
 				agent.setModel(decision.modelId);
 				routing.currentModel = decision.modelId;
 				stdout.write(
-					dim(`  [marga: ${decision.taskType}/${decision.complexity} → ${decision.modelId}]\n`),
+					dim(
+						`  [marga: ${decision.taskType}/${decision.complexity} → ${decision.modelId}` +
+						`${trigunaInfluence ? ` | ${trigunaInfluence.dominant}` : ""}]\n`,
+					),
 				);
 			}
 		} catch {
@@ -210,6 +245,62 @@ export function routeModelForTurn(
 		}
 	}
 	return { noLlmTemplateResponse };
+}
+
+function getTrigunaRoutingInfluence(agent: Agent) {
+	try {
+		return deriveTrigunaRoutingInfluence(agent.getChetana()?.getTriguna()?.getState() ?? undefined);
+	} catch {
+		return undefined;
+	}
+}
+
+function deriveTrigunaRoutingInfluence(
+	state: LocalTrigunaState | null | undefined,
+): LocalTrigunaRoutingInfluence | undefined {
+	if (!state) return undefined;
+	const dominant = getDominantGuna(state);
+	const dominantValue = state[dominant];
+	if (dominantValue < 0.45) return undefined;
+
+	if (dominant === "tamas") {
+		const severe = state.tamas >= 0.7;
+		return {
+			dominant,
+			costWeightBias: -0.35,
+			minimumTier: severe ? "sonnet" : "haiku",
+			minimumComplexity: severe ? "complex" : "medium",
+			avoidSkipLLM: true,
+			rationale: severe
+				? "tamas dominant: raise the model floor and keep an LLM in the loop"
+				: "tamas elevated: avoid zero-LLM shortcuts while degraded",
+		};
+	}
+
+	if (dominant === "rajas") {
+		return {
+			dominant,
+			costWeightBias: 0.2,
+			maximumTier: state.rajas >= 0.75 ? "sonnet" : undefined,
+			avoidSkipLLM: false,
+			rationale: state.rajas >= 0.75
+				? "rajas dominant: cool routing by capping the hottest tier"
+				: "rajas elevated: bias toward cheaper and faster tiers",
+		};
+	}
+
+	return {
+		dominant,
+		costWeightBias: 0,
+		avoidSkipLLM: false,
+		rationale: "sattva dominant: routing remains neutral",
+	};
+}
+
+function getDominantGuna(state: LocalTrigunaState): LocalTrigunaRoutingInfluence["dominant"] {
+	if (state.rajas >= state.sattva && state.rajas >= state.tamas) return "rajas";
+	if (state.tamas >= state.sattva && state.tamas >= state.rajas) return "tamas";
+	return "sattva";
 }
 
 /**

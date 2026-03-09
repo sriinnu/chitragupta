@@ -6,27 +6,32 @@
 import { Agent } from "@chitragupta/anina";
 import type { AgentProfile, ChitraguptaSettings } from "@chitragupta/core";
 
-import { createLogger } from "@chitragupta/core";
-import { listSessions } from "@chitragupta/smriti/session-store";
+import { createLogger, DEFAULT_FALLBACK_MODEL } from "@chitragupta/core";
+import type { Session } from "@chitragupta/smriti/types";
 import type { TuriyaRouter } from "@chitragupta/swara";
 import type { ProviderRegistry } from "@chitragupta/swara/provider-registry";
-import { getAllTools } from "@chitragupta/yantra";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { resolvePreferredProvider } from "./bootstrap.js";
-import type { ApiDeps } from "./http-server-types.js";
+import { applyLucyLiveGuidance, createServeSessionScope, type ServeSessionScope } from "./nervous-system-wiring.js";
 import {
 	createServerAgent,
 	provisionTlsCerts,
 	type ServePhaseModules,
 	wireServePhaseModules,
 } from "./main-serve-helpers.js";
+import { buildServerHandlers } from "./main-serve-api.js";
 import type { MeshBootstrapResult } from "./mesh-bootstrap.js";
-import { bootstrapMeshNetwork, buildMeshApiHandlers, resolveMeshConfig } from "./mesh-bootstrap.js";
+import { bootstrapMeshNetwork, resolveMeshConfig } from "./mesh-bootstrap.js";
 import type { ProjectInfo } from "./project-detector.js";
 
 const log = createLogger("cli:main-serve");
+
+function isLoopbackHost(host: string): boolean {
+	const normalized = host.trim().toLowerCase();
+	return normalized === "127.0.0.1" || normalized === "localhost" || normalized === "::1";
+}
 
 /** Options passed from main() to the serve command handler. */
 export interface ServeCommandOptions {
@@ -49,6 +54,11 @@ export interface ServeCommandOptions {
 export async function handleServeCommand(opts: ServeCommandOptions): Promise<void> {
 	const { args, settings, profile, registry, project, projectPath, turiyaRouter } = opts;
 	const { createChitraguptaAPI } = await import("./http-server.js");
+	void import("./modes/mcp-subsystems.js")
+		.then(({ primeLucyScarlettRuntime }) => primeLucyScarlettRuntime())
+		.catch(() => {
+			// Best-effort: live Scarlett/Lucy startup should not block serve mode.
+		});
 
 	const port = args.port ?? 3141;
 	const host = args.host ?? "127.0.0.1";
@@ -61,6 +71,15 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 		process.env.CHITRAGUPTA_AUTH_TOKEN ??
 		((settings as unknown as Record<string, unknown>).authToken as string | undefined);
 	const apiKeys = process.env.CHITRAGUPTA_API_KEYS?.split(",").filter(Boolean);
+	const allowInsecureRemoteServe = process.env.CHITRAGUPTA_ALLOW_INSECURE_REMOTE_SERVE === "1";
+
+	if (!isLoopbackHost(host) && !authToken && !apiKeys?.length && !allowInsecureRemoteServe) {
+		throw new Error(
+			`Refusing to bind serve mode to non-loopback host "${host}" without auth. `
+			+ "Set CHITRAGUPTA_AUTH_TOKEN or CHITRAGUPTA_API_KEYS, or explicitly opt in with "
+			+ "CHITRAGUPTA_ALLOW_INSECURE_REMOTE_SERVE=1.",
+		);
+	}
 
 	// ── Hub Dashboard + Dvara-Bandhu Pairing ──
 	const { PairingEngine } = await import("./pairing-engine.js");
@@ -86,7 +105,8 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 	};
 
 	let serverAgent: unknown = null;
-	const serverSession: unknown = null;
+	let serverSession: Session | null = null;
+	const serveSessionScope = createServeSessionScope();
 
 	// Wire phase modules
 	const { modules, cleanups } = await wireServePhaseModules(projectPath);
@@ -98,15 +118,17 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 
 	const servResolved = resolvePreferredProvider(args.provider, settings, registry);
 	if (servResolved) {
+		const serveModelId = args.model ?? profile.preferredModel ?? settings.defaultModel ?? DEFAULT_FALLBACK_MODEL;
 		const { result: agentResult, refs } = await createServerAgent({
 			servResolved,
 			profile,
 			settings,
-			project,
-			projectPath,
-			modules,
-			args: { model: args.model },
-		});
+				project,
+				projectPath,
+				modules,
+				args: { model: args.model },
+				sessionIdResolver: () => serveSessionScope.getSessionId(),
+			});
 		serverAgent = agentResult;
 		servKaalaRef = refs.kaalaRef;
 		servActorShutdownRef = refs.actorShutdownRef;
@@ -124,8 +146,8 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 	// for P2P bootstrap and mesh status reporting
 	if (serverAgent) {
 		try {
-			const agentAny = serverAgent as { actorSystem?: unknown };
-			meshActorSystem = agentAny.actorSystem;
+			const actorSystemAware = serverAgent as { getActorSystem?: () => unknown };
+			meshActorSystem = actorSystemAware.getActorSystem?.();
 		} catch {
 			/* best-effort */
 		}
@@ -135,6 +157,7 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 		buildServerHandlers({
 			serverAgent,
 			serverSession,
+			serveSessionScope,
 			registry,
 			projectPath,
 			turiyaRouter,
@@ -195,7 +218,7 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 			`\n`,
 	);
 	process.stdout.write(pairingEngine.getTerminalDisplay() + "\n\n");
-	process.stdout.write(`  Press Ctrl+C to stop.\n\n`);
+process.stdout.write(`  Press Ctrl+C to stop.\n\n`);
 
 	// Block until SIGINT
 	await new Promise<void>((resolve) => {
@@ -229,6 +252,12 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 					} catch {
 						/* best-effort */
 					}
+				}
+				if (cleanups.lokapalaUnsub) {
+					try { cleanups.lokapalaUnsub(); } catch { /* best-effort */ }
+				}
+				if (modules.servSamiti) {
+					try { (modules.servSamiti as { destroy(): void }).destroy(); } catch { /* best-effort */ }
 				}
 				if (cleanups.servKartavyaDispatcher) {
 					try {
@@ -267,72 +296,4 @@ export async function handleServeCommand(opts: ServeCommandOptions): Promise<voi
 
 // ─── Internal Helpers ───────────────────────────────────────────────────────
 
-/** Build the handler map passed to createChitraguptaAPI. */
-function buildServerHandlers(opts: {
-	serverAgent: unknown;
-	serverSession: unknown;
-	registry: ProviderRegistry;
-	projectPath: string;
-	turiyaRouter?: TuriyaRouter;
-	modules: ServePhaseModules;
-	pairingEngine: { generateChallenge(): void; getTerminalDisplay(): string };
-	budgetTracker: unknown;
-	meshActorSystem?: unknown;
-	getMeshBootstrapResult?: () => MeshBootstrapResult | undefined;
-}): ApiDeps {
-	const {
-		serverAgent,
-		serverSession,
-		registry,
-		projectPath,
-		turiyaRouter,
-		modules: m,
-		pairingEngine,
-		budgetTracker,
-	} = opts;
-	return {
-		getAgent: () => serverAgent,
-		getSession: () => serverSession,
-		listSessions: () => {
-			try {
-				return listSessions(projectPath);
-			} catch {
-				return [];
-			}
-		},
-		listProviders: () => registry.getAll().map((p) => ({ id: p.id, name: p.name })),
-		listTools: () =>
-			getAllTools().map((t) => ({
-				name: (t as unknown as Record<string, Record<string, string>>).definition?.name,
-				description: (t as unknown as Record<string, Record<string, string>>).definition?.description,
-			})),
-		prompt: serverAgent
-			? async (message: string) => {
-					const result = await (serverAgent as Agent).prompt(message);
-					return result.content
-						.filter((p): p is { type: "text"; text: string } => p.type === "text")
-						.map((p) => p.text)
-						.join("");
-				}
-			: undefined,
-		getVasanaEngine: () => m.vasanaEngine,
-		getNidraDaemon: () => m.servNidraDaemon,
-		getVidhiEngine: () => m.vidhiEngine,
-		getTuriyaRouter: () => turiyaRouter,
-		getTriguna: () => m.servTriguna,
-		getRtaEngine: () => m.servRtaEngine,
-		getBuddhi: () => m.servBuddhi,
-		getDatabase: () => m.servDatabase,
-		getSamiti: () => m.servSamiti,
-		getSabhaEngine: () => m.servSabhaEngine,
-		getLokapala: () => m.servLokapala,
-		getAkasha: () => m.servAkasha,
-		getKartavyaEngine: () => m.servKartavyaEngine,
-		getKalaChakra: () => m.servKalaChakra,
-		getVidyaOrchestrator: () => m.servVidyaOrchestrator,
-		getProjectPath: () => projectPath,
-		getPairingEngine: () => pairingEngine,
-		getBudgetTracker: () => budgetTracker,
-		...buildMeshApiHandlers(opts.meshActorSystem, opts.getMeshBootstrapResult ?? (() => undefined)),
-	};
-}
+export { buildServerHandlers } from "./main-serve-api.js";

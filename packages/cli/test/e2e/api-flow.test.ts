@@ -251,6 +251,7 @@ vi.mock("@chitragupta/core", () => ({
 	cascadeConfigs: mocks.mockCascadeConfigs,
 	getChitraguptaHome: mocks.mockGetChitraguptaHome,
 	resolveProfile: mocks.mockResolveProfile,
+	createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 	BUILT_IN_PROFILES: mocks.mockBuiltInProfiles,
 	DEFAULT_SETTINGS: mocks.mockSettings,
 	DEFAULT_PROVIDER_PRIORITY: ["claude-code", "codex-cli", "gemini-cli", "aider-cli", "ollama", "anthropic", "openai", "google"],
@@ -264,6 +265,7 @@ vi.mock("@chitragupta/swara/provider-registry", () => ({
 vi.mock("@chitragupta/swara/providers", () => ({
 	registerBuiltinProviders: mocks.mockRegisterBuiltinProviders,
 	createOpenAICompatProvider: mocks.mockCreateOpenAICompatProvider,
+	createLlamaCpp: vi.fn().mockReturnValue({ id: "llama.cpp", name: "llama.cpp" }),
 	claudeCodeProvider: { id: "claude-code", name: "Claude Code" },
 	geminiCLIProvider: { id: "gemini-cli", name: "Gemini CLI" },
 	codexProvider: { id: "codex-cli", name: "Codex CLI" },
@@ -279,6 +281,14 @@ vi.mock("@chitragupta/swara", () => ({
 
 vi.mock("@chitragupta/anina", () => ({
 	Agent: mocks.MockAgentClass,
+	MemoryBridge: class MockMemoryBridge {
+		getIdentityContext() {
+			return { load: () => "" };
+		}
+		async loadMemoryContext() {
+			return "";
+		}
+	},
 }));
 
 vi.mock("@chitragupta/smriti/session-store", () => ({
@@ -288,6 +298,76 @@ vi.mock("@chitragupta/smriti/session-store", () => ({
 	addTurn: mocks.mockAddTurn,
 	listSessions: mocks.mockListSessions,
 }));
+
+vi.mock("../../src/modes/daemon-bridge.js", () => {
+	return {
+		openSession: vi.fn(async (opts: Record<string, unknown>) => {
+			const created = mocks.mockCreateSession(opts);
+			return { session: created, created: true };
+		}),
+		createSession: vi.fn(async (opts: Record<string, unknown>) => {
+			const created = mocks.mockCreateSession(opts);
+			return { id: created.meta.id };
+		}),
+		showSession: vi.fn(async (id: string, project: string) => {
+			const created = mocks.mockCreateSession.mock.results.at(-1)?.value;
+			if (created && id === created.meta.id) return created;
+			const loaded = mocks.mockLoadSession(id, project);
+			return loaded ?? created ?? mocks.mockSession;
+		}),
+		listSessions: vi.fn(async (project?: string) => mocks.mockListSessions(project)),
+		addTurn: vi.fn(async (sessionId: string, project: string, turn: Record<string, unknown>) => {
+			const session = mocks.mockCreateSession.mock.results.at(-1)?.value ?? mocks.mockSession;
+			const nextTurnNumber =
+				typeof turn.turnNumber === "number" && turn.turnNumber > 0
+					? turn.turnNumber
+					: session.turns.length + 1;
+			session.turns.push({
+				...turn,
+				turnNumber: nextTurnNumber,
+			});
+			await mocks.mockAddTurn(sessionId, project, turn);
+		}),
+		unifiedRecall: vi.fn(async (query: string, opts?: { limit?: number }) => {
+			const results = mocks.mockSearchMemory(query);
+			const mapped = results.map((r: {
+				content: string;
+				relevance?: number;
+				timestamp?: number;
+				scope: { type: string; path?: string; agentId?: string; sessionId?: string };
+			}) => ({
+				content: r.content,
+				score: r.relevance ?? 0,
+				source: r.scope.type === "project" ? `project:${r.scope.path}`
+					: r.scope.type === "global" ? "global"
+					: r.scope.type === "agent" ? `agent:${r.scope.agentId}`
+					: `session:${r.scope.sessionId}`,
+				timestamp: r.timestamp,
+			}));
+			return typeof opts?.limit === "number" ? mapped.slice(0, opts.limit) : mapped;
+		}),
+		getLucyLiveContextViaDaemon: vi.fn(async () => ({ predictions: [], hit: null, liveSignals: [] })),
+		getAkashaStatsViaDaemon: vi.fn(async () => ({ totalTraces: 0, activeTraces: 0, avgStrength: 0, totalReinforcements: 0, byType: {} })),
+		queryAkashaViaDaemon: vi.fn(async () => []),
+		strongestAkashaViaDaemon: vi.fn(async () => []),
+		leaveAkashaViaDaemon: vi.fn(async () => ({ id: "trace-1" })),
+		onDaemonNotification: vi.fn(async () => () => {}),
+		getNidraStatusViaDaemon: vi.fn(async () => ({
+			state: "LISTENING",
+			lastStateChange: 0,
+			lastHeartbeat: 0,
+			consolidationProgress: 0,
+			uptimeMs: 0,
+		})),
+		touchNidraViaDaemon: vi.fn(async () => undefined),
+		notifyNidraSessionViaDaemon: vi.fn(async () => undefined),
+		wakeNidraViaDaemon: vi.fn(async () => undefined),
+		recordBuddhiDecisionViaDaemon: vi.fn(async () => ({ id: "decision-1" })),
+		listBuddhiDecisionsViaDaemon: vi.fn(async () => []),
+		getBuddhiDecisionViaDaemon: vi.fn(async () => null),
+		explainBuddhiDecisionViaDaemon: vi.fn(async () => null),
+	};
+});
 
 vi.mock("@chitragupta/smriti/search", () => ({
 	searchMemory: mocks.mockSearchMemory,
@@ -994,12 +1074,8 @@ describe("E2E: API Flow", () => {
 				throw new Error("Session not found");
 			});
 
-			const instance = await createChitragupta({ sessionId: "s-nonexistent" });
-
-			// Should fall back to creating a new session
-			expect(mocks.mockCreateSession).toHaveBeenCalled();
-
-			await instance.destroy();
+			await expect(createChitragupta({ sessionId: "s-nonexistent" }))
+				.rejects.toThrow(/Failed to resume requested session s-nonexistent/);
 		});
 
 		it("should handle response without cost gracefully", async () => {

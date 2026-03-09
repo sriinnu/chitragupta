@@ -2,38 +2,21 @@
  * @chitragupta/tantra — MCP Server.
  *
  * Exposes tools, resources, and prompts via the Model Context Protocol.
- * Supports stdio and SSE transports.
+ * Supports stdio and the legacy HTTP+SSE transport.
  */
 
-import {
-	createErrorResponse,
-	createResponse,
-	INTERNAL_ERROR,
-	INVALID_PARAMS,
-	isRequest,
-	METHOD_NOT_FOUND,
-} from "./jsonrpc.js";
+import { createErrorResponse, createResponse, INTERNAL_ERROR, INVALID_PARAMS, isRequest, METHOD_NOT_FOUND } from "./jsonrpc.js";
 import { handlePromptsGet, handlePromptsList, handleResourcesList, handleResourcesRead } from "./server-handlers.js";
 import { appendToolFooter, buildResponseMeta, resolveTraceContext, ToolCallRingBuffer } from "./server-telemetry.js";
 import type { ToolRegistry } from "./tool-registry.js";
 import { SSEServerTransport } from "./transport/sse.js";
 import { StdioServerTransport } from "./transport/stdio.js";
-import type {
-	JsonRpcNotification,
-	JsonRpcRequest,
-	JsonRpcResponse,
-	McpPromptHandler,
-	McpResourceHandler,
-	McpServerConfig,
-	McpToolHandler,
-	ServerCapabilities,
-	ServerInfo,
-	ToolCallRecord,
-} from "./types.js";
+import { StreamableHttpServerTransport } from "./transport/streamable-http.js";
+import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, McpPromptHandler, McpResourceHandler, McpServerConfig, McpToolHandler, ServerCapabilities, ServerInfo, ToolCallRecord } from "./types.js";
 
 type AnyMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
 
-/** MCP Server — tools, resources, and prompts over JSON-RPC 2.0 (stdio / SSE). */
+/** MCP Server — tools, resources, and prompts over JSON-RPC 2.0 (stdio / legacy HTTP+SSE). */
 export class McpServer {
 	private _config: McpServerConfig;
 	private _tools: Map<string, McpToolHandler> = new Map();
@@ -50,6 +33,7 @@ export class McpServer {
 	private _registryOwnedTools: Set<string> = new Set();
 	/** In-memory ring buffer of recent tool calls for the OS integration surface. */
 	private _ringBuffer = new ToolCallRingBuffer();
+	private _streamableHttpTransport: StreamableHttpServerTransport | null = null;
 
 	constructor(config: McpServerConfig) {
 		this._config = config;
@@ -220,17 +204,32 @@ export class McpServer {
 				});
 			});
 			this._stdioTransport.start();
-		} else if (this._config.transport === "sse") {
-			this._sseTransport = new SSEServerTransport();
-			this._sseTransport.onMessage((msg) => {
-				this._onMessage(msg).catch((_err) => {
-					// MCP errors are caught to prevent transport disruption. Errors are reported via JSON-RPC error responses.
+			} else if (this._config.transport === "sse") {
+				this._sseTransport = new SSEServerTransport(this._config.auth);
+				this._sseTransport.onMessage((msg, context) => {
+					this._onMessage(msg, context?.clientId).catch((_err) => {
+						// MCP errors are caught to prevent transport disruption. Errors are reported via JSON-RPC error responses.
+					});
 				});
-			});
-			const ssePort = this._config.ssePort ?? 3001;
-			await this._sseTransport.start(ssePort);
+				const ssePort = this._config.ssePort ?? 3001;
+				await this._sseTransport.start(ssePort, {
+					host: this._config.sseHost,
+					allowedOrigins: this._config.sseAllowedOrigins,
+				});
+			} else if (this._config.transport === "streamable-http") {
+				this._streamableHttpTransport = new StreamableHttpServerTransport(this._config.auth);
+				this._streamableHttpTransport.onMessage((msg, context) => {
+					this._onMessage(msg, context?.clientId).catch((_err) => {
+						// MCP errors are caught to prevent transport disruption. Errors are reported via JSON-RPC error responses.
+					});
+				});
+				const port = this._config.streamableHttpPort ?? this._config.ssePort ?? 3001;
+				await this._streamableHttpTransport.start(port, {
+					host: this._config.streamableHttpHost ?? this._config.sseHost,
+					allowedOrigins: this._config.streamableHttpAllowedOrigins ?? this._config.sseAllowedOrigins,
+				});
+			}
 		}
-	}
 
 	/**
 	 * Stop the server.
@@ -244,6 +243,10 @@ export class McpServer {
 			await this._sseTransport.stop();
 			this._sseTransport = null;
 		}
+		if (this._streamableHttpTransport) {
+			await this._streamableHttpTransport.stop();
+			this._streamableHttpTransport = null;
+		}
 		this._initialized = false;
 	}
 
@@ -252,14 +255,14 @@ export class McpServer {
 	/**
 	 * Handle an incoming message from any transport.
 	 */
-	private async _onMessage(msg: AnyMessage): Promise<void> {
+	private async _onMessage(msg: AnyMessage, clientId?: string): Promise<void> {
 		if (!isRequest(msg)) {
 			// We only process requests on the server side
 			return;
 		}
 
 		const response = await this._handleRequest(msg);
-		this._sendResponse(response);
+		this._sendResponse(response, clientId);
 	}
 
 	/**
@@ -412,17 +415,21 @@ export class McpServer {
 			this._stdioTransport.send(notification as unknown as JsonRpcResponse);
 		} else if (this._sseTransport) {
 			this._sseTransport.broadcast(notification as unknown as JsonRpcResponse);
+		} else if (this._streamableHttpTransport) {
+			this._streamableHttpTransport.broadcast(notification as unknown as JsonRpcResponse);
 		}
 	}
 
 	/**
 	 * Send a response via the active transport.
 	 */
-	private _sendResponse(response: JsonRpcResponse): void {
+	private _sendResponse(response: JsonRpcResponse, clientId?: string): void {
 		if (this._stdioTransport) {
 			this._stdioTransport.send(response);
 		} else if (this._sseTransport) {
-			this._sseTransport.broadcast(response);
+			this._sseTransport.send(response, clientId);
+		} else if (this._streamableHttpTransport) {
+			this._streamableHttpTransport.send(response, clientId);
 		}
 	}
 }

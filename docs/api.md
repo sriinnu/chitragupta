@@ -1,8 +1,20 @@
 # API Reference
 
-Chitragupta exposes four interface layers: a **CLI** with command groups and interactive slash commands, an **MCP server** with 25 tools for integration with Claude Code and other MCP clients, a **REST API** with 70+ endpoints served via `chitragupta serve`, and a **Hub web dashboard** for visual monitoring and device pairing. This document is the canonical reference for all public-facing interfaces.
+Chitragupta exposes four interface layers: a **CLI** with command groups and interactive slash commands, an **MCP server** with tool surfaces for integration with Claude Code and other MCP clients, a **REST API** served via `chitragupta serve`, and a **Hub web dashboard** for visual monitoring and device pairing. This document is the canonical reference for public-facing interface families; exact tool/endpoint counts can vary by release.
 
-For architectural context see [ARCHITECTURE.md](./ARCHITECTURE.md). For algorithmic details see [ALGORITHMS.md](./ALGORITHMS.md). For the Vedic model taxonomy see [VEDIC-MODELS.md](./VEDIC-MODELS.md).
+For architectural context see [architecture.md](./architecture.md). For algorithmic details see [algorithms.md](./algorithms.md). For the Vedic model taxonomy see [vedic-models.md](./vedic-models.md).
+
+Engine model:
+
+- Chitragupta is the authority for durable sessions, memory, routing policy, and bridge auth.
+- Vaayu and Takumi are consumers of the engine, not the owners of durable truth.
+- The daemon is the primary single-writer runtime surface for stateful operations.
+- The daemon now also exposes consumer-facing bridge methods for runtime capabilities and Sabha council operations.
+
+See also:
+- [runtime-constitution.md](./runtime-constitution.md)
+- [consumer-contract.md](./consumer-contract.md)
+- [current-status.md](./current-status.md)
 
 ---
 
@@ -13,6 +25,47 @@ For architectural context see [ARCHITECTURE.md](./ARCHITECTURE.md). For algorith
 3. [MCP Tools](#3-mcp-tools)
 4. [REST API Endpoints](#4-rest-api-endpoints)
 5. [MCP Resources and Prompts](#5-mcp-resources-and-prompts)
+
+For exact serve-mode endpoint availability in your running build, use `GET /api/openapi.json`.
+For exact MCP tool availability in your running build, inspect the tool list from your MCP client (`/mcp` in interactive mode).
+
+Daemon consumer bridge methods:
+
+- `bridge.info`
+- `bridge.capabilities`
+- `route.classes`
+- `route.resolve`
+- `session.open`
+- `session.collaborate`
+- `session.turn`
+- `lucy.live_context`
+- `compression.status`
+- `compression.compress`
+- `compression.auto`
+- `semantic.sync_status`
+- `semantic.sync_curated`
+- `sabha.ask`
+- `sabha.resume`
+- `sabha.submit_perspective`
+- `sabha.gather`
+- `sabha.deliberate`
+- `sabha.record`
+- `sabha.escalate`
+
+Notes:
+
+- `lucy.live_context` accepts an optional `project` so live Scarlett/Lucy guidance can stay inside the current project boundary while still reflecting global engine health.
+- `route.resolve` now returns both the engine-selected lane and optional `discoveryHints`, so kosha-discovery stays inside the engine control plane instead of forcing consumers to build a separate provider registry.
+- Day-file and consolidated-artifact recall paths can include `sourceSessionIds` so callers can drill from derived memory back into canonical raw sessions.
+- Day-file summaries may compact low-signal sessions for readability; use `sourceSessionIds` and canonical session APIs when full-fidelity replay is required.
+- `semantic.sync_status` and `semantic.sync_curated` operate on curated day/monthly/yearly consolidation artifacts, not raw turns.
+- curated semantic artifacts may include a derived `packedSummary` payload produced by the engine-owned PAKT lane; embeddings still use the original curated summary text.
+- the compression policy is runtime-aware: `pakt-core` is preferred and stdio `pakt` is the supported fallback.
+- Swapna/Nidra compaction can also emit a derived packed compaction summary; raw turns and raw sessions remain canonical.
+- `sabha.submit_perspective` lets a consulted peer write structured council feedback back into Sabha state.
+- `sabha.gather` / `sabha.get` now include consultation fields such as `perspectives`, `respondedParticipantIds`, `pendingParticipantIds`, and `consultationSummary`.
+- `sabha.resume` is the explicit contract for retrying or resuming pending mesh consultations without overloading read-only `sabha.get`.
+- use `session.collaborate` or `POST /api/sessions/collaborate` when multiple tabs or agents should intentionally share one same-day lineage thread.
 
 ---
 
@@ -83,9 +136,15 @@ chitragupta [options] [command]
 | Command | Description |
 |---------|-------------|
 | `mcp list` | List all configured MCP servers (global and project) |
-| `mcp add <id> <command> [args...] [--project] [--name <name>]` | Add MCP server |
+| `mcp add <id> <command> [args...] [--project] [--name <name>]` | Add a stdio MCP server |
 | `mcp remove <id> [--project]` | Remove MCP server |
-| `mcp test <id>` | Test MCP server connection |
+| `mcp test <id>` | Test MCP server connection using its configured transport |
+
+Notes:
+
+- `mcp add` is the convenience path for stdio servers.
+- HTTP MCP servers (`sse` and `streamable-http`) can be declared directly in `mcp.json`.
+- `mcp test` now respects the configured transport instead of assuming stdio.
 
 #### `orchestrate` -- Multi-Agent Orchestration
 
@@ -101,7 +160,7 @@ chitragupta [options] [command]
 | `workflow run <file \| template-name>` | Execute a workflow DAG |
 | `workflow list` | List saved workflows |
 | `workflow validate <file>` | Validate a workflow definition |
-| `workflow templates` | List built-in templates (code-review, refactor, bug-fix, deploy) |
+| `workflow templates` | List built-in templates (`code-review`, `refactor`, `bug-fix`, `deploy`, `autoresearch`, `acp-research-swarm`) |
 
 #### `skill` -- Skill Format Converter (Setu)
 
@@ -139,7 +198,7 @@ chitragupta [options] [command]
 | Command | Description |
 |---------|-------------|
 | `serve [--port 3141] [--host localhost]` | HTTP API server + Hub dashboard |
-| `mcp-server [--stdio\|--sse] [--port 3001] [--project <path>] [--agent] [--name <name>]` | MCP server |
+| `mcp-server [--stdio\|--sse\|--streamable-http] [--port 3001] [--project <path>] [--agent] [--name <name>]` | MCP server |
 
 ---
 
@@ -222,14 +281,14 @@ chitragupta [options] [command]
 | `/learn <query>` | Autonomous skill learning |
 | `/skill <sub> <file>` | Setu skill porter |
 | `/skills <sub>` | Skill security pipeline |
-| `/workflow [sub]` | Vayu DAG workflows |
+| `/workflow [sub]` | Prana workflows |
 | `/stats` | Codebase power stats |
 
 ---
 
 ## 3. MCP Tools
 
-25 tools exposed via the `chitragupta-mcp` binary. Supports both stdio and SSE transports.
+MCP tools are exposed via the `chitragupta-mcp` binary and support `stdio`, legacy `sse`, and `streamable-http` transports. Tool inventory can vary by package version and enabled subsystems.
 
 ### File and Shell Tools (12)
 
@@ -472,11 +531,63 @@ Return current Triguna health status. No parameters.
 
 Generate complete agent self-report. No parameters.
 
+#### `chitragupta_recall`
+
+Search across Chitragupta's memory layers for prior sessions, memory entries, day files, and Akasha traces.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | yes | Natural-language recall query |
+| `project` | string | no | Optional project-path filter |
+| `limit` | number | no | Maximum results. Default `5` |
+| `noCache` | boolean | no | Skip Transcendence predictive hits and search live memory layers only |
+| `fresh` | boolean | no | Alias for `noCache` |
+
+Operational notes:
+
+- `noCache` and `fresh` have the same effect.
+- When neither flag is set, recall may prepend a Transcendence predictive hit if one exists.
+- Metadata includes whether fresh/no-cache mode was requested.
+- Day-file recall results can now include `sourceSessionIds` when the best answer came from a consolidated artifact. Low-signal session detail may be compacted in that derived artifact, so use those IDs to drill back into canonical raw sessions when you need the full thread.
+
+#### `coding_agent`
+
+Route a coding task through Lucy, the Takumi compatibility bridge, and CLI fallback.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `task` | string | yes | The coding task to execute |
+| `mode` | enum | no | `full`, `plan-only`, or `cli`. Default `full` |
+| `noCache` | boolean | no | Bypass predictive context and request fresh context reads |
+
+Mode semantics:
+
+| Mode | Behavior |
+|------|----------|
+| `full` | Lucy context injection -> Takumi bridge -> CLI fallback |
+| `plan-only` | Returns a plan only. No commands are executed |
+| `cli` | Skips Lucy/Takumi bridge and routes directly to a detected coding CLI |
+
+Operational notes:
+
+- Fresh/no-cache mode skips Transcendence predictive context during Lucy context assembly.
+- The Takumi bridge propagates fresh intent into prompt text and environment variables.
+- Bridge priority is Takumi structured mode first, Takumi plain CLI second, generic coding CLI fallback third.
+
 ---
 
 ## 4. REST API Endpoints
 
+### Authority and Auth Boundaries
+
+| Interface | Runtime authority | Auth model | Note |
+|-----------|-------------------|------------|------|
+| Daemon socket / named pipe (`@chitragupta/daemon`) | Primary single-writer runtime surface for persistent state | `auth.handshake` bridge token + scoped method authorization | Used by daemon-backed MCP/CLI flows. |
+| Daemon loopback HTTP (`127.0.0.1:3690`) | Local operations/status surface | Loopback trust boundary (no bridge-token handshake) | Keep local-only. |
+| Serve-mode HTTP (`chitragupta serve`) | User-facing API + Hub surface | Pairing/JWT + serve auth routes | Separate auth plane from daemon socket auth. |
+
 Served by `chitragupta serve`. Default port 3141. When the Hub package is built, the server also serves the web dashboard at the root URL.
+Endpoint groups below are representative and source-backed; use OpenAPI for exact per-build contract.
 
 ### Health and Observability
 
@@ -494,7 +605,64 @@ Served by `chitragupta serve`. Default port 3141. When the Hub package is built,
 | `GET` | `/api/sessions` | List sessions |
 | `GET` | `/api/sessions/:id` | Session details |
 | `POST` | `/api/sessions` | Create session |
+| `POST` | `/api/sessions/collaborate` | Open or reuse an explicit shared same-day lineage session |
 | `POST` | `/api/chat` | Send message to agent |
+
+`POST /api/sessions` accepts optional lineage/session fields:
+
+- `sessionId`
+  - resume the exact existing session instead of creating a new one
+- `title`
+- `clientKey`
+- `sessionLineageKey`
+- `lineageKey`
+  - accepted alias for `sessionLineageKey`
+- `sessionReusePolicy`
+  - `isolated` or `same_day`
+- `consumer`
+- `surface`
+- `channel`
+- `actorId`
+
+Response shape:
+
+- `sessionId`
+- `created`
+- `requestId`
+
+`POST /api/sessions/collaborate` requires one of:
+
+- `sessionLineageKey`
+- `lineageKey`
+- `x-chitragupta-lineage`
+
+It accepts the same optional session fields as `POST /api/sessions`, but applies intentional `same_day` reuse semantics.
+
+`POST /api/chat` accepts the same lineage/session fields plus:
+
+- `message`
+  - required
+
+Header aliases:
+
+- `x-session-id`
+- `x-chitragupta-client`
+- `x-chitragupta-lineage`
+
+`POST /api/chat` response includes:
+
+- `response`
+- `sessionId`
+- `createdSession`
+- `requestId`
+
+Operational rules:
+
+- sessions default to `isolated`
+- intentional shared continuity must be explicit
+- use `/api/sessions/collaborate` when multiple tabs, agents, or surfaces should share one thread intentionally
+- raw sessions stay canonical even when recall later surfaces derived consolidation artifacts with `sourceSessionIds`
+- compacted day artifacts are a retrieval surface, not a replay surface
 
 ### Agent Management
 
@@ -532,6 +700,11 @@ Served by `chitragupta serve`. Default port 3141. When the Hub package is built,
 | `POST` | `/api/memory/:scope` | Append to memory |
 | `DELETE` | `/api/memory/:scope` | Delete memory |
 
+These `serve` memory routes are daemon-backed by default. Reads may degrade to limited read-only fallback if the daemon is unavailable; writes remain single-writer and require the daemon path.
+
+Valid scopes here are `global`, `project:<path>`, and `agent:<id>`.
+Session-scoped content stays in the session ledger and is accessed through session APIs, not `/api/memory/:scope`.
+
 ### Providers and Tools
 
 | Method | Endpoint | Description |
@@ -539,7 +712,9 @@ Served by `chitragupta serve`. Default port 3141. When the Hub package is built,
 | `GET` | `/api/providers` | List LLM providers |
 | `GET` | `/api/tools` | List tools |
 
-### Auth (Dvarpalaka)
+### Auth (Dvarpalaka, Serve Mode)
+
+These endpoints are for the `serve` HTTP surface. They do not replace daemon socket authentication (`auth.handshake`).
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -569,6 +744,23 @@ Served by `chitragupta serve`. Default port 3141. When the Hub package is built,
 | `GET` | `/api/rta/audit` | Audit log |
 | `GET` | `/api/decisions` | List decisions |
 | `GET` | `/api/decisions/:id/reasoning` | Nyaya reasoning |
+
+### Semantic Integrity
+
+Daemon bridge methods for semantic mirror operations:
+
+- `semantic.sync_status`
+  - inspect local and remote semantic sync state for curated consolidation artifacts
+- `semantic.sync_curated`
+  - repair local semantic sync and mirror curated artifacts to the remote semantic store
+
+These operate on:
+
+- curated day artifacts
+- curated monthly artifacts
+- curated yearly artifacts
+
+They do not treat raw turn exhaust as the canonical mirror source.
 
 ### Collective Intelligence (Phase 3)
 
@@ -610,7 +802,7 @@ Served by `chitragupta serve`. Default port 3141. When the Hub package is built,
 | `POST` | `/api/skills/learn` | Autonomous learning |
 | `POST` | `/api/skills/evaluate` | Evaluate lifecycles |
 
-### Workflows (Vayu)
+### Workflows (Prana)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|

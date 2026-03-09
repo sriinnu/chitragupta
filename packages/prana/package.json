@@ -1,0 +1,59 @@
+{
+	"name": "@chitragupta/prana",
+	"private": true,
+	"version": "0.1.0",
+	"description": "Workflow engine with DAG execution, parallel pipelines, and step orchestration",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/sriinnu/chitragupta.git",
+		"directory": "packages/prana"
+	},
+	"keywords": [
+		"chitragupta",
+		"prana",
+		"workflow",
+		"dag",
+		"pipeline",
+		"orchestration",
+		"typescript"
+	],
+	"engines": {
+		"node": ">=22"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./*": {
+			"types": "./dist/*.d.ts",
+			"import": "./dist/*.js"
+		}
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"dev": "tsc -p tsconfig.json --watch",
+		"clean": "rm -rf dist"
+	},
+	"dependencies": {
+		"@chitragupta/core": "workspace:*",
+		"@chitragupta/daemon": "workspace:*",
+		"@chitragupta/smriti": "workspace:*",
+		"@chitragupta/sutra": "workspace:*"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"homepage": "https://github.com/sriinnu/chitragupta/tree/main/packages/prana#readme",
+	"bugs": {
+		"url": "https://github.com/sriinnu/chitragupta/issues"
+	}
+}

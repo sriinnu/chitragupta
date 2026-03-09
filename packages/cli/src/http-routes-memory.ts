@@ -6,22 +6,33 @@
 import type { ChitraguptaServer } from "./http-server.js";
 import { okResponse, errorResponse } from "./server-response.js";
 import {
-	updateMemory,
-	appendMemory,
-	deleteMemory,
-	searchMemory,
-} from "@chitragupta/smriti";
-import {
 	parseScopeParam,
-	getMemoryEntry,
-	listAllScopes,
+	toMemoryScopeInfo,
 } from "./memory-api.js";
+import {
+	appendMemoryViaDaemon,
+	deleteMemoryViaDaemon,
+	getMemoryEntryViaDaemon,
+	listMemoryScopesViaDaemon,
+	searchMemoryFiles,
+	updateMemoryViaDaemon,
+} from "./modes/daemon-bridge.js";
+
+type DaemonMemoryScope =
+	| { type: "global" }
+	| { type: "project"; path: string }
+	| { type: "agent"; agentId: string };
+
+function isDaemonMemoryScope(scope: ReturnType<typeof parseScopeParam>): scope is DaemonMemoryScope {
+	return scope !== null && scope.type !== "session";
+}
 
 /** Mount all memory CRUD routes onto the server. */
 export function mountMemoryRoutes(server: ChitraguptaServer): void {
 	server.route("GET", "/api/memory/scopes", async () => {
 		try {
-			const scopes = listAllScopes();
+			const rawScopes = await listMemoryScopesViaDaemon();
+			const scopes = rawScopes.map((scope) => toMemoryScopeInfo(scope));
 			return {
 				status: 200,
 				body: okResponse({ scopes }, { count: scopes.length }),
@@ -42,7 +53,7 @@ export function mountMemoryRoutes(server: ChitraguptaServer): void {
 			const limit = typeof body.limit === "number" && body.limit > 0
 				? Math.floor(body.limit)
 				: 20;
-			const raw = searchMemory(query.trim());
+			const raw = await searchMemoryFiles(query.trim());
 			const results = raw.slice(0, limit).map((r) => ({
 				content: r.content,
 				score: r.relevance ?? 0,
@@ -61,14 +72,13 @@ export function mountMemoryRoutes(server: ChitraguptaServer): void {
 		try {
 			const scopeStr = req.params.scope;
 			const scope = parseScopeParam(scopeStr);
-			if (!scope) {
-				const isSession = scopeStr.startsWith("session:");
-				const msg = isSession
+			if (!isDaemonMemoryScope(scope)) {
+				const msg = scopeStr.startsWith("session:")
 					? "Session-scoped memory is accessed via the session API, not /api/memory"
 					: `Invalid scope format: "${scopeStr}". Use "global", "project:<path>", or "agent:<id>"`;
 				return { status: 400, body: errorResponse(msg) };
 			}
-			const entry = getMemoryEntry(scope);
+			const entry = await getMemoryEntryViaDaemon(scope);
 			return { status: 200, body: okResponse(entry) };
 		} catch (err) {
 			return { status: 500, body: errorResponse(`Failed to get memory: ${(err as Error).message}`) };
@@ -79,18 +89,15 @@ export function mountMemoryRoutes(server: ChitraguptaServer): void {
 		try {
 			const scopeStr = req.params.scope;
 			const scope = parseScopeParam(scopeStr);
-			if (!scope) {
+			if (!isDaemonMemoryScope(scope)) {
 				return { status: 400, body: { error: `Invalid scope format: "${scopeStr}"` } };
 			}
 			const body = (req.body ?? {}) as Record<string, unknown>;
 			if (typeof body.content !== "string") {
 				return { status: 400, body: { error: "Missing 'content' field in request body (must be a string)" } };
 			}
-			await updateMemory(scope, body.content);
-			return {
-				status: 200,
-				body: { scope: scopeStr, message: "Memory updated", timestamp: new Date().toISOString() },
-			};
+			const result = await updateMemoryViaDaemon(scope, body.content);
+			return { status: 200, body: { ...result, message: "Memory updated" } };
 		} catch (err) {
 			return { status: 500, body: { error: `Failed to update memory: ${(err as Error).message}` } };
 		}
@@ -100,14 +107,19 @@ export function mountMemoryRoutes(server: ChitraguptaServer): void {
 		try {
 			const scopeStr = req.params.scope;
 			const scope = parseScopeParam(scopeStr);
-			if (!scope) {
+			if (!isDaemonMemoryScope(scope)) {
 				return { status: 400, body: { error: `Invalid scope format: "${scopeStr}"` } };
 			}
 			const body = (req.body ?? {}) as Record<string, unknown>;
 			if (typeof body.entry !== "string" || body.entry.trim().length === 0) {
 				return { status: 400, body: { error: "Missing or empty 'entry' field in request body" } };
 			}
-			await appendMemory(scope, body.entry.trim());
+			const scopeRef = scope.type === "project"
+				? scope.path
+				: scope.type === "agent"
+					? scope.agentId
+					: undefined;
+			await appendMemoryViaDaemon(scope.type, body.entry.trim(), scopeRef);
 			return {
 				status: 200,
 				body: { scope: scopeStr, message: "Entry appended", timestamp: new Date().toISOString() },
@@ -121,15 +133,15 @@ export function mountMemoryRoutes(server: ChitraguptaServer): void {
 		try {
 			const scopeStr = req.params.scope;
 			const scope = parseScopeParam(scopeStr);
-			if (!scope) {
+			if (!isDaemonMemoryScope(scope)) {
 				return { status: 400, body: { error: `Invalid scope format: "${scopeStr}"` } };
 			}
-			const entry = getMemoryEntry(scope);
+			const entry = await getMemoryEntryViaDaemon(scope);
 			if (!entry.exists) {
 				return { status: 404, body: { error: `Memory not found for scope: "${scopeStr}"` } };
 			}
-			deleteMemory(scope);
-			return { status: 200, body: { scope: scopeStr, message: "Memory deleted" } };
+			const result = await deleteMemoryViaDaemon(scope);
+			return { status: 200, body: { ...result, message: "Memory deleted" } };
 		} catch (err) {
 			return { status: 500, body: { error: `Failed to delete memory: ${(err as Error).message}` } };
 		}

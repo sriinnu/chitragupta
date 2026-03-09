@@ -889,6 +889,25 @@ describe("TuriyaRouter", () => {
 			const withPreference = router.classify(ctx, { costWeight: 0.8 });
 			expect(noPreference.tier).toBe(withPreference.tier);
 		});
+
+		it("should honor minimumTier and maximumTier preference guards", () => {
+			warmUp(router, 16);
+			const ctx: TuriyaContext = {
+				complexity: 0.35, urgency: 0.1, creativity: 0.1,
+				precision: 0.2, codeRatio: 0.1, conversationDepth: 0.1, memoryLoad: 0,
+			};
+			const heavyCtx: TuriyaContext = {
+				complexity: 0.9, urgency: 0.4, creativity: 0.5,
+				precision: 0.6, codeRatio: 0.4, conversationDepth: 0.2, memoryLoad: 0.1,
+			};
+
+			const floored = router.classify(ctx, { costWeight: 1.0, minimumTier: "sonnet" });
+			const capped = router.classify(heavyCtx, { costWeight: 0.0, maximumTier: "sonnet" });
+
+			const tiers: TuriyaTier[] = ["no-llm", "haiku", "sonnet", "opus"];
+			expect(tiers.indexOf(floored.tier)).toBeGreaterThanOrEqual(tiers.indexOf("sonnet"));
+			expect(tiers.indexOf(capped.tier)).toBeLessThanOrEqual(tiers.indexOf("sonnet"));
+		});
 	});
 
 	// ─── V2: Cascade Routing ────────────────────────────────────────────────────

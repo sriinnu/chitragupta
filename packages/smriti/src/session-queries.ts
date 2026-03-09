@@ -11,87 +11,21 @@
  * DB helpers are imported from session-db.ts (no circular dependency).
  */
 
-import fs from "fs";
-import path from "path";
 import { createRequire } from "module";
 
 import { SessionError } from "@chitragupta/core";
 import type { SessionMeta, SessionTurn } from "./types.js";
-import { parseSessionMarkdown } from "./markdown-parser.js";
 import {
 	getAgentDb,
 	rowToSessionMeta,
-	getSessionsRoot,
-	getProjectSessionDir,
 } from "./session-db.js";
+export { listSessionsFromFilesystem } from "./session-queries-filesystem.js";
+import { listSessionsFromFilesystem } from "./session-queries-filesystem.js";
 
 const esmRequire = createRequire(import.meta.url);
 
 // Re-export getMaxTurnNumber from session-db so the public API stays on session-store.
 export { getMaxTurnNumber } from "./session-db.js";
-
-// ─── Filesystem Fallback ────────────────────────────────────────────────────
-
-/**
- * Legacy filesystem scan fallback.
- * Used when SQLite is unavailable or returns no rows (pre-migration state).
- *
- * @param project - Optional project path to scan sessions for.
- * @returns Array of session metadata sorted by updated timestamp descending.
- */
-export function listSessionsFromFilesystem(project?: string): SessionMeta[] {
-	const sessionsRoot = getSessionsRoot();
-	if (!fs.existsSync(sessionsRoot)) return [];
-
-	const results: SessionMeta[] = [];
-
-	if (project) {
-		const projectDir = getProjectSessionDir(project);
-		if (!fs.existsSync(projectDir)) return [];
-		results.push(...scanDirRecursive(projectDir));
-	} else {
-		const projectDirs = fs.readdirSync(sessionsRoot, { withFileTypes: true });
-		for (const entry of projectDirs) {
-			if (entry.isDirectory()) {
-				results.push(...scanDirRecursive(path.join(sessionsRoot, entry.name)));
-			}
-		}
-	}
-
-	results.sort((a, b) => new Date(b.updated).getTime() - new Date(a.updated).getTime());
-	return results;
-}
-
-/**
- * Recursively scan a directory for .md session files.
- * Handles both flat (old-style) and YYYY/MM/ (new-style) layouts.
- */
-function scanDirRecursive(dir: string): SessionMeta[] {
-	const metas: SessionMeta[] = [];
-
-	try {
-		const entries = fs.readdirSync(dir, { withFileTypes: true });
-		for (const entry of entries) {
-			const fullPath = path.join(dir, entry.name);
-			if (entry.isDirectory()) {
-				metas.push(...scanDirRecursive(fullPath));
-			} else if (entry.name.endsWith(".md")) {
-				try {
-					const content = fs.readFileSync(fullPath, "utf-8");
-					const session = parseSessionMarkdown(content);
-					metas.push(session.meta);
-				} catch (err: unknown) {
-					process.stderr.write(`[smriti:session-queries] skip unparseable file ${fullPath}: ${err instanceof Error ? err.message : String(err)}\n`);
-				}
-			}
-		}
-	} catch (err: unknown) {
-		// Directory may have been removed
-		process.stderr.write(`[smriti:session-queries] directory scan failed for ${dir}: ${err instanceof Error ? err.message : String(err)}\n`);
-	}
-
-	return metas;
-}
 
 // ─── Query API ──────────────────────────────────────────────────────────────
 
@@ -129,6 +63,32 @@ export function listSessions(project?: string): SessionMeta[] {
 
 	// Fallback: filesystem scan (for pre-migration or if SQLite fails)
 	return listSessionsFromFilesystem(project);
+}
+
+/**
+ * Resolve a specific set of session IDs without scanning unrelated sessions.
+ *
+ * Uses SQLite for indexed lookups and falls back to the filesystem listing
+ * when SQLite is unavailable.
+ *
+ * @param sessionIds - Session IDs to resolve.
+ * @returns Matching session metadata sorted by most recently updated first.
+ */
+export function listSessionsByIds(sessionIds: readonly string[]): SessionMeta[] {
+	if (sessionIds.length === 0) return [];
+
+	try {
+		const db = getAgentDb();
+		const placeholders = sessionIds.map(() => "?").join(",");
+		const rows = db.prepare(
+			`SELECT * FROM sessions WHERE id IN (${placeholders}) ORDER BY updated_at DESC`,
+		).all(...sessionIds) as Array<Record<string, unknown>>;
+		return rows.map(rowToSessionMeta);
+	} catch (err: unknown) {
+		process.stderr.write(`[smriti:session-queries] listSessionsByIds SQLite failed: ${err instanceof Error ? err.message : String(err)}\n`);
+		const wanted = new Set(sessionIds);
+		return listSessionsFromFilesystem().filter((meta) => wanted.has(meta.id));
+	}
 }
 
 /**

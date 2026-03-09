@@ -123,6 +123,23 @@ export interface RegisteredRoute {
 	handler: RouteHandler;
 }
 
+export interface SessionOpenOptions {
+	sessionId?: string;
+	title?: string;
+	clientKey?: string;
+	sessionLineageKey?: string;
+	sessionReusePolicy?: "isolated" | "same_day";
+	consumer?: string;
+	surface?: string;
+	channel?: string;
+	actorId?: string;
+}
+
+export interface PromptRequestOptions extends SessionOpenOptions {
+	onEvent?: (type: string, data: unknown) => void;
+	signal?: AbortSignal;
+}
+
 /**
  * Dependencies injected into route mounting functions.
  * Each route module uses a subset of these.
@@ -130,10 +147,13 @@ export interface RegisteredRoute {
 export interface ApiDeps {
 	getAgent: () => unknown;
 	getSession: () => unknown;
-	listSessions: () => unknown[];
+	loadSession?: (id: string) => Promise<unknown> | unknown;
+	openSession?: (options?: SessionOpenOptions) => Promise<{ id: string; created: boolean }>;
+	openSharedSession?: (options?: SessionOpenOptions) => Promise<{ id?: string; session?: unknown; created: boolean }>;
+	listSessions: () => unknown[] | Promise<unknown[]>;
 	listProviders?: () => unknown[];
 	listTools?: () => unknown[];
-	prompt?: (message: string, onEvent?: (type: string, data: unknown) => void, signal?: AbortSignal) => Promise<string>;
+	prompt?: (message: string, options?: PromptRequestOptions) => Promise<string>;
 	getVidyaOrchestrator?: () => unknown;
 	getVasanaEngine?: () => unknown;
 	getNidraDaemon?: () => unknown;
@@ -161,7 +181,10 @@ export interface ApiDeps {
 	/** Lazy getter for the P2P mesh router (for webhook→actor forwarding). */
 	getMeshRouter?: () => unknown;
 	/** P2P mesh status snapshot getter. */
-	getMeshStatus?: () => import("./mesh-bootstrap.js").MeshStatusSnapshot | undefined;
+	getMeshStatus?: () =>
+		| import("./mesh-observability.js").MeshStatusSnapshot
+		| Promise<import("./mesh-observability.js").MeshStatusSnapshot | undefined>
+		| undefined;
 	/** Connect to a remote peer endpoint. Returns true if connected. */
 	connectToPeer?: (endpoint: string) => Promise<boolean>;
 }

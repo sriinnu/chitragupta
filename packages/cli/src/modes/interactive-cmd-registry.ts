@@ -57,7 +57,7 @@ export const SLASH_COMMANDS: Array<{ name: string; description: string }> = [
 	{ name: "/kartavya", description: "Show Kartavya auto-execution pipeline" },
 	{ name: "/kala", description: "Show Kala Chakra temporal awareness" },
 	{ name: "/atman", description: "Show complete agent soul report" },
-	{ name: "/workflow", description: "Vayu DAG workflows (list/run/show/history)" },
+	{ name: "/workflow", description: "Prana workflows (list/run/show/history)" },
 	{ name: "/quit", description: "Exit Chitragupta" },
 ];
 
@@ -97,8 +97,17 @@ export interface SlashCommandContext {
 			consolidationPhase?: string;
 			consolidationProgress: number;
 			uptime: number;
-		};
-		wake(): void;
+		} | Promise<{
+			state: string;
+			lastStateChange: number;
+			lastHeartbeat: number;
+			lastConsolidationStart?: number;
+			lastConsolidationEnd?: number;
+			consolidationPhase?: string;
+			consolidationProgress: number;
+			uptime: number;
+		}>;
+		wake(): void | Promise<void>;
 	};
 }
 

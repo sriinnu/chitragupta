@@ -15,6 +15,7 @@ import { bold, dim, gray, green, cyan, yellow, red, reset, showCursor } from "@c
 import type { ProjectInfo } from "../project-detector.js";
 import { buildWelcomeMessage } from "../personality.js";
 import { BudgetTracker } from "../budget-tracker.js";
+import { applyLucyLiveGuidance } from "../nervous-system-wiring.js";
 import {
 	type SessionStats,
 	THEME,
@@ -199,10 +200,23 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 		toolStartTime: 0,
 	};
 	const handleAgentEvent = createAgentEventHandler(eventState);
-	agent.setOnEvent(handleAgentEvent);
+	const previousOnEvent = agent.getConfig().onEvent;
+	agent.setOnEvent((event, data) => {
+		handleAgentEvent(event, data);
+		previousOnEvent?.(event, data);
+	});
 
 	async function sendMessage(message: string): Promise<void> {
 		if (!message.trim()) return;
+
+		const runTurnCompleteHook = async (userMessage: string, assistantResponse: string): Promise<void> => {
+			if (!options.onTurnComplete) return;
+			try {
+				await options.onTurnComplete(userMessage, assistantResponse);
+			} catch {
+				// Session persistence is best-effort and should never break turn flow.
+			}
+		};
 
 		// Check budget limits before sending (slash commands still allowed)
 		if (eventState.budgetBlocked && !message.startsWith("/")) {
@@ -251,9 +265,7 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 					printAssistantLabel(stdout, profile.name);
 					stdout.write(memoryResponse + "\n");
 
-					if (options.onTurnComplete) {
-						options.onTurnComplete(message, memoryResponse);
-					}
+					await runTurnCompleteHook(message, memoryResponse);
 
 					renderStatusBar();
 					stdout.write("\n");
@@ -274,7 +286,8 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 		stats.turnCount++;
 
 		// ─── Smaran: per-turn memory recall (inject relevant memories) ──
-		const promptMessage = applyMemoryRecall(message, options);
+			let promptMessage = applyMemoryRecall(message, options);
+			promptMessage = await applyLucyLiveGuidance(promptMessage, message, options.project?.path);
 
 			// ─── Turiya: retroactive rephrase penalty for previous decision ──
 			applyRephrasePenalty(message, routing, options);
@@ -295,9 +308,7 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 					}
 				}
 
-				if (options.onTurnComplete) {
-					options.onTurnComplete(message, noLlmTemplateResponse);
-				}
+				await runTurnCompleteHook(message, noLlmTemplateResponse);
 
 				eventState.streamingText = noLlmTemplateResponse;
 				routing.lastUserMessage = message;
@@ -314,8 +325,8 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 			if (shikshaResult.handled) {
 				isStreaming = false;
 				kpState.isStreaming = false;
-				if (options.onTurnComplete && shikshaResult.output) {
-					options.onTurnComplete(message, shikshaResult.output);
+				if (shikshaResult.output) {
+					await runTurnCompleteHook(message, shikshaResult.output);
 				}
 				renderStatusBar();
 				stdout.write("\n");
@@ -338,9 +349,7 @@ export async function runInteractiveMode(options: InteractiveModeOptions): Promi
 			runPostTurnHooks(message, eventState.streamingText, routing, options, stdout);
 
 			// Notify caller of completed turn for session persistence
-			if (options.onTurnComplete) {
-				options.onTurnComplete(message, eventState.streamingText);
-			}
+			await runTurnCompleteHook(message, eventState.streamingText);
 
 		} catch (error) {
 			spinner.stop();

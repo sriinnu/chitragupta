@@ -1,10 +1,19 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import { resolve } from "node:path";
+
+const RUN_LIVE_SERVER_TESTS = process.env.CHITRAGUPTA_RUN_LIVE_SERVER_TESTS === "1";
+const LIVE_SERVER_TEST_EXCLUDES = RUN_LIVE_SERVER_TESTS
+	? []
+	: [
+		"packages/*/test/load/**/*.test.ts",
+		"packages/*/test/**/*.live-server.test.ts",
+	];
 
 export default defineConfig({
 	test: {
 		globals: true,
 		include: ["packages/*/test/**/*.test.ts"],
+		exclude: [...configDefaults.exclude, ...LIVE_SERVER_TEST_EXCLUDES],
 		setupFiles: [resolve(__dirname, "vitest.setup.ts")],
 		alias: {
 			"@chitragupta/core": resolve(__dirname, "packages/core/src/index.ts"),
@@ -31,7 +40,7 @@ export default defineConfig({
 			"@chitragupta/yantra": resolve(__dirname, "packages/yantra/src/index.ts"),
 			"@chitragupta/dharma": resolve(__dirname, "packages/dharma/src/index.ts"),
 			"@chitragupta/netra": resolve(__dirname, "packages/netra/src/index.ts"),
-			"@chitragupta/vayu": resolve(__dirname, "packages/vayu/src/index.ts"),
+			"@chitragupta/prana": resolve(__dirname, "packages/prana/src/index.ts"),
 			"@chitragupta/sutra": resolve(__dirname, "packages/sutra/src/index.ts"),
 			"@chitragupta/tantra": resolve(__dirname, "packages/tantra/src/index.ts"),
 			"@chitragupta/niyanta": resolve(__dirname, "packages/niyanta/src/index.ts"),

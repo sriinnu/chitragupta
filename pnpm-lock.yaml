@@ -72,6 +72,9 @@ importers:
       '@chitragupta/niyanta':
         specifier: workspace:*
         version: link:../niyanta
+      '@chitragupta/prana':
+        specifier: workspace:*
+        version: link:../prana
       '@chitragupta/smriti':
         specifier: workspace:*
         version: link:../smriti
@@ -87,9 +90,6 @@ importers:
       '@chitragupta/ui':
         specifier: workspace:*
         version: link:../ui
-      '@chitragupta/vayu':
-        specifier: workspace:*
-        version: link:../vayu
       '@chitragupta/vidhya-skills':
         specifier: workspace:*
         version: link:../vidhya-skills
@@ -107,9 +107,21 @@ importers:
       '@chitragupta/core':
         specifier: workspace:*
         version: link:../core
+      '@chitragupta/dharma':
+        specifier: workspace:*
+        version: link:../dharma
       '@chitragupta/smriti':
         specifier: workspace:*
         version: link:../smriti
+      '@chitragupta/sutra':
+        specifier: workspace:*
+        version: link:../sutra
+      '@chitragupta/tantra':
+        specifier: workspace:*
+        version: link:../tantra
+      kosha-discovery:
+        specifier: ^0.3.1
+        version: 0.3.1
     devDependencies:
       typescript:
         specifier: ^5.6.0
@@ -160,6 +172,24 @@ importers:
       '@chitragupta/core':
         specifier: workspace:*
         version: link:../core
+      '@chitragupta/sutra':
+        specifier: workspace:*
+        version: link:../sutra
+
+  packages/prana:
+    dependencies:
+      '@chitragupta/core':
+        specifier: workspace:*
+        version: link:../core
+      '@chitragupta/daemon':
+        specifier: workspace:*
+        version: link:../daemon
+      '@chitragupta/smriti':
+        specifier: workspace:*
+        version: link:../smriti
+      '@chitragupta/sutra':
+        specifier: workspace:*
+        version: link:../sutra
 
   packages/smriti:
     dependencies:
@@ -169,6 +199,12 @@ importers:
       '@chitragupta/swara':
         specifier: workspace:*
         version: link:../swara
+      '@chitragupta/tantra':
+        specifier: workspace:*
+        version: link:../tantra
+      '@sriinnu/pakt':
+        specifier: ^0.4.3
+        version: 0.4.3
       better-sqlite3:
         specifier: ^12.6.2
         version: 12.6.2
@@ -216,12 +252,6 @@ importers:
         version: link:../ui
 
   packages/ui:
-    dependencies:
-      '@chitragupta/core':
-        specifier: workspace:*
-        version: link:../core
-
-  packages/vayu:
     dependencies:
       '@chitragupta/core':
         specifier: workspace:*
@@ -706,6 +736,12 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@hono/node-server@1.19.11':
+    resolution: {integrity: sha512-dr8/3zEaB+p0D2n/IUrlPF1HZm586qgJNXK1a9fhg/PzdtkK7Ksd5l312tJX2yBuALqDYBlG20QEbayqPyxn+g==}
+    engines: {node: '>=18.14.1'}
+    peerDependencies:
+      hono: ^4
+
   '@huggingface/jinja@0.5.5':
     resolution: {integrity: sha512-xRlzazC+QZwr6z4ixEqYHo9fgwhTZ3xNSdljlKfUFGZSdlvt166DljRELFUfFytlYOYvo3vTisA/AFOuOAzFQQ==}
     engines: {node: '>=18'}
@@ -1098,6 +1134,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@sriinnu/pakt@0.4.3':
+    resolution: {integrity: sha512-x2u3X6Xyv4MTRjoNzZcGC1wELf7AD4B9majQC2PmQULNMIYrHolhqMJG7fiqhVp2S0HGj1+U+SymlL/HdThj0w==}
+    engines: {node: '>=18'}
+    hasBin: true
+
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
@@ -1395,6 +1436,9 @@ packages:
     resolution: {integrity: sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==}
     engines: {node: '>= 0.4'}
 
+  gpt-tokenizer@2.9.0:
+    resolution: {integrity: sha512-YSpexBL/k4bfliAzMrRqn3M6+it02LutVyhVpDeMKrC/O9+pCe/5s8U2hYKa2vFLD5/vHhsKc8sOn/qGqII8Kg==}
+
   guid-typescript@1.0.9:
     resolution: {integrity: sha512-Y8T4vYhEfwJOTbouREvG+3XDsjr8E3kIr7uf+JZ0BYloFsttiHU0WfvANVsR7TxNUJa/WpCnw/Ino/p+DeBhBQ==}
 
@@ -1408,6 +1452,10 @@ packages:
   he@1.2.0:
     resolution: {integrity: sha512-F/1DnUGPopORZi0ni+CvrCgHQ5FyEAHRLSApuYWMmrbSwoN2Mn/7k+Gl38gJnR7yyDZk6WLXwiGod1JOWNDKGw==}
     hasBin: true
+
+  hono@4.12.5:
+    resolution: {integrity: sha512-3qq+FUBtlTHhtYxbxheZgY8NIFnkkC/MR8u5TTsr7YZ3wixryQ3cCwn3iZbg8p8B88iDBBAYSfZDS75t8MN7Vg==}
+    engines: {node: '>=16.9.0'}
 
   ieee754@1.2.1:
     resolution: {integrity: sha512-dcyqhDvX1C46lXZcVqCpK+FtMRQVdIMN6/Df5js2zouUsqG7I6sFxitIC+7KYK29KdXOLHdu9zL4sFnoVQnqaA==}
@@ -1440,6 +1488,11 @@ packages:
 
   kolorist@1.8.0:
     resolution: {integrity: sha512-Y+60/zizpJ3HRH8DCss+q95yr6145JXZo46OTpFvDZWLfRCE4qChOyk1b26nMaNpfHHgxagk9dXT5OP0Tfe+dQ==}
+
+  kosha-discovery@0.3.1:
+    resolution: {integrity: sha512-5ce9zazGBpBrdVlDwog9w9T/Y7k1Om+GfhOvhZ2O+05O7uSe4+F9ikqTnMwVfl/30+l67UNFyGg6XKF7lFEQpA==}
+    engines: {node: '>=22'}
+    hasBin: true
 
   long@5.3.2:
     resolution: {integrity: sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA==}
@@ -2221,6 +2274,10 @@ snapshots:
   '@esbuild/win32-x64@0.27.3':
     optional: true
 
+  '@hono/node-server@1.19.11(hono@4.12.5)':
+    dependencies:
+      hono: 4.12.5
+
   '@huggingface/jinja@0.5.5':
     optional: true
 
@@ -2517,6 +2574,10 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.57.1':
     optional: true
+
+  '@sriinnu/pakt@0.4.3':
+    dependencies:
+      gpt-tokenizer: 2.9.0
 
   '@standard-schema/spec@1.1.0': {}
 
@@ -2860,6 +2921,8 @@ snapshots:
   gopd@1.2.0:
     optional: true
 
+  gpt-tokenizer@2.9.0: {}
+
   guid-typescript@1.0.9:
     optional: true
 
@@ -2871,6 +2934,8 @@ snapshots:
     optional: true
 
   he@1.2.0: {}
+
+  hono@4.12.5: {}
 
   ieee754@1.2.1: {}
 
@@ -2890,6 +2955,11 @@ snapshots:
   json5@2.2.3: {}
 
   kolorist@1.8.0: {}
+
+  kosha-discovery@0.3.1:
+    dependencies:
+      '@hono/node-server': 1.19.11(hono@4.12.5)
+      hono: 4.12.5
 
   long@5.3.2:
     optional: true

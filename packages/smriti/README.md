@@ -22,7 +22,7 @@ The Lucy neural capacity expansion system (named after the 2014 film) adds three
 - **Hybrid search (Samshodhana)** -- RRF fusion: BM25 + Vector + GraphRAG + Pramana epistemological weighting + Kala Chakra temporal boost; user-configurable weight priors blended with Thompson Sampling
 - **Session branching** -- Branch sessions like git branches and build a session tree
 - **Markdown storage** -- Sessions stored as human-readable Markdown with YAML frontmatter metadata
-- **Scoped memory** -- Global, project, agent, and session-level memory scopes
+- **Scoped memory** -- Global, project, and agent-level memory files; session memory remains part of the session ledger and is accessed through session APIs
 - **Sinkhorn-Knopp compaction** -- Nesterov-accelerated doubly stochastic mixing matrix for optimal token budget allocation; pre-compaction flush with `rollback()` support
 - **Bi-temporal edges (Dvikala)** -- Every graph edge carries valid-time and record-time axes, enabling time-travel queries and correction without data loss
 - **Memory consolidation (Samskaara)** -- Post-session pattern detection transforms raw experience into lasting knowledge rules with confidence tracking; evergreen rules exempt from temporal decay and pruning
@@ -33,9 +33,11 @@ The Lucy neural capacity expansion system (named after the 2014 film) adds three
 - **Swapna Consolidation** -- 5-phase dream cycle: REPLAY, RECOMBINE, CRYSTALLIZE, PROCEDURALIZE, COMPRESS
 - **Vidhi Engine** -- Procedural memory: n-gram extraction, anti-unification, Thompson Sampling for selection
 - **Periodic Consolidation** -- Monthly and yearly Markdown reports with FTS5 indexing
+- **Curated packed summaries** -- Daily/monthly/yearly consolidation artifacts can carry optional PAKT-packed derived summaries for transport/context packing while semantic embeddings stay on the original curated summary text
 - **Akasha** -- Stigmergic traces for indirect knowledge sharing between agents (ant colony optimization inspired)
 - **Kala Chakra** -- 7-scale temporal awareness (turn, session, day, week, month, quarter, year) with multi-scale decay; auto-initialized by default in HybridSearchEngine (disable with `disableTemporalBoost`)
 - **Provider Bridge** -- Adaptive context budget scaling with provider's context window; interrupted session detection for cross-device pickup
+- **Encrypted cross-device sync snapshots** -- PBKDF2 + AES-256-GCM envelope helpers for passphrase-protected sync transport
 - **Natasha Observer** -- Temporal trending engine: entity trend detection, error regression alerts, coding velocity tracking across hour/day/week/month windows; based on Zep/Graphiti bitemporal KG and TG-RAG hierarchical time summaries
 - **Transcendence Engine** -- Predictive context pre-fetcher: 5-source signal fusion (trends, temporal patterns, continuations, regressions, co-occurrence), LRU cache with TTL eviction, fuzzy Jaccard lookup; based on Neural Paging and MEM1 anticipatory staging
 - **Episodic Memory** -- Durable developer experience store: error signature normalization, multi-dimensional recall (error, tool, file, text), BM25 full-text search, recall frequency tracking
@@ -143,6 +145,7 @@ The Lucy neural capacity expansion system (named after the 2014 film) adds three
 ├── fact-extractor.ts                Fact extraction from session content
 ├── handover-types.ts                Handover type definitions
 ├── cross-machine-sync.ts            Cross-machine sync utilities
+├── cross-machine-sync-encrypted.ts  Encrypted snapshot envelope helpers
 ├── critique-store.ts                Self-critique persistence
 ├── orchestrator-checkpoint.ts       Sanchaalaka-Sthiti — durable orchestrator checkpoint/resume
 ├── orchestrator-checkpoint-types.ts Orchestrator checkpoint types
@@ -250,6 +253,88 @@ await appendMemory(
   "Decided to migrate from Express to Fastify."
 );
 ```
+
+### Cross-Device Sync (Encrypted)
+
+Use plaintext snapshots for trusted local flows, or encrypted envelopes for cross-device transport.
+
+```typescript
+import {
+  createCrossMachineSnapshot,
+  writeEncryptedCrossMachineSnapshot,
+  readEncryptedCrossMachineSnapshot,
+  importEncryptedCrossMachineSnapshot,
+} from "@chitragupta/smriti";
+
+const snapshot = createCrossMachineSnapshot({ includeDays: true, includeMemory: true });
+
+writeEncryptedCrossMachineSnapshot(
+  snapshot,
+  "./chitragupta-sync.enc.json",
+  process.env.CHITRAGUPTA_SYNC_PASSPHRASE!,
+);
+
+const decrypted = readEncryptedCrossMachineSnapshot(
+  "./chitragupta-sync.enc.json",
+  process.env.CHITRAGUPTA_SYNC_PASSPHRASE!,
+);
+
+importEncryptedCrossMachineSnapshot(
+  "./chitragupta-sync.enc.json",
+  process.env.CHITRAGUPTA_SYNC_PASSPHRASE!,
+  { strategy: "safe" },
+);
+```
+
+Canonical sessions + memory reference: `packages/smriti/docs/sessions-memory.md`.
+
+### Session Lineage Controls
+
+When consumers intentionally want same-thread reuse, pass explicit metadata instead of assuming one project equals one session.
+
+```typescript
+const session = createSession({
+  project: "/path/to/project",
+  agent: "vaayu",
+  model: "claude-sonnet-4-5-20250929",
+  metadata: {
+    clientKey: "vaayu:web:tab-7",
+    sessionLineageKey: "vaayu:web:checkout-review",
+    sessionReusePolicy: "same_day",
+    consumer: "vaayu",
+    surface: "api",
+    channel: "web",
+    actorId: "vaayu:tab:7",
+  },
+});
+```
+
+Default guidance:
+
+- use `isolated` for most tabs, CLIs, and jobs
+- use `same_day` only when you mean the same cognitive thread
+- keep raw sessions canonical even when recall later prefers a derived consolidated artifact
+
+### Remote Semantic Mirror
+
+Cross-device encrypted snapshot sync and the remote semantic mirror are separate things.
+
+- encrypted snapshot sync moves canonical data between trusted devices
+- remote semantic mirror sync promotes curated day/monthly/yearly artifacts for semantic recall
+
+```typescript
+import {
+  inspectRemoteSemanticSync,
+  syncRemoteSemanticMirror,
+} from "@chitragupta/smriti";
+
+const status = await inspectRemoteSemanticSync();
+console.log(status.issues);
+
+await syncRemoteSemanticMirror();
+```
+
+The remote semantic mirror should ingest curated consolidation artifacts with provenance such as `sourceSessionIds`, not raw noisy turn exhaust.
 
 ### Hybrid Search (Samshodhana)
 
@@ -649,30 +734,41 @@ The 5 phases mirror stages of sleep consolidation in neuroscience:
 Performance target: full cycle < 20 seconds for 50 sessions.
 
 ```typescript
-import { SwapnaConsolidation } from "@chitragupta/smriti";
-import type { SwapnaConfig, SwapnaResult } from "@chitragupta/smriti";
+import { DatabaseManager, SwapnaConsolidation } from "@chitragupta/smriti";
+import type { SwapnaResult } from "@chitragupta/smriti";
 
-const swapna = new SwapnaConsolidation(databaseManager, {
-  maxSessionsPerCycle: 50,
-  surpriseThreshold: 0.7,
-  minPatternFrequency: 3,
-  minSequenceLength: 2,
-  minSuccessRate: 0.8,
-  project: "/my/project",
-});
+const databaseManager = DatabaseManager.instance();
+const swapna = new SwapnaConsolidation(
+  {
+    maxSessionsPerCycle: 50,
+    surpriseThreshold: 0.7,
+    minPatternFrequency: 3,
+    minSequenceLength: 2,
+    minSuccessRate: 0.8,
+    project: "/my/project",
+    // Optional exact scope for Nidra deep-sleep or targeted replay.
+    sessionIds: ["sess-1", "sess-2"],
+  },
+  databaseManager,
+);
 
 // Run the full 5-phase dream cycle
-const result: SwapnaResult = await swapna.consolidate((phase, pct) => {
+const result: SwapnaResult = await swapna.run((phase, pct) => {
   console.log(`${phase}: ${(pct * 100).toFixed(0)}%`);
 });
 
-console.log(result.replay.highSurpriseTurns);  // Turns with novel information
-console.log(result.recombine.associations);     // Cross-session connections found
-console.log(result.crystallize.newVasanas);     // Behaviors crystallized
-console.log(result.proceduralize.newVidhis);    // Tool sequences learned
-console.log(result.compress.tokensReclaimed);   // Tokens freed via compression
-console.log(result.durationMs);                 // Total wall-clock time
+console.log(result.sourceSessionIds);                     // Canonical source sessions
+console.log(result.phases.replay.turnsScored);            // Turns scored for surprise
+console.log(result.phases.recombine.associations);        // Cross-session connections found
+console.log(result.phases.crystallize.vasanasCreated);    // Behaviors crystallized
+console.log(result.phases.proceduralize.vidhisCreated);   // Tool sequences learned
+console.log(result.phases.compress.compressionRatio);     // Compression ratio
+console.log(result.totalDurationMs);                      // Total wall-clock time
 ```
+
+Raw sessions remain canonical truth. Swapna outputs are derived artifacts and should keep provenance back to their `sourceSessionIds`.
+Curated day/monthly/yearly artifacts are also the right semantic/vector promotion boundary: promote the consolidated artifact, not the raw noisy session exhaust.
+Low-signal session detail may be compacted in day artifacts for readability, but canonical session replay must still come from the raw session ledger.
 
 ---
 
@@ -753,6 +849,8 @@ Flush checkpoints are stored under `<chitraguptaHome>/smriti/flush-checkpoints/`
 **File:** `periodic-consolidation.ts`
 
 Generates human-readable **Markdown reports** aggregating session data, vasanas, vidhis, and samskaras over calendar periods. Reports are stored under `<chitraguptaHome>/consolidated/` and indexed into FTS5 for full-text searchability.
+
+These reports are derived artifacts. Raw sessions remain canonical truth, and the generated markdown now embeds provenance metadata with source-session references so higher-level recall can drill back into raw sessions when needed.
 
 ```typescript
 import { PeriodicConsolidation } from "@chitragupta/smriti";

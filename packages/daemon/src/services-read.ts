@@ -8,13 +8,174 @@
  * @module
  */
 
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { getChitraguptaHome } from "@chitragupta/core";
 import type { RpcRouter } from "./rpc-router.js";
 import {
 	parseLimit,
 	DAEMON_START_MS,
+	normalizeParams,
 	normalizeProjectPath,
 	resolveProjectKey,
 } from "./services-helpers.js";
+import { computeLucyLiveContext, type SharedRegressionSignal } from "./lucy-live-state.js";
+
+const SHARED_SIGNAL_WINDOW_MS = 15 * 60 * 1000;
+
+type DaemonMemoryScope =
+	| { type: "global" }
+	| { type: "project"; path: string }
+	| { type: "agent"; agentId: string };
+
+function hashProject(projectPath: string): string {
+	return crypto.createHash("sha256").update(projectPath).digest("hex").slice(0, 12);
+}
+
+function serializeMemoryScope(scope: DaemonMemoryScope): string {
+	switch (scope.type) {
+		case "global":
+			return "global";
+		case "project":
+			return `project:${scope.path}`;
+		case "agent":
+			return `agent:${scope.agentId}`;
+	}
+}
+
+function resolveMemoryPath(scope: DaemonMemoryScope): string {
+	const root = path.join(getChitraguptaHome(), "memory");
+	switch (scope.type) {
+		case "global":
+			return path.join(root, "global.md");
+		case "project":
+			return path.join(root, "projects", hashProject(scope.path), "project.md");
+		case "agent":
+			return path.join(root, "agents", `${scope.agentId}.md`);
+	}
+}
+
+function parseMemoryScope(params: Record<string, unknown>): DaemonMemoryScope {
+	const rawScope = typeof params.scope === "string" ? params.scope.trim() : "";
+	if (rawScope) {
+		if (rawScope === "global") return { type: "global" };
+		if (rawScope.startsWith("project:")) {
+			const project = normalizeProjectPath(rawScope.slice("project:".length));
+			if (!project) throw new Error("Missing project scope path");
+			return { type: "project", path: project };
+		}
+		if (rawScope.startsWith("agent:")) {
+			const agentId = rawScope.slice("agent:".length).trim();
+			if (!agentId) throw new Error("Missing agent scope identifier");
+			return { type: "agent", agentId };
+		}
+		if (rawScope.startsWith("session:")) {
+			throw new Error("Session-scoped memory is accessed via the session API");
+		}
+	}
+
+	const scopeType = String(params.scopeType ?? params.type ?? "").trim();
+	switch (scopeType) {
+		case "global":
+			return { type: "global" };
+		case "project": {
+			const project = normalizeProjectPath(String(params.scopePath ?? params.path ?? params.project ?? "").trim());
+			if (!project) throw new Error("Missing scopePath for project memory");
+			return { type: "project", path: project };
+		}
+		case "agent": {
+			const agentId = String(params.agentId ?? params.scopePath ?? "").trim();
+			if (!agentId) throw new Error("Missing agentId for agent memory");
+			return { type: "agent", agentId };
+		}
+		case "session":
+			throw new Error("Session-scoped memory is accessed via the session API");
+		default:
+			throw new Error("Invalid memory scope");
+	}
+}
+
+function extractTraceProject(metadata: Record<string, unknown>): string {
+	if (typeof metadata.project === "string") {
+		return normalizeProjectPath(metadata.project);
+	}
+	if (typeof metadata.projectPath === "string") {
+		return normalizeProjectPath(metadata.projectPath);
+	}
+	if (metadata.scopeType === "project" && typeof metadata.scopePath === "string") {
+		return normalizeProjectPath(metadata.scopePath);
+	}
+	if (typeof metadata.scope === "string" && metadata.scope.startsWith("project:")) {
+		return normalizeProjectPath(metadata.scope.slice("project:".length));
+	}
+	return "";
+}
+
+function traceSignalKey(topic: string, project?: string): string {
+	return `${project ? `project:${project}` : "global"}::${topic}`;
+}
+
+async function loadScarlettRegressionSignals(
+	options: { limit?: number; project?: string } = {},
+): Promise<SharedRegressionSignal[]> {
+	const limit = options.limit ?? 12;
+	const requestedProject = normalizeProjectPath(options.project ?? "");
+	const { DatabaseManager } = await import("@chitragupta/smriti/db/database");
+	const db = DatabaseManager.instance().get("agent");
+	const rows = db.prepare(
+		`SELECT topic, content, trace_type, metadata, created_at
+		 FROM akasha_traces
+		 WHERE agent_id = ?
+		   AND created_at >= ?
+		 ORDER BY created_at DESC
+		 LIMIT ?`,
+	).all("scarlett-internal", Date.now() - SHARED_SIGNAL_WINDOW_MS, limit * 4) as Array<Record<string, unknown>>;
+
+	const healedAtByTopic = new Map<string, number>();
+	const warnings: SharedRegressionSignal[] = [];
+	for (const row of rows) {
+		let metadata: Record<string, unknown> = {};
+		try {
+			metadata = row.metadata ? JSON.parse(String(row.metadata)) as Record<string, unknown> : {};
+		} catch {
+			metadata = {};
+		}
+		const createdAt = Number(row.created_at ?? Date.now());
+		const topic = String(row.topic ?? "scarlett");
+		const traceProject = extractTraceProject(metadata);
+		if (requestedProject && traceProject && traceProject !== requestedProject) {
+			continue;
+		}
+		const traceType = String(row.trace_type ?? "");
+		const cleared = metadata.cleared === true || metadata.outcome === "success";
+		if (traceType === "correction" && cleared) {
+			const correctionKey = traceSignalKey(topic, traceProject || undefined);
+			healedAtByTopic.set(correctionKey, Math.max(healedAtByTopic.get(correctionKey) ?? 0, createdAt));
+			continue;
+		}
+		if (traceType !== "warning") continue;
+		const severityValue = String(metadata.severity ?? "warning").toLowerCase();
+		const severity = severityValue === "critical" ? "critical" : severityValue === "info" ? "info" : "warning";
+		warnings.push({
+			errorSignature: topic,
+			description: String(row.content ?? ""),
+			currentOccurrences: severity === "critical" ? 5 : severity === "warning" ? 3 : 1,
+			previousOccurrences: 0,
+			severity,
+			lastSeenBefore: new Date(Math.max(0, createdAt - 60_000)).toISOString(),
+			detectedAt: new Date(createdAt).toISOString(),
+			scope: traceProject ? "project" : "global",
+			project: traceProject || undefined,
+		});
+	}
+
+	return warnings
+		.filter((signal) => (
+			healedAtByTopic.get(traceSignalKey(signal.errorSignature, signal.project)) ?? 0
+		) < (Date.parse(signal.detectedAt) || 0))
+		.slice(0, limit);
+}
 
 // ─── Project Resolution Helpers ─────────────────────────────────────────────
 
@@ -39,6 +200,33 @@ function resolveProjectAgainstKnown(project: string, knownProjects: readonly str
 
 /** Read-through methods for memory files, day files, recall, and context. */
 export function registerReadMethods(router: RpcRouter): void {
+	router.register("lucy.live_context", async (rawParams) => {
+		const params = normalizeParams(rawParams);
+		const query = typeof params.query === "string" && params.query.trim() ? params.query.trim() : undefined;
+		const limit = parseLimit(params.limit, 5, 20);
+		const requestedProject = typeof params.project === "string"
+			? params.project
+			: typeof params.projectPath === "string"
+				? params.projectPath
+				: undefined;
+		let project: string | undefined;
+		if (requestedProject) {
+			const store = await import("@chitragupta/smriti/session-store");
+			project = resolveProjectAgainstKnown(requestedProject, knownProjectsFromStore(store));
+		}
+		const live = computeLucyLiveContext(
+			query,
+			limit,
+			await loadScarlettRegressionSignals({ limit, project }),
+			project ? { project } : undefined,
+		);
+		return {
+			predictions: live.predictions,
+			hit: live.hit,
+			liveSignals: live.liveSignals,
+		};
+	}, "Shared live Lucy/Scarlett intuition context from the daemon");
+
 	router.register("memory.unified_recall", async (params) => {
 		const query = String(params.query ?? "");
 		const limit = parseLimit(params.limit, 5);
@@ -75,6 +263,29 @@ export function registerReadMethods(router: RpcRouter): void {
 		});
 		return { results: filtered };
 	}, "Search memory markdown files");
+
+	router.register("memory.get", async (params) => {
+		const scope = parseMemoryScope(params);
+		const { getMemory } = await import("@chitragupta/smriti/memory-store");
+		const content = getMemory(scope);
+		const filePath = resolveMemoryPath(scope);
+		let exists = false;
+		let lastModified: string | undefined;
+		try {
+			if (fs.existsSync(filePath)) {
+				exists = true;
+				lastModified = fs.statSync(filePath).mtime.toISOString();
+			}
+		} catch {
+			/* best-effort stat */
+		}
+		return {
+			scope: serializeMemoryScope(scope),
+			content,
+			exists,
+			lastModified,
+		};
+	}, "Read memory content for a global, project, or agent scope");
 
 	router.register("memory.scopes", async () => {
 		const { listMemoryScopes } = await import("@chitragupta/smriti/memory-store");
@@ -147,7 +358,7 @@ export function registerDaemonMethods(
 		};
 
 		return {
-			version: "0.1.26",
+			version: "0.1.27",
 			pid: process.pid,
 			uptime: (Date.now() - DAEMON_START_MS) / 1000,
 			memory: {
@@ -187,6 +398,29 @@ export function registerDaemonMethods(
 
 /** Write methods that enforce single-writer through daemon. */
 export function registerWriteMethods(router: RpcRouter): void {
+	router.register("memory.update", async (params) => {
+		const scope = parseMemoryScope(params);
+		const content = String(params.content ?? "");
+		const { updateMemory } = await import("@chitragupta/smriti/memory-store");
+		await updateMemory(scope, content);
+		return {
+			updated: true,
+			scope: serializeMemoryScope(scope),
+			timestamp: new Date().toISOString(),
+		};
+	}, "Overwrite memory content for a global, project, or agent scope");
+
+	router.register("memory.delete", async (params) => {
+		const scope = parseMemoryScope(params);
+		const { deleteMemory } = await import("@chitragupta/smriti/memory-store");
+		deleteMemory(scope);
+		return {
+			deleted: true,
+			scope: serializeMemoryScope(scope),
+			timestamp: new Date().toISOString(),
+		};
+	}, "Delete memory for a global, project, or agent scope");
+
 	router.register("fact.extract", async (params) => {
 		const text = String(params.text ?? "");
 		let projectPath = typeof params.projectPath === "string" ? params.projectPath : undefined;

@@ -182,6 +182,26 @@ describe("AutonomousMcpManager", () => {
 			expect(manager.isCallAllowed("srv-1")).toBe(false);
 		});
 
+		it("should honor circuit breaker overrides passed to start", () => {
+			manager.stop();
+			manager.start({
+				circuitBreakerFailureThreshold: 2,
+				circuitBreakerCooldownMs: 100,
+			});
+
+			manager.recordCallFailure("srv-1");
+			expect(manager.isCallAllowed("srv-1")).toBe(true);
+
+			manager.recordCallFailure("srv-1");
+			expect(manager.isCallAllowed("srv-1")).toBe(false);
+
+			vi.advanceTimersByTime(99);
+			expect(manager.isCallAllowed("srv-1")).toBe(false);
+
+			vi.advanceTimersByTime(1);
+			expect(manager.isCallAllowed("srv-1")).toBe(true);
+		});
+
 		it("should transition from open to half-open after cooldown", () => {
 			for (let i = 0; i < 5; i++) {
 				manager.recordCallFailure("srv-1");
@@ -234,6 +254,20 @@ describe("AutonomousMcpManager", () => {
 			const states = manager.getCircuitBreakerStates();
 			const state = states.find((s) => s.serverId === "srv-1");
 			expect(state?.failureCount).toBe(0);
+		});
+
+		it("should honor circuit breaker window overrides passed to start", () => {
+			manager.stop();
+			manager.start({
+				circuitBreakerFailureThreshold: 2,
+				circuitBreakerWindowMs: 100,
+			});
+
+			manager.recordCallFailure("srv-1");
+			vi.advanceTimersByTime(101);
+			manager.recordCallFailure("srv-1");
+
+			expect(manager.isCallAllowed("srv-1")).toBe(true);
 		});
 	});
 
@@ -300,17 +334,28 @@ describe("AutonomousMcpManager", () => {
 			expect(quarantined[0].serverId).toBe("s1");
 		});
 
-		it("should auto-expire quarantine after duration", () => {
+		it("should auto-expire quarantine after duration", async () => {
 			const info = makeManagedInfo("s1");
-			(mockRegistry.getServer as ReturnType<typeof vi.fn>).mockReturnValue(info);
+			(mockRegistry.getServer as ReturnType<typeof vi.fn>).mockImplementation((serverId: string) => (
+				serverId === "s1" ? info : undefined
+			));
 			(mockRegistry.listServers as ReturnType<typeof vi.fn>).mockReturnValue([info]);
+			(mockRegistry.stopServer as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+				info.state = "stopped";
+			});
+			(mockRegistry.startServer as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+				info.state = "ready";
+				return info;
+			});
 			manager.start({
 				quarantineMaxCrashes: 1,
 				quarantineDurationMs: 5000,
+				discoveryIntervalMs: 1000,
 			});
 			mockRegistry._emit({ type: "server:state-changed", serverId: "s1", from: "ready", to: "error" });
 			expect(manager.getQuarantined()).toHaveLength(1);
-			vi.advanceTimersByTime(5001);
+			await vi.advanceTimersByTimeAsync(5001);
+			expect(mockRegistry.startServer).toHaveBeenCalledWith("s1");
 			expect(manager.getQuarantined()).toHaveLength(0);
 		});
 
@@ -318,12 +363,28 @@ describe("AutonomousMcpManager", () => {
 			const info = makeManagedInfo("s1");
 			(mockRegistry.getServer as ReturnType<typeof vi.fn>).mockReturnValue(info);
 			(mockRegistry.listServers as ReturnType<typeof vi.fn>).mockReturnValue([info]);
+			(mockRegistry.stopServer as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+				info.state = "stopped";
+			});
 			manager.start({ quarantineMaxCrashes: 1 });
 			mockRegistry._emit({ type: "server:state-changed", serverId: "s1", from: "ready", to: "error" });
 			expect(manager.getQuarantined()).toHaveLength(1);
 			manager.releaseFromQuarantine("s1");
 			expect(manager.getQuarantined()).toHaveLength(0);
 			expect(mockRegistry.startServer).toHaveBeenCalledWith("s1");
+		});
+
+		it("should restart errored servers on manual release", () => {
+			const info = makeManagedInfo("s1", "error");
+			(mockRegistry.getServer as ReturnType<typeof vi.fn>).mockReturnValue(info);
+			(mockRegistry.listServers as ReturnType<typeof vi.fn>).mockReturnValue([info]);
+			manager.start({ quarantineMaxCrashes: 1 });
+			mockRegistry._emit({ type: "server:state-changed", serverId: "s1", from: "ready", to: "error" });
+
+			manager.releaseFromQuarantine("s1");
+
+			expect(mockRegistry.restartServer).toHaveBeenCalledWith("s1");
+			expect(mockRegistry.startServer).not.toHaveBeenCalled();
 		});
 
 		it("should stop the quarantined server", () => {
@@ -333,6 +394,43 @@ describe("AutonomousMcpManager", () => {
 			manager.start({ quarantineMaxCrashes: 1 });
 			mockRegistry._emit({ type: "server:state-changed", serverId: "s1", from: "ready", to: "error" });
 			expect(mockRegistry.stopServer).toHaveBeenCalledWith("s1");
+		});
+
+		it("should retry automatic recovery after a failed restart attempt", async () => {
+			const info = makeManagedInfo("s1");
+			(mockRegistry.getServer as ReturnType<typeof vi.fn>).mockImplementation((serverId: string) => (
+				serverId === "s1" ? info : undefined
+			));
+			(mockRegistry.listServers as ReturnType<typeof vi.fn>).mockReturnValue([info]);
+			(mockRegistry.stopServer as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+				info.state = "stopped";
+			});
+
+			let startAttempts = 0;
+			(mockRegistry.startServer as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+				startAttempts++;
+				if (startAttempts === 1) {
+					info.state = "stopped";
+					throw new Error("restart failed");
+				}
+				info.state = "ready";
+				return info;
+			});
+
+			manager.start({
+				quarantineMaxCrashes: 1,
+				quarantineDurationMs: 2000,
+				discoveryIntervalMs: 1000,
+			});
+			mockRegistry._emit({ type: "server:state-changed", serverId: "s1", from: "ready", to: "error" });
+
+			await vi.advanceTimersByTimeAsync(2001);
+			expect(mockRegistry.startServer).toHaveBeenCalledTimes(1);
+			expect(manager.getQuarantined()).toHaveLength(1);
+
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(mockRegistry.startServer).toHaveBeenCalledTimes(2);
+			expect(manager.getQuarantined()).toHaveLength(0);
 		});
 	});
 

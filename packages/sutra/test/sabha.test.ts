@@ -139,6 +139,19 @@ describe("SabhaEngine — convene", () => {
 		expect(s1.id).not.toBe(s2.id);
 	});
 
+	it("generates unique IDs for identical inputs in the same millisecond", () => {
+		const engine = new SabhaEngine();
+		const participants = defaultParticipants();
+		const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+		try {
+			const s1 = engine.convene("topic", "admin", participants);
+			const s2 = engine.convene("topic", "admin", participants);
+			expect(s1.id).not.toBe(s2.id);
+		} finally {
+			nowSpy.mockRestore();
+		}
+	});
+
 	it("requires at least 2 participants", () => {
 		const engine = new SabhaEngine();
 		expect(() => engine.convene("topic", "admin", [

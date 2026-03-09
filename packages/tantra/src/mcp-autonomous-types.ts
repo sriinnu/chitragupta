@@ -54,6 +54,12 @@ export interface QuarantineInfo {
 	releaseAt: number;
 	/** Crash timestamps within the window. */
 	crashTimestamps: number[];
+	/** Whether an automatic recovery attempt is currently in flight. */
+	restartPending?: boolean;
+	/** Number of automatic recovery attempts made since quarantining. */
+	restartAttempts?: number;
+	/** When the most recent automatic recovery attempt started. */
+	lastRestartAttemptAt?: number;
 }
 
 /** Circuit breaker state for a single server. */

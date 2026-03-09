@@ -3,7 +3,7 @@
 /**
  * bundle.mjs — Bundle all Chitragupta packages into a single publishable dist/
  *
- * Prerequisites: run `pnpm -r run build` first (tsc compilation).
+ * Prerequisites: run `pnpm run build` first (workspace dependency-ordered compilation).
  * Uses esbuild with code splitting to create optimized ESM bundles.
  *
  * Output:
@@ -29,6 +29,52 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 const DIST = resolve(ROOT, "dist");
+const PUBLISH_MANIFEST = resolve(ROOT, "package.publish.json");
+const AUDITED_BUNDLE_EXTERNALS = new Set([
+	"better-sqlite3",
+	"onnxruntime-node",
+	"sqlite-vec",
+	"@aws-sdk/client-bedrock",
+]);
+
+function normalizeExternalPackage(specifier) {
+	if (!specifier || specifier.endsWith(".node")) return null;
+	if (specifier.startsWith("@")) {
+		const [scope, name] = specifier.split("/");
+		return scope && name ? `${scope}/${name}` : null;
+	}
+	if (specifier.startsWith(".")) return null;
+	const [name] = specifier.split("/");
+	return name || null;
+}
+
+function collectBundleExternals(metafile) {
+	const packages = new Set();
+	for (const input of Object.values(metafile.inputs)) {
+		for (const imp of input.imports ?? []) {
+			if (!imp.external) continue;
+			const normalized = normalizeExternalPackage(imp.path);
+			if (normalized) packages.add(normalized);
+		}
+	}
+	return Array.from(packages).sort();
+}
+
+function auditBundlePublishParity(metafile) {
+	const manifest = JSON.parse(readFileSync(PUBLISH_MANIFEST, "utf8"));
+	const declared = new Set([
+		...Object.keys(manifest.dependencies ?? {}),
+		...Object.keys(manifest.optionalDependencies ?? {}),
+	]);
+	const missing = collectBundleExternals(metafile)
+		.filter((name) => AUDITED_BUNDLE_EXTERNALS.has(name))
+		.filter((name) => !declared.has(name));
+	if (missing.length > 0) {
+		throw new Error(
+			`package.publish.json is missing bundled external dependencies: ${missing.join(", ")}`,
+		);
+	}
+}
 
 // ── Library entry points (compiled JS from tsc) ──────────────────────────────
 const PACKAGES = {
@@ -40,7 +86,7 @@ const PACKAGES = {
 	yantra: "packages/yantra/dist/index.js",
 	dharma: "packages/dharma/dist/index.js",
 	netra: "packages/netra/dist/index.js",
-	vayu: "packages/vayu/dist/index.js",
+	prana: "packages/prana/dist/index.js",
 	sutra: "packages/sutra/dist/index.js",
 	tantra: "packages/tantra/dist/index.js",
 	"vidhya-skills": "packages/vidhya-skills/dist/index.js",
@@ -76,7 +122,7 @@ async function main() {
 	if (missing.length > 0) {
 		console.error("Missing tsc output files:");
 		console.error(missing.join("\n"));
-		console.error('\nRun "pnpm -r run build" first.');
+		console.error('\nRun "pnpm run build" first.');
 		process.exit(1);
 	}
 
@@ -112,14 +158,15 @@ async function main() {
 		splitting: true,
 		sourcemap: true,
 		treeShaking: true,
-		external: [
-			"better-sqlite3",
-			"onnxruntime-node",
-			"onnxruntime-node/*",
-			"sqlite-vec",
-			"sqlite-vec/*",
-			"*.node",
-		],
+			external: [
+				"better-sqlite3",
+				"onnxruntime-node",
+				"onnxruntime-node/*",
+				"sqlite-vec",
+				"sqlite-vec/*",
+				"@aws-sdk/*",
+				"*.node",
+			],
 		logLevel: "info",
 		metafile: true,
 		// Ensure chunk filenames are clean
@@ -142,6 +189,7 @@ async function main() {
 		resolve(DIST, "meta.json"),
 		JSON.stringify(result.metafile, null, 2),
 	);
+	auditBundlePublishParity(result.metafile);
 
 	// Print summary
 	const outputs = Object.entries(result.metafile.outputs).filter(

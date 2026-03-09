@@ -63,6 +63,8 @@ import { handleDaemonCommand, handleSwapnaCommand } from "./main-subcommands.js"
 import { handleServeCommand } from "./main-serve-mode.js";
 import { wireTuiInfrastructure } from "./main-tui-wiring.js";
 import { createToolNotFoundResolver } from "./shared-factories.js";
+import { createDaemonBuddhiProxy } from "./runtime-daemon-proxies.js";
+import { enrichFromTranscendence, wireBuddhiRecorder, wireSkillGapRecorder } from "./nervous-system-wiring.js";
 import {
 	resolveSession,
 	runPratyabhijna,
@@ -238,16 +240,42 @@ export async function main(args: ParsedArgs): Promise<void> {
 		enrichedContext = enrichedContext ? enrichedContext + "\n\n" + wiring.soulPrompt : wiring.soulPrompt;
 	}
 
-	const systemPrompt = buildSystemPrompt({
+	let systemPrompt = buildSystemPrompt({
 		profile, project, contextFiles: loadContextFiles(projectPath),
 		memoryContext: enrichedContext, identityContext: wiring.identityContext,
 		tools: wiring.tools,
 	});
+	systemPrompt += await enrichFromTranscendence(projectPath);
+	let sharedAkasha: unknown;
+	try {
+		const { getAkasha } = await import("./modes/mcp-subsystems.js");
+		sharedAkasha = await getAkasha();
+	} catch {
+		sharedAkasha = undefined;
+	}
+	const skillGapRecorder = wireSkillGapRecorder(sharedAkasha, wiring.vidyaOrchestrator);
+	const buddhiRecorder = wireBuddhiRecorder(
+		createDaemonBuddhiProxy(),
+		undefined,
+		projectPath,
+		() => currentSessionId,
+	);
+	let currentSessionId: string | undefined;
 
 	// ─── 9. Resolve thinking level ──────────────────────────────────────
 	const thinkingLevel: ThinkingLevel = profile.preferredThinking ?? settings.thinkingLevel ?? "medium";
 
 	// ─── 10. Create the agent ───────────────────────────────────────────
+	const trigunaHandler = wiring.trigunaActuator
+		? (event: string, data: unknown) => {
+			if (event.startsWith("triguna:")) {
+				wiring.trigunaActuator!.handleEvent(event, data);
+			}
+		}
+		: undefined;
+	const eventHandlers = [trigunaHandler, buddhiRecorder].filter(
+		(handler): handler is (event: string, data: unknown) => void => Boolean(handler),
+	);
 	const agentConfig: AgentConfig = {
 		profile, providerId, model: modelId, tools: wiring.tools,
 		systemPrompt, thinkingLevel, workingDirectory: projectPath,
@@ -256,16 +284,20 @@ export async function main(args: ParsedArgs): Promise<void> {
 		lokapala: wiring.lokapala,
 		kaala: wiring.kaala as unknown as import("@chitragupta/anina").KaalaLifecycle | undefined,
 		enableLearning: true, enableAutonomy: true, enableMemory: true,
+		memoryBridge: wiring.memoryBridge,
 		project: projectPath,
 		chetanaConfig: { triguna: { enabled: true } },
-		onEvent: wiring.trigunaActuator
-			? (event, data) => { if (event.startsWith("triguna:")) { wiring.trigunaActuator!.handleEvent(event, data); } }
+		onEvent: eventHandlers.length > 0
+			? (event, data) => {
+				for (const handler of eventHandlers) handler(event, data);
+			}
 			: undefined,
 		// Wire 4: Persist learning-loop state across sessions
 		learningPersistPath: path.join(os.homedir(), ".chitragupta", "learning", "session-state.json"),
 		// Wire 2: Record skill gaps for SkillLearner analysis
 		onSkillGap: (toolName: string) => {
 			process.stderr.write(`[skill-gap] ${toolName}\n`);
+			skillGapRecorder(toolName);
 		},
 		onToolNotFound: createToolNotFoundResolver({
 			tools: wiring.tools,
@@ -280,39 +312,33 @@ export async function main(args: ParsedArgs): Promise<void> {
 	agent.setProvider(provider);
 
 	// ─── 10a. Load plugins ──────────────────────────────────────────────
-	try {
-		const pluginRegistry = await loadPlugins();
-		for (const pluginTool of pluginRegistry.tools) { agent.registerTool(pluginTool); }
-	} catch { /* best-effort */ }
+		try {
+			const pluginRegistry = await loadPlugins();
+			for (const pluginTool of pluginRegistry.tools) { agent.registerTool(pluginTool); }
+		} catch { /* best-effort */ }
 
-	// ─── 10a-ii. Register coding_agent tool (CLI router) ────────────────
-	agent.registerTool({
-		definition: {
-			name: "coding_agent",
-			description:
-				"Delegate a coding task to the best available coding CLI on PATH " +
-				"(takumi, claude, codex, aider, gemini). Detects available tools automatically.",
-			inputSchema: {
-				type: "object",
-				properties: {
-					task: { type: "string", description: "The coding task to accomplish." },
-				},
-				required: ["task"],
+		// ─── 10a-ii. Register coding_agent tool (CLI router) ────────────────
+		const { createCodingAgentTool } = await import("./modes/mcp-tools-coding.js");
+		const sharedCodingAgentTool = createCodingAgentTool(projectPath, {
+			sessionIdResolver: () => currentSessionId,
+			consumer: "agent:coding_agent",
+		});
+		agent.registerTool({
+			definition: sharedCodingAgentTool.definition,
+			async execute(execArgs: Record<string, unknown>): Promise<import("@chitragupta/core").ToolResult> {
+				const result = await sharedCodingAgentTool.execute(execArgs);
+				const content = result.content
+					.filter((entry): entry is { type: "text"; text: string } =>
+						entry.type === "text" && typeof entry.text === "string")
+					.map((entry) => entry.text)
+					.join("\n\n");
+				return {
+					content,
+					isError: result.isError,
+					metadata: result._metadata as Record<string, unknown> | undefined,
+				};
 			},
-		},
-		async execute(execArgs: Record<string, unknown>): Promise<import("@chitragupta/core").ToolResult> {
-			const task = String(execArgs.task ?? "");
-			if (!task) return { content: "Error: task is required", isError: true };
-			try {
-				const { routeCodingTask } = await import("./modes/coding-router.js");
-				const result = await routeCodingTask({ task, cwd: projectPath });
-				const text = `[${result.cli}] exit=${result.exitCode}\n${result.output}`;
-				return { content: text, isError: result.exitCode !== 0 };
-			} catch (err) {
-				return { content: `coding_agent failed: ${err instanceof Error ? err.message : String(err)}`, isError: true };
-			}
-		},
-	});
+		});
 
 	// ─── 10b. Register agent with KaalaBrahma ───────────────────────────
 	if (wiring.kaala) {
@@ -327,18 +353,26 @@ export async function main(args: ParsedArgs): Promise<void> {
 	}
 
 	// ─── 11. Handle session ─────────────────────────────────────────────
-	const session = resolveSession({ projectPath, profile, modelId, agent, args });
+	const session = await resolveSession({ projectPath, profile, modelId, agent, args });
+	currentSessionId = session.meta.id;
 
 	await runPratyabhijna(agent, session.meta.id, projectPath);
 
-	if (wiring.nidraDaemon) { try { wiring.nidraDaemon.start(); log.info("Nidra daemon started"); } catch { /* best-effort */ } }
+	if (wiring.nidraDaemon) {
+		try {
+			await Promise.resolve(wiring.nidraDaemon.start());
+			log.info("Nidra daemon started");
+		} catch {
+			/* best-effort */
+		}
+	}
 
 	// ─── 12. Register cleanup ───────────────────────────────────────────
 	const shutdownAll = buildShutdownFn(agent, wiring);
 
-	process.on("beforeExit", () => { shutdownAll().catch((e) => { log.debug("shutdown failed on beforeExit", { error: String(e) }); }); });
+	process.on("beforeExit", () => { shutdownAll().catch((e: unknown) => { log.debug("shutdown failed on beforeExit", { error: String(e) }); }); });
 	process.on("SIGINT", () => {
-		shutdownAll().catch((e) => { log.debug("shutdown failed on SIGINT", { error: String(e) }); }).finally(() => process.exit(0));
+		shutdownAll().catch((e: unknown) => { log.debug("shutdown failed on SIGINT", { error: String(e) }); }).finally(() => process.exit(0));
 	});
 
 	// ─── 13. Launch mode ────────────────────────────────────────────────

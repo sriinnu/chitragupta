@@ -94,4 +94,42 @@ describe("RpcRouter", () => {
 		expect(router.has("daemon.ping")).toBe(true);
 		expect(router.has("nonexistent")).toBe(false);
 	});
+
+	it("tracks connected clients and their runtime state", () => {
+		const router = new RpcRouter();
+		router.attachClient("client-1", { transport: "socket", connectedAt: 100 });
+		router.markClientSeen("client-1", { kind: "request", transport: "socket" });
+		router.updateClientPreferences("client-1", { theme: "light" });
+		router.recordObservations("client-1", [
+			{ type: "tool_usage", entity: "read", summary: "read used", severity: "info" },
+			{ type: "tool_usage", entity: "read", summary: "read used", severity: "info" },
+		]);
+
+		const client = router.getClient("client-1");
+		expect(client).toMatchObject({
+			id: "client-1",
+			transport: "socket",
+			requestCount: 1,
+			preferences: { theme: "light" },
+			observationCount: 2,
+		});
+		expect(client?.topPatterns[0]).toMatchObject({
+			type: "tool_usage",
+			entity: "read",
+			count: 2,
+		});
+	});
+
+	it("sends notifications through the configured notifier", () => {
+		const router = new RpcRouter();
+		const sent: Array<{ method: string; targets?: readonly string[] }> = [];
+		router.setNotifier((notification, targetClientIds) => {
+			sent.push({ method: notification.method, targets: targetClientIds });
+			return 1;
+		});
+
+		const delivered = router.notify("pattern.detected", { ok: true }, ["client-1"]);
+		expect(delivered).toBe(1);
+		expect(sent).toEqual([{ method: "pattern.detected", targets: ["client-1"] }]);
+	});
 });

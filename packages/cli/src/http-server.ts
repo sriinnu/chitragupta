@@ -4,8 +4,9 @@ import http from "node:http";
 import https from "node:https";
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { WebSocketServer } from "./ws-handler.js";
+import { isPairingBootstrapPath, safeCompare } from "./http-server-auth-helpers.js";
 import {
 	createLogger,
 	MetricsRegistry,
@@ -41,16 +42,6 @@ const MIME_TYPES: Record<string, string> = {
 	".jpeg": "image/jpeg", ".ico": "image/x-icon", ".woff": "font/woff",
 	".woff2": "font/woff2", ".ttf": "font/ttf", ".map": "application/json; charset=utf-8",
 };
-
-/**
- * Constant-time string comparison to prevent timing side-channel attacks.
- */
-function safeCompare(a: string, b: string): boolean {
-	const bufA = Buffer.from(a, "utf-8");
-	const bufB = Buffer.from(b, "utf-8");
-	if (bufA.length !== bufB.length) { timingSafeEqual(bufA, bufA); return false; }
-	return timingSafeEqual(bufA, bufB);
-}
 
 /** Connect-style middleware for pre-route processing. */
 export type ServerMiddleware = (
@@ -121,7 +112,18 @@ export class ChitraguptaServer {
 				if (allowedOrigin !== "*") res.setHeader("Vary", "Origin");
 			}
 			res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
-			res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, X-Request-ID");
+			res.setHeader(
+				"Access-Control-Allow-Headers",
+				[
+					"Content-Type",
+					"Authorization",
+					"X-API-Key",
+					"X-Request-ID",
+					"X-Session-ID",
+					"X-Chitragupta-Client",
+					"X-Chitragupta-Lineage",
+				].join(", "),
+			);
 			res.setHeader("Content-Type", "application/json; charset=utf-8");
 			res.setHeader("X-Request-ID", requestId);
 
@@ -331,6 +333,9 @@ export class ChitraguptaServer {
 		authEnabled: boolean, dvarapalakaEnabled: boolean,
 		authConfig?: AuthMiddlewareConfig, authToken?: string, apiKeys?: string[],
 	): Promise<AuthContext | false | "forbidden" | true> {
+		if (isPairingBootstrapPath(rawPath)) {
+			return true;
+		}
 		if (dvarapalakaEnabled && authConfig) {
 			const bridgeConfig: AuthMiddlewareConfig = {
 				...authConfig,

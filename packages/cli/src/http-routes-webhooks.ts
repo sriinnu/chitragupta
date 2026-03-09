@@ -17,7 +17,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { ChitraguptaServer } from "./http-server.js";
 import type { ParsedRequest } from "./http-server-types.js";
-import type { MeshStatusSnapshot } from "./mesh-bootstrap.js";
+import type { MeshStatusSnapshot } from "./mesh-observability.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -34,7 +34,7 @@ export interface WebhookRouteDeps {
 		route(envelope: unknown): void;
 	} | undefined;
 	/** P2P mesh status getter. */
-	getMeshStatus?: () => MeshStatusSnapshot | undefined;
+	getMeshStatus?: () => MeshStatusSnapshot | Promise<MeshStatusSnapshot | undefined> | undefined;
 	/** P2P mesh peer connection function. */
 	connectToPeer?: (endpoint: string) => Promise<boolean>;
 }
@@ -147,24 +147,36 @@ export function mountWebhookRoutes(
 
 	// ── Mesh Status ───────────────────────────────────────────────────
 	server.route("GET", "/api/mesh/status", async () => {
-		const status = deps.getMeshStatus?.();
+		const status = await deps.getMeshStatus?.();
 		if (!status) {
 			return { status: 200, body: { enabled: false, reason: "P2P mesh not bootstrapped" } };
 		}
-		return { status: 200, body: { enabled: true, ...status } };
+		return { status: 200, body: { enabled: status.p2pBootstrapped, runtimeActive: status.running, ...status } };
 	});
 
 	// ── List Peers ────────────────────────────────────────────────────
 	server.route("GET", "/api/mesh/peers", async () => {
-		const status = deps.getMeshStatus?.();
+		const status = await deps.getMeshStatus?.();
 		if (!status) {
-			return { status: 200, body: { peers: [], connectedCount: 0 } };
+			return {
+				status: 200,
+				body: {
+					localActors: [],
+					remoteGossipPeers: [],
+					peers: [],
+					connectedCount: 0,
+					p2pBootstrapped: false,
+				},
+			};
 		}
 		return {
 			status: 200,
 			body: {
+				localActors: status.localActors,
+				remoteGossipPeers: status.remoteGossipPeers,
 				peers: status.peers,
 				connectedCount: status.connectedCount,
+				p2pBootstrapped: status.p2pBootstrapped,
 			},
 		};
 	});

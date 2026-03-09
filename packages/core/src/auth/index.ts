@@ -16,6 +16,18 @@ export {
 } from "./jwt.js";
 export type { JWTConfig, JWTPayload, JWTSignInput } from "./jwt.js";
 
+// Bridge Auth
+export {
+	BridgeAuthError,
+	DEFAULT_BRIDGE_REQUIRED_SCOPE,
+	BRIDGE_KEY_PREFIX,
+	BRIDGE_KEY_PATTERN,
+	parseBridgeKey,
+	parseBridgeScopes,
+	readBridgeAuthEnv,
+	parseBridgeKeyFromEnv,
+} from "./bridge.js";
+
 // RBAC
 export {
 	RBACEngine,

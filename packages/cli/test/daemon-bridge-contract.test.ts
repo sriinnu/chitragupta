@@ -15,10 +15,11 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 
-const bridgeSource = fs.readFileSync(
-	new URL("../src/modes/daemon-bridge.ts", import.meta.url),
-	"utf-8",
-);
+const bridgeSource = [
+	"../src/modes/daemon-bridge-core.ts",
+	"../src/modes/daemon-bridge-sessions.ts",
+	"../src/modes/daemon-bridge-collective.ts",
+].map((rel) => fs.readFileSync(new URL(rel, import.meta.url), "utf-8")).join("\n");
 
 const fallbackSource = fs.readFileSync(
 	new URL("../src/modes/daemon-bridge-fallback.ts", import.meta.url),
@@ -47,7 +48,7 @@ describe("daemon-bridge fallback contract", () => {
 		});
 
 		it("is used in daemonCall catch block", () => {
-			expect(bridgeSource).toContain("if (isDaemonUnavailable(err))");
+			expect(bridgeSource).toContain("isDaemonUnavailable(err)");
 		});
 	});
 

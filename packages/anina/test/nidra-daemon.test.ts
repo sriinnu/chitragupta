@@ -1175,29 +1175,133 @@ describe("NidraDaemon", () => {
 			expect(selectCalls.length).toBeGreaterThanOrEqual(1);
 		});
 
-		it("should restore saved state from SQLite row", () => {
-			mockGet.mockReturnValue({
-				current_state: "DREAMING",
-				last_state_change: 1000,
-				last_heartbeat: 2000,
-				last_consolidation_start: 900,
-				last_consolidation_end: null,
-				consolidation_phase: "RECOMBINE",
-				consolidation_progress: 0.6,
-			});
+			it("should restore saved state from SQLite row", () => {
+				mockGet.mockReturnValue({
+					current_state: "DREAMING",
+					last_state_change: 1000,
+					last_heartbeat: 2000,
+					last_consolidation_start: 900,
+						last_consolidation_end: null,
+						consolidation_phase: "RECOMBINE",
+						consolidation_progress: 0.6,
+						consecutive_idle_dream_cycles: 2,
+						sessions_processed_since_deep_sleep: 7,
+						session_notifications_since_deep_sleep: 9,
+						pending_session_ids: JSON.stringify(["sess-a", "sess-b"]),
+						preserve_pending_sessions_on_listening: 1,
+					});
 
-			daemon = createDaemon();
-			daemon.start();
+				daemon = createDaemon();
+				daemon.start();
 
 			const snap = daemon.snapshot();
 			expect(snap.state).toBe("DREAMING");
 			expect(snap.lastStateChange).toBe(1000);
 			expect(snap.lastHeartbeat).toBe(2000);
-			expect(snap.lastConsolidationStart).toBe(900);
-			expect(snap.lastConsolidationEnd).toBeUndefined();
-			expect(snap.consolidationPhase).toBe("RECOMBINE");
-			expect(snap.consolidationProgress).toBe(0.6);
-		});
+				expect(snap.lastConsolidationStart).toBe(900);
+				expect(snap.lastConsolidationEnd).toBeUndefined();
+				expect(snap.consolidationPhase).toBe("RECOMBINE");
+					expect(snap.consolidationProgress).toBe(0.6);
+					expect(snap.consecutiveIdleDreamCycles).toBe(2);
+					expect(snap.sessionsProcessedSinceDeepSleep).toBe(7);
+					expect(snap.sessionNotificationsSinceDeepSleep).toBe(9);
+					expect(snap.pendingSessionIds).toEqual(["sess-a", "sess-b"]);
+				});
+
+			it("should restore deep-sleep counters safely when persisted row is partial", () => {
+				mockGet.mockReturnValue({
+					current_state: "DEEP_SLEEP",
+					last_state_change: 1000,
+					last_heartbeat: 2000,
+					last_consolidation_start: null,
+					last_consolidation_end: null,
+					consolidation_phase: null,
+					consolidation_progress: 0,
+				});
+
+				daemon = createDaemon();
+				daemon.start();
+
+					const snap = daemon.snapshot();
+					expect(snap.state).toBe("DEEP_SLEEP");
+					expect(snap.consecutiveIdleDreamCycles).toBe(0);
+					expect(snap.sessionsProcessedSinceDeepSleep).toBe(0);
+					expect(snap.sessionNotificationsSinceDeepSleep).toBe(0);
+					expect(snap.pendingSessionIds).toEqual([]);
+				});
+
+			it("should restore pending-session preservation intent", () => {
+				mockGet.mockReturnValue({
+					current_state: "LISTENING",
+					last_state_change: 1000,
+					last_heartbeat: 2000,
+					last_consolidation_start: null,
+					last_consolidation_end: null,
+					consolidation_phase: null,
+					consolidation_progress: 0,
+					consecutive_idle_dream_cycles: 0,
+					sessions_processed_since_deep_sleep: 2,
+					session_notifications_since_deep_sleep: 2,
+					pending_session_ids: JSON.stringify(["sess-a", "sess-b"]),
+					preserve_pending_sessions_on_listening: 1,
+				});
+
+				daemon = createDaemon();
+				daemon.start();
+
+				const snap = daemon.snapshot();
+				expect(snap.pendingSessionIds).toEqual(["sess-a", "sess-b"]);
+				expect(snap.sessionsProcessedSinceDeepSleep).toBe(2);
+			});
+
+			it("should resume the dream handler when restored directly into DREAMING", async () => {
+				const dreamFn = vi.fn(async (_progress: (phase: SwapnaPhase, pct: number) => void) => {});
+				mockGet.mockReturnValue({
+					current_state: "DREAMING",
+					last_state_change: 1000,
+					last_heartbeat: 2000,
+					last_consolidation_start: 900,
+					last_consolidation_end: null,
+					consolidation_phase: "REPLAY",
+					consolidation_progress: 0.1,
+					consecutive_idle_dream_cycles: 1,
+					sessions_processed_since_deep_sleep: 2,
+					pending_session_ids: JSON.stringify(["sess-a"]),
+				});
+
+				daemon = createDaemon();
+				daemon.onDream(dreamFn);
+				daemon.start();
+				await vi.advanceTimersByTimeAsync(0);
+
+				expect(daemon.snapshot().state).toBe("DREAMING");
+				expect(dreamFn).toHaveBeenCalledOnce();
+			});
+
+			it("should resume deep-sleep consolidation when restored directly into DEEP_SLEEP", async () => {
+				const consolidateFn = vi.fn(async (_ids: readonly string[]) => {});
+				mockGet.mockReturnValue({
+					current_state: "DEEP_SLEEP",
+					last_state_change: 1000,
+					last_heartbeat: 2000,
+					last_consolidation_start: null,
+					last_consolidation_end: null,
+					consolidation_phase: null,
+					consolidation_progress: 0,
+					consecutive_idle_dream_cycles: 0,
+					sessions_processed_since_deep_sleep: 2,
+					pending_session_ids: JSON.stringify(["sess-a", "sess-b"]),
+				});
+
+				daemon = createDaemon();
+				daemon.onDeepSleepConsolidation(consolidateFn);
+				daemon.start();
+				await vi.advanceTimersByTimeAsync(0);
+
+				expect(daemon.snapshot().state).toBe("DEEP_SLEEP");
+				expect(consolidateFn).toHaveBeenCalledOnce();
+				expect(consolidateFn).toHaveBeenCalledWith(["sess-a", "sess-b"]);
+			});
 
 		it("should start fresh in LISTENING if no saved row", () => {
 			mockGet.mockReturnValue(undefined);
@@ -1380,9 +1484,9 @@ describe("NidraDaemon", () => {
 			expect(daemon.snapshot().state).toBe("LISTENING");
 		});
 
-		it("should persist state with correct values on transition", () => {
-			daemon = createDaemon();
-			daemon.start();
+			it("should persist state with correct values on transition", () => {
+				daemon = createDaemon();
+				daemon.start();
 
 			mockRun.mockClear();
 			vi.advanceTimersByTime(1001);
@@ -1393,12 +1497,28 @@ describe("NidraDaemon", () => {
 				(c) => c.length >= 8 && c[0] === "DREAMING"
 			);
 			expect(persistCall).toBeDefined();
-			if (persistCall) {
-				expect(persistCall[0]).toBe("DREAMING"); // current_state
-				expect(typeof persistCall[1]).toBe("number"); // last_state_change
-				expect(typeof persistCall[2]).toBe("number"); // last_heartbeat
-			}
-		});
+				if (persistCall) {
+					expect(persistCall[0]).toBe("DREAMING"); // current_state
+					expect(typeof persistCall[1]).toBe("number"); // last_state_change
+					expect(typeof persistCall[2]).toBe("number"); // last_heartbeat
+				}
+			});
+
+			it("should persist deep-sleep counters and pending session IDs", () => {
+				daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 5 });
+				daemon.start();
+
+				mockRun.mockClear();
+				daemon.notifySession("persist-s1");
+				daemon.notifySession("persist-s2");
+
+				expect(mockRun.mock.calls).toEqual(
+					expect.arrayContaining([
+						expect.arrayContaining([0, 1, 1, JSON.stringify(["persist-s1"])]),
+						expect.arrayContaining([0, 2, 2, JSON.stringify(["persist-s1", "persist-s2"])]),
+					]),
+				);
+			});
 
 		it("should handle concurrent dream progress and wake gracefully", async () => {
 			let progressCalled = 0;
@@ -1453,6 +1573,7 @@ describe("NidraDaemon", () => {
 			const snap = daemon.snapshot();
 			expect(snap.consecutiveIdleDreamCycles).toBe(0);
 			expect(snap.sessionsProcessedSinceDeepSleep).toBe(0);
+			expect(snap.sessionNotificationsSinceDeepSleep).toBe(0);
 			expect(snap.pendingSessionIds).toEqual([]);
 		});
 
@@ -1462,6 +1583,7 @@ describe("NidraDaemon", () => {
 			daemon.notifySession("sess-1");
 			const snap = daemon.snapshot();
 			expect(snap.sessionsProcessedSinceDeepSleep).toBe(1);
+			expect(snap.sessionNotificationsSinceDeepSleep).toBe(1);
 			expect(snap.pendingSessionIds).toContain("sess-1");
 		});
 
@@ -1472,8 +1594,21 @@ describe("NidraDaemon", () => {
 			daemon.notifySession("sess-dup");
 			const snap = daemon.snapshot();
 			expect(snap.pendingSessionIds.filter((id) => id === "sess-dup").length).toBe(1);
-			// sessionsProcessedSinceDeepSleep counts calls, not unique IDs
+			expect(snap.sessionsProcessedSinceDeepSleep).toBe(1);
+			expect(snap.sessionNotificationsSinceDeepSleep).toBe(2);
+		});
+
+		it("should force DEEP_SLEEP only from unique session count, not repeated notifications", () => {
+			daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 2 });
+			daemon.start();
+			daemon.notifySession("sess-a");
+			daemon.notifySession("sess-a");
+			expect(daemon.snapshot().state).toBe("LISTENING");
+			daemon.notifySession("sess-b");
+			const snap = daemon.snapshot();
+			expect(snap.state).toBe("DEEP_SLEEP");
 			expect(snap.sessionsProcessedSinceDeepSleep).toBe(2);
+			expect(snap.sessionNotificationsSinceDeepSleep).toBe(3);
 		});
 
 		it("should track consecutive idle dream cycles in snapshot", () => {
@@ -1518,18 +1653,21 @@ describe("NidraDaemon", () => {
 			expect(daemon.snapshot().state).toBe("DEEP_SLEEP");
 		});
 
-		it("should wake from DEEP_SLEEP to LISTENING on notifySession()", () => {
-			daemon = createDaemon();
-			daemon.start();
+			it("should wake from DEEP_SLEEP to LISTENING on notifySession()", () => {
+				daemon = createDaemon();
+				daemon.start();
 
 			// Enter DEEP_SLEEP via normal timer path
 			vi.advanceTimersByTime(1001 + 2001);
 			expect(daemon.snapshot().state).toBe("DEEP_SLEEP");
 
-			// New session arrives — should wake
-			daemon.notifySession("wake-sess");
-			expect(daemon.snapshot().state).toBe("LISTENING");
-		});
+				// New session arrives — should wake
+				daemon.notifySession("wake-sess");
+				expect(daemon.snapshot().state).toBe("LISTENING");
+				expect(daemon.snapshot().pendingSessionIds).toEqual(["wake-sess"]);
+				expect(daemon.snapshot().sessionsProcessedSinceDeepSleep).toBe(1);
+				expect(daemon.snapshot().sessionNotificationsSinceDeepSleep).toBe(1);
+			});
 
 		it("should reset session counters when transitioning to LISTENING", () => {
 			daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 5 });
@@ -1538,11 +1676,13 @@ describe("NidraDaemon", () => {
 			daemon.notifySession("s1");
 			daemon.notifySession("s2");
 			expect(daemon.snapshot().sessionsProcessedSinceDeepSleep).toBe(2);
+			expect(daemon.snapshot().sessionNotificationsSinceDeepSleep).toBe(2);
 
 			// Full cycle back to LISTENING
 			vi.advanceTimersByTime(1001 + 2001 + 3001);
 			expect(daemon.snapshot().state).toBe("LISTENING");
 			expect(daemon.snapshot().sessionsProcessedSinceDeepSleep).toBe(0);
+			expect(daemon.snapshot().sessionNotificationsSinceDeepSleep).toBe(0);
 			expect(daemon.snapshot().pendingSessionIds).toEqual([]);
 		});
 
@@ -1563,21 +1703,102 @@ describe("NidraDaemon", () => {
 			expect(passedIds).toContain("s2");
 		});
 
-		it("deepSleepConsolidationHandler should supersede legacy deepSleepHandler", async () => {
-			const legacyFn = vi.fn(async () => {});
-			const consolidateFn = vi.fn(async (_ids: readonly string[]) => {});
-			daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 1 });
-			daemon.onDeepSleep(legacyFn);
+			it("deepSleepConsolidationHandler should supersede legacy deepSleepHandler", async () => {
+				const legacyFn = vi.fn(async () => {});
+				const consolidateFn = vi.fn(async (_ids: readonly string[]) => {});
+				daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 1 });
+				daemon.onDeepSleep(legacyFn);
 			daemon.onDeepSleepConsolidation(consolidateFn);
 			daemon.start();
 
 			daemon.notifySession("s1");
 			expect(daemon.snapshot().state).toBe("DEEP_SLEEP");
 
-			await vi.advanceTimersByTimeAsync(0);
-			expect(consolidateFn).toHaveBeenCalledOnce();
-			expect(legacyFn).not.toHaveBeenCalled();
-		});
+				await vi.advanceTimersByTimeAsync(0);
+				expect(consolidateFn).toHaveBeenCalledOnce();
+				expect(legacyFn).not.toHaveBeenCalled();
+			});
+
+			it("should persist consumed pending session IDs after deep-sleep consolidation", async () => {
+				const consolidateFn = vi.fn(async (_ids: readonly string[]) => {});
+				daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 1 });
+				daemon.onDeepSleepConsolidation(consolidateFn);
+				daemon.start();
+
+				mockRun.mockClear();
+				daemon.notifySession("s1");
+				await vi.advanceTimersByTimeAsync(0);
+
+				expect(daemon.snapshot().pendingSessionIds).toEqual([]);
+				expect(mockRun.mock.calls.some((call) => call[10] === JSON.stringify([]))).toBe(true);
+			});
+
+				it("should keep unprocessed pending session IDs after partial deep-sleep consolidation", async () => {
+					const consolidateFn = vi.fn(async (ids: readonly string[]) => ids.filter((id) => id !== "s2"));
+					daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 2 });
+				daemon.onDeepSleepConsolidation(consolidateFn);
+				daemon.start();
+
+				daemon.notifySession("s1");
+				daemon.notifySession("s2");
+				await vi.advanceTimersByTimeAsync(0);
+
+					expect(daemon.snapshot().pendingSessionIds).toEqual(["s2"]);
+				});
+
+				it("should retain unprocessed pending session IDs after returning to LISTENING", async () => {
+					const consolidateFn = vi.fn(async (ids: readonly string[]) => ids.filter((id) => id !== "s2"));
+					daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 2 });
+					daemon.onDeepSleepConsolidation(consolidateFn);
+					daemon.start();
+
+					daemon.notifySession("s1");
+					daemon.notifySession("s2");
+					await vi.advanceTimersByTimeAsync(0);
+					expect(daemon.snapshot().state).toBe("DEEP_SLEEP");
+					expect(daemon.snapshot().pendingSessionIds).toEqual(["s2"]);
+
+					await vi.advanceTimersByTimeAsync(3001);
+					expect(daemon.snapshot().state).toBe("LISTENING");
+					expect(daemon.snapshot().pendingSessionIds).toEqual(["s2"]);
+					expect(daemon.snapshot().sessionsProcessedSinceDeepSleep).toBe(1);
+					expect(daemon.snapshot().sessionNotificationsSinceDeepSleep).toBe(0);
+				});
+
+				it("should ignore stale deep-sleep completion after wake and re-entry", async () => {
+					const runResolvers: Array<(value: readonly string[]) => void> = [];
+					const consolidateFn = vi.fn(
+						() =>
+							new Promise<readonly string[]>((resolve) => {
+								runResolvers.push(resolve);
+							}),
+					);
+					daemon = createDaemon({ ...FAST_CONFIG, sessionCountThreshold: 2 });
+					daemon.onDeepSleepConsolidation(consolidateFn);
+					daemon.start();
+
+					daemon.notifySession("s1");
+					daemon.notifySession("s2");
+					expect(daemon.snapshot().state).toBe("DEEP_SLEEP");
+
+					daemon.wake();
+					expect(daemon.snapshot().state).toBe("LISTENING");
+					expect(daemon.snapshot().pendingSessionIds).toEqual(["s1", "s2"]);
+
+					daemon.notifySession("s3");
+					expect(daemon.snapshot().state).toBe("DEEP_SLEEP");
+					expect(consolidateFn).toHaveBeenCalledTimes(2);
+
+					runResolvers[0]?.(["s1", "s2"]);
+					await vi.advanceTimersByTimeAsync(0);
+
+					expect(daemon.snapshot().state).toBe("DEEP_SLEEP");
+					expect(daemon.snapshot().pendingSessionIds).toEqual(["s1", "s2", "s3"]);
+
+					runResolvers[1]?.(["s1", "s2"]);
+					await vi.advanceTimersByTimeAsync(0);
+					expect(daemon.snapshot().pendingSessionIds).toEqual(["s3"]);
+				});
 
 		it("should not crash if notifySession() called on disposed daemon", () => {
 			daemon = createDaemon();

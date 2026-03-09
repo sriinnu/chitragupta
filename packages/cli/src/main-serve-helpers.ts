@@ -5,44 +5,31 @@
  * Extracted from main-serve-mode.ts to keep both files under 450 LOC.
  */
 
-import type { AgentConfig, ToolHandler } from "@chitragupta/anina";
-import { Agent } from "@chitragupta/anina";
-import type { AgentProfile, ChitraguptaSettings } from "@chitragupta/core";
-
-import { createLogger, DEFAULT_FALLBACK_MODEL } from "@chitragupta/core";
-import type { ProviderDefinition } from "@chitragupta/swara";
+import type { ToolHandler } from "@chitragupta/anina";
+import { createLogger } from "@chitragupta/core";
 import { getAllTools } from "@chitragupta/yantra";
 import path from "path";
-import { loadProjectMemory } from "./bootstrap.js";
-import { loadContextFiles } from "./context-files.js";
-import { buildSystemPrompt } from "./personality.js";
-import type { ProjectInfo } from "./project-detector.js";
-import { createToolNotFoundResolver } from "./shared-factories.js";
+import {
+	allowLocalRuntimeFallback,
+	createDaemonAkashaProxy,
+	createDaemonBuddhiProxy,
+	createDaemonNidraProxy,
+	createDaemonSabhaProxy,
+} from "./runtime-daemon-proxies.js";
+import { createSabhaProvider } from "./shared-factories.js";
+import {
+	wireAkashaDurability, leaveAkashaTrace,
+} from "./nervous-system-wiring.js";
+import type { ServeCleanups, ServePhaseModules } from "./main-serve-types.js";
 
 const log = createLogger("cli:main-serve-helpers");
 
-/** Phase modules wired for serve mode. All fields are optional/unknown since each is best-effort. */
-export interface ServePhaseModules {
-	vasanaEngine: unknown;
-	vidhiEngine: unknown;
-	servNidraDaemon: unknown;
-	servTriguna: unknown;
-	servRtaEngine: unknown;
-	servBuddhi: unknown;
-	servDatabase: unknown;
-	servSamiti: unknown;
-	servSabhaEngine: unknown;
-	servLokapala: unknown;
-	servAkasha: unknown;
-	servKartavyaEngine: unknown;
-	servKalaChakra: unknown;
-	servVidyaOrchestrator: unknown;
-}
-
-export interface ServeCleanups {
-	skillWatcherCleanups: Array<() => void>;
-	servKartavyaDispatcher?: { start(): void; stop(): void };
-}
+export type { ServeCleanups, ServePhaseModules } from "./main-serve-types.js";
+export {
+	createServerAgent,
+	type CreateServerAgentParams,
+	type ServerAgentRefs,
+} from "./main-serve-agent.js";
 
 /** Provision TLS certificates via Kavach if enabled. */
 export async function provisionTlsCerts(noTls?: boolean): Promise<import("./tls/tls-types.js").TlsCertificates | undefined> {
@@ -96,16 +83,27 @@ export async function wireServePhaseModules(
 		log.debug("Self-evolution modules unavailable", { error: String(e) });
 	}
 	try {
-		const { NidraDaemon: N } = await import("@chitragupta/anina");
-		m.servNidraDaemon = new N({
-			idleTimeoutMs: 300_000,
-			dreamDurationMs: 600_000,
-			deepSleepDurationMs: 1_800_000,
-			project: projectPath,
-		});
-		(m.servNidraDaemon as { start: () => void }).start();
+		m.servNidraDaemon = createDaemonNidraProxy();
+		const { getNidraStatusViaDaemon } = await import("./modes/daemon-bridge.js");
+		await getNidraStatusViaDaemon();
+		log.info("Serve mode using daemon-backed Nidra proxy");
 	} catch (e) {
-		log.debug("NidraDaemon unavailable", { error: String(e) });
+		if (!allowLocalRuntimeFallback()) {
+			log.warn("Daemon-backed Nidra startup probe failed; keeping deferred daemon proxy", { error: String(e) });
+		} else {
+			try {
+				const { NidraDaemon: N } = await import("@chitragupta/anina");
+				m.servNidraDaemon = new N({
+					idleTimeoutMs: 300_000,
+					dreamDurationMs: 600_000,
+					deepSleepDurationMs: 1_800_000,
+					project: projectPath,
+				});
+				(m.servNidraDaemon as { start: () => void }).start();
+			} catch (inner) {
+				log.debug("NidraDaemon unavailable", { error: String(inner) });
+			}
+		}
 	}
 
 	// Phase 2: Intelligence Layer
@@ -122,10 +120,21 @@ export async function wireServePhaseModules(
 		log.debug("RtaEngine unavailable", { error: String(e) });
 	}
 	try {
-		const { Buddhi } = await import("@chitragupta/anina");
-		m.servBuddhi = new Buddhi();
+		m.servBuddhi = createDaemonBuddhiProxy();
+		const { listBuddhiDecisionsViaDaemon } = await import("./modes/daemon-bridge.js");
+		await listBuddhiDecisionsViaDaemon({ limit: 1 });
+		log.info("Serve mode using daemon-backed Buddhi proxy");
 	} catch (e) {
-		log.debug("Buddhi unavailable", { error: String(e) });
+		if (!allowLocalRuntimeFallback()) {
+			log.warn("Daemon-backed Buddhi startup probe failed; keeping deferred daemon proxy", { error: String(e) });
+		} else {
+			try {
+				const { Buddhi } = await import("@chitragupta/anina");
+				m.servBuddhi = new Buddhi();
+			} catch (inner) {
+				log.debug("Buddhi unavailable", { error: String(inner) });
+			}
+		}
 	}
 	try {
 		const { DatabaseManager } = await import("@chitragupta/smriti");
@@ -136,9 +145,9 @@ export async function wireServePhaseModules(
 
 	// Phase 3: Collaboration
 	try {
-		const { Samiti, SabhaEngine } = await import("@chitragupta/sutra");
+		const { Samiti } = await import("@chitragupta/sutra");
 		m.servSamiti = new Samiti();
-		m.servSabhaEngine = new SabhaEngine();
+		m.servSabhaEngine = createDaemonSabhaProxy();
 	} catch (e) {
 		log.debug("Collaboration modules unavailable", { error: String(e) });
 	}
@@ -149,11 +158,53 @@ export async function wireServePhaseModules(
 		log.debug("LokapalaController unavailable", { error: String(e) });
 	}
 	try {
-		const { AkashaField } = await import("@chitragupta/smriti");
-		m.servAkasha = new AkashaField();
+		m.servAkasha = createDaemonAkashaProxy();
+		await (m.servAkasha as { stats: () => Promise<unknown> }).stats();
+		log.info("Serve mode using daemon-backed Akasha proxy");
 	} catch (e) {
-		log.debug("AkashaField unavailable", { error: String(e) });
+		if (!allowLocalRuntimeFallback()) {
+			log.warn("Daemon-backed Akasha startup probe failed; keeping deferred daemon proxy", { error: String(e) });
+			if (!m.servAkasha) {
+				m.servAkasha = createDaemonAkashaProxy();
+			}
+		} else {
+			try {
+				const { getAkasha } = await import("./modes/mcp-subsystems.js");
+				m.servAkasha = await getAkasha();
+				if (await wireAkashaDurability(m.servAkasha)) {
+					log.info("Akasha durability wired for serve mode");
+				} else {
+					log.info("Serve mode using daemon-backed/shared Akasha");
+				}
+			} catch (inner) {
+				log.debug("AkashaField unavailable", { error: String(inner) });
+			}
+		}
 	}
+
+		// Wire Lokapala findings → Akasha deposit (warning/critical only)
+		if (m.servLokapala && m.servAkasha) {
+			try {
+				type LF = { domain: string; severity: string; title: string; description: string; location?: string; confidence: number };
+				const lok = m.servLokapala as { onFinding(h: (f: LF) => void): () => void };
+				c.lokapalaUnsub = lok.onFinding((f) => {
+					if (f.severity === "info") return;
+					leaveAkashaTrace(m.servAkasha, {
+						agentId: "lokapala",
+						type: "warning",
+						topic: f.domain,
+						content: `[${f.severity}] ${f.title}: ${f.description}${f.location ? ` (${f.location})` : ""}`,
+						metadata: {
+							title: f.title,
+							severity: f.severity,
+							location: f.location,
+							confidence: f.confidence,
+						},
+					});
+				});
+				log.info("Lokapala → Akasha trace wired");
+			} catch { /* best-effort */ }
+		}
 
 	// Phase 4: Autonomy
 	const toolHandlers = new Map<string, ToolHandler>(getAllTools().map((t) => [t.definition.name, t]));
@@ -174,7 +225,13 @@ export async function wireServePhaseModules(
 	};
 	try {
 		const { KartavyaEngine } = await import("@chitragupta/niyanta");
-		m.servKartavyaEngine = new KartavyaEngine();
+		// Wire 8: Sabha risk gate — KartavyaEngine routes high-confidence
+		// niyama proposals through Sabha LLM deliberation before approval.
+		const sabhaProvider = await createSabhaProvider();
+		m.servKartavyaEngine = new KartavyaEngine(
+			sabhaProvider ? { sabhaProvider } as Partial<ConstructorParameters<typeof KartavyaEngine>[0]> : undefined,
+		);
+		if (sabhaProvider) log.info("Wire 8: Sabha risk gate active for KartavyaEngine");
 		try {
 			const { KartavyaDispatcher } = await import("@chitragupta/niyanta");
 			const d = new KartavyaDispatcher(
@@ -264,177 +321,4 @@ export async function wireServePhaseModules(
 	}
 
 	return { modules: m, cleanups: c };
-}
-
-export interface CreateServerAgentParams {
-	servResolved: { providerId: string; provider: ProviderDefinition };
-	profile: AgentProfile;
-	settings: ChitraguptaSettings;
-	project: ProjectInfo;
-	projectPath: string;
-	modules: ServePhaseModules;
-	args: { model?: string };
-}
-
-export interface ServerAgentRefs {
-	kaalaRef?: { dispose(): void };
-	actorShutdownRef?: () => void;
-	commHubDestroyRef?: () => void;
-}
-
-/** Create the server agent with full mesh infrastructure. */
-export async function createServerAgent(params: CreateServerAgentParams): Promise<{ result: Agent; refs: ServerAgentRefs }> {
-	const { servResolved, profile, settings, project, projectPath, modules, args } = params;
-	const { providerId, provider } = servResolved;
-	const modelId = args.model ?? profile.preferredModel ?? settings.defaultModel ?? DEFAULT_FALLBACK_MODEL;
-	const tools = getAllTools();
-
-	const contextFiles = loadContextFiles(projectPath);
-	const memory = loadProjectMemory(projectPath);
-	const systemPrompt = buildSystemPrompt({ profile, project, contextFiles, memoryContext: memory ?? undefined, tools });
-
-	const { createPolicyAdapter, createMeshInfrastructure } = await import("./shared-factories.js");
-	const mesh = await createMeshInfrastructure();
-
-	let commHub: AgentConfig["commHub"];
-	let commHubDestroy: (() => void) | undefined;
-	try {
-		const { CommHub } = await import("@chitragupta/sutra");
-		const h = new CommHub({ enableLogging: false });
-		commHub = h as unknown as AgentConfig["commHub"];
-		commHubDestroy = () => h.destroy();
-	} catch {
-		/* best-effort */
-	}
-
-	const policyEngine = await createPolicyAdapter({ sessionId: "coding-serve", agentId: "kartru", projectPath });
-
-	const agentConfig: AgentConfig = {
-		profile,
-		providerId,
-		model: modelId,
-		tools,
-		systemPrompt,
-		thinkingLevel: profile.preferredThinking ?? settings.thinkingLevel ?? "medium",
-		workingDirectory: projectPath,
-		policyEngine,
-		commHub,
-		actorSystem: mesh.actorSystem,
-		samiti: modules.servSamiti as unknown as import("@chitragupta/anina").MeshSamiti | undefined,
-		lokapala: modules.servLokapala as unknown as import("@chitragupta/anina").LokapalaGuardians | undefined,
-		kaala: mesh.kaala as unknown as AgentConfig["kaala"],
-		enableLearning: true,
-		enableAutonomy: true,
-		enableMemory: true,
-		project: projectPath,
-		onToolNotFound: createToolNotFoundResolver({
-			tools,
-			vidyaOrchestrator: modules.servVidyaOrchestrator as
-				| {
-						bridge?: { getSkillForTool(toolName: string): { name: string } | null };
-						recommend?(query: string): Array<{ skill?: { name?: string }; score?: number }>;
-				  }
-				| undefined,
-			onGap: (toolName: string) => {
-				try {
-					log.debug("tool-not-found", { toolName });
-				} catch {
-					/* best-effort */
-				}
-			},
-		}),
-	};
-
-	const agent = new Agent(agentConfig);
-	agent.setProvider(provider);
-
-	// Register with KaalaBrahma
-	if (mesh.kaala) {
-		try {
-			(mesh.kaala as unknown as { registerAgent(info: Record<string, unknown>): void }).registerAgent({
-				agentId: agent.id,
-				lastBeat: Date.now(),
-				startedAt: Date.now(),
-				turnCount: 0,
-				tokenUsage: 0,
-				status: "alive",
-				parentId: null,
-				depth: 0,
-				purpose: "HTTP server agent",
-				tokenBudget: 200_000,
-			});
-			(mesh.kaala as unknown as { startMonitoring(): void }).startMonitoring();
-			if (modules.servSamiti) {
-				(
-					mesh.kaala as unknown as { onStatusChange(cb: (id: string, o: string, n: string) => void): () => void }
-				).onStatusChange((id, o, n) => {
-					try {
-						(modules.servSamiti as unknown as { broadcast(ch: string, msg: Record<string, unknown>): void }).broadcast(
-							"#alerts",
-							{
-								sender: "kaala-brahma",
-								severity: n === "error" ? "warning" : "info",
-								category: "lifecycle",
-								content: `Agent ${id}: ${o} → ${n}`,
-							},
-						);
-					} catch {
-						/* best-effort */
-					}
-				});
-			}
-		} catch {
-			/* best-effort */
-		}
-	}
-
-	// Wire deep-sleep handler
-	if (modules.servNidraDaemon) {
-		try {
-			(modules.servNidraDaemon as { onDeepSleep(cb: () => Promise<void>): void }).onDeepSleep(async () => {
-				try {
-					const { DatabaseManager } = await import("@chitragupta/smriti");
-					const dbm = DatabaseManager.instance();
-					for (const dbName of ["agent", "graph", "vectors"] as const) {
-						try {
-							const d = dbm.get(dbName);
-							d.pragma("wal_checkpoint(TRUNCATE)");
-							d.exec("VACUUM");
-						} catch {
-							/* best-effort */
-						}
-					}
-					try {
-						dbm.get("agent").exec(`INSERT INTO turns_fts(turns_fts) VALUES('optimize')`);
-					} catch {
-						/* best-effort */
-					}
-					try {
-						dbm
-							.get("agent")
-							.exec(
-								`DELETE FROM consolidation_log WHERE rowid NOT IN (SELECT rowid FROM consolidation_log ORDER BY created_at DESC LIMIT 100)`,
-							);
-					} catch {
-						/* best-effort */
-					}
-				} catch {
-					/* best-effort */
-				}
-			});
-		} catch {
-			/* best-effort */
-		}
-	}
-
-	log.info("Server agent created", { providerId, model: modelId });
-
-	return {
-		result: agent,
-		refs: {
-			kaalaRef: mesh.kaala ? (mesh.kaala as unknown as { dispose(): void }) : undefined,
-			actorShutdownRef: mesh.actorSystemShutdown,
-			commHubDestroyRef: commHubDestroy,
-		},
-	};
 }

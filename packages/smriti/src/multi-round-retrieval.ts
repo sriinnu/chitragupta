@@ -30,7 +30,6 @@ import {
 	decomposeQuery,
 	generateFollowUpQueries,
 } from "./query-decomposition.js";
-
 // Re-export decomposition utilities so downstream consumers can still
 // import everything from this module (preserves backward compatibility).
 export {

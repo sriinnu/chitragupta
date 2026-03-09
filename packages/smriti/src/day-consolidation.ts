@@ -35,6 +35,11 @@ import { resolveSessionProvider } from "./provider-labels.js";
 import { FactExtractor } from "./fact-extractor.js";
 import { DAY_CONSOLIDATION_FORMAT_VERSION, generateDayMarkdown } from "./day-consolidation-renderer.js";
 import type { ProjectDayActivity } from "./day-consolidation-renderer.js";
+import {
+	parseConsolidationMetadata,
+	toSourceSessionReference,
+	type DayConsolidationMetadata,
+} from "./consolidation-provenance.js";
 
 // ─── Re-exports ─────────────────────────────────────────────────────────────
 // Keep all public symbols available from this module so that
@@ -45,6 +50,7 @@ export type { ProjectDayActivity } from "./day-consolidation-renderer.js";
 
 export {
 	readDayFile,
+	readDayFileMetadata,
 	listDayFiles,
 	searchDayFiles,
 	isDayConsolidated,
@@ -67,6 +73,8 @@ export interface DayConsolidationResult {
 	totalTurns: number;
 	/** Facts extracted for global memory. */
 	extractedFacts: string[];
+	/** Canonical source sessions referenced by the consolidated artifact. */
+	sourceSessionIds: string[];
 	/** Duration of consolidation in ms. */
 	durationMs: number;
 }
@@ -93,9 +101,12 @@ interface DayFileStats {
 
 function parseDayFileStats(content: string): DayFileStats {
 	const versionMatch = content.match(/format v(\d+)/i);
+	const provenance = parseConsolidationMetadata(content);
+	const sessionCountFromMetadata = provenance?.kind === "day" ? provenance.sessionCount : undefined;
+	const projectCountFromMetadata = provenance?.kind === "day" ? provenance.projectCount : undefined;
 	return {
-		sessionCount: (content.match(/^### Session:/gm) || []).length,
-		projectCount: (content.match(/^## Project:/gm) || []).length,
+		sessionCount: sessionCountFromMetadata ?? (content.match(/^### Session:/gm) || []).length,
+		projectCount: projectCountFromMetadata ?? (content.match(/^## Project:/gm) || []).length,
 		formatVersion: versionMatch ? Number.parseInt(versionMatch[1] ?? "0", 10) || 0 : 0,
 	};
 }
@@ -113,6 +124,9 @@ function isDayFileFresh(dayPath: string, content: string, metas: SessionMeta[]):
 	const stats = parseDayFileStats(content);
 	if (stats.formatVersion < DAY_CONSOLIDATION_FORMAT_VERSION) return false;
 	if (stats.sessionCount !== metas.length) return false;
+	const provenance = parseConsolidationMetadata(content);
+	if (!provenance || provenance.kind !== "day") return false;
+	if (provenance.sourceSessionIds.length !== metas.length) return false;
 	const latestMetaMs = latestSessionMetaTimestamp(metas);
 	if (latestMetaMs === 0) return true;
 	try {
@@ -151,6 +165,7 @@ export async function consolidateDay(
 	if (!options?.force && dayFileExists && options?.loadSessions) {
 		const content = fs.readFileSync(dayPath, "utf-8");
 		const stats = parseDayFileStats(content);
+		const provenance = parseConsolidationMetadata(content);
 		return {
 			date,
 			filePath: dayPath,
@@ -158,6 +173,7 @@ export async function consolidateDay(
 			projectCount: stats.projectCount,
 			totalTurns: 0,
 			extractedFacts: [],
+			sourceSessionIds: provenance?.kind === "day" ? provenance.sourceSessionIds : [],
 			durationMs: performance.now() - t0,
 		};
 	}
@@ -167,19 +183,21 @@ export async function consolidateDay(
 		try {
 			const content = fs.readFileSync(dayPath, "utf-8");
 			const { listSessionsByDate } = await import("./session-store.js");
-			preloadedMetas = listSessionsByDate(date);
-			if (isDayFileFresh(dayPath, content, preloadedMetas)) {
-				const stats = parseDayFileStats(content);
-				return {
-					date,
-					filePath: dayPath,
-					sessionsProcessed: stats.sessionCount,
-					projectCount: stats.projectCount,
-					totalTurns: 0,
-					extractedFacts: [],
-					durationMs: performance.now() - t0,
-				};
-			}
+				preloadedMetas = listSessionsByDate(date);
+				if (isDayFileFresh(dayPath, content, preloadedMetas)) {
+					const stats = parseDayFileStats(content);
+					const provenance = parseConsolidationMetadata(content);
+					return {
+						date,
+						filePath: dayPath,
+						sessionsProcessed: stats.sessionCount,
+						projectCount: stats.projectCount,
+						totalTurns: 0,
+						extractedFacts: [],
+						sourceSessionIds: provenance?.kind === "day" ? provenance.sourceSessionIds : [],
+						durationMs: performance.now() - t0,
+					};
+				}
 		} catch {
 			// Fall through to full re-consolidation.
 		}
@@ -224,6 +242,7 @@ export async function consolidateDay(
 			projectCount: 0,
 			totalTurns: 0,
 			extractedFacts: [],
+			sourceSessionIds: [],
 			durationMs: performance.now() - t0,
 		};
 	}
@@ -278,9 +297,10 @@ export async function consolidateDay(
 
 	// Extract facts using the real FactExtractor (pattern + vector similarity)
 	const extractedFacts = await extractFactsWithEngine(sessions);
+	const metadata = buildDayConsolidationMetadata(date, projectMap, sessions.map(({ meta }) => meta));
 
 	// Generate markdown (now using event chains for richer content)
-	const markdown = generateDayMarkdown(date, projectMap, sessions.length, totalTurns, extractedFacts);
+	const markdown = generateDayMarkdown(date, projectMap, sessions.length, totalTurns, extractedFacts, metadata);
 
 	// Write day file
 	const dir = path.dirname(dayPath);
@@ -300,7 +320,29 @@ export async function consolidateDay(
 		projectCount: projectMap.size,
 		totalTurns,
 		extractedFacts,
+		sourceSessionIds: metadata.sourceSessionIds,
 		durationMs: performance.now() - t0,
+	};
+}
+
+function buildDayConsolidationMetadata(
+	date: string,
+	projectMap: Map<string, ProjectDayActivity>,
+	metas: SessionMeta[],
+): DayConsolidationMetadata {
+	return {
+		kind: "day",
+		formatVersion: DAY_CONSOLIDATION_FORMAT_VERSION,
+		date,
+		generatedAt: new Date().toISOString(),
+		sessionCount: metas.length,
+		projectCount: projectMap.size,
+		sourceSessionIds: metas.map((meta) => meta.id),
+		sourceSessions: metas.map(toSourceSessionReference),
+		projects: [...projectMap.values()].map((activity) => ({
+			project: activity.project,
+			sessionIds: activity.sessions.map((session) => session.id),
+		})),
 	};
 }
 

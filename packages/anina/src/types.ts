@@ -15,6 +15,7 @@ import type {
 	ToolHandler,
 } from "@chitragupta/core";
 import type { ContentPart, StreamEvent, EmbeddingProvider } from "@chitragupta/swara";
+import type { MemoryBridge } from "./memory-bridge.js";
 
 // ─── Mesh Structural Types ──────────────────────────────────────────────────
 // Imported for local use (AgentConfig) and re-exported for backward compatibility.
@@ -157,6 +158,8 @@ export interface AgentConfig {
 	onEvent?: (event: AgentEventType, data: unknown) => void;
 	/** Enable memory/session persistence. */
 	enableMemory?: boolean;
+	/** Optional preconfigured MemoryBridge instance. */
+	memoryBridge?: MemoryBridge;
 	/** Project path for memory scoping. */
 	project?: string;
 	/** Enable the LearningLoop for tool usage tracking and Markov prediction. */

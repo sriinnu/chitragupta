@@ -7,9 +7,31 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { executeLucy } from "../src/modes/lucy-bridge.js";
 import type { LucyBridgeConfig, LucyEpisode, LucyTrace } from "../src/modes/lucy-bridge.js";
 
+const { mockPackLiveContextText } = vi.hoisted(() => ({
+	mockPackLiveContextText: vi.fn(),
+}));
+const { mockPackContextViaDaemon } = vi.hoisted(() => ({
+	mockPackContextViaDaemon: vi.fn(),
+}));
+const { mockAllowLocalRuntimeFallback } = vi.hoisted(() => ({
+	mockAllowLocalRuntimeFallback: vi.fn(() => false),
+}));
+
 // Mock the coding router
 vi.mock("../src/modes/coding-router.js", () => ({
 	routeViaBridge: vi.fn(),
+}));
+
+vi.mock("@chitragupta/smriti", () => ({
+	packLiveContextText: mockPackLiveContextText,
+}));
+
+vi.mock("../src/modes/daemon-bridge-sessions.js", () => ({
+	packContextViaDaemon: mockPackContextViaDaemon,
+}));
+
+vi.mock("../src/runtime-daemon-proxies.js", () => ({
+	allowLocalRuntimeFallback: mockAllowLocalRuntimeFallback,
 }));
 
 import { routeViaBridge } from "../src/modes/coding-router.js";
@@ -18,6 +40,9 @@ const mockRouteViaBridge = vi.mocked(routeViaBridge);
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mockAllowLocalRuntimeFallback.mockReturnValue(false);
+	mockPackLiveContextText.mockResolvedValue(null);
+	mockPackContextViaDaemon.mockResolvedValue({ packed: false });
 });
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -134,6 +159,21 @@ describe("Lucy Bridge", () => {
 			expect(result.success).toBe(false);
 		});
 
+		it("respects the auto-fix confidence threshold", async () => {
+			mockRouteViaBridge.mockResolvedValueOnce({
+				cli: "takumi",
+				output: "FAIL 1 test\nTests: 1 failed",
+				exitCode: 1,
+			});
+
+			const config = createConfig({ autoFixThreshold: 0.95 });
+			const result = await executeLucy("Thresholded task", config);
+
+			expect(result.autoFixAttempts).toBe(0);
+			expect(result.success).toBe(false);
+			expect(mockRouteViaBridge).toHaveBeenCalledTimes(1);
+		});
+
 		it("records results in episodic memory and akasha", async () => {
 			const recordEpisode = vi.fn().mockResolvedValue(undefined);
 			const depositAkasha = vi.fn().mockResolvedValue(undefined);
@@ -162,6 +202,37 @@ describe("Lucy Bridge", () => {
 			const trace = depositAkasha.mock.calls[0][0] as LucyTrace;
 			expect(trace.type).toBe("solution");
 			expect(trace.topics).toContain("lucy-bridge");
+		});
+
+		it("treats daemon packed=false as authoritative even when local fallback is allowed", async () => {
+			mockAllowLocalRuntimeFallback.mockReturnValue(true);
+			mockPackContextViaDaemon.mockResolvedValue({ packed: false });
+			mockPackLiveContextText.mockResolvedValue({
+				runtime: "pakt-core",
+				packedText: "locally-packed-episodic",
+				format: "text",
+				savings: 17,
+				originalLength: 520,
+			});
+			const queryEpisodic = vi.fn().mockResolvedValue(["past fix hint"]);
+			const queryAkasha = vi.fn().mockResolvedValue([]);
+			mockRouteViaBridge.mockResolvedValueOnce({
+				cli: "takumi",
+				output: "Done",
+				exitCode: 0,
+			});
+
+			const config = createConfig({ queryEpisodic, queryAkasha });
+			await executeLucy("Add auth", config);
+
+			expect(mockPackLiveContextText).not.toHaveBeenCalled();
+			expect(mockRouteViaBridge).toHaveBeenCalledWith(expect.objectContaining({
+				context: expect.objectContaining({
+					episodicHints: [
+						expect.stringContaining("past fix hint"),
+					],
+				}),
+			}));
 		});
 
 		it("deposits warning trace on failure", async () => {
@@ -236,6 +307,74 @@ describe("Lucy Bridge", () => {
 			expect(trace.topics).toContain("testing");
 			expect(trace.topics).toContain("api");
 			expect(trace.topics).toContain("authentication");
+		});
+
+		it("packs large Lucy context blocks through PAKT when beneficial", async () => {
+			const longHints = Array.from({ length: 5 }, (_, index) => `Hint ${index} ${"x".repeat(220)}`);
+			const longDecisions = Array.from({ length: 4 }, (_, index) => `Decision ${index} ${"y".repeat(220)}`);
+			mockPackContextViaDaemon
+				.mockResolvedValueOnce({
+					runtime: "pakt-core",
+					packedText: "packed-episodic",
+					format: "text",
+					savings: 45,
+					originalLength: 1400,
+				})
+				.mockResolvedValueOnce({
+					runtime: "pakt-core",
+					packedText: "packed-decisions",
+					format: "text",
+					savings: 38,
+					originalLength: 1200,
+				});
+
+			mockRouteViaBridge.mockResolvedValueOnce({
+				cli: "takumi",
+				output: "Done",
+				exitCode: 0,
+			});
+
+			const config = createConfig({
+				queryEpisodic: vi.fn().mockResolvedValue(longHints),
+				queryAkasha: vi.fn().mockResolvedValue(longDecisions),
+			});
+			await executeLucy("Pack context", config);
+
+			expect(mockRouteViaBridge).toHaveBeenCalledWith(expect.objectContaining({
+				context: expect.objectContaining({
+					episodicHints: [expect.stringContaining("packed-episodic")],
+					recentDecisions: [expect.stringContaining("packed-decisions")],
+				}),
+			}));
+		});
+
+		it("does not bypass daemon compression policy when pack_context returns packed=false", async () => {
+			const longHints = Array.from({ length: 5 }, (_, index) => `Hint ${index} ${"x".repeat(220)}`);
+			mockPackContextViaDaemon.mockResolvedValue({ packed: false });
+			mockPackLiveContextText.mockResolvedValue({
+				runtime: "pakt-core",
+				packedText: "should-not-be-used",
+				format: "text",
+				savings: 45,
+				originalLength: 1400,
+			});
+			mockRouteViaBridge.mockResolvedValueOnce({
+				cli: "takumi",
+				output: "Done",
+				exitCode: 0,
+			});
+
+			await executeLucy("Honor daemon compression policy", createConfig({
+				queryEpisodic: vi.fn().mockResolvedValue(longHints),
+				queryAkasha: vi.fn().mockResolvedValue([]),
+			}));
+
+			expect(mockPackLiveContextText).not.toHaveBeenCalled();
+			expect(mockRouteViaBridge).toHaveBeenCalledWith(expect.objectContaining({
+				context: expect.objectContaining({
+					episodicHints: expect.arrayContaining([expect.stringContaining("Hint 0")]),
+				}),
+			}));
 		});
 	});
 });

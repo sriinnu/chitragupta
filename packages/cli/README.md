@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/@yugenlab/chitragupta"><img src="https://img.shields.io/npm/v/@yugenlab/chitragupta" alt="npm" /></a>
   <img src="https://img.shields.io/badge/tests-12%2C022-brightgreen" alt="Tests" />
-  <img src="https://img.shields.io/badge/MCP_tools-60%2B-blue" alt="MCP Tools" />
+  <img src="https://img.shields.io/badge/MCP_tools-runtime-blue" alt="MCP Tools" />
   <img src="https://img.shields.io/badge/node-%3E%3D22-blue" alt="Node" />
   <a href="../../LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
 </p>
@@ -17,6 +17,18 @@
 ---
 
 Persistent memory and observability layer for AI coding agents. The CLI is the unified entry point: interactive agent, single-shot task runner, MCP server for Claude Code / Cursor / any MCP client, or full HTTP API server.
+
+The CLI is a surface of the engine, not a second authority:
+
+- Chitragupta daemon owns durable writes and canonical sessions.
+- CLI/TUI/API/serve consume that daemon-owned runtime by default.
+- Vaayu and Takumi are downstream consumers of the same engine model.
+
+For the runtime wiring behind the public coding path:
+
+- User-facing coding flow: [../../docs/coding-agent.md](../../docs/coding-agent.md)
+- Internal integrity and self-healing loops: [../../docs/runtime-integrity.md](../../docs/runtime-integrity.md)
+- Engine/consumer model: [../../docs/runtime-constitution.md](../../docs/runtime-constitution.md)
 
 ---
 
@@ -50,6 +62,18 @@ chitragupta run "fix the login bug"
 # MCP server for Claude Code
 chitragupta mcp-server
 ```
+
+---
+
+## Runtime Authority and Auth Surfaces
+
+- **Daemon-first runtime**: CLI and MCP flows target the daemon as the single-writer authority for persistent state.
+- **Daemon-backed MemoryBridge**: main runtime surfaces share daemon-backed session/memory persistence instead of mixing local and daemon writers.
+- **Socket/pipe auth**: daemon RPC requires `auth.handshake` with a local bridge token and method scopes.
+- **Degraded fallback**: if daemon is unavailable, fallback is read-only for a narrow method subset; writes fail closed.
+- **Serve vs daemon auth**: `chitragupta serve` auth (pairing/JWT/API routes) is a separate HTTP auth plane from daemon socket auth.
+- **Lucy/Scarlett scope**: runtime overlays are platform-wide internal concepts; CLI coding paths expose only part of that behavior.
+- **Canonical sessions**: raw sessions remain the source of truth; recall may surface derived day/month/year artifacts with `sourceSessionIds` for drill-down.
 
 ---
 
@@ -226,6 +250,9 @@ chitragupta mcp-server
 # SSE transport (for HTTP-based MCP clients)
 chitragupta mcp-server --sse --port 3001
 
+# Streamable HTTP transport (for newer MCP HTTP clients)
+chitragupta mcp-server --streamable-http --port 3001
+
 # With project path override
 chitragupta mcp-server --project /path/to/project
 
@@ -240,8 +267,8 @@ chitragupta mcp-server --name my-chitragupta
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CHITRAGUPTA_MCP_TRANSPORT` | `"stdio"` or `"sse"` | `stdio` |
-| `CHITRAGUPTA_MCP_PORT` | SSE port | `3001` |
+| `CHITRAGUPTA_MCP_TRANSPORT` | `"stdio"`, `"sse"`, or `"streamable-http"` | `stdio` |
+| `CHITRAGUPTA_MCP_PORT` | HTTP transport port (`sse` or `streamable-http`) | `3001` |
 | `CHITRAGUPTA_MCP_PROJECT` | Project path override | `process.cwd()` |
 | `CHITRAGUPTA_MCP_AGENT` | Agent profile override | -- |
 
@@ -249,7 +276,7 @@ chitragupta mcp-server --name my-chitragupta
 
 ## MCP Tools
 
-Chitragupta exposes 60+ MCP tools organized into categories. Below is the complete inventory.
+Chitragupta exposes an MCP tool surface organized into categories. Inventory can vary by release/profile.
 
 ### Memory and Sessions
 
@@ -333,6 +360,10 @@ Chitragupta exposes 60+ MCP tools organized into categories. Below is the comple
 | `mesh_peers` | List all peers with health info |
 | `mesh_gossip` | Get gossip protocol state |
 | `mesh_topology` | Full mesh topology view |
+
+Notes:
+- `mesh_status` and `mesh_peers` now distinguish local mesh actors from remote gossip peers.
+- Capability routing works in local-only mode too; full P2P networking is added when `CHITRAGUPTA_MESH_*` mesh config is present.
 
 ### Vidhya Skills Pipeline
 

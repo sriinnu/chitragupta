@@ -47,8 +47,12 @@
 	},
 	"dependencies": {
 		"@chitragupta/core": "workspace:*",
+		"@chitragupta/dharma": "workspace:*",
 		"@chitragupta/smriti": "workspace:*",
-		"@chitragupta/anina": "workspace:*"
+		"@chitragupta/anina": "workspace:*",
+		"@chitragupta/sutra": "workspace:*",
+		"@chitragupta/tantra": "workspace:*",
+		"kosha-discovery": "^0.3.1"
 	},
 	"devDependencies": {
 		"typescript": "^5.6.0"

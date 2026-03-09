@@ -48,6 +48,7 @@ const PROBE_TO_ENTITY: Readonly<Record<string, string>> = {
 	"nidra-heartbeat": "nidra",
 	"consolidation-queue": "consolidation",
 	"memory-pressure": "memory",
+	"semantic-sync": "semantic-memory",
 };
 
 /**

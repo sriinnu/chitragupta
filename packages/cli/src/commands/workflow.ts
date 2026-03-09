@@ -22,8 +22,10 @@ import {
 	REFACTOR_WORKFLOW,
 	BUG_FIX_WORKFLOW,
 	DEPLOY_WORKFLOW,
-} from "@chitragupta/vayu";
-import type { Workflow, WorkflowEvent } from "@chitragupta/vayu";
+	AUTORESEARCH_WORKFLOW,
+	ACP_RESEARCH_SWARM_WORKFLOW,
+} from "@chitragupta/prana";
+import type { Workflow, WorkflowEvent } from "@chitragupta/prana";
 import {
 	bold,
 	green,
@@ -41,6 +43,8 @@ const TEMPLATE_MAP: Record<string, Workflow> = {
 	"refactor": REFACTOR_WORKFLOW,
 	"bug-fix": BUG_FIX_WORKFLOW,
 	"deploy": DEPLOY_WORKFLOW,
+	"autoresearch": AUTORESEARCH_WORKFLOW,
+	"acp-research-swarm": ACP_RESEARCH_SWARM_WORKFLOW,
 };
 
 // ─── Event Renderer ──────────────────────────────────────────────────────────

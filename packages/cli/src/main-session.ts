@@ -12,12 +12,10 @@
  *   - replaySessionIntoAgent helper
  */
 
-import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 
 import {
-	getChitraguptaHome,
 	createLogger,
 } from "@chitragupta/core";
 import type { AgentProfile, BudgetConfig, ThinkingLevel } from "@chitragupta/core";
@@ -29,10 +27,8 @@ import { Agent } from "@chitragupta/anina";
 import type { AgentConfig, AgentMessage } from "@chitragupta/anina";
 
 import {
-	createSession,
 	listSessions,
 	loadSession,
-	addTurn,
 } from "@chitragupta/smriti/session-store";
 import type { Session } from "@chitragupta/smriti/types";
 
@@ -41,8 +37,25 @@ import type { ProviderRegistry } from "@chitragupta/swara/provider-registry";
 import type { ProjectInfo } from "./project-detector.js";
 import { runInteractiveMode } from "./modes/interactive.js";
 import { runPrintMode } from "./modes/print.js";
-
+import { applyLucyLiveGuidance } from "./nervous-system-wiring.js";
+import {
+	addTurn as addTurnViaDaemon,
+	createSession as createSessionViaDaemon,
+	listSessions as listSessionsViaDaemon,
+	showSession as showSessionViaDaemon,
+} from "./modes/daemon-bridge.js";
 import type { TuiWiringResult } from "./main-tui-wiring.js";
+import {
+	buildShutdownFn,
+	runPostSessionHooks,
+	triggerSwapnaConsolidation,
+} from "./main-session-hooks.js";
+
+export {
+	buildShutdownFn,
+	runPostSessionHooks,
+	triggerSwapnaConsolidation,
+} from "./main-session-hooks.js";
 
 const log = createLogger("cli:main-session");
 
@@ -65,14 +78,14 @@ export interface SessionResolveParams {
  * Handles --continue (resume most recent), --resume (show picker),
  * and default (create new).
  */
-export function resolveSession(params: SessionResolveParams): Session {
+export async function resolveSession(params: SessionResolveParams): Promise<Session> {
 	const { projectPath, profile, modelId, agent, args } = params;
 
 	if (args.continue) {
-		const sessions = listSessions(projectPath);
+		const sessions = await listSessionsViaDaemon(projectPath);
 		if (sessions.length > 0) {
 			try {
-				const session = loadSession(sessions[0].id, projectPath);
+				const session = await showSessionViaDaemon(String(sessions[0].id), projectPath) as unknown as Session;
 				replaySessionIntoAgent(agent, session);
 				return session;
 			} catch {
@@ -80,7 +93,7 @@ export function resolveSession(params: SessionResolveParams): Session {
 			}
 		}
 	} else if (args.resume) {
-		const sessions = listSessions(projectPath);
+		const sessions = await listSessionsViaDaemon(projectPath);
 		if (sessions.length === 0) {
 			process.stderr.write(`\nNo sessions found. Starting a new session.\n\n`);
 		} else {
@@ -93,7 +106,7 @@ export function resolveSession(params: SessionResolveParams): Session {
 			process.stdout.write(`\nContinuing most recent session: ${sessions[0].title}\n\n`);
 
 			try {
-				const session = loadSession(sessions[0].id, projectPath);
+				const session = await showSessionViaDaemon(String(sessions[0].id), projectPath) as unknown as Session;
 				replaySessionIntoAgent(agent, session);
 				return session;
 			} catch {
@@ -102,12 +115,20 @@ export function resolveSession(params: SessionResolveParams): Session {
 		}
 	}
 
-	return createSession({
+	const created = await createSessionViaDaemon({
 		project: projectPath,
 		agent: profile.id,
 		model: modelId,
 		title: args.prompt ? args.prompt.slice(0, 60) : "New Session",
+		metadata: {
+			consumer: "chitragupta",
+			surface: "cli",
+			channel: "terminal",
+			actorId: `cli:${process.pid}`,
+			sessionReusePolicy: "isolated",
+		},
 	});
+	return await showSessionViaDaemon(created.id, projectPath) as unknown as Session;
 }
 
 /**
@@ -196,23 +217,42 @@ export async function launchInteractiveMode(params: LaunchInteractiveParams): Pr
 			snapshot: () => wiring.nidraDaemon!.snapshot(),
 			wake: () => wiring.nidraDaemon!.wake(),
 		} : undefined,
-		onTurnComplete: (userMsg, assistantMsg) => {
-			if (wiring.nidraDaemon) { try { wiring.nidraDaemon.touch(); } catch { /* best-effort */ } }
+		onTurnComplete: async (userMsg, assistantMsg) => {
+			if (wiring.nidraDaemon) { try { await Promise.resolve(wiring.nidraDaemon.touch()); } catch { /* best-effort */ } }
 			try {
-				addTurn(session.meta.id, projectPath, { turnNumber: 0, role: "user", content: userMsg, agent: profile.id, model: modelId })
-					.catch((e) => { log.debug("user turn save failed", { error: String(e) }); });
-				const lastMsg = agent.getMessages().at(-1);
-				const contentParts = lastMsg?.role === "assistant" ? lastMsg.content as unknown as Array<Record<string, unknown>> : undefined;
-				addTurn(session.meta.id, projectPath, { turnNumber: 0, role: "assistant", content: assistantMsg, contentParts, agent: profile.id, model: modelId })
-					.catch((e) => { log.debug("assistant turn save failed", { error: String(e) }); });
-			} catch { /* best-effort */ }
+				await addTurnViaDaemon(session.meta.id, projectPath, {
+					turnNumber: 0,
+					role: "user",
+					content: userMsg,
+					agent: profile.id,
+					model: modelId,
+				});
+			} catch (e) {
+				log.debug("user turn save failed", { error: String(e) });
+			}
+			const lastMsg = agent.getMessages().at(-1);
+			const contentParts = lastMsg?.role === "assistant" ? lastMsg.content as unknown as Array<Record<string, unknown>> : undefined;
+			try {
+				await addTurnViaDaemon(session.meta.id, projectPath, {
+					turnNumber: 0,
+					role: "assistant",
+					content: assistantMsg,
+					contentParts,
+					agent: profile.id,
+					model: modelId,
+				});
+			} catch (e) {
+				log.debug("assistant turn save failed", { error: String(e) });
+			}
 			if (wiring.checkpointManager && session) {
 				try {
-					wiring.checkpointManager.save(session.meta.id, {
+					await wiring.checkpointManager.save(session.meta.id, {
 						version: 1, sessionId: session.meta.id, turns: [...agent.getMessages()],
 						metadata: { model: modelId, profile: profile.id }, timestamp: Date.now(),
-					}).catch((e) => { log.debug("checkpoint save failed", { error: String(e) }); });
-				} catch { /* best-effort */ }
+					});
+				} catch (e) {
+					log.debug("checkpoint save failed", { error: String(e) });
+				}
 			}
 		},
 	});
@@ -252,127 +292,41 @@ export async function launchPrintMode(params: LaunchPrintParams): Promise<void> 
 			}
 		} catch { /* best-effort */ }
 	}
+	printPrompt = await applyLucyLiveGuidance(printPrompt, params.prompt, projectPath);
 
 	const exitCode = await runPrintMode({ agent, prompt: printPrompt });
 
 	// Save print-mode result to session
 	try {
-		await addTurn(session.meta.id, projectPath, { turnNumber: 0, role: "user", content: params.prompt, agent: profile.id, model: modelId });
-		const lastMsg = agent.getMessages().at(-1);
-		if (lastMsg) {
-			const text = lastMsg.content.filter((p: { type: string }): p is { type: "text"; text: string } => p.type === "text").map((p: { type: "text"; text: string }) => p.text).join("");
-			const contentParts = lastMsg.role === "assistant" ? lastMsg.content as unknown as Array<Record<string, unknown>> : undefined;
-			await addTurn(session.meta.id, projectPath, { turnNumber: 0, role: "assistant", content: text, contentParts, agent: profile.id, model: modelId });
-		}
+		await addTurnViaDaemon(session.meta.id, projectPath, {
+			turnNumber: 0,
+			role: "user",
+			content: params.prompt,
+			agent: profile.id,
+			model: modelId,
+		});
 	} catch { /* best-effort */ }
-
-	await shutdownAll();
-	process.exit(exitCode);
-}
-
-/**
- * Run post-session hooks: Turiya state persistence, Samskaara consolidation,
- * and Swapna dream-cycle consolidation (fire-and-forget).
- */
-export async function runPostSessionHooks(
-	turiyaRouter: TuriyaRouter | undefined,
-	projectPath: string,
-): Promise<void> {
-	// Persist Turiya state
-	if (turiyaRouter) {
+	const lastMsg = agent.getMessages().at(-1);
+	if (lastMsg) {
+		const text = lastMsg.content
+			.filter((p: { type: string }): p is { type: "text"; text: string } => p.type === "text")
+			.map((p: { type: "text"; text: string }) => p.text)
+			.join("");
+		const contentParts = lastMsg.role === "assistant" ? lastMsg.content as unknown as Array<Record<string, unknown>> : undefined;
 		try {
-			const turiyaStatePath = path.join(getChitraguptaHome(), "turiya-state.json");
-			fs.writeFileSync(turiyaStatePath, JSON.stringify(turiyaRouter.serialize()), "utf8");
-			const stats = turiyaRouter.getStats();
-			if (stats.totalRequests > 0) {
-				log.info("Turiya state saved", { requests: stats.totalRequests, savings: `${stats.savingsPercent.toFixed(1)}%` });
-			}
+			await addTurnViaDaemon(session.meta.id, projectPath, {
+				turnNumber: 0,
+				role: "assistant",
+				content: text,
+				contentParts,
+				agent: profile.id,
+				model: modelId,
+			});
 		} catch { /* best-effort */ }
 	}
 
-	// Samskaara consolidation (synchronous, bounded by timeout)
-	const CONSOLIDATION_TIMEOUT_MS = 5_000;
-	try {
-		const consolidationWork = async () => {
-			const { ConsolidationEngine } = await import("@chitragupta/smriti");
-			const consolidator = new ConsolidationEngine();
-			consolidator.load();
-			const recentMetas = listSessions(projectPath).slice(0, 5);
-			const recentSessions: Session[] = [];
-			for (const meta of recentMetas) { try { const s = loadSession(meta.id, projectPath); if (s) recentSessions.push(s); } catch { /* skip */ } }
-			if (recentSessions.length > 0) {
-				const result = consolidator.consolidate(recentSessions);
-				consolidator.decayRules();
-				consolidator.pruneRules();
-				consolidator.save();
-				if (result.newRules.length > 0) {
-					process.stderr.write(`\n  \u2726 Samskaara: Learned ${result.newRules.length} new rule${result.newRules.length > 1 ? "s" : ""} from this session.\n`);
-				}
-			}
-		};
-		await Promise.race([consolidationWork(), new Promise<void>((resolve) => setTimeout(resolve, CONSOLIDATION_TIMEOUT_MS))]);
-	} catch { /* best-effort */ }
-
-	// Swapna dream-cycle consolidation (fire-and-forget, non-blocking).
-	// Runs the 5-phase cycle (replay, recombine, crystallize, proceduralize, compress)
-	// in the background so session exit is never delayed.
-	triggerSwapnaConsolidation(projectPath);
-}
-
-/**
- * Fire-and-forget Swapna (dream-cycle) consolidation.
- *
- * Spawns the 5-phase consolidation asynchronously via setImmediate so it
- * does not block the caller. The returned timer is unref'd so Node can
- * exit even if the cycle is still running.
- *
- * @param projectPath - The project directory to consolidate sessions for.
- */
-export function triggerSwapnaConsolidation(projectPath: string): void {
-	const timer = setTimeout(() => {
-		(async () => {
-			try {
-				const { SwapnaConsolidation } = await import("@chitragupta/smriti");
-				const swapna = new SwapnaConsolidation({ project: projectPath });
-				const result = await swapna.run();
-				log.info("Swapna consolidation complete", {
-					cycleId: result.cycleId,
-					durationMs: Math.round(result.totalDurationMs),
-					vasanas: result.phases.crystallize.vasanasCreated,
-					vidhis: result.phases.proceduralize.vidhisCreated,
-				});
-			} catch (err) {
-				log.debug("Swapna consolidation failed (best-effort)", {
-					error: err instanceof Error ? err.message : String(err),
-				});
-			}
-		})();
-	}, 0);
-	// unref so the timer does not keep the process alive
-	timer.unref();
-}
-
-/**
- * Build the shutdown function that cleans up all resources.
- */
-export function buildShutdownFn(
-	agent: Agent,
-	wiring: TuiWiringResult,
-): () => Promise<void> {
-	return async () => {
-		for (const fn of wiring.mcpSkillWatcherCleanups) { try { fn(); } catch { /* best-effort */ } }
-		if (wiring.nidraDaemon) { try { await wiring.nidraDaemon.stop(); } catch { /* best-effort */ } }
-		if (wiring.rtaEngine) {
-			try { const { DatabaseManager } = await import("@chitragupta/smriti"); wiring.rtaEngine.persistAuditLog(DatabaseManager.instance().get("agent")); } catch { /* best-effort */ }
-		}
-		try { agent.dispose(); } catch { /* best-effort */ }
-		wiring.sandeshaRouter?.destroy();
-		wiring.commHubDestroy?.();
-		wiring.actorSystemShutdown?.();
-		wiring.kaala?.dispose();
-		wiring.messageBus?.destroy();
-		if (wiring.mcpShutdown) await wiring.mcpShutdown();
-	};
+	await shutdownAll();
+	process.exit(exitCode);
 }
 
 /**

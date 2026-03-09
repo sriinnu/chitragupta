@@ -8,10 +8,10 @@
  */
 
 import net from "node:net";
-import fs from "node:fs";
 import { createLogger } from "@chitragupta/core";
+import { authorizeDaemonMethod, type DaemonAuthContext, type DaemonServerAuthConfig } from "./auth.js";
 import type { DaemonPaths } from "./paths.js";
-import { ensureDirs, isWindows } from "./paths.js";
+import { ensureDirs } from "./paths.js";
 import {
 	ErrorCode,
 	createErrorResponse,
@@ -20,10 +20,12 @@ import {
 	isRequest,
 	parseMessage,
 	serialize,
+	type RpcNotification,
 	type RpcRequest,
 	type RpcResponse,
 } from "./protocol.js";
 import type { RpcRouter } from "./rpc-router.js";
+import { bindServerSocket } from "./server-bind.js";
 
 const log = createLogger("daemon:server");
 
@@ -38,6 +40,9 @@ const MAX_PENDING_REQUESTS = 100;
 
 /** Application-level server error code (JSON-RPC). */
 const SERVER_ERROR = -32000;
+const UNAUTHORIZED_ERROR = -32001;
+const FORBIDDEN_ERROR = -32004;
+const RATE_LIMIT_ERROR = -32029;
 
 /** Per-connection state. */
 interface ClientConnection {
@@ -47,6 +52,8 @@ interface ClientConnection {
 	connectedAt: number;
 	/** Number of in-flight (pending) requests. */
 	pendingRequests: number;
+	authenticated: boolean;
+	auth?: DaemonAuthContext;
 }
 
 /** Server configuration. */
@@ -55,6 +62,8 @@ export interface DaemonServerConfig {
 	paths: DaemonPaths;
 	/** RPC method router. */
 	router: RpcRouter;
+	/** Optional bridge auth validator for daemon socket connections. */
+	auth?: DaemonServerAuthConfig;
 	/** Max concurrent connections (default: 256). */
 	maxConnections?: number;
 }
@@ -76,8 +85,31 @@ export interface DaemonServer {
  * parses NDJSON frames, and routes JSON-RPC requests.
  */
 export async function startServer(config: DaemonServerConfig): Promise<DaemonServer> {
-	const { paths, router, maxConnections = 256 } = config;
+	const { paths, router, auth, maxConnections = 256 } = config;
 	const clients = new Map<string, ClientConnection>();
+	const requestWindows = new Map<string, number[]>();
+
+	const sendNotification = (conn: ClientConnection, notification: RpcNotification): boolean => {
+		if (conn.socket.destroyed) return false;
+		try {
+			conn.socket.write(serialize(notification));
+			return true;
+		} catch {
+			return false;
+		}
+	};
+
+	router.setNotifier((notification, targetClientIds) => {
+		let delivered = 0;
+		const targets = targetClientIds ? new Set(targetClientIds) : null;
+		for (const [clientId, conn] of clients) {
+			if (targets && !targets.has(clientId)) continue;
+			if (sendNotification(conn, notification)) {
+				delivered++;
+			}
+		}
+		return delivered;
+	});
 
 	ensureDirs(paths);
 
@@ -91,37 +123,41 @@ export async function startServer(config: DaemonServerConfig): Promise<DaemonSer
 
 		const clientId = crypto.randomUUID();
 		const conn: ClientConnection = {
-			id: clientId, socket, buffer: "", connectedAt: Date.now(), pendingRequests: 0,
+			id: clientId, socket, buffer: "", connectedAt: Date.now(), pendingRequests: 0, authenticated: !auth?.required,
 		};
 		clients.set(clientId, conn);
+		router.attachClient(clientId, { transport: "socket", connectedAt: conn.connectedAt });
 		log.debug("Client connected", { clientId, total: clients.size });
 
 		socket.on("data", (chunk) => {
 			conn.buffer += chunk.toString("utf-8");
 
 			// Buffer overflow guard — disconnect before OOM
-			if (conn.buffer.length > MAX_BUFFER_SIZE) {
-				log.warn("Buffer limit exceeded, closing connection", {
-					clientId, bufferSize: conn.buffer.length,
-				});
-				const err = createErrorResponse(0, SERVER_ERROR, "Buffer limit exceeded");
-				conn.socket.write(serialize(err));
-				conn.socket.destroy();
-				clients.delete(clientId);
-				return;
-			}
+				if (conn.buffer.length > MAX_BUFFER_SIZE) {
+					log.warn("Buffer limit exceeded, closing connection", {
+						clientId, bufferSize: conn.buffer.length,
+					});
+					const err = createErrorResponse(0, SERVER_ERROR, "Buffer limit exceeded");
+					conn.socket.write(serialize(err));
+					conn.socket.destroy();
+					clients.delete(clientId);
+					router.detachClient(clientId);
+					return;
+				}
 
-			processBuffer(conn, router);
-		});
+				processBuffer(conn, router, auth, requestWindows);
+			});
 
 		socket.on("close", () => {
 			clients.delete(clientId);
+			router.detachClient(clientId);
 			log.debug("Client disconnected", { clientId, total: clients.size });
 		});
 
 		socket.on("error", (err) => {
 			log.warn("Client socket error", { clientId, error: err.message });
 			clients.delete(clientId);
+			router.detachClient(clientId);
 			socket.destroy();
 		});
 	});
@@ -143,7 +179,12 @@ export async function startServer(config: DaemonServerConfig): Promise<DaemonSer
 }
 
 /** Process buffered NDJSON data, dispatch complete lines. */
-function processBuffer(conn: ClientConnection, router: RpcRouter): void {
+function processBuffer(
+	conn: ClientConnection,
+	router: RpcRouter,
+	auth: DaemonServerAuthConfig | undefined,
+	requestWindows: Map<string, number[]>,
+): void {
 	let newlineIdx: number;
 	while ((newlineIdx = conn.buffer.indexOf("\n")) !== -1) {
 		const line = conn.buffer.slice(0, newlineIdx).trim();
@@ -170,8 +211,28 @@ function processBuffer(conn: ClientConnection, router: RpcRouter): void {
 		}
 
 		if (isRequest(msg)) {
-			// Backpressure: reject if too many pending requests
-			if (conn.pendingRequests >= MAX_PENDING_REQUESTS) {
+			if (!authorizeRequest(conn, msg.method, auth)) {
+				const err = createErrorResponse(msg.id, UNAUTHORIZED_ERROR, "Bridge authentication required");
+				conn.socket.write(serialize(err));
+				continue;
+			}
+			if (msg.method === "auth.handshake") {
+				handleAuthHandshake(conn, msg, auth);
+				continue;
+			}
+				if (!authorizeMethod(conn, msg.method, auth)) {
+					const required = requiredScopeForMethod(conn, msg.method);
+					const err = createErrorResponse(msg.id, FORBIDDEN_ERROR, `Insufficient scope for ${msg.method}`, required ? { requiredScope: required } : undefined);
+					conn.socket.write(serialize(err));
+					continue;
+				}
+				if (!withinRequestRateLimit(conn, msg.method, auth, requestWindows)) {
+					const err = createErrorResponse(msg.id, RATE_LIMIT_ERROR, "Bridge rate limit exceeded");
+					conn.socket.write(serialize(err));
+					continue;
+				}
+				// Backpressure: reject if too many pending requests
+				if (conn.pendingRequests >= MAX_PENDING_REQUESTS) {
 				log.warn("Backpressure: too many pending requests", {
 					clientId: conn.id, pending: conn.pendingRequests,
 				});
@@ -186,7 +247,32 @@ function processBuffer(conn: ClientConnection, router: RpcRouter): void {
 				})
 				.finally(() => { conn.pendingRequests--; });
 		} else if (isNotification(msg)) {
-			router.handle(msg.method, msg.params ?? {}).catch((err) => {
+			if (!authorizeRequest(conn, msg.method, auth)) {
+				const err = createErrorResponse(0, UNAUTHORIZED_ERROR, "Bridge authentication required");
+				conn.socket.write(serialize(err));
+				conn.socket.destroy();
+				return;
+			}
+			if (msg.method === "auth.handshake") {
+				handleAuthHandshake(conn, { ...msg, id: 0 }, auth);
+				continue;
+			}
+				if (!authorizeMethod(conn, msg.method, auth)) {
+					const err = createErrorResponse(0, FORBIDDEN_ERROR, `Insufficient scope for ${msg.method}`);
+					conn.socket.write(serialize(err));
+					continue;
+				}
+				if (!withinRequestRateLimit(conn, msg.method, auth, requestWindows)) {
+					const err = createErrorResponse(0, RATE_LIMIT_ERROR, "Bridge rate limit exceeded");
+					conn.socket.write(serialize(err));
+					continue;
+				}
+				router.handle(msg.method, msg.params ?? {}, {
+					clientId: conn.id,
+				transport: "socket",
+				kind: "notification",
+				auth: conn.auth,
+			}).catch((err) => {
 				log.warn("Notification handler error", { method: msg.method, error: String(err) });
 			});
 		}
@@ -198,7 +284,12 @@ function processBuffer(conn: ClientConnection, router: RpcRouter): void {
 async function handleRequest(conn: ClientConnection, req: RpcRequest, router: RpcRouter): Promise<void> {
 	let response: RpcResponse;
 	try {
-		const result = await router.handle(req.method, req.params ?? {});
+		const result = await router.handle(req.method, req.params ?? {}, {
+			clientId: conn.id,
+			transport: "socket",
+			kind: "request",
+			auth: conn.auth,
+		});
 		response = createResponse(req.id, result);
 	} catch (err: unknown) {
 		const message = err instanceof Error ? err.message : String(err);
@@ -209,6 +300,90 @@ async function handleRequest(conn: ClientConnection, req: RpcRequest, router: Rp
 	if (!conn.socket.destroyed) {
 		conn.socket.write(serialize(response));
 	}
+}
+
+function authorizeRequest(
+	conn: ClientConnection,
+	method: string,
+	auth?: DaemonServerAuthConfig,
+): boolean {
+	if (method === "auth.handshake") return true;
+	if (!auth?.required) return true;
+	return conn.authenticated;
+}
+
+function authorizeMethod(
+	conn: ClientConnection,
+	method: string,
+	auth?: DaemonServerAuthConfig,
+): boolean {
+	if (!auth?.required) return true;
+	const scopes = conn.auth?.scopes ?? [];
+	return authorizeDaemonMethod(method, scopes).allowed;
+}
+
+function requiredScopeForMethod(conn: ClientConnection, method: string): string | undefined {
+	const scopes = conn.auth?.scopes ?? [];
+	return authorizeDaemonMethod(method, scopes).required;
+}
+
+function handleAuthHandshake(
+	conn: ClientConnection,
+	req: RpcRequest,
+	auth?: DaemonServerAuthConfig,
+): void {
+	if (!auth?.required) {
+		conn.authenticated = true;
+		conn.auth = { scopes: ["admin"] };
+		conn.socket.write(serialize(createResponse(req.id, { authenticated: true, scopes: conn.auth.scopes })));
+		return;
+	}
+
+	const token =
+		typeof req.params?.apiKey === "string" ? req.params.apiKey
+			: typeof req.params?.token === "string" ? req.params.token
+				: "";
+	const result = auth.validateToken(token);
+	if (!result.authenticated) {
+		conn.socket.write(serialize(createErrorResponse(req.id, UNAUTHORIZED_ERROR, result.error ?? "Bridge authentication failed")));
+		conn.socket.destroy();
+		return;
+	}
+
+	conn.authenticated = true;
+	conn.auth = {
+		keyId: result.keyId,
+		tenantId: result.tenantId,
+		scopes: result.scopes ?? ["read"],
+	};
+	conn.socket.write(serialize(createResponse(req.id, {
+		authenticated: true,
+		keyId: result.keyId,
+		tenantId: result.tenantId,
+		scopes: conn.auth.scopes,
+	})));
+}
+
+function withinRequestRateLimit(
+	conn: ClientConnection,
+	method: string,
+	auth: DaemonServerAuthConfig | undefined,
+	requestWindows: Map<string, number[]>,
+): boolean {
+	const config = auth?.requestRateLimit;
+	if (!config) return true;
+	if (config.exemptMethods.includes(method)) return true;
+
+	const key = conn.auth?.keyId ?? conn.auth?.tenantId ?? conn.id;
+	const now = Date.now();
+	const recent = (requestWindows.get(key) ?? []).filter((ts) => now - ts <= config.windowMs);
+	if (recent.length >= config.maxRequests) {
+		requestWindows.set(key, recent);
+		return false;
+	}
+	recent.push(now);
+	requestWindows.set(key, recent);
+	return true;
 }
 
 /** Gracefully stop the server and close all client connections. */
@@ -227,81 +402,4 @@ async function stopServer(server: net.Server, clients: Map<string, ClientConnect
 	});
 
 	log.info("Daemon server stopped");
-}
-
-/**
- * Bind server to socket path safely.
- *
- * If socket path is in use, probe whether another daemon is alive.
- * - Alive: fail fast (do not unlink live socket)
- * - Dead/stale: unlink once and retry bind
- */
-async function bindServerSocket(server: net.Server, socketPath: string): Promise<void> {
-	let staleUnlinked = false;
-
-	for (;;) {
-		try {
-			await listenOnce(server, socketPath);
-			return;
-		} catch (err) {
-			const code = (err as NodeJS.ErrnoException).code;
-			if (code !== "EADDRINUSE") throw err;
-
-			const live = await isSocketLive(socketPath);
-			if (live) {
-				throw new Error(`Socket already in use by a live daemon: ${socketPath}`);
-			}
-			if (staleUnlinked) {
-				throw new Error(`Failed to recover stale socket: ${socketPath}`);
-			}
-
-			// Named pipes on Windows are virtual — no file to unlink
-			if (isWindows()) {
-				throw new Error(`Named pipe in use but daemon not responding: ${socketPath}`);
-			}
-
-			try {
-				fs.unlinkSync(socketPath);
-				staleUnlinked = true;
-				log.warn("Removed stale socket file before retrying bind", { socket: socketPath });
-			} catch (unlinkErr) {
-				if ((unlinkErr as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkErr;
-				staleUnlinked = true;
-			}
-		}
-	}
-}
-
-/** Listen once and resolve on successful bind. */
-function listenOnce(server: net.Server, socketPath: string): Promise<void> {
-	return new Promise<void>((resolve, reject) => {
-		const onError = (err: unknown) => {
-			server.off("listening", onListening);
-			reject(err);
-		};
-		const onListening = () => {
-			server.off("error", onError);
-			resolve();
-		};
-		server.once("error", onError);
-		server.once("listening", onListening);
-		server.listen(socketPath);
-	});
-}
-
-/** Probe whether a daemon is actively accepting connections on the socket. */
-function isSocketLive(socketPath: string): Promise<boolean> {
-	return new Promise<boolean>((resolve) => {
-		const probe = net.createConnection(socketPath);
-		let settled = false;
-		const finish = (live: boolean) => {
-			if (settled) return;
-			settled = true;
-			probe.destroy();
-			resolve(live);
-		};
-		probe.once("connect", () => finish(true));
-		probe.once("error", () => finish(false));
-		probe.setTimeout(250, () => finish(false));
-	});
 }

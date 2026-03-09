@@ -18,6 +18,15 @@ export { resolvePaths, ensureDirs, cleanStaleSocket, isWindows, getPlatform, typ
 
 // Public API: process management (for CLI commands)
 export { checkStatus, spawnDaemon, stopDaemon, type DaemonStatus } from "./process.js";
+export {
+	createDaemonServerAuth,
+	ensureDaemonBridgeToken,
+	resolveDaemonClientToken,
+	authorizeDaemonMethod,
+	type DaemonAuthContext,
+	type DaemonServerAuthConfig,
+	type DaemonRateLimitConfig,
+} from "./auth.js";
 
 // Public API: protocol types (for extensions)
 export {

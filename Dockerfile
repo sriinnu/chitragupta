@@ -22,7 +22,7 @@ COPY packages/ui/package.json            packages/ui/package.json
 COPY packages/yantra/package.json        packages/yantra/package.json
 COPY packages/dharma/package.json        packages/dharma/package.json
 COPY packages/netra/package.json         packages/netra/package.json
-COPY packages/vayu/package.json          packages/vayu/package.json
+COPY packages/prana/package.json          packages/prana/package.json
 COPY packages/sutra/package.json         packages/sutra/package.json
 COPY packages/tantra/package.json        packages/tantra/package.json
 COPY packages/vidhya-skills/package.json packages/vidhya-skills/package.json
@@ -58,7 +58,7 @@ COPY packages/ui/package.json            packages/ui/package.json
 COPY packages/yantra/package.json        packages/yantra/package.json
 COPY packages/dharma/package.json        packages/dharma/package.json
 COPY packages/netra/package.json         packages/netra/package.json
-COPY packages/vayu/package.json          packages/vayu/package.json
+COPY packages/prana/package.json          packages/prana/package.json
 COPY packages/sutra/package.json         packages/sutra/package.json
 COPY packages/tantra/package.json        packages/tantra/package.json
 COPY packages/vidhya-skills/package.json packages/vidhya-skills/package.json
@@ -77,7 +77,7 @@ COPY --from=build /app/packages/ui/dist            packages/ui/dist
 COPY --from=build /app/packages/yantra/dist        packages/yantra/dist
 COPY --from=build /app/packages/dharma/dist        packages/dharma/dist
 COPY --from=build /app/packages/netra/dist         packages/netra/dist
-COPY --from=build /app/packages/vayu/dist          packages/vayu/dist
+COPY --from=build /app/packages/prana/dist          packages/prana/dist
 COPY --from=build /app/packages/sutra/dist         packages/sutra/dist
 COPY --from=build /app/packages/tantra/dist        packages/tantra/dist
 COPY --from=build /app/packages/vidhya-skills/dist packages/vidhya-skills/dist

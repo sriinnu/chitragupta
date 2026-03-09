@@ -48,7 +48,7 @@ export interface HeartbeatData {
 	/** Timestamp of last tool call (epoch ms). */
 	lastToolCallAt: number | null;
 	/** Transport type. */
-	transport: "stdio" | "sse";
+	transport: "stdio" | "sse" | "streamable-http";
 	/** Mesh WebSocket port (for P2P auto-discovery). Null if mesh not active. */
 	meshPort: number | null;
 	/** Best-effort provider name for the hosting CLI. */
@@ -72,7 +72,7 @@ export interface HeartbeatOptions {
 	/** Workspace/project path. */
 	workspace: string;
 	/** Transport type. */
-	transport: "stdio" | "sse";
+	transport: "stdio" | "sse" | "streamable-http";
 }
 
 /** Handle to a running heartbeat writer. */

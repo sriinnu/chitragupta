@@ -23,10 +23,13 @@ import {
 	getActionType,
 	createEmbeddingProviderInstance,
 } from "./bootstrap.js";
+import { allowLocalRuntimeFallback, createDaemonNidraProxy, type NidraSnapshotLike } from "./runtime-daemon-proxies.js";
+import { createDaemonBackedMemoryBridge } from "./runtime-daemon-memory-bridge.js";
 import { resolveAgentLimits } from "./agent-limits.js";
 
 /** Result of API infrastructure wiring. */
 export interface ApiWiringResult {
+	memoryBridge?: import("@chitragupta/anina").MemoryBridge;
 	vidyaOrchestrator?: import("@chitragupta/vidhya-skills").VidyaOrchestrator;
 	policyAdapter?: AgentConfig["policyEngine"];
 	embeddingProvider?: Awaited<ReturnType<typeof createEmbeddingProviderInstance>>;
@@ -41,8 +44,12 @@ export interface ApiWiringResult {
 		}) => Promise<unknown>;
 	};
 	nidraDaemon?: {
-		start: () => void; stop: () => Promise<void>;
-		touch: () => void;
+		start: () => void | Promise<void>;
+		stop: () => Promise<void>;
+		touch: () => void | Promise<void>;
+		notifySession?: (sessionId: string) => void | Promise<void>;
+		wake?: () => void | Promise<void>;
+		snapshot?: () => NidraSnapshotLike | Promise<NidraSnapshotLike>;
 		onDream: (cb: (progress: (...args: unknown[]) => void) => Promise<void>) => void;
 		onDeepSleep: (cb: () => Promise<void>) => void;
 	};
@@ -72,6 +79,12 @@ export interface ApiWiringParams {
 export async function wireApiInfrastructure(params: ApiWiringParams): Promise<ApiWiringResult> {
 	const { projectPath, tools, sessionId, noMemory } = params;
 	const result: ApiWiringResult = { skillWatcherCleanups: [] };
+
+	void import("./modes/mcp-subsystems.js")
+		.then(({ primeLucyScarlettRuntime }) => primeLucyScarlettRuntime())
+		.catch(() => {
+			// Best-effort: daemon-backed Lucy/Scarlett bridge should not block API startup.
+		});
 
 	// ── Policy engine ──
 	wirePolicyEngine(result, sessionId, projectPath);
@@ -163,12 +176,12 @@ function wirePolicyEngine(
 
 async function wireMemoryBridge(result: ApiWiringResult, projectPath: string): Promise<void> {
 	try {
-		const { MemoryBridge } = await import("@chitragupta/anina");
-		const memoryBridge = new MemoryBridge({
+		const memoryBridge = createDaemonBackedMemoryBridge({
 			enabled: true, project: projectPath, enableSmaran: true,
 			enableGraphRAG: true, enableHybridSearch: true,
 			identityPath: projectPath, embeddingProvider: result.embeddingProvider,
 		});
+		result.memoryBridge = memoryBridge;
 		const identityCtx = memoryBridge.getIdentityContext();
 		if (identityCtx) {
 			const loaded = identityCtx.load().trim();
@@ -306,10 +319,21 @@ async function wireRtaEngine(result: ApiWiringResult): Promise<void> {
 
 async function wireNidraDaemon(result: ApiWiringResult, projectPath: string): Promise<void> {
 	try {
+		const { getNidraStatusViaDaemon } = await import("./modes/daemon-bridge.js");
+		await getNidraStatusViaDaemon();
+		const proxy = createDaemonNidraProxy() as NonNullable<typeof result.nidraDaemon>;
+		result.nidraDaemon = proxy;
+		await Promise.resolve(proxy.start());
+		return;
+	} catch {
+		// Fall through to local best-effort owner when daemon is unavailable.
+	}
+	if (!allowLocalRuntimeFallback()) return;
+	try {
 		const { NidraDaemon } = await import("@chitragupta/anina");
 		const nidra = new NidraDaemon({ project: projectPath });
 		result.nidraDaemon = nidra as unknown as typeof result.nidraDaemon;
-		result.nidraDaemon!.start();
+		await Promise.resolve(result.nidraDaemon!.start());
 
 		nidra.onDream(async (progress) => {
 			try {

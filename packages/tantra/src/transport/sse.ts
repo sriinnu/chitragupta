@@ -1,25 +1,54 @@
 /**
- * @chitragupta/tantra — Server-Sent Events (SSE) transport for MCP.
+ * @chitragupta/tantra — Legacy HTTP+SSE transport for MCP.
  *
- * SSEServerTransport creates an HTTP server with POST /message and GET /sse endpoints.
- * SSEClientTransport connects to an SSE endpoint and sends requests via POST.
+ * This is the older two-endpoint HTTP+SSE transport:
+ * - GET /sse opens a server-to-client event stream
+ * - POST /message sends client-to-server JSON-RPC
+ *
+ * It is not the newer streamable HTTP transport. The implementation keeps
+ * the legacy surface available, but hardens it for production use with
+ * loopback binding, origin validation, and per-client response routing.
  */
 
-import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
-import type { JsonRpcRequest, JsonRpcResponse, JsonRpcNotification } from "../types.js";
+import type {
+	JsonRpcNotification,
+	JsonRpcRequest,
+	JsonRpcResponse,
+	McpAuthContext,
+	McpMethodAuthorization,
+	McpServerAuthConfig,
+} from "../types.js";
 import { parseMessage } from "../jsonrpc.js";
+import { isLoopbackOrigin, type NormalizedServerAuth, normalizeServerAuth } from "./transport-auth.js";
+
+export { SSEClientTransport } from "./sse-client.js";
 
 type AnyMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
-type MessageHandler = (msg: AnyMessage) => void;
+export interface SSEMessageContext {
+	clientId?: string;
+	auth?: McpAuthContext;
+}
+
+type MessageHandler = (msg: AnyMessage, context?: SSEMessageContext) => void;
+
+interface SSEServerStartOptions {
+	host?: string;
+	allowedOrigins?: string[] | ((origin: string) => boolean);
+}
+
+interface RateLimitWindow {
+	count: number;
+	startedAt: number;
+}
 
 // ─── SSEServerTransport ─────────────────────────────────────────────────────
 
 interface SSEClient {
 	id: string;
 	res: ServerResponse;
+	auth?: McpAuthContext;
 }
 
 /**
@@ -36,6 +65,14 @@ export class SSEServerTransport {
 	private _server: Server | null = null;
 	private _clients: Map<string, SSEClient> = new Map();
 	private _handler: MessageHandler | null = null;
+	private _allowedOrigins: string[] | ((origin: string) => boolean) | null = null;
+	private _boundHost = "127.0.0.1";
+	private _auth: NormalizedServerAuth | null = null;
+	private _rateLimitWindows: Map<string, RateLimitWindow> = new Map();
+
+	constructor(auth?: McpServerAuthConfig) {
+		this._auth = normalizeServerAuth(auth);
+	}
 
 	/**
 	 * Register a handler for incoming messages.
@@ -90,14 +127,16 @@ export class SSEServerTransport {
 	 * @param port - The port number to listen on.
 	 * @returns A promise that resolves when the server is listening.
 	 */
-	start(port: number): Promise<void> {
+	start(port: number, options: SSEServerStartOptions = {}): Promise<void> {
+		this._boundHost = options.host ?? "127.0.0.1";
+		this._allowedOrigins = options.allowedOrigins ?? null;
 		return new Promise((resolve, reject) => {
 			this._server = createServer((req, res) => {
 				this._handleHttp(req, res);
 			});
 
 			this._server.on("error", reject);
-			this._server.listen(port, () => {
+			this._server.listen(port, this._boundHost, () => {
 				resolve();
 			});
 		});
@@ -129,10 +168,23 @@ export class SSEServerTransport {
 	 * Route incoming HTTP requests to the appropriate handler.
 	 */
 	private _handleHttp(req: IncomingMessage, res: ServerResponse): void {
+		const origin = req.headers.origin;
+		if (origin && !this._isOriginAllowed(origin)) {
+			res.writeHead(403, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "Origin not allowed" }));
+			return;
+		}
+
 		// CORS headers
-		res.setHeader("Access-Control-Allow-Origin", "*");
+		if (origin && this._isOriginAllowed(origin)) {
+			res.setHeader("Access-Control-Allow-Origin", origin);
+			res.setHeader("Vary", "Origin");
+		}
 		res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-		res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+		res.setHeader(
+			"Access-Control-Allow-Headers",
+			this._auth ? `Content-Type, ${this._auth.headerName}` : "Content-Type",
+		);
 
 		if (req.method === "OPTIONS") {
 			res.writeHead(204);
@@ -143,9 +195,9 @@ export class SSEServerTransport {
 		const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
 		if (req.method === "GET" && url.pathname === "/sse") {
-			this._handleSSE(req, res);
+			this._handleSSE(req, res, url);
 		} else if (req.method === "POST" && url.pathname === "/message") {
-			this._handleMessage(req, res);
+			this._handleMessage(req, res, url);
 		} else {
 			res.writeHead(404, { "Content-Type": "application/json" });
 			res.end(JSON.stringify({ error: "Not found" }));
@@ -155,7 +207,13 @@ export class SSEServerTransport {
 	/**
 	 * Handle GET /sse — establish an SSE connection.
 	 */
-	private _handleSSE(_req: IncomingMessage, res: ServerResponse): void {
+	private _handleSSE(req: IncomingMessage, res: ServerResponse, url: URL): void {
+		const auth = this._authenticate(req, url);
+		if (!auth.ok) {
+			this._writeJsonError(res, auth.statusCode, auth.error);
+			return;
+		}
+
 		const clientId = randomUUID();
 
 		res.writeHead(200, {
@@ -167,7 +225,7 @@ export class SSEServerTransport {
 		// Send the client their ID as the first event
 		res.write(`event: endpoint\ndata: /message?clientId=${clientId}\n\n`);
 
-		this._clients.set(clientId, { id: clientId, res });
+		this._clients.set(clientId, { id: clientId, res, auth: auth.context });
 
 		res.on("close", () => {
 			this._clients.delete(clientId);
@@ -177,7 +235,28 @@ export class SSEServerTransport {
 	/**
 	 * Handle POST /message — receive a JSON-RPC message from a client.
 	 */
-	private _handleMessage(req: IncomingMessage, res: ServerResponse): void {
+	private _handleMessage(req: IncomingMessage, res: ServerResponse, url: URL): void {
+		const auth = this._authenticate(req, url);
+		if (!auth.ok) {
+			this._writeJsonError(res, auth.statusCode, auth.error);
+			return;
+		}
+
+		const clientId = url.searchParams.get("clientId");
+		if (!clientId) {
+			this._writeJsonError(res, 400, "Missing required clientId");
+			return;
+		}
+		const client = this._clients.get(clientId);
+		if (!client) {
+			this._writeJsonError(res, 404, "Unknown SSE client");
+			return;
+		}
+		if (!this._isClientBoundToAuth(client, auth.context)) {
+			this._writeJsonError(res, 403, "Client/token mismatch");
+			return;
+		}
+
 		let body = "";
 
 		req.setEncoding("utf-8");
@@ -188,18 +267,145 @@ export class SSEServerTransport {
 		req.on("end", () => {
 			const msg = parseMessage(body);
 			if (!msg) {
-				res.writeHead(400, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ error: "Invalid JSON-RPC message" }));
+				this._writeJsonError(res, 400, "Invalid JSON-RPC message");
+				return;
+			}
+
+			const rateLimitError = this._consumeRateLimit(msg, auth.context);
+			if (rateLimitError) {
+				this._writeJsonError(res, 429, rateLimitError);
+				return;
+			}
+
+			const authorization = this._authorizeMessage(msg, auth.context);
+			if (!authorization.allowed) {
+				this._writeJsonError(
+					res,
+					403,
+					authorization.error ?? `Forbidden${authorization.requiredScope ? `: requires ${authorization.requiredScope}` : ""}`,
+				);
 				return;
 			}
 
 			if (this._handler) {
-				this._handler(msg);
+				this._handler(msg, { clientId, auth: auth.context });
 			}
 
 			res.writeHead(200, { "Content-Type": "application/json" });
 			res.end(JSON.stringify({ ok: true }));
 		});
+	}
+
+	private _isOriginAllowed(origin: string): boolean {
+		if (!origin) return true;
+		if (typeof this._allowedOrigins === "function") {
+			return this._allowedOrigins(origin);
+		}
+		if (Array.isArray(this._allowedOrigins)) {
+			return this._allowedOrigins.includes(origin);
+		}
+		return isLoopbackOrigin(origin);
+	}
+
+	private _authenticate(req: IncomingMessage, url: URL): {
+		ok: boolean;
+		context?: McpAuthContext;
+		statusCode: number;
+		error?: string;
+	} {
+		if (!this._auth) {
+			return { ok: true, statusCode: 200 };
+		}
+
+		const token = this._extractToken(req, url);
+		if (!token) {
+			if (!this._auth.required) {
+				return { ok: true, statusCode: 200 };
+			}
+			return { ok: false, statusCode: 401, error: "Missing bridge token" };
+		}
+
+		const result = this._auth.validateToken(token);
+		if (!result.authenticated) {
+			return { ok: false, statusCode: 401, error: result.error ?? "Unauthorized" };
+		}
+
+		return {
+			ok: true,
+			statusCode: 200,
+			context: {
+				keyId: result.keyId,
+				tenantId: result.tenantId,
+				scopes: result.scopes ?? [],
+			},
+		};
+	}
+
+	private _extractToken(req: IncomingMessage, url: URL): string | null {
+		if (!this._auth) return null;
+
+		const headerValue = req.headers[this._auth.headerLookup];
+		const rawHeader = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+		if (typeof rawHeader === "string" && rawHeader.trim()) {
+			const trimmed = rawHeader.trim();
+			const bearerPrefix = `${this._auth.bearerPrefix} `;
+			if (trimmed.startsWith(bearerPrefix)) {
+				return trimmed.slice(bearerPrefix.length).trim();
+			}
+			return trimmed;
+		}
+
+		if (this._auth.allowQueryToken) {
+			const token = url.searchParams.get(this._auth.queryParam);
+			if (typeof token === "string" && token.trim()) {
+				return token.trim();
+			}
+		}
+
+		return null;
+	}
+
+	private _authorizeMessage(msg: AnyMessage, context?: McpAuthContext): McpMethodAuthorization {
+		if (!this._auth?.authorizeMethod || !("method" in msg) || typeof msg.method !== "string") {
+			return { allowed: true };
+		}
+		return this._auth.authorizeMethod(msg.method, context ?? { scopes: [] });
+	}
+
+	private _consumeRateLimit(msg: AnyMessage, context?: McpAuthContext): string | null {
+		if (!this._auth?.rateLimit || !("method" in msg) || typeof msg.method !== "string") {
+			return null;
+		}
+
+		const exemptMethods = new Set(this._auth.rateLimit.exemptMethods ?? []);
+		if (exemptMethods.has(msg.method)) return null;
+
+		const rateLimitKey = context?.keyId ?? context?.tenantId ?? "anonymous";
+		const now = Date.now();
+		const current = this._rateLimitWindows.get(rateLimitKey);
+		if (!current || now - current.startedAt >= this._auth.rateLimit.windowMs) {
+			this._rateLimitWindows.set(rateLimitKey, { count: 1, startedAt: now });
+			return null;
+		}
+
+		if (current.count >= this._auth.rateLimit.maxRequests) {
+			return "Rate limit exceeded";
+		}
+
+		current.count += 1;
+		return null;
+	}
+
+	private _isClientBoundToAuth(client: SSEClient, context?: McpAuthContext): boolean {
+		if (!client.auth || !context) return true;
+		if (client.auth.keyId && context.keyId && client.auth.keyId !== context.keyId) return false;
+		if (client.auth.tenantId && context.tenantId && client.auth.tenantId !== context.tenantId) return false;
+		return true;
+	}
+
+	private _writeJsonError(res: ServerResponse, statusCode: number, error?: string): void {
+		res.writeHead(statusCode, { "Content-Type": "application/json" });
+		res.end(JSON.stringify({ error: error ?? "Request failed" }));
 	}
 }
 
@@ -211,210 +417,3 @@ export class SSEServerTransport {
  * Connects to an MCP server's SSE endpoint and sends requests via POST.
  * Implements auto-reconnect with exponential backoff (up to 10 attempts).
  */
-export class SSEClientTransport {
-	private _handler: MessageHandler | null = null;
-	private _baseUrl = "";
-	private _messageEndpoint = "";
-	private _connected = false;
-	private _abortController: AbortController | null = null;
-	private _reconnectAttempts = 0;
-	private _maxReconnectAttempts = 10;
-	private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-	/**
-	 * Register a handler for incoming messages from the server.
-	 *
-	 * @param handler - Callback invoked for each parsed JSON-RPC message.
-	 */
-	onMessage(handler: MessageHandler): void {
-		this._handler = handler;
-	}
-
-	/**
-	 * Send a JSON-RPC message to the server via POST.
-	 *
-	 * @param message - The JSON-RPC message to send.
-	 * @returns A promise that resolves on successful delivery.
-	 * @throws If not connected or the POST fails.
-	 */
-	send(message: AnyMessage): Promise<void> {
-		if (!this._connected || !this._messageEndpoint) {
-			return Promise.reject(new Error("SSEClientTransport: not connected"));
-		}
-
-		const body = JSON.stringify(message);
-		const url = new URL(this._messageEndpoint, this._baseUrl);
-		const isHttps = url.protocol === "https:";
-		const doRequest = isHttps ? httpsRequest : httpRequest;
-
-		return new Promise((resolve, reject) => {
-			const req = doRequest(
-				url,
-				{
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						"Content-Length": Buffer.byteLength(body),
-					},
-				},
-				(res) => {
-					// Consume response
-					res.resume();
-					if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-						resolve();
-					} else {
-						reject(new Error(`SSEClientTransport: POST failed with status ${res.statusCode}`));
-					}
-				},
-			);
-
-			req.on("error", reject);
-			req.setTimeout(30_000, () => {
-				req.destroy(new Error("SSEClientTransport: POST timed out after 30s"));
-			});
-			req.write(body);
-			req.end();
-		});
-	}
-
-	/**
-	 * Connect to the SSE endpoint.
-	 *
-	 * @param url - The base URL of the MCP server (e.g., "http://localhost:3001").
-	 * @returns A promise that resolves when the SSE connection is established.
-	 */
-	connect(url: string): Promise<void> {
-		this._baseUrl = url;
-		this._reconnectAttempts = 0;
-
-		return this._doConnect();
-	}
-
-	/**
-	 * Disconnect from the SSE endpoint.
-	 */
-	disconnect(): void {
-		this._connected = false;
-		if (this._abortController) {
-			this._abortController.abort();
-			this._abortController = null;
-		}
-		if (this._reconnectTimer) {
-			clearTimeout(this._reconnectTimer);
-			this._reconnectTimer = null;
-		}
-	}
-
-	/**
-	 * Internal: establish the SSE connection.
-	 */
-	private _doConnect(): Promise<void> {
-		return new Promise((resolve, reject) => {
-			const sseUrl = new URL("/sse", this._baseUrl);
-			const isHttps = sseUrl.protocol === "https:";
-			const doRequest = isHttps ? httpsRequest : httpRequest;
-
-			this._abortController = new AbortController();
-
-			const req = doRequest(
-				sseUrl,
-				{
-					method: "GET",
-					headers: { Accept: "text/event-stream" },
-				},
-				(res) => {
-					if (res.statusCode !== 200) {
-						reject(new Error(`SSEClientTransport: SSE connect failed with status ${res.statusCode}`));
-						return;
-					}
-
-					this._connected = true;
-					this._reconnectAttempts = 0;
-					let buffer = "";
-
-					res.setEncoding("utf-8");
-					res.on("data", (chunk: string) => {
-						buffer += chunk;
-						// Parse SSE events from buffer
-						const events = buffer.split("\n\n");
-						buffer = events.pop() ?? "";
-
-						for (const event of events) {
-							this._parseSSEEvent(event);
-						}
-					});
-
-					res.on("end", () => {
-						this._connected = false;
-						this._scheduleReconnect();
-					});
-
-					res.on("error", () => {
-						this._connected = false;
-						this._scheduleReconnect();
-					});
-
-					resolve();
-				},
-			);
-
-			req.on("error", (err) => {
-				if (this._reconnectAttempts === 0) {
-					reject(err);
-				} else {
-					this._scheduleReconnect();
-				}
-			});
-
-			req.end();
-		});
-	}
-
-	/**
-	 * Parse an SSE event string and dispatch the message.
-	 */
-	private _parseSSEEvent(event: string): void {
-		const lines = event.split("\n");
-		let eventType = "";
-		let data = "";
-
-		for (const line of lines) {
-			if (line.startsWith("event:")) {
-				eventType = line.slice(6).trim();
-			} else if (line.startsWith("data:")) {
-				data += (data ? "\n" : "") + line.slice(5).trim();
-			}
-		}
-
-		if (eventType === "endpoint" && data) {
-			// Store the message endpoint
-			this._messageEndpoint = data;
-			return;
-		}
-
-		if (data) {
-			const msg = parseMessage(data);
-			if (msg && this._handler) {
-				this._handler(msg);
-			}
-		}
-	}
-
-	/**
-	 * Schedule a reconnect attempt with exponential backoff.
-	 */
-	private _scheduleReconnect(): void {
-		if (this._reconnectAttempts >= this._maxReconnectAttempts) {
-			return;
-		}
-
-		const delay = Math.min(1000 * Math.pow(2, this._reconnectAttempts), 30_000);
-		this._reconnectAttempts++;
-
-		this._reconnectTimer = setTimeout(() => {
-			this._doConnect().catch(() => {
-				// Reconnect failure handled by _scheduleReconnect in the connect flow
-			});
-		}, delay);
-	}
-}

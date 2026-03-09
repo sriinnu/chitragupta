@@ -1,6 +1,25 @@
 # Novel Algorithms
 
-Chitragupta does not glue APIs together. It implements novel algorithms with mathematical rigor. Every data structure is chosen for a reason.
+This document describes the concrete algorithms and algorithmic composites that exist in the repository.
+
+Some entries are direct implementations of established mathematical primitives. Others are Chitragupta-specific compositions that combine several ideas into a runtime behavior.
+
+## Reading Guide
+
+- Direct algorithmic primitives in this repo include families such as Wilson confidence bounds, EMA smoothing, BOCPD, Personalized PageRank, contextual bandits, and SWIM-style gossip.
+- Higher-level rows such as Swapna consolidation, information-theoretic compaction, or skill evolution are repo-native compositions built from those primitives and related literature.
+- The research map lives in [research.md](./research.md). That document distinguishes direct anchors from heuristic adaptations and validation references.
+- pi-mono lineage is not the provenance story for the algorithms listed here. Where pi-mono is relevant, it is mostly in adjacent operator ergonomics rather than these mathematical or retrieval components.
+
+## Research Traceability
+
+| Algorithm family in this file | Where to trace the research grounding |
+| --- | --- |
+| Memory and retrieval | [research.md#memory-and-consolidation](./research.md#memory-and-consolidation) and [research.md#neuroscience-inspired](./research.md#neuroscience-inspired) |
+| Agent intelligence and metacognition | [research.md#metacognition-and-self-awareness](./research.md#metacognition-and-self-awareness) |
+| Orchestration, proactive behavior, and routing | [research.md#proactive-and-predictive-agents](./research.md#proactive-and-predictive-agents) and [research.md#model-routing-and-cost-optimization](./research.md#model-routing-and-cost-optimization) |
+| Skill evolution and proceduralization | [research.md#tool-and-skill-evolution](./research.md#tool-and-skill-evolution) |
+| Safety, world models, and guardrails | [research.md#safety-and-guardrails](./research.md#safety-and-guardrails) and [research.md#causal-and-world-models](./research.md#causal-and-world-models) |
 
 ---
 

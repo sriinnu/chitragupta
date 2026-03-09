@@ -1,9 +1,10 @@
 /**
  * Takumi Bridge — Protocol Types.
  *
- * Defines the structured communication protocol between Chitragupta (brain)
- * and Takumi (coding agent). Communication happens via NDJSON over stdio
- * when spawning Takumi as a child process.
+ * Defines the communication contract between Chitragupta (brain)
+ * and Takumi (coding agent). The preferred path uses Takumi's current
+ * one-shot CLI surface with `--print --stream ndjson`; plain `--print`
+ * text mode is the compatibility fallback.
  *
  * @module
  */
@@ -30,17 +31,30 @@ export interface TakumiBridgeOptions {
 export interface TakumiContext {
 	/** Tree-sitter repo map summary (from netra). */
 	repoMap?: string;
+	/** Force fresh inspection instead of relying on predictive summaries. */
+	noCache?: boolean;
+	/** Alias for `noCache` to make fresh-mode intent explicit at call sites. */
+	fresh?: boolean;
 	/** Episodic memory hints — past error patterns, solutions. */
 	episodicHints?: string[];
 	/** Recent architectural decisions from Akasha. */
 	recentDecisions?: string[];
 	/** Relevant file contents keyed by path. */
 	fileContext?: Record<string, string>;
+	/** Engine-selected execution lane metadata from route.resolve. */
+	engineRoute?: {
+		routeClass?: string;
+		capability?: string | null;
+		selectedCapabilityId?: string | null;
+		enforced?: boolean;
+		reason?: string | null;
+		policyTrace?: string[];
+	};
 }
 
 // ─── Request / Response ────────────────────────────────────────────────────
 
-/** Structured request sent to Takumi over NDJSON. */
+/** Structured request sent to the Takumi bridge. */
 export interface TakumiRequest {
 	/** Discriminator — always "task" for now. */
 	type: "task";
@@ -50,7 +64,7 @@ export interface TakumiRequest {
 	context?: TakumiContext;
 }
 
-/** Structured result returned by Takumi over NDJSON. */
+/** Structured result synthesized by the bridge from Takumi output. */
 export interface TakumiResponse {
 	/** Discriminator — always "result". */
 	type: "result";
@@ -64,6 +78,13 @@ export interface TakumiResponse {
 	output: string;
 	/** Process exit code (0 = success). */
 	exitCode: number;
+	/**
+	 * Bridge mode actually used for this execution.
+	 * `rpc` means structured NDJSON stream compatibility mode.
+	 */
+	modeUsed?: "rpc" | "cli";
+	/** Whether the caller requested a fresh/no-cache Takumi run. */
+	cacheIntent?: "default" | "fresh";
 }
 
 /** Streaming event emitted by Takumi during execution. */
@@ -78,7 +99,10 @@ export interface TakumiEvent {
 
 /** Detection result for Takumi availability and mode. */
 export interface TakumiBridgeStatus {
-	/** Communication mode: rpc (NDJSON), cli (text), or unavailable. */
+	/**
+	 * Communication mode: `rpc` means Takumi's structured NDJSON stream via
+	 * `--print --stream ndjson`; `cli` means plain `--print` text mode.
+	 */
 	mode: "rpc" | "cli" | "unavailable";
 	/** The resolved command used for detection. */
 	command: string;

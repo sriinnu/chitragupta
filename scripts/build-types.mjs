@@ -37,7 +37,7 @@ const PACKAGES = [
 	"yantra",
 	"dharma",
 	"netra",
-	"vayu",
+	"prana",
 	"sutra",
 	"tantra",
 	"vidhya-skills",

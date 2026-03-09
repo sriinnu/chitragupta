@@ -12,21 +12,23 @@
  *
  * Usage:
  *   chitragupta-mcp                         Stdio mode (default)
- *   chitragupta-mcp --sse --port 3001       SSE/HTTP mode
+ *   chitragupta-mcp --sse --port 3001                 Legacy SSE/HTTP mode
+ *   chitragupta-mcp --streamable-http --port 3001     Streamable HTTP mode
  *   chitragupta-mcp --agent                 Enable agent prompt tool
  *   chitragupta-mcp --project /path/to/dir  Set project directory
  *
  * Environment variables:
- *   CHITRAGUPTA_MCP_TRANSPORT    "stdio" or "sse" (default: "stdio")
+ *   CHITRAGUPTA_MCP_TRANSPORT    "stdio", "sse", or "streamable-http" (default: "stdio")
  *   CHITRAGUPTA_MCP_PORT         Port for SSE mode (default: 3001)
  *   CHITRAGUPTA_MCP_PROJECT      Project directory (default: cwd)
  *   CHITRAGUPTA_MCP_AGENT        "true" to enable agent tool
  *   CHITRAGUPTA_MCP_NAME         Server name (default: "chitragupta")
+ *   CHITRAGUPTA_MCP_BRIDGE_API_KEY  Override bridge token for SSE / daemon bridge clients
  */
 
 import { runMcpServerMode } from "./modes/mcp-server.js";
 import { loadCredentials } from "./bootstrap.js";
-import { configureLogging, ConsoleTransport } from "@chitragupta/core";
+import { configureLogging, ConsoleTransport, parseBridgeKeyFromEnv } from "@chitragupta/core";
 import { CLI_PACKAGE_VERSION } from "./version.js";
 
 // ─── Stdout Guard ───────────────────────────────────────────────────────────
@@ -112,14 +114,15 @@ async function runDiagnostics(): Promise<void> {
 // ─── Parse CLI Arguments ────────────────────────────────────────────────────
 
 function parseArgs(argv: string[]): {
-	transport: "stdio" | "sse";
+	transport: "stdio" | "sse" | "streamable-http";
 	port: number;
 	projectPath: string;
 	enableAgent: boolean;
 	name: string;
 	check: boolean;
 } {
-	let transport: "stdio" | "sse" = (process.env.CHITRAGUPTA_MCP_TRANSPORT as "stdio" | "sse") ?? "stdio";
+	let transport: "stdio" | "sse" | "streamable-http" =
+		(process.env.CHITRAGUPTA_MCP_TRANSPORT as "stdio" | "sse" | "streamable-http") ?? "stdio";
 	let port = parseInt(process.env.CHITRAGUPTA_MCP_PORT ?? "3001", 10) || 3001;
 	let projectPath = process.env.CHITRAGUPTA_MCP_PROJECT ?? process.cwd();
 	let enableAgent = process.env.CHITRAGUPTA_MCP_AGENT === "true";
@@ -131,6 +134,8 @@ function parseArgs(argv: string[]): {
 
 		if (arg === "--sse") {
 			transport = "sse";
+		} else if (arg === "--streamable-http") {
+			transport = "streamable-http";
 		} else if (arg === "--stdio") {
 			transport = "stdio";
 		} else if (arg === "--port" && i + 1 < argv.length) {
@@ -149,17 +154,19 @@ function parseArgs(argv: string[]): {
 				"\nChitragupta MCP Server\n\n" +
 				"Usage:\n" +
 				"  chitragupta-mcp                         Stdio mode (default)\n" +
-				"  chitragupta-mcp --sse --port 3001       SSE/HTTP mode\n" +
+				"  chitragupta-mcp --sse --port 3001                 Legacy SSE/HTTP mode\n" +
+				"  chitragupta-mcp --streamable-http --port 3001     Streamable HTTP mode\n" +
 				"  chitragupta-mcp --agent                 Enable agent prompt tool\n" +
 				"  chitragupta-mcp --project /path/to/dir  Set project directory\n" +
 				"  chitragupta-mcp --check                 Run environment diagnostics\n" +
 				"  chitragupta-mcp --name my-chitragupta   Custom server name\n\n" +
 				"Environment variables:\n" +
-				"  CHITRAGUPTA_MCP_TRANSPORT    stdio|sse (default: stdio)\n" +
-				"  CHITRAGUPTA_MCP_PORT         SSE port (default: 3001)\n" +
-				"  CHITRAGUPTA_MCP_PROJECT      Project directory\n" +
-				"  CHITRAGUPTA_MCP_AGENT        true to enable agent\n" +
-				"  CHITRAGUPTA_MCP_NAME         Server name\n\n" +
+				"  CHITRAGUPTA_MCP_TRANSPORT    stdio|sse|streamable-http (default: stdio)\n" +
+					"  CHITRAGUPTA_MCP_PORT         SSE port (default: 3001)\n" +
+					"  CHITRAGUPTA_MCP_PROJECT      Project directory\n" +
+					"  CHITRAGUPTA_MCP_AGENT        true to enable agent\n" +
+					"  CHITRAGUPTA_MCP_NAME         Server name\n" +
+					"  CHITRAGUPTA_MCP_BRIDGE_API_KEY  Override bridge token for SSE clients\n\n" +
 				"Claude Code integration (.mcp.json in project root):\n" +
 				'  {\n' +
 				'    "mcpServers": {\n' +
@@ -185,6 +192,12 @@ function parseArgs(argv: string[]): {
 async function main(): Promise<void> {
 	const t0 = performance.now();
 	const args = parseArgs(process.argv.slice(2));
+	parseBridgeKeyFromEnv(process.env, [
+		"CHITRAGUPTA_MCP_BRIDGE_API_KEY",
+		"CHITRAGUPTA_DAEMON_API_KEY",
+		"CHITRAGUPTA_API_KEY",
+		"CHITRAGUPTA_BRIDGE_API_KEY",
+	]);
 
 	// Diagnostic mode — check environment and exit
 	if (args.check) {
