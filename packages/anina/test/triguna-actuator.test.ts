@@ -24,7 +24,7 @@ function createMockKaala() {
 		healTree: vi.fn(),
 		getTreeHealth: vi.fn(),
 		setConfig: vi.fn(),
-	} satisfies KaalaLifecycle & { setConfig: ReturnType<typeof vi.fn> };
+	};
 }
 
 function createMockSamiti() {
