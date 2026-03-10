@@ -247,7 +247,10 @@ Current rule:
 - `pakt-core` is the preferred engine-owned runtime; stdio `pakt serve --stdio` is the supported fallback
 - the daemon exposes `compression.pack_context` for live-context packing, and engine surfaces should treat the daemon response as authoritative while it is reachable
 - local in-process packing is only the daemon-unavailable fallback, not a bypass for a daemon-side `packed: false` decision
-- live Takumi prompt synthesis should use that same daemon-first packing path for bulky repo/file context and preserve packed Lucy hint blocks instead of collapsing them to generic short-hint limits
+- daemon-authored Lucy guidance/prediction blocks should be reused verbatim by consumers instead of being rebuilt locally from raw predictions/signals when the daemon already provided them
+- live Takumi prompt synthesis should use that same daemon-first packing path for bulky repo/file context, episodic hint sections, and recent-decision sections, while preserving packed Lucy hint blocks instead of collapsing them to generic short-hint limits
+- consumers that reuse previously packed live context should normalize it first instead of blindly nesting packed payloads into another packed section
+- auxiliary env exports are intentionally best-effort and may omit bulky raw context instead of bypassing the engine-owned packing policy
 - consumers should inspect `compression.status` / `runtime.compression_policy` instead of assuming a specific runtime is always available
 - consumers should request compression from the engine instead of inventing their own durable compaction lane
 - compressed outputs remain derived artifacts and must preserve provenance back to canonical session or consolidation sources
@@ -267,17 +270,21 @@ Contract:
 - consumers request the semantic lane
 - the daemon may materialize discovered models into temporary routeable capabilities
 - `route.resolve` still returns one engine-selected lane plus attached `discoveryHints`
+- `discovery.info` should be treated as cached control-plane state and may expose freshness metadata such as schema version, TTL, routing authority, and cache age
 - for `chat.flex` and `tool.use.flex`, the daemon now prefers healthy discovered capabilities first instead of treating discovery as a weak afterthought
 - callers may pass `preferredModelId` or `preferredModelIds` inside the route-resolution context to express a discovery preference; the engine may hard-pin the matching healthy discovered capability, but the decision still belongs to Chitragupta
 - consumers should not bypass this by hardcoding provider/model choices as a second authority
 - consumers that want strict engine-lane enforcement should pass an explicit `routeClass` or `capability` together with the canonical `sessionId`
 - when a canonical coding `sessionId` exists but no explicit `routeClass` is supplied, the coding path may infer a default engine route class from the task before resolving the lane
-- bounded research is stricter: it now requires both the workflow lane (`research.bounded`) and the execution lane (default `tool.use.flex`) to resolve through the daemon before execution proceeds
+- bounded research is stricter: it now resolves both the workflow lane (`research.bounded`) and the execution lane (default `tool.use.flex`) through one daemon `route.resolveBatch` call before execution proceeds
 - bounded research records now persist the packed context block itself when the daemon-approved PAKT path succeeds, so recall can reuse the derived compacted context without reconstructing it from raw logs
+- bounded research records now also persist execution-binding provenance such as preferred discovered providers/models when a discovery-backed execution lane was selected
 - a Takumi bridge caller must fail closed when the engine resolves a non-Takumi lane instead of overriding that decision locally
 - if the engine resolves the request to the local `tool.coding_agent` lane, the caller should respect that and fall back to the local coding CLI path instead of treating the result as a policy error
 - if the engine resolves the request to a compatible model/runtime lane such as `discovery.model.*` or `engine.local.*`, the Takumi bridge may still execute, but only inside that engine-selected envelope and without overriding the selected lane locally
 - a Takumi bridge caller must also fail closed when explicit engine-route resolution was requested but the daemon route lookup fails, or when the engine selected Takumi and the Takumi bridge is unavailable
+- a Takumi bridge caller must also fail closed when an enforced route or enforced route envelope cannot be transported through the structured bridge contract without dropping authoritative engine selections
+- when Takumi explicitly reports a provider or model outside an enforced engine-selected lane, the bridge should treat that as a contract violation and fail closed instead of accepting the run
 
 ## Sabha Replication Contract
 
@@ -398,7 +405,13 @@ Current consumer-facing daemon methods now include:
 - `route.resolve`
   - resolves a route class or raw capability to the engine-selected lane
   - also returns optional `discoveryHints`, so provider/model inventory and cheapest-route guidance stay attached to the engine decision
+  - may return an `executionBinding` envelope when the selected lane is an executor such as Takumi and the engine wants the consumer to stay inside a discovery-backed model/provider set
+  - that envelope can now carry both the preferred provider/model set and the currently selected provider/model pair the consumer should honor
   - consumers that request explicit engine-route enforcement should treat route-resolution failure as a hard stop, not as permission to fall back to a local vendor choice
+
+- `route.resolveBatch`
+  - resolves multiple route classes in one daemon call
+  - intended for consumers with role-based planners/workers/reviewers so they do not rebuild route policy locally
 
 - `session.open`
   - consumer-friendly open-or-create session alias

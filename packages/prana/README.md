@@ -70,6 +70,8 @@ Research nodes keep one canonical project/session path:
 - the daemon session binds to the canonical project root
 - `researchCwd` may narrow execution inside that project, but may not escape it
 - optional `researchParentSessionId` and `researchSessionLineageKey` propagate lineage into the engine session ledger
+- `route.resolveBatch` is used for the bounded workflow lane plus the execution lane so Prana does not rebuild route policy locally
+- the returned execution envelope now preserves the selected provider/model pair and the preferred allowed set for the bounded run
 - daemon `compression.pack_context` is authoritative while the daemon is reachable
 
 ### Chitragupta Workflow Templates (7 templates)

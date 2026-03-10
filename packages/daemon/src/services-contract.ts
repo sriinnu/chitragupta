@@ -3,7 +3,10 @@ import { getCompressionPolicyStatus } from "./services-compression.js";
 import { getDiscoveryRouteHints, getDiscoveryStatus } from "./services-discovery.js";
 import {
 	applyDiscoveryRoutePreference,
+	buildDiscoveryExecutionBinding,
+	normalizeEngineCapabilityForRouting,
 	resolveDiscoveryRouteQuery,
+	resolveDiscoveryRouteQueryForRequest,
 } from "./services-discovery-routing.js";
 import { getLocalRuntimePolicyStatus } from "./services-local-runtime.js";
 import {
@@ -11,8 +14,10 @@ import {
 	resolveCapabilitySurface,
 	routeCapability,
 	type ConsumerConstraint,
+	type RouteClassDescriptor,
 	type RoutingRequest,
 } from "./services-contract-catalog.js";
+import type { RouteExecutionBinding } from "./services-contract-catalog-types.js";
 import {
 	listRouteClasses,
 	mergeRouteClassConstraints,
@@ -25,6 +30,101 @@ function authSnapshot(context?: RpcInvocationContext): Record<string, unknown> {
 		keyId: context?.auth?.keyId ?? null,
 		tenantId: context?.auth?.tenantId ?? null,
 		scopes: context?.auth?.scopes ?? [],
+	};
+}
+
+interface RouteResolveParams {
+	consumer?: unknown;
+	sessionId?: unknown;
+	routeClass?: unknown;
+	capability?: unknown;
+	constraints?: unknown;
+	context?: unknown;
+}
+
+function buildRoutingRequest(params: RouteResolveParams): {
+	request: RoutingRequest;
+	routeClass: RouteClassDescriptor | null;
+} {
+	const requestedRouteClass = typeof params.routeClass === "string" ? params.routeClass.trim() : "";
+	const routeClass = requestedRouteClass ? resolveRouteClass(requestedRouteClass) : null;
+	if (requestedRouteClass && !routeClass) {
+		throw new Error(`Unknown routeClass '${requestedRouteClass}'.`);
+	}
+	const requestedCapability = normalizeEngineCapabilityForRouting(String(params.capability ?? "").trim());
+	if (routeClass && requestedCapability && requestedCapability !== routeClass.capability) {
+		throw new Error(
+			`routeClass '${routeClass.id}' resolves to capability '${routeClass.capability}', `
+			+ `got incompatible capability '${requestedCapability}'.`,
+		);
+	}
+	const rawConstraints = (typeof params.constraints === "object" && params.constraints !== null)
+		? params.constraints as ConsumerConstraint
+		: undefined;
+	const request: RoutingRequest = {
+		consumer: String(params.consumer ?? "consumer").trim(),
+		sessionId: String(params.sessionId ?? "").trim(),
+		capability: requestedCapability || routeClass?.capability || "",
+		routeClass: routeClass?.id,
+		constraints: mergeRouteClassConstraints(routeClass?.constraints, rawConstraints),
+		context: (typeof params.context === "object" && params.context !== null)
+			? params.context as Record<string, unknown>
+			: undefined,
+	};
+	if (!request.sessionId || !request.capability) {
+		throw new Error("Missing sessionId and capability/routeClass");
+	}
+	return { request, routeClass };
+}
+
+async function resolveRouteDecision(params: RouteResolveParams): Promise<{
+	request: RoutingRequest;
+	routeClass: RouteClassDescriptor | null;
+	discoveryHints: Awaited<ReturnType<typeof getDiscoveryRouteHints>>;
+	executionBinding: RouteExecutionBinding | null;
+	selected: ReturnType<typeof routeCapability>["selected"];
+	reason: string;
+	fallbackChain: string[];
+	policyTrace: string[];
+	degraded: boolean;
+	discoverableOnly: boolean;
+}> {
+	const { request, routeClass } = buildRoutingRequest(params);
+	const discoveryQuery = resolveDiscoveryRouteQueryForRequest(request.capability, routeClass);
+	const includeDiscoveredModels = discoveryQuery !== null;
+	const capabilities = await resolveCapabilitySurface({ includeDiscoveredModels });
+	const discoveryHints = includeDiscoveredModels
+		? await getDiscoveryRouteHints(request.capability, 3, discoveryQuery)
+		: null;
+	const discoveryPreference = applyDiscoveryRoutePreference(request, capabilities, discoveryHints);
+	const routedRequest: RoutingRequest = discoveryPreference.constraints
+		? {
+			...request,
+			constraints: discoveryPreference.constraints,
+		}
+		: request;
+	const routed = routeCapability(routedRequest, capabilities);
+	if (discoveryPreference.policyTrace.length > 0) {
+		routed.policyTrace.push(...discoveryPreference.policyTrace);
+	}
+	if (routedRequest.constraints?.preferredCapabilityIds?.length) {
+		routed.policyTrace.push(`preferred:${routedRequest.constraints.preferredCapabilityIds.join(",")}`);
+	}
+	if (routedRequest.constraints?.hardCapabilityId) {
+		routed.policyTrace.push(`hard:${routedRequest.constraints.hardCapabilityId}`);
+	}
+	return {
+		...routed,
+		request,
+		routeClass,
+		discoveryHints,
+		executionBinding: buildDiscoveryExecutionBinding(
+			routeClass,
+			discoveryHints,
+			capabilities,
+			routed.selected?.id ?? null,
+			routed.fallbackChain,
+		),
 	};
 }
 
@@ -81,9 +181,9 @@ export function registerContractMethods(router: RpcRouter): void {
 
 	router.register("bridge.capabilities", async () => {
 		const methods = router.listMethods().map((meta) => meta.name).sort();
-			return {
-				contractVersion: 2,
-				methods,
+		return {
+			contractVersion: 2,
+			methods,
 			groups: {
 				bridge: methods.filter((name) => name.startsWith("bridge.")),
 				session: methods.filter((name) => name.startsWith("session.") || name.startsWith("turn.")),
@@ -106,24 +206,24 @@ export function registerContractMethods(router: RpcRouter): void {
 					|| name.startsWith("heal.")
 					|| name.startsWith("preference."),
 				),
-				},
-				routeClasses: listRouteClasses().map((descriptor) => ({
-					id: descriptor.id,
-					label: descriptor.label,
-					capability: descriptor.capability,
-					description: descriptor.description,
-					tags: descriptor.tags,
-				})),
-				consumerModel: {
-					vaayu: "primary-consumer",
-					takumi: "consumer-and-executable-capability",
+			},
+			routeClasses: listRouteClasses().map((descriptor) => ({
+				id: descriptor.id,
+				label: descriptor.label,
+				capability: descriptor.capability,
+				description: descriptor.description,
+				tags: descriptor.tags,
+			})),
+			consumerModel: {
+				vaayu: "primary-consumer",
+				takumi: "consumer-and-executable-capability",
 			},
 			sabhaProtocol: {
 				verbs: [
-						"list_active",
-						"get",
-						"resume",
-						"ask",
+					"list_active",
+					"get",
+					"resume",
+					"ask",
 					"submit_perspective",
 					"deliberate",
 					"challenge",
@@ -138,14 +238,14 @@ export function registerContractMethods(router: RpcRouter): void {
 					"record",
 					"escalate",
 				],
-				},
-				routingProtocol: {
-					supportsRouteClasses: true,
-					defaultOwner: "chitragupta",
-				},
-				runtime: {
-					serverPush: router.hasNotifier(),
-					liveLucyContext: methods.includes("lucy.live_context"),
+			},
+			routingProtocol: {
+				supportsRouteClasses: true,
+				defaultOwner: "chitragupta",
+			},
+			runtime: {
+				serverPush: router.hasNotifier(),
+				liveLucyContext: methods.includes("lucy.live_context"),
 				localRuntimePolicy: methods.includes("runtime.local_policy"),
 				compressionPolicy: methods.includes("runtime.compression_policy"),
 			},
@@ -205,72 +305,44 @@ export function registerContractMethods(router: RpcRouter): void {
 				),
 			),
 		};
-		}, "Describe the engine-owned compression policy for PAKT-backed compaction");
+	}, "Describe the engine-owned compression policy for PAKT-backed compaction");
 
-		router.register("route.classes", async () => ({
-			contractVersion: 1,
-			routeClasses: listRouteClasses(),
-		}), "List engine-owned route classes for consumers such as Takumi and Vaayu");
+	router.register("route.classes", async () => ({
+		contractVersion: 1,
+		routeClasses: listRouteClasses(),
+	}), "List engine-owned route classes for consumers such as Takumi and Vaayu");
 
 	router.register("capabilities", async (params) => {
-			return {
-				capabilities: filterCapabilities(await resolveCapabilitySurface(), params),
+		return {
+			capabilities: filterCapabilities(await resolveCapabilitySurface(), params),
 		};
 	}, "Query engine-owned capabilities for external consumers");
 
 	router.register("route.resolve", async (params) => {
-			const requestedRouteClass = typeof params.routeClass === "string" ? params.routeClass.trim() : "";
-			const routeClass = requestedRouteClass ? resolveRouteClass(requestedRouteClass) : null;
-			if (requestedRouteClass && !routeClass) {
-				throw new Error(`Unknown routeClass '${requestedRouteClass}'.`);
-			}
-			const requestedCapability = String(params.capability ?? "").trim();
-			if (routeClass && requestedCapability && requestedCapability !== routeClass.capability) {
-				throw new Error(
-					`routeClass '${routeClass.id}' resolves to capability '${routeClass.capability}', `
-					+ `got incompatible capability '${requestedCapability}'.`,
-				);
-			}
-			const rawConstraints = (typeof params.constraints === "object" && params.constraints !== null)
-				? params.constraints as ConsumerConstraint
-				: undefined;
-			const request: RoutingRequest = {
-				consumer: String(params.consumer ?? "consumer").trim(),
-				sessionId: String(params.sessionId ?? "").trim(),
-				capability: requestedCapability || routeClass?.capability || "",
-				routeClass: routeClass?.id,
-				constraints: mergeRouteClassConstraints(routeClass?.constraints, rawConstraints),
-				context: (typeof params.context === "object" && params.context !== null)
-					? params.context as Record<string, unknown>
-					: undefined,
-			};
-			if (!request.sessionId || !request.capability) {
-				throw new Error("Missing sessionId and capability/routeClass");
-				}
-				const includeDiscoveredModels = resolveDiscoveryRouteQuery(request.capability) !== null;
-				const capabilities = await resolveCapabilitySurface({ includeDiscoveredModels });
-				const discoveryHints = includeDiscoveredModels ? await getDiscoveryRouteHints(request.capability) : null;
-				const discoveryPreference = applyDiscoveryRoutePreference(request, capabilities, discoveryHints);
-				const routedRequest: RoutingRequest = discoveryPreference.constraints
-					? {
-						...request,
-						constraints: discoveryPreference.constraints,
-					}
-					: request;
-				const routed = routeCapability(routedRequest, capabilities);
-				if (discoveryPreference.policyTrace.length > 0) {
-					routed.policyTrace.push(...discoveryPreference.policyTrace);
-				}
-				if (routedRequest.constraints?.preferredCapabilityIds?.length) {
-					routed.policyTrace.push(`preferred:${routedRequest.constraints.preferredCapabilityIds.join(",")}`);
-				}
-				if (routedRequest.constraints?.hardCapabilityId) {
-					routed.policyTrace.push(`hard:${routedRequest.constraints.hardCapabilityId}`);
-				}
-				return {
-					...routed,
-				routeClass,
-				discoveryHints,
-			};
-		}, "Resolve a semantic consumer request into an engine-owned capability");
+		return resolveRouteDecision(params);
+	}, "Resolve a semantic consumer request into an engine-owned capability");
+
+	router.register("route.resolveBatch", async (params) => {
+		const sessionId = String(params.sessionId ?? "").trim();
+		const consumer = String(params.consumer ?? "consumer").trim();
+		const routes = Array.isArray(params.routes) ? params.routes : [];
+		if (!sessionId) throw new Error("Missing sessionId");
+		if (routes.length === 0) throw new Error("Missing routes");
+		return {
+			contractVersion: 1,
+			resolutions: await Promise.all(routes.map(async (entry, index) => ({
+				key: typeof (entry as { key?: unknown }).key === "string"
+					? (entry as { key: string }).key
+					: `route-${index + 1}`,
+				...(await resolveRouteDecision({
+					consumer,
+					sessionId,
+					routeClass: (entry as { routeClass?: unknown }).routeClass,
+					capability: (entry as { capability?: unknown }).capability,
+					constraints: (entry as { constraints?: unknown }).constraints,
+					context: (entry as { context?: unknown }).context,
+				})),
+			}))),
+		};
+	}, "Resolve multiple route classes/capabilities into engine-owned execution bindings");
 }

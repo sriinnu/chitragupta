@@ -5,7 +5,6 @@ import {
 	listPersistedSabhaEvents,
 	listPersistedSabhaStates,
 	recordPersistedSabhaMutation,
-	savePersistedSabhaStateSnapshot,
 } from "./services-collaboration-store.js";
 import {
 	dispatchSabhaMeshBinding,
@@ -22,6 +21,7 @@ import {
 	getSabhaEventLog,
 	getSabhaMeshBindingMap,
 	getSabhaPerspectiveMap,
+	getSabhaRevision,
 	getSabhaTouchedAt,
 	listSabhaMeshBindings,
 	listTrackedSabhaIds,
@@ -172,9 +172,9 @@ export async function dispatchMeshConsultations(
 		const bindings = listSabhaMeshBindings(sabha.id);
 		if (bindings.length === 0) return [];
 		const perspectiveMap = getSabhaPerspectiveMap(sabha.id);
-		const dispatches: SabhaMeshDispatchRecord[] = [];
-		const leaseOwner = getCollaborationMeshLeaseOwner();
-		for (const binding of bindings) {
+			const dispatches: SabhaMeshDispatchRecord[] = [];
+			const leaseOwner = getCollaborationMeshLeaseOwner();
+			for (const binding of bindings) {
 			if (participantFilter && !participantFilter.has(binding.participantId)) continue;
 			if (perspectiveMap.has(binding.participantId)) continue;
 			if (
@@ -185,23 +185,36 @@ export async function dispatchMeshConsultations(
 				})
 			) {
 				continue;
-			}
-			const previousState = buildPersistedSabhaState(sabha);
-			const pendingRecord: SabhaMeshDispatchRecord = {
-				participantId: binding.participantId,
-				target: binding.resolvedTarget?.trim() || binding.target,
+				}
+				const pendingRecord: SabhaMeshDispatchRecord = {
+					participantId: binding.participantId,
+					target: binding.resolvedTarget?.trim() || binding.target,
 				mode: binding.mode,
 				status: "pending",
 				attemptedAt: Date.now(),
 				leaseOwner,
-				leaseExpiresAt: Date.now() + Math.max(1_000, binding.timeoutMs),
-				resumed: options?.resumed === true,
-			};
-			appendSabhaDispatchRecord(sabha.id, pendingRecord);
-			savePersistedSabhaStateSnapshot(buildPersistedSabhaState(sabha), previousState);
-			const dispatch = await dispatchSabhaMeshBinding(sabha, binding, {
-				applyPerspective: (perspective) => {
-					if (perspectiveMap.has(perspective.participantId)) return false;
+					leaseExpiresAt: Date.now() + Math.max(1_000, binding.timeoutMs),
+					resumed: options?.resumed === true,
+				};
+				appendSabhaDispatchRecord(sabha.id, pendingRecord);
+				const leaseEvent = recordPersistedSabhaMutation(buildPersistedSabhaState(sabha), {
+					expectedRevision: getSabhaRevision(sabha.id),
+					eventType: options?.resumed === true
+						? "mesh_dispatch_pending_resumed"
+						: "mesh_dispatch_pending",
+					payload: {
+						participantId: binding.participantId,
+						target: pendingRecord.target,
+						status: pendingRecord.status,
+						leaseOwner,
+						leaseExpiresAt: pendingRecord.leaseExpiresAt,
+						resumed: options?.resumed === true,
+					},
+				});
+				appendSabhaEventRecord(leaseEvent);
+				const dispatch = await dispatchSabhaMeshBinding(sabha, binding, {
+					applyPerspective: (perspective) => {
+						if (perspectiveMap.has(perspective.participantId)) return false;
 					perspectiveMap.set(perspective.participantId, perspective);
 					return true;
 				},
@@ -272,8 +285,12 @@ export async function resumeActiveSabhaMeshDispatches(
 	for (const sabha of sharedSabhaEngine.listActive()) {
 		try {
 			await resumePendingMeshConsultations(router, sabha, { forceFailed: true });
-		} catch {
-			// Keep the daemon live; clients can gather or retry the Sabha later.
+		} catch (error) {
+			console.warn(
+				`[chitragupta:sabha] failed to resume pending mesh work for '${sabha.id}': ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
 		}
 	}
 }

@@ -155,6 +155,11 @@ export function authorizeDaemonMethod(
 			? { allowed: true }
 			: { allowed: false, required: "read" };
 	}
+	if (method === "research.experiments.list") {
+		return hasScope(scopes, "read") || hasScope(scopes, "memory")
+			? { allowed: true }
+			: { allowed: false, required: "read" };
+	}
 	if (method.startsWith("bridge.")) {
 		return hasScope(scopes, "read") ? { allowed: true } : { allowed: false, required: "read" };
 	}
@@ -176,6 +181,7 @@ export function authorizeDaemonMethod(
 		|| method.startsWith("nidra.")
 		|| method.startsWith("consolidation.")
 		|| method === "semantic.sync_curated"
+		|| method === "research.experiments.record"
 		|| method.startsWith("fact.")
 		|| method.startsWith("akasha.")
 		|| method === "memory.write"

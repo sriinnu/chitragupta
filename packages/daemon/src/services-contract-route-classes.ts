@@ -16,6 +16,12 @@ const ROUTE_CLASSES: RouteClassDescriptor[] = [
 			preferredCapabilityIds: ["tool.coding_agent"],
 		},
 		tags: ["coding", "local", "fast"],
+		discoveryBinding: {
+			capability: "function_calling",
+			mode: "chat",
+			preferLocalProviders: true,
+			allowCrossProvider: false,
+		},
 		metadata: { owner: "chitragupta", class: "execution-lane" },
 	},
 	{
@@ -30,6 +36,12 @@ const ROUTE_CLASSES: RouteClassDescriptor[] = [
 			preferredCapabilityIds: ["tool.coding_agent"],
 		},
 		tags: ["coding", "patch", "economical"],
+		discoveryBinding: {
+			capability: "function_calling",
+			mode: "chat",
+			preferLocalProviders: true,
+			allowCrossProvider: false,
+		},
 		metadata: { owner: "chitragupta", class: "execution-lane" },
 	},
 	{
@@ -43,6 +55,12 @@ const ROUTE_CLASSES: RouteClassDescriptor[] = [
 			preferredCapabilityIds: ["adapter.takumi.executor"],
 		},
 		tags: ["coding", "reasoning", "review"],
+		discoveryBinding: {
+			capability: "chat",
+			mode: "chat",
+			preferLocalProviders: true,
+			allowCrossProvider: true,
+		},
 		metadata: { owner: "chitragupta", class: "execution-lane" },
 	},
 	{
@@ -56,6 +74,12 @@ const ROUTE_CLASSES: RouteClassDescriptor[] = [
 			preferredCapabilityIds: ["adapter.takumi.executor"],
 		},
 		tags: ["coding", "review", "strict"],
+		discoveryBinding: {
+			capability: "chat",
+			mode: "chat",
+			preferLocalProviders: true,
+			allowCrossProvider: true,
+		},
 		metadata: { owner: "chitragupta", class: "execution-lane" },
 	},
 	{
@@ -69,6 +93,12 @@ const ROUTE_CLASSES: RouteClassDescriptor[] = [
 			preferredCapabilityIds: ["adapter.takumi.executor"],
 		},
 		tags: ["coding", "validation", "high-trust"],
+		discoveryBinding: {
+			capability: "chat",
+			mode: "chat",
+			preferLocalProviders: true,
+			allowCrossProvider: true,
+		},
 		metadata: { owner: "chitragupta", class: "execution-lane" },
 	},
 	{

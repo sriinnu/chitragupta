@@ -14,7 +14,10 @@ import {
 import { registerContractMethods } from "../src/services-contract.js";
 import { registerMeshMethods } from "../src/services-mesh.js";
 import { _resetDiscoveryStateForTests, registerDiscoveryMethods } from "../src/services-discovery.js";
-import { getCollaborationMeshSystemForTests } from "../src/services-collaboration-mesh.js";
+import {
+	getCollaborationMeshLeaseOwner,
+	getCollaborationMeshSystemForTests,
+} from "../src/services-collaboration-mesh.js";
 import { savePersistedSabhaStateSnapshot } from "../src/services-collaboration-store.js";
 import {
 	_resetCollaborationStateForTests,
@@ -61,7 +64,14 @@ const providerRoles = vi.fn(() => [
 const capabilities = vi.fn(() => [
 	{ capability: "chat", modelCount: 1, providerCount: 1, providers: ["openai"], modes: ["chat"] },
 ]);
-const cheapestModels = vi.fn(() => ({ matches: [], candidates: 1, pricedCandidates: 1, skippedNoPricing: 0, priceMetric: "blended", missingCredentials: [] }));
+const cheapestModels = vi.fn(() => ({
+	matches: [{ modelId: "gpt-4.1", providerId: "openai" }],
+	candidates: 1,
+	pricedCandidates: 1,
+	skippedNoPricing: 0,
+	priceMetric: "blended",
+	missingCredentials: [],
+}));
 const modelRouteInfo = vi.fn(() => [
 	{ provider: "openai", originProvider: "openai", isDirect: true, isPreferred: true },
 ]);
@@ -240,12 +250,28 @@ describe("collaboration + consumer bridge contract services", () => {
 			}, ctx) as {
 				selected: { id: string } | null;
 				routeClass: { id: string; capability: string } | null;
+				executionBinding: {
+					source: string;
+					kind: string;
+					preferredModelIds: string[];
+					preferredProviderIds: string[];
+					allowCrossProvider: boolean;
+				} | null;
 				policyTrace: string[];
 			};
 			expect(strictRoute.selected?.id).toBe("adapter.takumi.executor");
 			expect(strictRoute.routeClass).toEqual(expect.objectContaining({
 				id: "coding.review.strict",
 				capability: "coding.review",
+			}));
+			expect(strictRoute.executionBinding).toEqual(expect.objectContaining({
+				source: "kosha-discovery",
+				kind: "executor",
+				selectedModelId: "gpt-4.1",
+				selectedProviderId: "openai",
+				preferredModelIds: ["gpt-4.1"],
+				preferredProviderIds: ["openai"],
+				allowCrossProvider: true,
 			}));
 			expect(strictRoute.policyTrace).toContain("route-class:coding.review.strict");
 
@@ -254,14 +280,16 @@ describe("collaboration + consumer bridge contract services", () => {
 				sessionId: "sess-chat",
 				capability: "chat",
 			}, ctx) as {
+				selected: { id: string } | null;
 				discoveryHints: {
 					capability: string;
 					capabilities: Array<{ capability: string }>;
 					cheapest: { candidates: number } | null;
 				} | null;
 			};
+			expect(chatRoute.selected?.id).toBe("discovery.model.openai.gpt-4-1");
 			expect(chatRoute.discoveryHints).toEqual(expect.objectContaining({
-				capability: "chat",
+				capability: "model.chat",
 				capabilities: [expect.objectContaining({ capability: "chat" })],
 			}));
 			expect(chatRoute.discoveryHints?.cheapest).toEqual(expect.objectContaining({ candidates: 1 }));
@@ -304,6 +332,39 @@ describe("collaboration + consumer bridge contract services", () => {
 					"discovery-explicit:discovery.model.openai.gpt-4-1",
 					"discovery-hard:discovery.model.openai.gpt-4-1",
 				]));
+
+			const batchRoute = await router.handle("route.resolveBatch", {
+				consumer: "takumi",
+				sessionId: "sess-batch",
+				routes: [
+					{ key: "planner", routeClass: "coding.deep-reasoning" },
+					{ key: "reviewer", routeClass: "coding.review.strict" },
+				],
+			}, ctx) as {
+				contractVersion: number;
+				resolutions: Array<{
+					key: string;
+					selected: { id: string } | null;
+					executionBinding: { preferredModelIds?: string[]; preferredProviderIds?: string[] } | null;
+				}>;
+			};
+			expect(batchRoute.contractVersion).toBe(1);
+			expect(batchRoute.resolutions).toEqual(expect.arrayContaining([
+				expect.objectContaining({
+					key: "planner",
+					selected: expect.objectContaining({ id: "adapter.takumi.executor" }),
+					executionBinding: expect.objectContaining({
+						selectedModelId: "gpt-4.1",
+						selectedProviderId: "openai",
+						preferredModelIds: ["gpt-4.1"],
+						preferredProviderIds: ["openai"],
+					}),
+				}),
+				expect.objectContaining({
+					key: "reviewer",
+					selected: expect.objectContaining({ id: "adapter.takumi.executor" }),
+				}),
+			]));
 			});
 
 	it("reports daemon-owned mesh status and topology for the collaboration runtime", async () => {
@@ -918,7 +979,7 @@ describe("collaboration + consumer bridge contract services", () => {
 					expect.objectContaining({
 						participantId: "mesh-peer",
 						status: "pending",
-						leaseOwner: "sabha-daemon",
+						leaseOwner: expect.stringContaining("sabha-daemon"),
 					}),
 					expect.objectContaining({
 						participantId: "mesh-peer",
@@ -976,6 +1037,7 @@ describe("collaboration + consumer bridge contract services", () => {
 
 		it("resumes an expired pending Sabha mesh lease after restart", async () => {
 			const now = Date.now();
+			const leaseOwner = getCollaborationMeshLeaseOwner();
 			savePersistedSabhaStateSnapshot({
 				sabha: {
 					id: "sabha-restart",
@@ -1079,6 +1141,7 @@ describe("collaboration + consumer bridge contract services", () => {
 
 		it("resumes a same-owner pending mesh lease immediately after restart", async () => {
 			const now = Date.now();
+			const leaseOwner = getCollaborationMeshLeaseOwner();
 			savePersistedSabhaStateSnapshot({
 				sabha: {
 					id: "sabha-restart-same-owner",
@@ -1112,7 +1175,7 @@ describe("collaboration + consumer bridge contract services", () => {
 						mode: "ask",
 						status: "pending",
 						attemptedAt: now - 500,
-						leaseOwner: "sabha-daemon",
+						leaseOwner,
 						leaseExpiresAt: now + 20_000,
 					},
 				],
@@ -1161,7 +1224,7 @@ describe("collaboration + consumer bridge contract services", () => {
 				expect.objectContaining({
 					participantId: "memory-peer",
 					status: "pending",
-					leaseOwner: "sabha-daemon",
+					leaseOwner,
 				}),
 				expect.objectContaining({
 					participantId: "memory-peer",
@@ -1180,6 +1243,88 @@ describe("collaboration + consumer bridge contract services", () => {
 					}),
 				}),
 			]));
+		});
+
+		it("does not resume a foreign unexpired mesh lease after restart", async () => {
+			const now = Date.now();
+			savePersistedSabhaStateSnapshot({
+				sabha: {
+					id: "sabha-restart-foreign-owner",
+					topic: "Should an unexpired foreign mesh lease be taken over?",
+					status: "convened",
+					convener: "vaayu",
+					participants: [
+						{ id: "memory-peer", role: "observer", expertise: 0.74, credibility: 0.81 },
+						{ id: "kartru", role: "proposer", expertise: 0.82, credibility: 0.86 },
+					],
+					rounds: [],
+					finalVerdict: null,
+					createdAt: now - 60_000,
+					concludedAt: null,
+				},
+				revision: 1,
+				clientBindings: {},
+				meshBindings: [
+					{
+						participantId: "memory-peer",
+						target: "capability:sabha.consult.memory",
+						mode: "ask",
+						timeoutMs: 10_000,
+						topic: "sabha.consult",
+					},
+				],
+				dispatchLog: [
+					{
+						participantId: "memory-peer",
+						target: "capability:sabha.consult.memory",
+						mode: "ask",
+						status: "pending",
+						attemptedAt: now - 500,
+						leaseOwner: "remote-node",
+						leaseExpiresAt: now + 20_000,
+					},
+				],
+				perspectives: [],
+			});
+
+			DatabaseManager.reset();
+			_resetCollaborationStateForTests();
+			initAgentSchema(DatabaseManager.instance(tmpDir));
+
+			router = new RpcRouter();
+			notifications = [];
+			router.setNotifier((notification) => {
+				notifications.push(notification);
+				return 1;
+			});
+			registerCompressionMethods(router);
+			registerDiscoveryMethods(router);
+			registerContractMethods(router);
+			registerCollaborationMethods(router);
+			registerMeshMethods(router);
+
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			const recovered = await router.handle("sabha.get", { id: "sabha-restart-foreign-owner" }, ctx) as {
+				sabha: {
+					perspectives: Array<{ participantId: string }>;
+					dispatchLog: Array<{ participantId: string; status: string; leaseOwner?: string }>;
+					recentEvents: Array<{ eventType: string; payload?: Record<string, unknown> }>;
+				};
+			};
+
+			expect(recovered.sabha.perspectives).toEqual([]);
+			expect(recovered.sabha.dispatchLog).toEqual([
+				expect.objectContaining({
+					participantId: "memory-peer",
+					status: "pending",
+					leaseOwner: "remote-node",
+				}),
+			]);
+			expect(
+				recovered.sabha.recentEvents.some(
+					(event) => event.eventType === "mesh_dispatch_resumed",
+				),
+			).toBe(false);
 		});
 
 		it("resumes pending mesh work through the explicit sabha.resume contract", async () => {

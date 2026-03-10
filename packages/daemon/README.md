@@ -139,7 +139,10 @@ Discovery notes:
 - It contributes provider/model inventory, route availability, pricing, and provider health.
 - Route authority remains with Chitragupta; discovery does not replace engine policy.
 - Generic engine lanes such as `chat.flex` and `tool.use.flex` can be widened into temporary routeable discovered-model capabilities during `route.resolve`.
-- Consumers still receive one engine-selected lane plus `discoveryHints`; they should not treat discovery as a second routing authority.
+- Consumers receive one engine-selected lane plus attached discovery metadata.
+- `route.resolve` can also return an `executionBinding` envelope when a consumer such as Takumi should stay inside an engine-approved provider/model set.
+- that envelope can carry both the selected provider/model pair and the broader preferred provider/model set for the lane
+- `route.resolveBatch` exists so multi-role consumers can request multiple bindings in one daemon call instead of reconstructing route policy locally.
 
 ## Usage
 

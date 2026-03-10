@@ -7,45 +7,63 @@ import type { NodeContext } from "../src/chitragupta-nodes.js";
 const {
 	appendMemory,
 	packLiveContextText,
+	upsertResearchExperiment,
 	databaseGet,
 	createClient,
 	daemonCall,
+	defaultDaemonCallImplementation,
 	disconnect,
 } = vi.hoisted(() => {
-	const appendMemory = vi.fn(async () => undefined);
-	const packLiveContextText = vi.fn(async (text: string) => ({
-		runtime: "pakt-core",
-		savings: 42,
-		packedText: `packed:${text.slice(0, 24)}`,
-	}));
-	const databaseGet = vi.fn(() => ({}));
-	const daemonCall = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+		const appendMemory = vi.fn(async () => undefined);
+		const packLiveContextText = vi.fn(async (text: string) => ({
+			runtime: "pakt-core",
+			savings: 42,
+			packedText: `packed:${text.slice(0, 24)}`,
+		}));
+		const upsertResearchExperiment = vi.fn(() => ({ id: "exp-fallback-1" }));
+		const databaseGet = vi.fn(() => ({}));
+	const defaultDaemonCallImplementation = async (method: string, params?: Record<string, unknown>) => {
 			switch (method) {
 				case "lucy.live_context":
 					return { hit: null, predictions: [], liveSignals: [] };
 				case "session.open":
 					return { session: { meta: { id: "sess-autoresearch" } }, created: true };
-				case "route.resolve":
-					if (params?.routeClass === "tool.use.flex") {
+				case "route.resolveBatch":
 						return {
-							request: { capability: "model.tool-use" },
-							routeClass: { id: "tool.use.flex", capability: "model.tool-use" },
-							selected: { id: "discovery.model.ollama.qwen-coder" },
-							discoverableOnly: false,
-							degraded: false,
-							reason: "Selected discovery.model.ollama.qwen-coder for model.tool-use",
-							policyTrace: ["consumer:prana:autoresearch:execution", "route-class:tool.use.flex", "selected:discovery.model.ollama.qwen-coder"],
+							contractVersion: 1,
+							resolutions: [
+								{
+									key: "research",
+									request: { capability: "research.autoresearch" },
+									routeClass: { id: "research.bounded", capability: "research.autoresearch" },
+									selected: { id: "engine.research.autoresearch" },
+									discoverableOnly: false,
+									degraded: false,
+									reason: "Selected engine.research.autoresearch for research.autoresearch",
+									policyTrace: ["consumer:prana:autoresearch", "route-class:research.bounded", "selected:engine.research.autoresearch"],
+								},
+								{
+									key: "execution",
+									request: { capability: "model.tool-use" },
+									routeClass: { id: "tool.use.flex", capability: "model.tool-use" },
+									selected: { id: "discovery.model.ollama.qwen-coder" },
+									executionBinding: {
+										source: "kosha-discovery",
+										kind: "executor",
+										query: { capability: "function_calling", mode: "chat" },
+										selectedModelId: "qwen-coder",
+										selectedProviderId: "ollama",
+										preferredModelIds: ["qwen-coder"],
+										preferredProviderIds: ["ollama"],
+										allowCrossProvider: false,
+									},
+									discoverableOnly: false,
+									degraded: false,
+									reason: "Selected discovery.model.ollama.qwen-coder for model.tool-use",
+									policyTrace: ["consumer:prana:autoresearch:execution", "route-class:tool.use.flex", "selected:discovery.model.ollama.qwen-coder"],
+								},
+							],
 						};
-					}
-						return {
-							request: { capability: "research.autoresearch" },
-							routeClass: { id: "research.bounded", capability: "research.autoresearch" },
-						selected: { id: "engine.research.autoresearch" },
-						discoverableOnly: false,
-						degraded: false,
-						reason: "Selected engine.research.autoresearch for research.autoresearch",
-						policyTrace: ["consumer:prana:autoresearch", "route-class:research.bounded", "selected:engine.research.autoresearch"],
-					};
 			case "sabha.ask":
 				return { sabha: { id: "sabha-daemon", topic: String(params?.question ?? "") } };
 			case "sabha.deliberate":
@@ -72,25 +90,31 @@ const {
 					savings: 42,
 					packedText: "packed:daemon",
 				};
-			case "memory.append":
-				return { appended: true };
-			case "akasha.leave":
-				return { trace: { id: "trace-1" } };
-			default:
-				throw new Error(`Unexpected daemon method: ${method}`);
-		}
-	});
+			case "research.outcome.record":
+				return {
+					recorded: true,
+					memoryScope: "project",
+					traceId: "trace-1",
+					experimentId: "exp-daemon-1",
+				};
+				default:
+					throw new Error(`Unexpected daemon method: ${method}`);
+			}
+	};
+	const daemonCall = vi.fn(defaultDaemonCallImplementation);
 	const disconnect = vi.fn();
 	const createClient = vi.fn(async () => ({
 		call: daemonCall,
 		disconnect,
 	}));
-	return {
-		appendMemory,
-		packLiveContextText,
-		databaseGet,
-		createClient,
-		daemonCall,
+		return {
+			appendMemory,
+			packLiveContextText,
+			upsertResearchExperiment,
+			databaseGet,
+			createClient,
+			daemonCall,
+		defaultDaemonCallImplementation,
 		disconnect,
 	};
 });
@@ -176,6 +200,7 @@ let researchDir = "";
 vi.mock("@chitragupta/smriti", () => ({
 	appendMemory,
 	packLiveContextText,
+	upsertResearchExperiment,
 	AkashaField: MockAkashaField,
 	DatabaseManager: {
 		instance: () => ({ get: databaseGet }),
@@ -206,9 +231,11 @@ describe("chitragupta research nodes", () => {
 		await fs.writeFile(path.join(researchDir, "prepare.py"), "print('prepare')\n", "utf8");
 		appendMemory.mockClear();
 		packLiveContextText.mockClear();
+		upsertResearchExperiment.mockClear();
 		databaseGet.mockClear();
 		createClient.mockClear();
-		daemonCall.mockClear();
+		daemonCall.mockReset();
+		daemonCall.mockImplementation(defaultDaemonCallImplementation);
 		disconnect.mockClear();
 	});
 
@@ -270,6 +297,12 @@ describe("chitragupta research nodes", () => {
 							routeClass: "tool.use.flex",
 							capability: "model.tool-use",
 							selectedCapabilityId: "discovery.model.ollama.qwen-coder",
+							executionBinding: expect.objectContaining({
+								selectedModelId: "qwen-coder",
+								selectedProviderId: "ollama",
+								preferredModelIds: ["qwen-coder"],
+								preferredProviderIds: ["ollama"],
+							}),
 							discoverableOnly: false,
 						}),
 					}),
@@ -282,15 +315,19 @@ describe("chitragupta research nodes", () => {
 			project: researchDir,
 			agent: "prana:autoresearch",
 		}));
-		expect(daemonCall).toHaveBeenCalledWith("route.resolve", expect.objectContaining({
+		expect(daemonCall).toHaveBeenCalledWith("route.resolveBatch", expect.objectContaining({
 			consumer: "prana:autoresearch",
 			sessionId: "sess-autoresearch",
-			routeClass: "research.bounded",
-		}));
-		expect(daemonCall).toHaveBeenCalledWith("route.resolve", expect.objectContaining({
-			consumer: "prana:autoresearch:execution",
-			sessionId: "sess-autoresearch",
-			routeClass: "tool.use.flex",
+			routes: expect.arrayContaining([
+				expect.objectContaining({
+					key: "research",
+					routeClass: "research.bounded",
+				}),
+				expect.objectContaining({
+					key: "execution",
+					routeClass: "tool.use.flex",
+				}),
+			]),
 		}));
 	});
 
@@ -314,11 +351,16 @@ describe("chitragupta research nodes", () => {
 			surface: "research",
 			channel: "workflow",
 		}));
-		expect(daemonCall).toHaveBeenCalledWith("route.resolve", expect.objectContaining({
-			context: expect.objectContaining({
-				projectPath: researchDir,
-				cwd: path.join(researchDir, "subdir"),
-			}),
+		expect(daemonCall).toHaveBeenCalledWith("route.resolveBatch", expect.objectContaining({
+			routes: expect.arrayContaining([
+				expect.objectContaining({
+					key: "research",
+					context: expect.objectContaining({
+						projectPath: researchDir,
+						cwd: path.join(researchDir, "subdir"),
+					}),
+				}),
+			]),
 		}));
 	});
 
@@ -334,11 +376,11 @@ describe("chitragupta research nodes", () => {
 		expect(result.summary).toContain("canonical project path");
 	});
 
-	it("runs a bounded experiment only after council approval and extracts the metric", async () => {
-		const { autoresearchRun } = await import("../src/chitragupta-nodes-research.js");
-		const result = await autoresearchRun(makeContext({
-			stepOutputs: {
-				"acp-research-council": { data: { finalVerdict: "accepted" } },
+		it("runs a bounded experiment only after council approval and extracts the metric", async () => {
+			const { autoresearchRun } = await import("../src/chitragupta-nodes-research.js");
+			const result = await autoresearchRun(makeContext({
+				stepOutputs: {
+					"acp-research-council": { data: { finalVerdict: "accepted" } },
 			},
 			extra: {
 				researchCommand: process.execPath,
@@ -348,14 +390,111 @@ describe("chitragupta research nodes", () => {
 		}));
 
 		expect(result.ok).toBe(true);
-		expect(result.data).toEqual(
-			expect.objectContaining({
-				metricName: "val_bpb",
+			expect(result.data).toEqual(
+				expect.objectContaining({
+					metricName: "val_bpb",
+					metric: 0.991,
+					timedOut: false,
+				}),
+			);
+		});
+
+		it("passes engine-selected execution lane details into bounded research runs", async () => {
+			const { autoresearchRun } = await import("../src/chitragupta-nodes-research.js");
+			const result = await autoresearchRun(makeContext({
+				stepOutputs: {
+					"acp-research-council": {
+						data: {
+							finalVerdict: "accepted",
+							executionRoute: {
+								routeClass: "tool.use.flex",
+								capability: "model.tool-use",
+								selectedCapabilityId: "discovery.model.ollama.qwen-coder",
+								discoverableOnly: false,
+								reason: "Selected discovery.model.ollama.qwen-coder for model.tool-use",
+								executionBinding: {
+									source: "kosha-discovery",
+									kind: "executor",
+									selectedModelId: "qwen-coder",
+									selectedProviderId: "ollama",
+									preferredModelIds: ["qwen-coder"],
+									preferredProviderIds: ["ollama"],
+									allowCrossProvider: false,
+								},
+							},
+						},
+					},
+				},
+				extra: {
+					researchCommand: process.execPath,
+					researchArgs: [
+						"-e",
+						[
+							"console.log(process.env.CHITRAGUPTA_SELECTED_MODEL_ID);",
+							"console.log(process.env.CHITRAGUPTA_SELECTED_PROVIDER_ID);",
+							"console.log(process.env.CHITRAGUPTA_SELECTED_CAPABILITY_ID);",
+							"console.log(process.env.CHITRAGUPTA_PREFERRED_PROVIDER_IDS);",
+							"console.log(process.env.CHITRAGUPTA_EXECUTION_ROUTE_CLASS);",
+							"console.log('val_bpb: 0.991000');",
+						].join(""),
+					],
+					researchCwd: researchDir,
+				},
+			}));
+
+			expect(result.ok).toBe(true);
+			expect(result.data).toEqual(expect.objectContaining({
+				executionRouteClass: "tool.use.flex",
+				selectedCapabilityId: "discovery.model.ollama.qwen-coder",
+				selectedModelId: "qwen-coder",
+				selectedProviderId: "ollama",
 				metric: 0.991,
-				timedOut: false,
-			}),
-		);
-	});
+			}));
+			expect((result.data as { stdout: string }).stdout).toContain("qwen-coder");
+			expect((result.data as { stdout: string }).stdout).toContain("ollama");
+			expect((result.data as { stdout: string }).stdout).toContain("discovery.model.ollama.qwen-coder");
+			expect((result.data as { stdout: string }).stdout).toContain("ollama");
+			expect((result.data as { stdout: string }).stdout).toContain("tool.use.flex");
+		});
+
+		it("does not leak the research lane into execution env when executionRoute is absent", async () => {
+			const { autoresearchRun } = await import("../src/chitragupta-nodes-research.js");
+			const result = await autoresearchRun(makeContext({
+				stepOutputs: {
+					"acp-research-council": {
+						data: {
+							finalVerdict: "accepted",
+							route: {
+								routeClass: "research.bounded",
+								capability: "research.autoresearch",
+								selectedCapabilityId: "engine.research.autoresearch",
+								discoverableOnly: false,
+								reason: "Selected engine.research.autoresearch for research.autoresearch",
+							},
+						},
+					},
+				},
+				extra: {
+					researchCommand: process.execPath,
+					researchArgs: [
+						"-e",
+						[
+							"console.log(String(process.env.CHITRAGUPTA_SELECTED_CAPABILITY_ID ?? 'none'));",
+							"console.log('val_bpb: 0.991000');",
+						].join(""),
+					],
+					researchCwd: researchDir,
+				},
+			}));
+
+			expect(result.ok).toBe(true);
+			expect(result.data).toEqual(expect.objectContaining({
+				selectedCapabilityId: null,
+				selectedModelId: null,
+				selectedProviderId: null,
+			}));
+			expect((result.data as { stdout: string }).stdout).toContain("none");
+		});
 
 	it("blocks experiment execution when the council does not support it", async () => {
 		const { autoresearchRun } = await import("../src/chitragupta-nodes-research.js");
@@ -487,23 +626,27 @@ describe("chitragupta research nodes", () => {
 			},
 		});
 			expect(recorded.ok).toBe(true);
-			expect(daemonCall).toHaveBeenCalledWith("memory.append", expect.objectContaining({
-				scopeType: "project",
-				scopePath: researchDir,
+			expect(daemonCall).toHaveBeenCalledWith("research.outcome.record", expect.objectContaining({
+				projectPath: researchDir,
 				entry: expect.stringContaining("### Packed Context\npacked:daemon"),
-			}));
-		expect(daemonCall).toHaveBeenCalledWith("akasha.leave", expect.objectContaining({
-			agentId: "prana:autoresearch",
-			topic: "Bounded run",
-		}));
-		expect(appendMemory).not.toHaveBeenCalled();
-		expect(recorded.data).toEqual(
-			expect.objectContaining({
-				recorded: true,
-				traceId: "trace-1",
+				traceContent: expect.stringContaining("Decision: keep"),
+				topic: "Bounded run",
 				decision: "keep",
-				source: "daemon",
-			}),
+				traceMetadata: expect.objectContaining({
+					projectPath: researchDir,
+					parentSessionId: null,
+					sessionLineageKey: null,
+				}),
+			}));
+			expect(appendMemory).not.toHaveBeenCalled();
+			expect(recorded.data).toEqual(
+				expect.objectContaining({
+					recorded: true,
+					traceId: "trace-1",
+					experimentId: "exp-daemon-1",
+					decision: "keep",
+					source: "daemon",
+				}),
 		);
 	});
 
@@ -547,6 +690,174 @@ describe("chitragupta research nodes", () => {
 		expect(databaseGet).toHaveBeenCalledWith("agent");
 		expect(recorded.data).toEqual(expect.objectContaining({ source: "fallback", traceId: "trace-fallback" }));
 	});
+
+	it("fails closed when the daemon rejects research outcome recording for policy reasons", async () => {
+		daemonCall.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			if (method === "research.outcome.record") {
+				throw new Error("policy denied");
+			}
+			return defaultDaemonCallImplementation(method, params);
+		});
+		const { autoresearchRecord } = await import("../src/chitragupta-nodes-research.js");
+		const recorded = await autoresearchRecord(makeContext({
+			stepOutputs: {
+				"acp-research-council": {
+					data: {
+						finalVerdict: "accepted",
+						lucy: { recommendation: "support" },
+					},
+				},
+				"autoresearch-run": {
+					data: {
+						stdout: "val_bpb: 0.991000\nstable run",
+						stderr: "",
+					},
+				},
+				"autoresearch-evaluate": {
+					data: {
+						baselineMetric: 1.01,
+						observedMetric: 0.991,
+						delta: 0.019,
+						decision: "keep",
+					},
+				},
+				"pakt-pack-research-context": {
+					data: {
+						packed: true,
+						runtime: "pakt-core",
+						source: "daemon",
+						packedText: "packed:daemon",
+					},
+				},
+			},
+			extra: {
+				researchTopic: "Policy denied",
+				researchHypothesis: "should fail closed",
+			},
+		}));
+
+		expect(recorded.ok).toBe(false);
+		expect(String(recorded.summary)).toContain("policy denied");
+		expect(appendMemory).not.toHaveBeenCalled();
+		expect(upsertResearchExperiment).not.toHaveBeenCalled();
+	});
+
+	it("reverts target files after a failed discarded run and preserves scope lineage in records", async () => {
+		const { autoresearchRun, autoresearchEvaluate, autoresearchFinalize, autoresearchRecord } = await import("../src/chitragupta-nodes-research.js");
+		await fs.writeFile(path.join(researchDir, "train.py"), "print('before')\n", "utf8");
+
+		const run = await autoresearchRun(makeContext({
+			stepOutputs: {
+				"acp-research-council": {
+					data: {
+						finalVerdict: "accepted",
+						executionRoute: {
+							routeClass: "tool.use.flex",
+							capability: "model.tool-use",
+							selectedCapabilityId: "discovery.model.ollama.qwen-coder",
+							executionBinding: {
+								source: "kosha-discovery",
+								kind: "executor",
+								selectedModelId: "qwen-coder",
+								selectedProviderId: "ollama",
+							},
+						},
+					},
+				},
+			},
+			extra: {
+				researchCommand: process.execPath,
+				researchArgs: [
+					"-e",
+					[
+						"require('fs').writeFileSync('train.py', \"print('after')\\n\");",
+						"console.error('boom');",
+						"process.exit(2);",
+					].join(""),
+				],
+				researchParentSessionId: "sess-parent",
+				researchSessionLineageKey: "lineage-alpha",
+			},
+		}));
+
+		expect(run.ok).toBe(false);
+		expect(run.data).toEqual(expect.objectContaining({
+			exitCode: 2,
+			scopeSnapshot: expect.any(Object),
+			selectedCapabilityId: "discovery.model.ollama.qwen-coder",
+		}));
+		expect(await fs.readFile(path.join(researchDir, "train.py"), "utf8")).toContain("after");
+
+		const evaluation = await autoresearchEvaluate(makeContext({
+			stepOutputs: {
+				"autoresearch-baseline": { data: { metricName: "val_bpb", objective: "minimize", baselineMetric: 0.99 } },
+				"autoresearch-run": run,
+			},
+		}));
+		expect(evaluation.ok).toBe(true);
+		expect(evaluation.data).toEqual(expect.objectContaining({ decision: "discard" }));
+
+		const finalize = await autoresearchFinalize(makeContext({
+			stepOutputs: {
+				"autoresearch-run": run,
+				"autoresearch-evaluate": evaluation,
+			},
+		}));
+		expect(finalize.ok).toBe(true);
+		expect(finalize.data).toEqual(expect.objectContaining({
+			action: "reverted",
+		}));
+		expect(await fs.readFile(path.join(researchDir, "train.py"), "utf8")).toContain("before");
+
+		const packed = { data: { packed: false, runtime: null, source: "none", savings: 0 } };
+		const recorded = await autoresearchRecord(makeContext({
+			stepOutputs: {
+				"acp-research-council": {
+					data: {
+						finalVerdict: "accepted",
+						sessionId: "sess-autoresearch",
+						executionRoute: {
+							routeClass: "tool.use.flex",
+							capability: "model.tool-use",
+							selectedCapabilityId: "discovery.model.ollama.qwen-coder",
+							executionBinding: {
+								source: "kosha-discovery",
+								kind: "executor",
+								selectedModelId: "qwen-coder",
+								selectedProviderId: "ollama",
+							},
+						},
+					},
+				},
+				"autoresearch-run": run,
+				"autoresearch-evaluate": evaluation,
+				"autoresearch-finalize": finalize,
+				"pakt-pack-research-context": packed,
+			},
+			extra: {
+				researchParentSessionId: "sess-parent",
+				researchSessionLineageKey: "lineage-alpha",
+			},
+		}));
+		expect(recorded.ok).toBe(true);
+			expect(recorded.data).toEqual(expect.objectContaining({
+				experimentRecord: expect.objectContaining({
+					parentSessionId: "sess-parent",
+					sessionLineageKey: "lineage-alpha",
+					finalize: expect.objectContaining({ action: "reverted" }),
+				}),
+				experimentId: "exp-daemon-1",
+			}));
+			expect(daemonCall).toHaveBeenCalledWith("research.outcome.record", expect.objectContaining({
+				parentSessionId: "sess-parent",
+				sessionLineageKey: "lineage-alpha",
+				traceMetadata: expect.objectContaining({
+					parentSessionId: "sess-parent",
+					sessionLineageKey: "lineage-alpha",
+					finalizeAction: "reverted",
+				}),
+			}));
+		});
 
 	it("does not bypass daemon packing policy when the daemon declines to pack", async () => {
 		const defaultImplementation = daemonCall.getMockImplementation();
@@ -592,9 +903,48 @@ describe("chitragupta research nodes", () => {
 		}));
 
 		expect(result.ok).toBe(true);
-		expect(daemonCall).toHaveBeenCalledWith("route.resolve", expect.objectContaining({
-			consumer: "prana:autoresearch:execution",
-			routeClass: "chat.flex",
+		expect(daemonCall).toHaveBeenCalledWith("route.resolveBatch", expect.objectContaining({
+			routes: expect.arrayContaining([
+				expect.objectContaining({
+					key: "execution",
+					routeClass: "chat.flex",
+				}),
+			]),
+		}));
+	});
+
+	it("packs large live Lucy/Scarlett signal reasoning before writing a skeptical council perspective", async () => {
+		const defaultImplementation = daemonCall.getMockImplementation();
+		daemonCall.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			if (method === "lucy.live_context") {
+				return {
+					hit: { entity: "sqlite", content: "Live warning ".repeat(60), source: "daemon" },
+					predictions: [],
+					liveSignals: [
+						{ severity: "warning", description: "signal-a ".repeat(80) },
+						{ severity: "warning", description: "signal-b ".repeat(80) },
+					],
+				};
+			}
+			return defaultImplementation
+				? defaultImplementation(method, params)
+				: undefined;
+		});
+
+		const { acpResearchCouncil } = await import("../src/chitragupta-nodes-research.js");
+		const result = await acpResearchCouncil(makeContext({
+			extra: {
+				researchTopic: "Packed live warnings",
+			},
+		}));
+
+		expect(result.ok).toBe(true);
+		expect(daemonCall).toHaveBeenCalledWith("compression.pack_context", expect.objectContaining({
+			text: expect.stringContaining("Live warning"),
+		}));
+		expect(daemonCall).toHaveBeenCalledWith("sabha.submit_perspective", expect.objectContaining({
+			summary: "packed:daemon",
+			reasoning: "packed:daemon",
 		}));
 	});
 });

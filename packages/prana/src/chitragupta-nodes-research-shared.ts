@@ -4,6 +4,7 @@
 
 import path from "node:path";
 import type { NodeContext } from "./chitragupta-nodes.js";
+import type { ResearchResolvedRouteSummary } from "./chitragupta-nodes-research-records.js";
 
 export const DEFAULT_TARGET_FILES = ["train.py"];
 export const DEFAULT_IMMUTABLE_FILES = ["prepare.py"];
@@ -39,6 +40,10 @@ export interface ResearchRunData {
 	cwd: string;
 	metricName: string;
 	metric: number | null;
+	executionRouteClass?: string;
+	selectedCapabilityId?: string | null;
+	selectedModelId?: string | null;
+	selectedProviderId?: string | null;
 	stdout: string;
 	stderr: string;
 	exitCode: number;
@@ -46,6 +51,12 @@ export interface ResearchRunData {
 	durationMs: number;
 	scopeGuard: "git" | "hash-only";
 	targetFilesChanged: string[];
+	scopeSnapshot?: ResearchScopeSnapshot;
+}
+
+export interface ResearchScopeSnapshot {
+	mode: "git" | "hash-only";
+	fileContents: Record<string, string | null>;
 }
 
 export interface CouncilParticipantSummary {
@@ -75,25 +86,17 @@ export interface ResearchCouncilSummary {
 		criticalSignalCount: number;
 		recommendation: "support" | "caution" | "block";
 	};
-	route: {
-		routeClass: string | null;
-		capability: string | null;
-		selectedCapabilityId: string | null;
-		degraded: boolean;
-		discoverableOnly: boolean;
-		reason: string | null;
-		policyTrace: string[];
-	} | null;
-	executionRoute: {
-		routeClass: string | null;
-		capability: string | null;
-		selectedCapabilityId: string | null;
-		degraded: boolean;
-		discoverableOnly: boolean;
-		reason: string | null;
-		policyTrace: string[];
-	} | null;
+	route: ResearchResolvedRouteSummary | null;
+	executionRoute: ResearchResolvedRouteSummary | null;
 	source: "daemon" | "local-fallback";
+}
+
+export interface ResearchFinalizeResult {
+	decision: "keep" | "discard";
+	action: "kept" | "reverted" | "skipped";
+	revertedFiles: string[];
+	reason: string | null;
+	scopeGuard: "git" | "hash-only";
 }
 
 export function stringValue(value: unknown, fallback: string): string {
@@ -261,79 +264,4 @@ export function councilSupports(finalVerdict: unknown): boolean {
 		|| normalized === "supported"
 		|| normalized === "approved"
 		|| normalized === "proceed";
-}
-
-export function buildResearchRecord(
-	scope: ResearchScope,
-	council: Record<string, unknown>,
-	evaluation: Record<string, unknown>,
-	packed: Record<string, unknown>,
-): string {
-	const observed = typeof evaluation.observedMetric === "number"
-		? evaluation.observedMetric
-		: "unknown";
-	const baseline = typeof evaluation.baselineMetric === "number"
-		? evaluation.baselineMetric
-		: "unknown";
-	const delta = typeof evaluation.delta === "number"
-		? evaluation.delta.toFixed(6)
-		: "n/a";
-	const verdict = typeof council.finalVerdict === "string"
-		? council.finalVerdict
-		: "unknown";
-	const sessionId = typeof council.sessionId === "string" ? council.sessionId : "none";
-	const route = council.route && typeof council.route === "object"
-		? council.route as {
-			routeClass?: unknown;
-			capability?: unknown;
-			selectedCapabilityId?: unknown;
-			reason?: unknown;
-		}
-		: null;
-	const executionRoute = council.executionRoute && typeof council.executionRoute === "object"
-		? council.executionRoute as {
-			routeClass?: unknown;
-			capability?: unknown;
-			selectedCapabilityId?: unknown;
-			reason?: unknown;
-		}
-		: null;
-	const decision = typeof evaluation.decision === "string"
-		? evaluation.decision
-		: "record";
-	const packRuntime = typeof packed.runtime === "string" ? packed.runtime : "none";
-	const packSavings = typeof packed.savings === "number" ? `${packed.savings}%` : "n/a";
-	const packSource = typeof packed.source === "string" ? packed.source : "unknown";
-	const packSummary = typeof packed.packedText === "string" && packed.packedText.trim()
-		? `\n\n### Packed Context\n${packed.packedText.trim()}`
-		: "";
-	return [
-		`## Autoresearch Experiment`,
-		``,
-		`- topic: ${scope.topic}`,
-		`- hypothesis: ${scope.hypothesis}`,
-		`- command: ${scope.command} ${scope.commandArgs.join(" ")}`.trim(),
-		`- cwd: ${scope.cwd}`,
-		`- target files: ${scope.targetFiles.join(", ")}`,
-		`- immutable files: ${scope.immutableFiles.join(", ")}`,
-		`- metric: ${scope.metricName}`,
-		`- objective: ${scope.objective}`,
-		`- session id: ${sessionId}`,
-		`- route class: ${typeof route?.routeClass === "string" ? route.routeClass : "none"}`,
-		`- route capability: ${typeof route?.capability === "string" ? route.capability : "none"}`,
-		`- route selected capability: ${typeof route?.selectedCapabilityId === "string" ? route.selectedCapabilityId : "none"}`,
-		`- route reason: ${typeof route?.reason === "string" ? route.reason : "n/a"}`,
-		`- execution route class: ${typeof executionRoute?.routeClass === "string" ? executionRoute.routeClass : "none"}`,
-		`- execution capability: ${typeof executionRoute?.capability === "string" ? executionRoute.capability : "none"}`,
-		`- execution selected capability: ${typeof executionRoute?.selectedCapabilityId === "string" ? executionRoute.selectedCapabilityId : "none"}`,
-		`- execution route reason: ${typeof executionRoute?.reason === "string" ? executionRoute.reason : "n/a"}`,
-		`- baseline: ${baseline}`,
-		`- observed: ${observed}`,
-		`- delta: ${delta}`,
-		`- decision: ${decision}`,
-		`- council verdict: ${verdict}`,
-		`- packed runtime: ${packRuntime}`,
-		`- packed source: ${packSource}`,
-		`- packed savings: ${packSavings}`,
-	].join("\n") + packSummary;
 }

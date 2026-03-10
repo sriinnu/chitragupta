@@ -46,9 +46,54 @@ export interface TakumiContext {
 		routeClass?: string;
 		capability?: string | null;
 		selectedCapabilityId?: string | null;
+		executionBinding?: {
+			source: "engine" | "kosha-discovery";
+			kind: "executor" | "model";
+			query?: {
+				capability: string;
+				mode?: string;
+				role?: string;
+			};
+			selectedModelId?: string;
+			selectedProviderId?: string;
+			candidateModelIds?: string[];
+			preferredModelIds?: string[];
+			preferredProviderIds?: string[];
+			preferLocalProviders?: boolean;
+			allowCrossProvider?: boolean;
+		} | null;
 		enforced?: boolean;
 		reason?: string | null;
 		policyTrace?: string[];
+	};
+	/** Engine-selected multi-lane envelope for Takumi's internal task scheduler. */
+	engineRouteEnvelope?: {
+		primaryKey: string;
+		lanes: Array<{
+			key: string;
+			routeClass?: string;
+			capability?: string | null;
+			selectedCapabilityId?: string | null;
+			executionBinding?: {
+				source: "engine" | "kosha-discovery";
+				kind: "executor" | "model";
+				query?: {
+					capability: string;
+					mode?: string;
+					role?: string;
+				};
+				selectedModelId?: string;
+				selectedProviderId?: string;
+				candidateModelIds?: string[];
+				preferredModelIds?: string[];
+				preferredProviderIds?: string[];
+				preferLocalProviders?: boolean;
+				allowCrossProvider?: boolean;
+			} | null;
+			enforced?: boolean;
+			reason?: string | null;
+			policyTrace?: string[];
+		}>;
 	};
 }
 
@@ -85,6 +130,12 @@ export interface TakumiResponse {
 	modeUsed?: "rpc" | "cli";
 	/** Whether the caller requested a fresh/no-cache Takumi run. */
 	cacheIntent?: "default" | "fresh";
+	/** Best-effort post-run contract audit details from the bridge. */
+	contractAudit?: {
+		observedProviderIds?: string[];
+		observedModelIds?: string[];
+		violations?: string[];
+	};
 }
 
 /** Streaming event emitted by Takumi during execution. */

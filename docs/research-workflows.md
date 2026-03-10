@@ -98,7 +98,7 @@ Daemon-first council execution now also binds the run to:
 - optional lineage reuse via `researchParentSessionId` and `researchSessionLineageKey`
 - the engine route class `research.bounded`
 - the engine-selected capability `engine.research.autoresearch`
-- a second execution lane, defaulting to `tool.use.flex`, that must also resolve to a concrete engine-selected capability before a bounded run is allowed to execute
+- a second execution lane, defaulting to `tool.use.flex`, that is resolved in the same daemon `route.resolveBatch` call and must also resolve to a concrete engine-selected capability before a bounded run is allowed to execute
 
 Bounded research now fails closed when:
 - `session.open` does not return a canonical engine session id
@@ -147,6 +147,7 @@ The durable record is the experiment summary with:
 - keep/discard decision
 - council verdict
 - compression metadata
+- execution-binding provenance for discovery-backed lanes
 
 ## PAKT
 
@@ -154,6 +155,7 @@ PAKT is used here as an engine-managed capability.
 It compresses experiment context so future runs or handovers can consume a smaller, provenance-preserving summary.
 If the daemon is reachable, its `compression.pack_context` decision is authoritative.
 Local packing only activates when the daemon is unavailable.
+The packed research record now preserves the compacted payload itself plus the engine-selected provider/model envelope used for execution, including the selected provider/model pair and the preferred allowed set returned by the daemon route contract.
 
 PAKT does not become the memory authority.
 Smriti remains canonical.

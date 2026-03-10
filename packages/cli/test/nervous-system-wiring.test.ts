@@ -60,6 +60,22 @@ describe("nervous-system-wiring Lucy guidance", () => {
 		expect(mockPackLiveContextText).not.toHaveBeenCalled();
 	});
 
+	it("uses daemon-provided packed Lucy guidance blocks without rebuilding them locally", async () => {
+		mockGetLucyLiveContextViaDaemon.mockResolvedValue({
+			hit: { content: "Recent memory: auth retry path" },
+			predictions: [{ entity: "auth.ts", confidence: 0.93, source: "transcendence" }],
+			liveSignals: [{ entity: "smriti", reason: "semantic sync lag" }],
+			guidanceBlock: "## Lucy live guidance\n[packed via pakt-core, saved 35%]\npacked-daemon-guidance",
+		});
+
+		const { getLucyLiveGuidanceBlock } = await import("../src/nervous-system-wiring.js");
+		const result = await getLucyLiveGuidanceBlock("Investigate auth regression", "/tmp/project");
+
+		expect(result).toContain("packed-daemon-guidance");
+		expect(mockPackContextViaDaemon).not.toHaveBeenCalled();
+		expect(mockPackLiveContextText).not.toHaveBeenCalled();
+	});
+
 	it("falls back to local packing when daemon packing fails and local fallback is allowed", async () => {
 		mockAllowLocalRuntimeFallback.mockReturnValue(true);
 		mockPackContextViaDaemon.mockRejectedValue(new Error("daemon unavailable"));

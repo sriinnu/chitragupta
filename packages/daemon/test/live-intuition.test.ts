@@ -80,6 +80,8 @@ describe("lucy.live_context", () => {
 			predictions: Array<{ entity: string; confidence: number; source: string }>;
 			hit: { entity: string; content: string; source: string } | null;
 			liveSignals: Array<{ errorSignature: string }>;
+			guidanceBlock?: string;
+			predictionsBlock?: string;
 		};
 
 		expect(result.hit).toMatchObject({
@@ -90,6 +92,8 @@ describe("lucy.live_context", () => {
 		expect(result.liveSignals).toEqual([
 			expect.objectContaining({ errorSignature: "smriti" }),
 		]);
+		expect(result.guidanceBlock).toContain("## Lucy live guidance");
+		expect(result.predictionsBlock).toContain("## Predicted Context (Transcendence pre-cache)");
 	});
 
 	it("keeps project-scoped Scarlett warnings out of other projects", async () => {
@@ -145,6 +149,7 @@ describe("lucy.live_context", () => {
 			predictions: Array<{ entity: string; confidence: number; source: string }>;
 			hit: { entity: string; content: string; source: string } | null;
 			liveSignals: Array<{ errorSignature: string; scope?: string; project?: string }>;
+			guidanceBlock?: string;
 		};
 
 		expect(projA.hit).toMatchObject({
@@ -162,5 +167,7 @@ describe("lucy.live_context", () => {
 		expect(projB.liveSignals).toEqual(expect.arrayContaining([
 			expect.objectContaining({ errorSignature: "smriti", scope: "global" }),
 		]));
+		expect(projA.guidanceBlock).toContain("Project A lint failure");
+		expect(projB.guidanceBlock).not.toContain("Project A lint failure");
 	});
 });

@@ -15,7 +15,6 @@ import { getChitraguptaHome } from "@chitragupta/core";
 import type { RpcRouter } from "./rpc-router.js";
 import {
 	parseLimit,
-	DAEMON_START_MS,
 	normalizeParams,
 	normalizeProjectPath,
 	resolveProjectKey,
@@ -33,7 +32,7 @@ function hashProject(projectPath: string): string {
 	return crypto.createHash("sha256").update(projectPath).digest("hex").slice(0, 12);
 }
 
-function serializeMemoryScope(scope: DaemonMemoryScope): string {
+export function resolveMemoryScope(scope: DaemonMemoryScope): string {
 	switch (scope.type) {
 		case "global":
 			return "global";
@@ -56,7 +55,7 @@ function resolveMemoryPath(scope: DaemonMemoryScope): string {
 	}
 }
 
-function parseMemoryScope(params: Record<string, unknown>): DaemonMemoryScope {
+export function parseMemoryScope(params: Record<string, unknown>): DaemonMemoryScope {
 	const rawScope = typeof params.scope === "string" ? params.scope.trim() : "";
 	if (rawScope) {
 		if (rawScope === "global") return { type: "global" };
@@ -114,6 +113,72 @@ function extractTraceProject(metadata: Record<string, unknown>): string {
 
 function traceSignalKey(topic: string, project?: string): string {
 	return `${project ? `project:${project}` : "global"}::${topic}`;
+}
+
+async function buildPackedLiveContextBlock(
+	title: string,
+	lines: string[],
+	intro?: string,
+): Promise<string> {
+	if (lines.length === 0) return "";
+	const rawBody = [
+		intro?.trim() ? intro.trim() : "",
+		...lines,
+	].filter(Boolean).join("\n");
+	try {
+		const { packLiveContextText } = await import("@chitragupta/smriti");
+		const packed = await packLiveContextText(rawBody);
+		if (packed) {
+			return [
+				`## ${title}`,
+				`[packed via ${packed.runtime}, saved ${Math.max(0, Math.round(packed.savings * 100))}%]`,
+				packed.packedText,
+			].join("\n");
+		}
+	} catch {
+		// Best-effort: fall back to the raw block when packing is unavailable.
+	}
+	return [
+		`## ${title}`,
+		rawBody,
+	].join("\n");
+}
+
+async function buildLucyGuidanceBlock(live: {
+	hit: { content: string } | null;
+	predictions: Array<{ entity: string; confidence: number; source: string }>;
+	liveSignals: SharedRegressionSignal[];
+}): Promise<string> {
+	const lines: string[] = [];
+	if (live.hit?.content) {
+		lines.push(`- Relevant live context: ${live.hit.content}`);
+	}
+	for (const prediction of live.predictions.slice(0, 3)) {
+		lines.push(
+			`- Predicted entity: ${prediction.entity} `
+			+ `(${(prediction.confidence * 100).toFixed(0)}%, ${prediction.source})`,
+		);
+	}
+	for (const signal of live.liveSignals.slice(0, 2)) {
+		const signature = signal.errorSignature || "system";
+		const summary = signal.description || "active regression signal";
+		lines.push(`- Scarlett signal: ${signature} [${signal.severity}] -> ${summary}`);
+	}
+	return buildPackedLiveContextBlock("Lucy live guidance", lines);
+}
+
+async function buildLucyPredictionsBlock(
+	predictions: Array<{ entity: string; confidence: number; source: string }>,
+): Promise<string> {
+	if (predictions.length === 0) return "";
+	const lines = predictions.slice(0, 5).map((prediction) =>
+		`- ${prediction.entity} (confidence: ${(prediction.confidence * 100).toFixed(0)}%, source: ${prediction.source})`,
+	);
+	return buildPackedLiveContextBlock(
+		"Predicted Context (Transcendence pre-cache)",
+		lines,
+		"These entities are likely relevant to upcoming work:",
+	);
 }
 
 async function loadScarlettRegressionSignals(
@@ -220,10 +285,14 @@ export function registerReadMethods(router: RpcRouter): void {
 			await loadScarlettRegressionSignals({ limit, project }),
 			project ? { project } : undefined,
 		);
+		const guidanceBlock = query ? await buildLucyGuidanceBlock(live) : "";
+		const predictionsBlock = await buildLucyPredictionsBlock(live.predictions);
 		return {
 			predictions: live.predictions,
 			hit: live.hit,
 			liveSignals: live.liveSignals,
+			guidanceBlock,
+			predictionsBlock,
 		};
 	}, "Shared live Lucy/Scarlett intuition context from the daemon");
 
@@ -279,11 +348,11 @@ export function registerReadMethods(router: RpcRouter): void {
 		} catch {
 			/* best-effort stat */
 		}
-		return {
-			scope: serializeMemoryScope(scope),
-			content,
-			exists,
-			lastModified,
+			return {
+				scope: resolveMemoryScope(scope),
+				content,
+				exists,
+				lastModified,
 		};
 	}, "Read memory content for a global, project, or agent scope");
 
@@ -334,108 +403,4 @@ export function registerReadMethods(router: RpcRouter): void {
 		const ctx = await loadProviderContext(project, { providerContextWindow, deviceId });
 		return { assembled: ctx.assembled, itemCount: ctx.itemCount };
 	}, "Load provider context for a project — accepts providerContextWindow and deviceId");
-}
-
-// ─── Daemon Introspection ───────────────────────────────────────────────────
-
-/** Daemon introspection methods for observability. */
-export function registerDaemonMethods(
-	router: RpcRouter,
-	db: typeof import("@chitragupta/smriti/session-db"),
-): void {
-	router.register("daemon.status", async () => {
-		const agentDb = db.getAgentDb();
-		const mem = process.memoryUsage();
-
-		/** Count rows in a table, returning 0 if the table doesn't exist. */
-		const count = (table: string): number => {
-			try {
-				const row = agentDb.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number } | undefined;
-				return row?.n ?? 0;
-			} catch {
-				return 0;
-			}
-		};
-
-		return {
-			version: "0.1.27",
-			pid: process.pid,
-			uptime: (Date.now() - DAEMON_START_MS) / 1000,
-			memory: {
-				rss: mem.rss,
-				heapUsed: mem.heapUsed,
-				heapTotal: mem.heapTotal,
-				external: mem.external,
-			},
-			methods: router.listMethods().length,
-			counts: {
-				turns: count("turns"),
-				sessions: count("sessions"),
-				rules: count("consolidation_rules"),
-				vidhis: count("vidhis"),
-				samskaras: count("samskaras"),
-				vasanas: count("vasanas"),
-				akashaTraces: count("akasha_traces"),
-			},
-			timestamp: Date.now(),
-		};
-	}, "Full daemon status: version, PID, uptime, memory, DB counts");
-
-	router.register("daemon.health", async () => {
-		const mem = process.memoryUsage();
-		return {
-			alive: true,
-			pid: process.pid,
-			uptime: (Date.now() - DAEMON_START_MS) / 1000,
-			memory: mem.rss,
-			methods: router.listMethods().length,
-			connections: null,
-		};
-	}, "Lightweight health check for monitoring");
-}
-
-// ─── Write Methods ──────────────────────────────────────────────────────────
-
-/** Write methods that enforce single-writer through daemon. */
-export function registerWriteMethods(router: RpcRouter): void {
-	router.register("memory.update", async (params) => {
-		const scope = parseMemoryScope(params);
-		const content = String(params.content ?? "");
-		const { updateMemory } = await import("@chitragupta/smriti/memory-store");
-		await updateMemory(scope, content);
-		return {
-			updated: true,
-			scope: serializeMemoryScope(scope),
-			timestamp: new Date().toISOString(),
-		};
-	}, "Overwrite memory content for a global, project, or agent scope");
-
-	router.register("memory.delete", async (params) => {
-		const scope = parseMemoryScope(params);
-		const { deleteMemory } = await import("@chitragupta/smriti/memory-store");
-		deleteMemory(scope);
-		return {
-			deleted: true,
-			scope: serializeMemoryScope(scope),
-			timestamp: new Date().toISOString(),
-		};
-	}, "Delete memory for a global, project, or agent scope");
-
-	router.register("fact.extract", async (params) => {
-		const text = String(params.text ?? "");
-		let projectPath = typeof params.projectPath === "string" ? params.projectPath : undefined;
-		if (!text) throw new Error("Missing text");
-		if (projectPath) {
-			projectPath = normalizeProjectPath(projectPath);
-		}
-
-		const { getFactExtractor } = await import("@chitragupta/smriti/fact-extractor");
-		const extractor = getFactExtractor();
-		const facts = await extractor.extractAndSave(
-			text,
-			{ type: "global" },
-			projectPath ? { type: "project", path: projectPath } : undefined,
-		);
-		return { extracted: facts.length, facts };
-	}, "Extract and save facts from text (single-writer)");
 }

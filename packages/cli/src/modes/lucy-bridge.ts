@@ -24,7 +24,10 @@
 
 import type { TakumiContext, TakumiResponse, TakumiEvent } from "./takumi-bridge-types.js";
 import { routeViaBridge } from "./coding-router.js";
-import { packContextWithFallback } from "../context-packing.js";
+import {
+	normalizeContextForReuse,
+	packContextWithFallback,
+} from "../context-packing.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -201,7 +204,7 @@ export async function executeLucy(
 			failurePattern: extractFailureHint(result.output),
 		});
 
-		const fixTask = buildFixTask(task, result.output);
+		const fixTask = await buildFixTask(task, result.output);
 		const fixContext = await buildLucyContext(fixTask, config);
 		result = await executeWithContext(fixTask, config.projectPath, fixContext, config);
 	}
@@ -275,7 +278,8 @@ async function buildLucyContext(
 
 async function packLucyContextEntries(label: string, entries: string[]): Promise<string[] | undefined> {
 	if (entries.length === 0) return undefined;
-	const trimmed = entries.map((entry) => entry.trim()).filter(Boolean).slice(0, 5);
+	const normalized = await Promise.all(entries.map((entry) => normalizeContextForReuse(entry)));
+	const trimmed = normalized.map((entry) => entry.trim()).filter(Boolean).slice(0, 5);
 	if (trimmed.length === 0) return undefined;
 	const joined = trimmed.map((entry) => `- ${entry}`).join("\n");
 	const packed = await packContextWithFallback(joined);
@@ -366,15 +370,32 @@ function shouldAutoFix(
 // ─── Fix Task Builder ───────────────────────────────────────────────────────
 
 /** Build a fix task from the original task and failure output. */
-function buildFixTask(originalTask: string, failureOutput: string): string {
+async function buildFixTask(originalTask: string, failureOutput: string): Promise<string> {
 	const hint = extractFailureHint(failureOutput);
-	const truncatedOutput = failureOutput.slice(-2000);
+	const recentOutputSection = await buildFixOutputSection(failureOutput);
 
 	return (
 		`Fix the test failures from the previous task.\n\n` +
 		`Original task: ${originalTask}\n\n` +
 		`Failure summary:\n${hint}\n\n` +
-		`Recent output (last 2000 chars):\n${truncatedOutput}`
+		recentOutputSection
+	);
+}
+
+async function buildFixOutputSection(failureOutput: string): Promise<string> {
+	const normalized = await normalizeContextForReuse(failureOutput);
+	const sourceText = typeof normalized === "string" && normalized.trim() ? normalized : failureOutput;
+	const shouldPack = sourceText.length >= 420;
+	if (!shouldPack) {
+		return `Recent output (last 2000 chars):\n${sourceText.slice(-2000)}`;
+	}
+	const packed = await packContextWithFallback(sourceText);
+	if (!packed) {
+		return `Recent output (last 2000 chars):\n${sourceText.slice(-2000)}`;
+	}
+	return (
+		`Recent output (packed via ${packed.runtime}, saved ${Math.max(0, Math.round(packed.savings * 100))}%):\n` +
+		packed.packedText
 	);
 }
 

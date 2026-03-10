@@ -204,6 +204,17 @@ export type {
 	SummaryPacker,
 } from "./pakt-compression.js";
 
+/** Canonical bounded-research experiment ledger for overnight/workflow loops. */
+export {
+	upsertResearchExperiment,
+	listResearchExperiments,
+} from "./research-experiments.js";
+export type {
+	ResearchExperimentRecordInput,
+	StoredResearchExperiment,
+	ListResearchExperimentsOptions,
+} from "./research-experiments.js";
+
 /** Session compactor that prunes low-signal turns using stream-weighted scoring. */
 export { SessionCompactor } from "./compactor.js";
 

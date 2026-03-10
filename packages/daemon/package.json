@@ -1,6 +1,6 @@
 {
 	"name": "@chitragupta/daemon",
-	"version": "0.1.2",
+  "version": "0.1.3",
 	"description": "Centralized daemon — one process per user, Unix domain socket, JSON-RPC 2.0, single-writer SQLite, health monitoring, and auto-recovery",
 	"type": "module",
 	"license": "MIT",

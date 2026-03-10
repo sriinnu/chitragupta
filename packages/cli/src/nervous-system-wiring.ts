@@ -184,6 +184,10 @@ export async function enrichFromTranscendence(projectPath: string): Promise<stri
 	try {
 		const { getLucyLiveContextViaDaemon } = await import("./modes/daemon-bridge.js");
 		const result = await getLucyLiveContextViaDaemon(undefined, { limit: 5, project: projectPath });
+		if (typeof result.predictionsBlock === "string" && result.predictionsBlock.trim()) {
+			log.info("Wire 6b: Transcendence injected", { predictions: result.predictions.length, mode: "daemon-packed" });
+			return result.predictionsBlock;
+		}
 		if (!Array.isArray(result.predictions) || result.predictions.length === 0) return "";
 		const top = result.predictions.slice(0, 5);
 		const lines = top.map(p =>
@@ -249,6 +253,9 @@ export async function getLucyLiveGuidanceBlock(
 	try {
 		const { getLucyLiveContextViaDaemon } = await import("./modes/daemon-bridge.js");
 		const live = await getLucyLiveContextViaDaemon(trimmedQuery, { limit: 3, project: projectPath });
+		if (typeof live.guidanceBlock === "string" && live.guidanceBlock.trim()) {
+			return live.guidanceBlock;
+		}
 		const lines: string[] = [];
 
 		if (live.hit?.content) {

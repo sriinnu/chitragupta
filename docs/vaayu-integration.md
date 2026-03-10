@@ -51,6 +51,7 @@ Examples:
 | `predict.next` | Lucy intuition / anticipation |
 | `health.status` | Scarlett integrity / healing state |
 | `sabha.ask` | future council / peer-consultation path |
+| `route.resolveBatch` | engine-approved execution envelopes for multi-role assistant flows |
 
 This prevents Vaayu from becoming a second routing authority.
 
@@ -110,6 +111,17 @@ Vaayu consumes the engine's internal nervous system rather than re-implementing 
 | Sabha | future peer consultation and council-style coordination |
 
 Vaayu should render or act on these signals, not become the source of truth for them.
+
+## Route and Packing Notes
+
+Current engine contract details that matter to Vaayu:
+
+- `route.resolveBatch` exists for multi-role flows, so Vaayu can request planner/worker/reviewer envelopes in one daemon call instead of recreating route policy locally
+- discovery may widen generic engine lanes through `kosha-discovery`, but Chitragupta still owns the final selected lane and any `executionBinding`
+- when Chitragupta returns an `executionBinding`, Vaayu should treat the selected provider/model pair as authoritative for that lane and use the preferred set only as an allowed envelope
+- live context packing is engine-owned through `compression.pack_context`
+- a daemon `packed: false` decision is authoritative while the daemon is reachable
+- internal `Prana` workflows already use this shape for bounded research, and Vaayu should consume the same contract instead of inventing a second workflow policy layer
 
 ---
 

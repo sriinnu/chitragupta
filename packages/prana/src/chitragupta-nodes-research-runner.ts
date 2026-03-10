@@ -6,11 +6,14 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import process from "node:process";
 import { promisify } from "node:util";
 import {
 	councilSupports,
+	type ResearchFinalizeResult,
 	type ResearchRunData,
 	type ResearchScope,
+	type ResearchScopeSnapshot,
 	pickMetric,
 	validateScope,
 } from "./chitragupta-nodes-research-shared.js";
@@ -21,7 +24,29 @@ type ScopeSnapshot = {
 	mode: "git" | "hash-only";
 	changedPaths: string[];
 	hashes: Map<string, string | null>;
+	fileContents: Map<string, string | null>;
 };
+
+type ExecutableResearchScope = ResearchScope & {
+	env?: Record<string, string>;
+};
+
+type ResearchExecutionRoute = {
+	routeClass?: unknown;
+	capability?: unknown;
+	selectedCapabilityId?: unknown;
+	discoverableOnly?: unknown;
+	reason?: unknown;
+	executionBinding?: {
+		source?: unknown;
+		selectedModelId?: unknown;
+		selectedProviderId?: unknown;
+		preferredModelIds?: unknown;
+		preferredProviderIds?: unknown;
+		candidateModelIds?: unknown;
+		allowCrossProvider?: unknown;
+	} | null;
+} | null;
 
 function normalizeRelativePath(file: string): string {
 	return file.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
@@ -49,10 +74,24 @@ async function hashFile(filePath: string): Promise<string | null> {
 	}
 }
 
+async function readFileContent(filePath: string): Promise<string | null> {
+	try {
+		return await fs.readFile(filePath, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+		throw error;
+	}
+}
+
 async function captureScopeSnapshot(scope: ResearchScope): Promise<ScopeSnapshot> {
 	const hashes = new Map<string, string | null>();
+	const fileContents = new Map<string, string | null>();
 	for (const file of uniqueScopeFiles(scope)) {
-		hashes.set(file, await hashFile(path.join(scope.cwd, file)));
+		const fullPath = path.join(scope.cwd, file);
+		hashes.set(file, await hashFile(fullPath));
+		if (allowedPaths(scope).has(file)) {
+			fileContents.set(file, await readFileContent(fullPath));
+		}
 	}
 	try {
 		const { stdout } = await execFileAsync(
@@ -69,10 +108,10 @@ async function captureScopeSnapshot(scope: ResearchScope): Promise<ScopeSnapshot
 				const renameIndex = body.indexOf(" -> ");
 				return normalizeRelativePath(renameIndex >= 0 ? body.slice(renameIndex + 4) : body);
 			});
-		return { mode: "git", changedPaths, hashes };
-	} catch {
-		return { mode: "hash-only", changedPaths: [], hashes };
-	}
+			return { mode: "git", changedPaths, hashes, fileContents };
+		} catch {
+			return { mode: "hash-only", changedPaths: [], hashes, fileContents };
+		}
 }
 
 function assertScopeSnapshot(scope: ResearchScope, snapshot: ScopeSnapshot, phase: "before" | "after"): void {
@@ -102,23 +141,36 @@ function compareScopeSnapshots(scope: ResearchScope, before: ScopeSnapshot, afte
 	return { targetFilesChanged: changedTargets };
 }
 
-async function runBoundedCommand(scope: ResearchScope): Promise<ResearchRunData> {
+function serializeScopeSnapshot(scope: ResearchScope, snapshot: ScopeSnapshot): ResearchScopeSnapshot {
+	const fileContents: Record<string, string | null> = {};
+	for (const file of scope.targetFiles) {
+		const key = normalizeRelativePath(file);
+		fileContents[key] = snapshot.fileContents.get(key) ?? null;
+	}
+	return {
+		mode: snapshot.mode,
+		fileContents,
+	};
+}
+
+async function runBoundedCommand(scope: ExecutableResearchScope): Promise<ResearchRunData> {
 	validateScope(scope);
 	const before = await captureScopeSnapshot(scope);
 	assertScopeSnapshot(scope, before, "before");
 	const startedAt = Date.now();
-	try {
-		const { stdout, stderr } = await execFileAsync(scope.command, scope.commandArgs, {
-			cwd: scope.cwd,
-			timeout: scope.budgetMs,
-			maxBuffer: 10 * 1024 * 1024,
-		});
+		try {
+			const { stdout, stderr } = await execFileAsync(scope.command, scope.commandArgs, {
+				cwd: scope.cwd,
+				env: scope.env ? { ...process.env, ...scope.env } : process.env,
+				timeout: scope.budgetMs,
+				maxBuffer: 10 * 1024 * 1024,
+			});
 		const after = await captureScopeSnapshot(scope);
 		assertScopeSnapshot(scope, after, "after");
 		const compared = compareScopeSnapshots(scope, before, after);
 		const combined = `${stdout}\n${stderr}`;
-		return {
-			command: scope.command,
+			return {
+				command: scope.command,
 			commandArgs: scope.commandArgs,
 			cwd: scope.cwd,
 			metricName: scope.metricName,
@@ -127,13 +179,15 @@ async function runBoundedCommand(scope: ResearchScope): Promise<ResearchRunData>
 			stderr,
 			exitCode: 0,
 			timedOut: false,
-			durationMs: Date.now() - startedAt,
-			scopeGuard: after.mode,
-			targetFilesChanged: compared.targetFilesChanged,
-		};
-	} catch (error) {
-		const after = await captureScopeSnapshot(scope);
-		const compared = compareScopeSnapshots(scope, before, after);
+				durationMs: Date.now() - startedAt,
+				scopeGuard: after.mode,
+				targetFilesChanged: compared.targetFilesChanged,
+				scopeSnapshot: serializeScopeSnapshot(scope, before),
+			};
+		} catch (error) {
+			const after = await captureScopeSnapshot(scope);
+			assertScopeSnapshot(scope, after, "after");
+			const compared = compareScopeSnapshots(scope, before, after);
 		const err = error as Error & {
 			code?: number | string;
 			stdout?: string;
@@ -145,13 +199,73 @@ async function runBoundedCommand(scope: ResearchScope): Promise<ResearchRunData>
 			stdout: err.stdout ?? "",
 			stderr: err.stderr ?? "",
 			metric: pickMetric(combined, scope.metricPattern),
+			exitCode: typeof err.code === "number" ? err.code : null,
 			durationMs: Date.now() - startedAt,
 			timedOut: err.signal === "SIGTERM",
 			scopeGuard: after.mode,
 			targetFilesChanged: compared.targetFilesChanged,
+			scopeSnapshot: serializeScopeSnapshot(scope, before),
 		});
 		throw enriched;
 	}
+}
+
+function normalizeStringList(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	return value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+}
+
+function extractGatingRoute(council: Record<string, unknown>): ResearchExecutionRoute {
+	return council.executionRoute && typeof council.executionRoute === "object"
+		? council.executionRoute as ResearchExecutionRoute
+		: council.route && typeof council.route === "object"
+			? council.route as ResearchExecutionRoute
+			: null;
+}
+
+function extractExecutionRoute(council: Record<string, unknown>): ResearchExecutionRoute {
+	return council.executionRoute && typeof council.executionRoute === "object"
+		? council.executionRoute as ResearchExecutionRoute
+		: null;
+}
+
+function buildResearchExecutionEnv(
+	scope: ResearchScope,
+	executionRoute: ResearchExecutionRoute,
+): Record<string, string> {
+	if (!executionRoute) return {};
+	const env: Record<string, string> = {};
+	if (scope.executionRouteClass) env.CHITRAGUPTA_ROUTE_CLASS = scope.executionRouteClass;
+	if (scope.executionCapability) env.CHITRAGUPTA_ROUTE_CAPABILITY = scope.executionCapability;
+	if (typeof executionRoute.routeClass === "string" && executionRoute.routeClass.trim()) {
+		env.CHITRAGUPTA_EXECUTION_ROUTE_CLASS = executionRoute.routeClass.trim();
+	}
+	if (typeof executionRoute.capability === "string" && executionRoute.capability.trim()) {
+		env.CHITRAGUPTA_EXECUTION_CAPABILITY = executionRoute.capability.trim();
+	}
+	if (typeof executionRoute.selectedCapabilityId === "string" && executionRoute.selectedCapabilityId.trim()) {
+		env.CHITRAGUPTA_SELECTED_CAPABILITY_ID = executionRoute.selectedCapabilityId.trim();
+	}
+	const binding = executionRoute.executionBinding;
+	if (!binding || typeof binding !== "object") return env;
+	env.CHITRAGUPTA_EXECUTION_BINDING = JSON.stringify(binding);
+	if (typeof binding.source === "string" && binding.source.trim()) {
+		env.CHITRAGUPTA_EXECUTION_BINDING_SOURCE = binding.source.trim();
+	}
+	if (typeof binding.selectedModelId === "string" && binding.selectedModelId.trim()) {
+		env.CHITRAGUPTA_SELECTED_MODEL_ID = binding.selectedModelId.trim();
+	}
+	if (typeof binding.selectedProviderId === "string" && binding.selectedProviderId.trim()) {
+		env.CHITRAGUPTA_SELECTED_PROVIDER_ID = binding.selectedProviderId.trim();
+	}
+	const preferredModelIds = normalizeStringList(binding.preferredModelIds);
+	if (preferredModelIds.length > 0) env.CHITRAGUPTA_PREFERRED_MODEL_IDS = preferredModelIds.join(",");
+	const preferredProviderIds = normalizeStringList(binding.preferredProviderIds);
+	if (preferredProviderIds.length > 0) env.CHITRAGUPTA_PREFERRED_PROVIDER_IDS = preferredProviderIds.join(",");
+	const candidateModelIds = normalizeStringList(binding.candidateModelIds);
+	if (candidateModelIds.length > 0) env.CHITRAGUPTA_CANDIDATE_MODEL_IDS = candidateModelIds.join(",");
+	if (binding.allowCrossProvider === false) env.CHITRAGUPTA_ALLOW_CROSS_PROVIDER = "0";
+	return env;
 }
 
 export async function executeResearchRun(
@@ -161,30 +275,68 @@ export async function executeResearchRun(
 	if (!councilSupports(council.finalVerdict)) {
 		throw new Error(`Research council did not approve execution: ${String(council.finalVerdict ?? "unknown")}`);
 	}
-	const route =
-		council.route && typeof council.route === "object"
-			? council.route as {
-				selectedCapabilityId?: unknown;
-				discoverableOnly?: unknown;
-				reason?: unknown;
-			}
-			: null;
-	const executionRoute =
-		council.executionRoute && typeof council.executionRoute === "object"
-			? council.executionRoute as {
-				selectedCapabilityId?: unknown;
-				discoverableOnly?: unknown;
-				reason?: unknown;
-			}
-			: null;
-	const gatingRoute = executionRoute ?? route;
+	const gatingRoute = extractGatingRoute(council);
+	const executionRoute = extractExecutionRoute(council);
 	if (gatingRoute && (gatingRoute.discoverableOnly === true || typeof gatingRoute.selectedCapabilityId !== "string" || !gatingRoute.selectedCapabilityId.trim())) {
 		const reason = typeof gatingRoute.reason === "string" && gatingRoute.reason.trim()
 			? gatingRoute.reason.trim()
 			: "research route did not resolve to an executable engine capability";
 		throw new Error(`Research route did not authorize execution: ${reason}`);
 	}
-	return runBoundedCommand(scope);
+	const env = buildResearchExecutionEnv(scope, executionRoute);
+	let result: ResearchRunData;
+	try {
+		result = await runBoundedCommand({ ...scope, env });
+	} catch (error) {
+		const err = error as Error & Record<string, unknown>;
+		err.executionRouteClass =
+			typeof executionRoute?.routeClass === "string" ? executionRoute.routeClass : scope.executionRouteClass;
+		err.selectedCapabilityId =
+			typeof executionRoute?.selectedCapabilityId === "string" ? executionRoute.selectedCapabilityId : null;
+		err.selectedModelId =
+			typeof executionRoute?.executionBinding?.selectedModelId === "string"
+				? executionRoute.executionBinding.selectedModelId
+				: null;
+		err.selectedProviderId =
+			typeof executionRoute?.executionBinding?.selectedProviderId === "string"
+				? executionRoute.executionBinding.selectedProviderId
+				: null;
+		throw err;
+	}
+	return {
+		...result,
+		executionRouteClass: typeof executionRoute?.routeClass === "string" ? executionRoute.routeClass : scope.executionRouteClass,
+		selectedCapabilityId: typeof executionRoute?.selectedCapabilityId === "string" ? executionRoute.selectedCapabilityId : null,
+		selectedModelId: typeof executionRoute?.executionBinding?.selectedModelId === "string"
+			? executionRoute.executionBinding.selectedModelId
+			: null,
+		selectedProviderId: typeof executionRoute?.executionBinding?.selectedProviderId === "string"
+			? executionRoute.executionBinding.selectedProviderId
+			: null,
+	};
+}
+
+async function restoreScopeFromSnapshot(
+	scope: ResearchScope,
+	snapshot: ResearchScopeSnapshot,
+): Promise<string[]> {
+	const revertedFiles: string[] = [];
+	for (const [file, content] of Object.entries(snapshot.fileContents)) {
+		const fullPath = path.join(scope.cwd, file);
+		if (content === null) {
+			try {
+				await fs.rm(fullPath, { force: true });
+				revertedFiles.push(file);
+			} catch {
+				// Ignore cleanup errors for absent files.
+			}
+			continue;
+		}
+		await fs.mkdir(path.dirname(fullPath), { recursive: true });
+		await fs.writeFile(fullPath, content, "utf8");
+		revertedFiles.push(file);
+	}
+	return revertedFiles;
 }
 
 export async function evaluateResearchResult(
@@ -216,5 +368,41 @@ export async function evaluateResearchResult(
 		delta,
 		improved,
 		decision: improved ? "keep" : "discard",
+	};
+}
+
+export async function finalizeResearchResult(
+	scope: ResearchScope,
+	run: Record<string, unknown>,
+	evaluation: Record<string, unknown>,
+): Promise<ResearchFinalizeResult> {
+	const decision = evaluation.decision === "keep" ? "keep" : "discard";
+	const scopeGuard = run.scopeGuard === "hash-only" ? "hash-only" : "git";
+	if (decision === "keep") {
+		return {
+			decision,
+			action: "kept",
+			revertedFiles: [],
+			reason: null,
+			scopeGuard,
+		};
+	}
+	const snapshot = run.scopeSnapshot;
+	if (!snapshot || typeof snapshot !== "object" || !("fileContents" in snapshot) || typeof (snapshot as { fileContents?: unknown }).fileContents !== "object") {
+		return {
+			decision,
+			action: "skipped",
+			revertedFiles: [],
+			reason: "No reusable scope snapshot was available for discard cleanup.",
+			scopeGuard,
+		};
+	}
+	const revertedFiles = await restoreScopeFromSnapshot(scope, snapshot as ResearchScopeSnapshot);
+	return {
+		decision,
+		action: "reverted",
+		revertedFiles,
+		reason: revertedFiles.length > 0 ? null : "Discarded run produced no target-file changes to restore.",
+		scopeGuard,
 	};
 }

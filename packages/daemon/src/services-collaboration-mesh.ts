@@ -1,3 +1,4 @@
+import os from "node:os";
 import { loadGlobalSettings } from "@chitragupta/core";
 import { ActorSystem, type MeshEnvelope, type PeerNetworkConfig } from "@chitragupta/sutra";
 import type { Sabha } from "@chitragupta/sutra";
@@ -18,6 +19,7 @@ import {
 
 let sharedCollaborationMesh: ActorSystem | undefined;
 let sharedCollaborationMeshBootstrapPromise: Promise<void> | undefined;
+let sharedCollaborationMeshLeaseOwner: string | undefined;
 
 interface CollaborationMeshSettings {
 	mesh?: Partial<PeerNetworkConfig>;
@@ -210,7 +212,12 @@ export function getCollaborationMeshPort(): number {
 }
 
 export function getCollaborationMeshLeaseOwner(): string {
-	return resolveConfiguredCollaborationNodeId() || "sabha-daemon";
+	const configured = resolveConfiguredCollaborationNodeId();
+	if (configured) return configured;
+	if (!sharedCollaborationMeshLeaseOwner) {
+		sharedCollaborationMeshLeaseOwner = `sabha-daemon:${os.hostname()}:${process.pid}`;
+	}
+	return sharedCollaborationMeshLeaseOwner;
 }
 
 export function getCollaborationMeshNodeId(): string {
@@ -433,4 +440,5 @@ export function getCollaborationMeshSystemForTests(): ActorSystem {
 export function _resetCollaborationMeshForTests(): void {
 	sharedCollaborationMesh = undefined;
 	sharedCollaborationMeshBootstrapPromise = undefined;
+	sharedCollaborationMeshLeaseOwner = undefined;
 }

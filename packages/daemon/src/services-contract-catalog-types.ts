@@ -39,6 +39,31 @@ export interface ConsumerConstraint {
 	hardCapabilityId?: string;
 }
 
+export interface RouteDiscoveryBindingPolicy {
+	capability: string;
+	mode?: string;
+	role?: string;
+	preferLocalProviders?: boolean;
+	allowCrossProvider?: boolean;
+}
+
+export interface RouteExecutionBinding {
+	source: "engine" | "kosha-discovery";
+	kind: "executor" | "model";
+	query?: {
+		capability: string;
+		mode?: string;
+		role?: string;
+	};
+	selectedModelId?: string;
+	selectedProviderId?: string;
+	candidateModelIds?: string[];
+	preferredModelIds?: string[];
+	preferredProviderIds?: string[];
+	preferLocalProviders?: boolean;
+	allowCrossProvider?: boolean;
+}
+
 export interface RouteClassDescriptor {
 	id: string;
 	label: string;
@@ -46,6 +71,7 @@ export interface RouteClassDescriptor {
 	capability: string;
 	constraints?: ConsumerConstraint;
 	tags: string[];
+	discoveryBinding?: RouteDiscoveryBindingPolicy;
 	metadata?: Record<string, unknown>;
 }
 

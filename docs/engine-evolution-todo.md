@@ -41,17 +41,30 @@ This file tracks core-engine closure work that should not disappear into ad hoc 
 ## Next
 
 - [ ] Push Sabha past restart-safe mesh consultation into fuller distributed merge / oplog semantics across multiple active nodes.
+- [ ] Turn the current bounded `autoresearch` / ACP research workflows into a full overnight loop with hard run budgets, baseline capture, keep/discard or revert decisions, branch hygiene, and automatic result consolidation after long unattended runs.
+- [ ] Generalize that overnight research loop beyond Karpathy-style training into engine-owned dream projects of any kind: code experiments, architecture probes, memory/retrieval tuning, and system-improvement loops that can run while Nidra later consolidates what mattered.
+- [ ] Make overnight research outcomes feed back into Smriti, Akasha, Nidra, and PAKT as first-class learned artifacts: compacted logs, reusable experiment summaries, retained hypotheses, and next-step seeds for future dream projects.
 - [x] Add side-effect-free `sabha.repl.pull` and revisioned `sabha.repl.apply` so replicated Sabha state can move between nodes without resuming pending mesh work as a read-side effect.
 - [x] Add first-class local runtime support for both `llama.cpp` and `Ollama` in the engine control plane.
 - [x] Make `llama.cpp` the default performance-first local inference backend once the control plane lands.
 - [x] Keep `Ollama` as a supported convenience/distribution adapter and fallback local runtime, without moving routing authority out of Chitragupta.
 - [x] Route live-context packing through the daemon-owned compression surface first and fall back locally only when the daemon path is unavailable.
 - [x] Apply that same daemon-first packing path to Transcendence and Vasana prompt enrichment so serve/API/agent prompt assembly stays aligned with MCP/Lucy behavior.
+- [x] Reuse daemon-authored packed Lucy guidance and prediction blocks directly in CLI and MCP paths instead of rebuilding them locally from raw predictions and regression signals.
 - [x] Apply that same daemon-first packing path to Takumi prompt synthesis for bulky repo/file context, and preserve packed Lucy hints as packed hints instead of truncating them to generic short-hint limits.
 - [ ] Extend the engine-owned PAKT compression lane from curated-summary packing into more Nidra and Smriti compaction flows.
 - [x] Tighten the `research.bounded` control-plane lane so discovery and route resolution influence capability selection materially, not only as advisory hints.
 - [x] Make discovery-managed flex lanes (`chat.flex`, `tool.use.flex`) prefer healthy discovered capabilities first and support explicit `preferredModelId`/`preferredModelIds` hints without moving routing authority out of Chitragupta.
+- [x] Normalize legacy discovery-facing capability requests like `chat` / `function_calling` onto engine `model.*` lanes before routing so discovery-backed selection is real instead of hint-only.
+- [x] Add `route.resolveBatch` plus discovery-backed execution bindings so Takumi-style role schedulers can consume engine-approved provider/model envelopes instead of rebuilding route policy locally.
 - [x] Persist packed research context into derived bounded-research records so recall can reuse the daemon-approved compacted context directly.
+- [x] Resolve Prana bounded-research workflow and execution lanes through one daemon `route.resolveBatch` call and preserve execution-binding provenance in the durable record.
+- [x] Pass the engine-selected execution lane directly into bounded research run environments so the actual experiment process sees the selected provider/model envelope instead of only recording it afterward.
+- [x] Apply daemon-first live packing to bulky Takumi episodic-hint and recent-decision sections, not only repo/file excerpts.
+- [x] Apply that same daemon-first packing policy to Lucy auto-fix failure context so repair tasks do not default to raw uncompressed log tails when the engine packer is healthy.
+- [x] Normalize already-packed live context before reusing it in Takumi and Lucy readback paths so PAKT output is not blindly nested into another packed section.
+- [x] Make enforced Takumi route envelopes fail closed when the authoritative engine selection cannot be represented safely in the structured bridge payload.
+- [x] Add a best-effort post-run Takumi contract audit that fails closed when the bridge explicitly observes provider/model declarations outside an enforced engine-selected lane.
 - [ ] Tighten Vaayu and Takumi consumer contracts around canonical sessions, bridge scopes, and provenance-aware recall.
 - [x] Make explicit Takumi engine-route requests fail closed when daemon route resolution fails or when the engine selected Takumi but the Takumi bridge is unavailable.
 - [x] Move the interactive agent and MCP `coding_agent` surfaces onto the same session-aware engine route-class path so route resolution governs execution beyond the original Takumi bridge entrypoint.

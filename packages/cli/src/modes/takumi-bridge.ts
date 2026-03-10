@@ -32,9 +32,11 @@ import {
 	safeJsonParse,
 } from "./takumi-bridge-helpers.js";
 import {
+	auditTakumiResponseAgainstContract,
 	buildContextEnv,
 	buildPrompt,
 	extractErrorMessage,
+	inspectTakumiContextContract,
 	resolveCacheIntent,
 	shouldFallbackToCli,
 } from "./takumi-bridge-context.js";
@@ -102,6 +104,20 @@ export class TakumiBridge {
 			};
 			this.injectedContext = null;
 		}
+		const contractInspection = inspectTakumiContextContract(request.context);
+		if (contractInspection.violations.length > 0) {
+			return {
+				type: "result",
+				modeUsed: status.mode === "rpc" ? "rpc" : "cli",
+				cacheIntent: resolveCacheIntent(request.context),
+				filesModified: [],
+				output: [
+					"Takumi execution blocked by the Chitragupta engine route contract.",
+					...contractInspection.violations.map((violation) => `- ${violation}`),
+				].join("\n"),
+				exitCode: 1,
+			};
+		}
 
 		if (status.mode === "unavailable") {
 			return {
@@ -125,12 +141,14 @@ export class TakumiBridge {
 				onEvent,
 			);
 			if (shouldFallbackToCli(structuredResult)) {
-				return this._spawnCli(prompt, request.context, onEvent);
+				const cliResult = await this._spawnCli(prompt, request.context, onEvent);
+				return auditTakumiResponseAgainstContract(request.context, cliResult);
 			}
-			return structuredResult;
+			return auditTakumiResponseAgainstContract(request.context, structuredResult);
 		}
 
-		return this._spawnCli(prompt, request.context, onEvent);
+		const cliResult = await this._spawnCli(prompt, request.context, onEvent);
+		return auditTakumiResponseAgainstContract(request.context, cliResult);
 	}
 
 	injectContext(context: TakumiContext): void {
