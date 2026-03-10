@@ -55,6 +55,7 @@ describe("chitragupta research workflows", () => {
 			"autoresearch-baseline",
 			"autoresearch-run",
 			"autoresearch-evaluate",
+			"autoresearch-finalize",
 			"pakt-pack-research-context",
 			"autoresearch-record",
 		]);
