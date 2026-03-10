@@ -1,6 +1,6 @@
 import type { DatabaseManager } from "./database.js";
 
-export const AGENT_SCHEMA_VERSION = 18;
+export const AGENT_SCHEMA_VERSION = 19;
 export const GRAPH_SCHEMA_VERSION = 1;
 export const VECTORS_SCHEMA_VERSION = 1;
 

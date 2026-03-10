@@ -40,6 +40,11 @@ This file tracks core-engine closure work that should not disappear into ad hoc 
 
 ## Next
 
+- [ ] Current next four core items:
+  1. `kosha-discovery` deeper control-plane influence while keeping `kosha` discovery-only.
+  2. Deeper `PAKT` / `unPAKT` across live read-side reuse, decompression-aware recall, and repair/readback flows.
+  3. Full overnight research loop with hard budgets, keep/discard/revert, experiment ledger, and Nidra consolidation.
+  4. External `vaayu` integration on top of the stabilized Chitragupta engine contract.
 - [ ] Push Sabha past restart-safe mesh consultation into fuller distributed merge / oplog semantics across multiple active nodes.
 - [ ] Turn the current bounded `autoresearch` / ACP research workflows into a full overnight loop with hard run budgets, baseline capture, keep/discard or revert decisions, branch hygiene, and automatic result consolidation after long unattended runs.
 - [ ] Generalize that overnight research loop beyond Karpathy-style training into engine-owned dream projects of any kind: code experiments, architecture probes, memory/retrieval tuning, and system-improvement loops that can run while Nidra later consolidates what mattered.
@@ -63,8 +68,10 @@ This file tracks core-engine closure work that should not disappear into ad hoc 
 - [x] Apply daemon-first live packing to bulky Takumi episodic-hint and recent-decision sections, not only repo/file excerpts.
 - [x] Apply that same daemon-first packing policy to Lucy auto-fix failure context so repair tasks do not default to raw uncompressed log tails when the engine packer is healthy.
 - [x] Normalize already-packed live context before reusing it in Takumi and Lucy readback paths so PAKT output is not blindly nested into another packed section.
+- [x] Expose daemon-owned `compression.normalize_context` and `compression.unpack_context` so consumers can safely reuse or expand packed context on the read side instead of treating packed blocks as opaque strings.
 - [x] Make enforced Takumi route envelopes fail closed when the authoritative engine selection cannot be represented safely in the structured bridge payload.
 - [x] Add a best-effort post-run Takumi contract audit that fails closed when the bridge explicitly observes provider/model declarations outside an enforced engine-selected lane.
+- [x] Persist git provenance in bounded research records and fail closed when git refs change during the run so the experiment ledger cannot silently drift across branches or commits.
 - [ ] Tighten Vaayu and Takumi consumer contracts around canonical sessions, bridge scopes, and provenance-aware recall.
 - [x] Make explicit Takumi engine-route requests fail closed when daemon route resolution fails or when the engine selected Takumi but the Takumi bridge is unavailable.
 - [x] Move the interactive agent and MCP `coding_agent` surfaces onto the same session-aware engine route-class path so route resolution governs execution beyond the original Takumi bridge entrypoint.

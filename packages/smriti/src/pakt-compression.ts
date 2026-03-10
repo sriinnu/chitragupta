@@ -187,6 +187,58 @@ export async function autoProcessTextThroughPolicy(args: {
 	return runCompressionOperation((runtime) => runtime.auto(args));
 }
 
+function looksLikePackedPayload(text: string): boolean {
+	return text.trim().startsWith("pakt:");
+}
+
+function extractPackedPayload(text: string): string {
+	const trimmed = text.trim();
+	if (trimmed.startsWith("[PAKT packed ")) {
+		const newlineIndex = trimmed.indexOf("\n");
+		if (newlineIndex >= 0) {
+			const payload = trimmed.slice(newlineIndex + 1).trim();
+			if (payload) return payload;
+		}
+	}
+	return trimmed;
+}
+
+function extractNormalizedResult(
+	processed: Record<string, unknown>,
+): string | null {
+	return typeof processed.result === "string" && processed.result.trim()
+		? processed.result
+		: null;
+}
+
+export async function normalizePackedContextText(text: string): Promise<string> {
+	const payload = extractPackedPayload(text);
+	if (!payload || !looksLikePackedPayload(payload)) return text;
+	try {
+		const processed = await autoProcessTextThroughPolicy({ text: payload });
+		if (processed.action === "decompressed") return payload;
+		const normalized = extractNormalizedResult(processed);
+		if (normalized && looksLikePackedPayload(normalized)) return normalized;
+		return payload;
+	} catch {
+		return payload;
+	}
+}
+
+export async function unpackPackedContextText(text: string): Promise<string> {
+	const payload = extractPackedPayload(text);
+	if (!payload || !looksLikePackedPayload(payload)) return text;
+	try {
+		const processed = await autoProcessTextThroughPolicy({ text: payload });
+		if (processed.action === "decompressed") {
+			return extractNormalizedResult(processed) ?? text;
+		}
+		return text;
+	} catch {
+		return text;
+	}
+}
+
 export async function packCuratedSummaryText(text: string): Promise<PackedSummaryResult | null> {
 	try {
 		return await getSummaryPacker().packSummary(text);

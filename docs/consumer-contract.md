@@ -208,6 +208,8 @@ Good:
 - `compression.compress`
 - `compression.auto`
 - `compression.pack_context`
+- `compression.normalize_context`
+- `compression.unpack_context`
 - `sabha.ask`
 - `sabha.resume`
 - `sabha.submit_perspective`
@@ -246,6 +248,7 @@ Current rule:
 - Chitragupta may invoke PAKT as an executable compression capability
 - `pakt-core` is the preferred engine-owned runtime; stdio `pakt serve --stdio` is the supported fallback
 - the daemon exposes `compression.pack_context` for live-context packing, and engine surfaces should treat the daemon response as authoritative while it is reachable
+- `compression.normalize_context` and `compression.unpack_context` now exist for consumers that need to safely reuse or expand already-packed context instead of layering packed payloads on top of packed payloads
 - local in-process packing is only the daemon-unavailable fallback, not a bypass for a daemon-side `packed: false` decision
 - daemon-authored Lucy guidance/prediction blocks should be reused verbatim by consumers instead of being rebuilt locally from raw predictions/signals when the daemon already provided them
 - live Takumi prompt synthesis should use that same daemon-first packing path for bulky repo/file context, episodic hint sections, and recent-decision sections, while preserving packed Lucy hint blocks instead of collapsing them to generic short-hint limits
@@ -279,6 +282,7 @@ Contract:
 - bounded research is stricter: it now resolves both the workflow lane (`research.bounded`) and the execution lane (default `tool.use.flex`) through one daemon `route.resolveBatch` call before execution proceeds
 - bounded research records now persist the packed context block itself when the daemon-approved PAKT path succeeds, so recall can reuse the derived compacted context without reconstructing it from raw logs
 - bounded research records now also persist execution-binding provenance such as preferred discovered providers/models when a discovery-backed execution lane was selected
+- bounded research records now persist git provenance (`gitBranch`, `gitHeadCommit`, dirty-state before/after) and fail closed if git refs change during the bounded run
 - a Takumi bridge caller must fail closed when the engine resolves a non-Takumi lane instead of overriding that decision locally
 - if the engine resolves the request to the local `tool.coding_agent` lane, the caller should respect that and fall back to the local coding CLI path instead of treating the result as a policy error
 - if the engine resolves the request to a compatible model/runtime lane such as `discovery.model.*` or `engine.local.*`, the Takumi bridge may still execute, but only inside that engine-selected envelope and without overriding the selected lane locally

@@ -20,6 +20,10 @@ export interface ResearchExperimentRecordInput {
 	selectedCapabilityId?: string | null;
 	selectedModelId?: string | null;
 	selectedProviderId?: string | null;
+	gitBranch?: string | null;
+	gitHeadCommit?: string | null;
+	gitDirtyBefore?: boolean | null;
+	gitDirtyAfter?: boolean | null;
 	baselineMetric?: number | null;
 	observedMetric?: number | null;
 	delta?: number | null;
@@ -131,6 +135,10 @@ function parseStoredRow(row: Record<string, unknown>): StoredResearchExperiment 
 		selectedCapabilityId: normalizeOptionalString(row.selected_capability_id),
 		selectedModelId: normalizeOptionalString(row.selected_model_id),
 		selectedProviderId: normalizeOptionalString(row.selected_provider_id),
+		gitBranch: normalizeOptionalString(row.git_branch),
+		gitHeadCommit: normalizeOptionalString(row.git_head_commit),
+		gitDirtyBefore: typeof row.git_dirty_before === "number" ? row.git_dirty_before !== 0 : null,
+		gitDirtyAfter: typeof row.git_dirty_after === "number" ? row.git_dirty_after !== 0 : null,
 		baselineMetric: normalizeOptionalNumber(row.baseline_metric),
 		observedMetric: normalizeOptionalNumber(row.observed_metric),
 		delta: normalizeOptionalNumber(row.delta),
@@ -168,17 +176,21 @@ export function upsertResearchExperiment(input: ResearchExperimentRecordInput): 
 			council_verdict,
 			route_class,
 			execution_route_class,
-			selected_capability_id,
-			selected_model_id,
-			selected_provider_id,
-			packed_context,
+				selected_capability_id,
+				selected_model_id,
+				selected_provider_id,
+				git_branch,
+				git_head_commit,
+				git_dirty_before,
+				git_dirty_after,
+				packed_context,
 			packed_runtime,
 			packed_source,
 			record_json,
 			created_at,
 			updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
 			experiment_key = excluded.experiment_key,
 			budget_ms = excluded.budget_ms,
 			baseline_metric = excluded.baseline_metric,
@@ -189,10 +201,14 @@ export function upsertResearchExperiment(input: ResearchExperimentRecordInput): 
 			council_verdict = excluded.council_verdict,
 			route_class = excluded.route_class,
 			execution_route_class = excluded.execution_route_class,
-			selected_capability_id = excluded.selected_capability_id,
-			selected_model_id = excluded.selected_model_id,
-			selected_provider_id = excluded.selected_provider_id,
-			packed_context = excluded.packed_context,
+				selected_capability_id = excluded.selected_capability_id,
+				selected_model_id = excluded.selected_model_id,
+				selected_provider_id = excluded.selected_provider_id,
+				git_branch = CASE WHEN ? THEN excluded.git_branch ELSE research_experiments.git_branch END,
+				git_head_commit = CASE WHEN ? THEN excluded.git_head_commit ELSE research_experiments.git_head_commit END,
+				git_dirty_before = CASE WHEN ? THEN excluded.git_dirty_before ELSE research_experiments.git_dirty_before END,
+				git_dirty_after = CASE WHEN ? THEN excluded.git_dirty_after ELSE research_experiments.git_dirty_after END,
+				packed_context = excluded.packed_context,
 			packed_runtime = excluded.packed_runtime,
 			packed_source = excluded.packed_source,
 			record_json = excluded.record_json,
@@ -216,15 +232,23 @@ export function upsertResearchExperiment(input: ResearchExperimentRecordInput): 
 		input.councilVerdict ?? null,
 		input.routeClass ?? null,
 		input.executionRouteClass ?? null,
-		input.selectedCapabilityId ?? null,
-		input.selectedModelId ?? null,
-		input.selectedProviderId ?? null,
-		input.packedContext ?? null,
+			input.selectedCapabilityId ?? null,
+			input.selectedModelId ?? null,
+			input.selectedProviderId ?? null,
+			normalizeOptionalString(input.gitBranch) ?? null,
+			normalizeOptionalString(input.gitHeadCommit) ?? null,
+			typeof input.gitDirtyBefore === "boolean" ? (input.gitDirtyBefore ? 1 : 0) : null,
+			typeof input.gitDirtyAfter === "boolean" ? (input.gitDirtyAfter ? 1 : 0) : null,
+			input.packedContext ?? null,
 		input.packedRuntime ?? null,
 		input.packedSource ?? null,
 		JSON.stringify(input.record),
 		now,
 		now,
+		input.gitBranch !== undefined ? 1 : 0,
+		input.gitHeadCommit !== undefined ? 1 : 0,
+		input.gitDirtyBefore !== undefined ? 1 : 0,
+		input.gitDirtyAfter !== undefined ? 1 : 0,
 	);
 
 	const row = db

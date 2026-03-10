@@ -11,10 +11,10 @@ async function expandPackedContext<T extends ExpandableExperiment>(
 ): Promise<T & { expandedPackedContext?: string | null }> {
 	if (!experiment.packedContext?.trim()) return experiment;
 	try {
-		const { autoProcessTextThroughPolicy } = await import("@chitragupta/smriti");
-		const expanded = await autoProcessTextThroughPolicy({ text: experiment.packedContext });
-		if (typeof expanded.result === "string" && expanded.result.trim()) {
-			return { ...experiment, expandedPackedContext: expanded.result };
+		const { unpackPackedContextText } = await import("@chitragupta/smriti");
+		const expanded = await unpackPackedContextText(experiment.packedContext);
+		if (expanded.trim() && expanded !== experiment.packedContext) {
+			return { ...experiment, expandedPackedContext: expanded };
 		}
 	} catch {
 		// Best-effort: keep the stored packed form when expansion is unavailable.
@@ -54,10 +54,14 @@ export function registerResearchMethods(router: RpcRouter): void {
 			councilVerdict: typeof params.councilVerdict === "string" ? params.councilVerdict : null,
 			routeClass: typeof params.routeClass === "string" ? params.routeClass : null,
 			executionRouteClass: typeof params.executionRouteClass === "string" ? params.executionRouteClass : null,
-			selectedCapabilityId: typeof params.selectedCapabilityId === "string" ? params.selectedCapabilityId : null,
-			selectedModelId: typeof params.selectedModelId === "string" ? params.selectedModelId : null,
-			selectedProviderId: typeof params.selectedProviderId === "string" ? params.selectedProviderId : null,
-			baselineMetric: typeof params.baselineMetric === "number" ? params.baselineMetric : null,
+				selectedCapabilityId: typeof params.selectedCapabilityId === "string" ? params.selectedCapabilityId : null,
+				selectedModelId: typeof params.selectedModelId === "string" ? params.selectedModelId : null,
+				selectedProviderId: typeof params.selectedProviderId === "string" ? params.selectedProviderId : null,
+				gitBranch: typeof params.gitBranch === "string" ? params.gitBranch : null,
+				gitHeadCommit: typeof params.gitHeadCommit === "string" ? params.gitHeadCommit : null,
+				gitDirtyBefore: typeof params.gitDirtyBefore === "boolean" ? params.gitDirtyBefore : null,
+				gitDirtyAfter: typeof params.gitDirtyAfter === "boolean" ? params.gitDirtyAfter : null,
+				baselineMetric: typeof params.baselineMetric === "number" ? params.baselineMetric : null,
 			observedMetric: typeof params.observedMetric === "number" ? params.observedMetric : null,
 			delta: typeof params.delta === "number" ? params.delta : null,
 			packedContext: typeof params.packedContext === "string" ? params.packedContext : null,
@@ -121,10 +125,14 @@ export function registerResearchMethods(router: RpcRouter): void {
 			councilVerdict: typeof params.councilVerdict === "string" ? params.councilVerdict : null,
 			routeClass: typeof params.routeClass === "string" ? params.routeClass : null,
 			executionRouteClass: typeof params.executionRouteClass === "string" ? params.executionRouteClass : null,
-			selectedCapabilityId: typeof params.selectedCapabilityId === "string" ? params.selectedCapabilityId : null,
-			selectedModelId: typeof params.selectedModelId === "string" ? params.selectedModelId : null,
-			selectedProviderId: typeof params.selectedProviderId === "string" ? params.selectedProviderId : null,
-			baselineMetric: typeof params.baselineMetric === "number" ? params.baselineMetric : null,
+				selectedCapabilityId: typeof params.selectedCapabilityId === "string" ? params.selectedCapabilityId : null,
+				selectedModelId: typeof params.selectedModelId === "string" ? params.selectedModelId : null,
+				selectedProviderId: typeof params.selectedProviderId === "string" ? params.selectedProviderId : null,
+				gitBranch: typeof params.gitBranch === "string" ? params.gitBranch : null,
+				gitHeadCommit: typeof params.gitHeadCommit === "string" ? params.gitHeadCommit : null,
+				gitDirtyBefore: typeof params.gitDirtyBefore === "boolean" ? params.gitDirtyBefore : null,
+				gitDirtyAfter: typeof params.gitDirtyAfter === "boolean" ? params.gitDirtyAfter : null,
+				baselineMetric: typeof params.baselineMetric === "number" ? params.baselineMetric : null,
 			observedMetric: typeof params.observedMetric === "number" ? params.observedMetric : null,
 			delta: typeof params.delta === "number" ? params.delta : null,
 			packedContext: typeof params.packedContext === "string" ? params.packedContext : null,

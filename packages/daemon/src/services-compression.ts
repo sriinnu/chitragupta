@@ -8,7 +8,9 @@ import {
 	autoProcessTextThroughPolicy,
 	compressTextThroughPolicy,
 	getCompressionPolicyStatus as getSmritiCompressionPolicyStatus,
+	normalizePackedContextText,
 	packLiveContextText,
+	unpackPackedContextText,
 } from "@chitragupta/smriti";
 
 export type {
@@ -24,6 +26,11 @@ export function _setCompressionRuntimeForTests(runtime: CompressionRuntime | nul
 
 export async function getCompressionPolicyStatus(): Promise<CompressionPolicyStatus> {
 	return getSmritiCompressionPolicyStatus();
+}
+
+function isPackedContextText(text: string): boolean {
+	const trimmed = text.trim();
+	return trimmed.startsWith("pakt:") || trimmed.startsWith("[PAKT packed ");
 }
 
 export function registerCompressionMethods(router: RpcRouter): void {
@@ -52,6 +59,28 @@ export function registerCompressionMethods(router: RpcRouter): void {
 		if (!text.trim()) throw new Error("Missing text");
 		return autoProcessTextThroughPolicy({ text });
 	}, "Auto-compress or decompress text through the engine-owned PAKT runtime");
+
+	router.register("compression.normalize_context", async (params) => {
+		const text = typeof params.text === "string" ? params.text : "";
+		if (!text.trim()) throw new Error("Missing text");
+		const normalized = await normalizePackedContextText(text);
+		return {
+			text: normalized,
+			changed: normalized !== text,
+			packed: isPackedContextText(text),
+		};
+	}, "Normalize packed context payloads through the engine-owned PAKT runtime");
+
+	router.register("compression.unpack_context", async (params) => {
+		const text = typeof params.text === "string" ? params.text : "";
+		if (!text.trim()) throw new Error("Missing text");
+		const unpacked = await unpackPackedContextText(text);
+		return {
+			text: unpacked,
+			unpacked: unpacked !== text,
+			packed: isPackedContextText(text),
+		};
+	}, "Unpack packed context payloads through the engine-owned PAKT runtime");
 
 	router.register("compression.pack_context", async (params): Promise<PackedLiveContextResult | { packed: false }> => {
 		const text = typeof params.text === "string" ? params.text : "";

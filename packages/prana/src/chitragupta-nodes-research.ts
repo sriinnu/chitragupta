@@ -113,6 +113,10 @@ export async function autoresearchRun(ctx: NodeContext): Promise<NodeResult> {
 			scopeGuard?: "git" | "hash-only";
 			targetFilesChanged?: string[];
 			scopeSnapshot?: unknown;
+			gitBranch?: string | null;
+			gitHeadCommit?: string | null;
+			gitDirtyBefore?: boolean | null;
+			gitDirtyAfter?: boolean | null;
 			executionRouteClass?: string | null;
 			selectedCapabilityId?: string | null;
 			selectedModelId?: string | null;
@@ -136,6 +140,14 @@ export async function autoresearchRun(ctx: NodeContext): Promise<NodeResult> {
 					error.scopeSnapshot && typeof error.scopeSnapshot === "object"
 						? error.scopeSnapshot
 						: null,
+				gitBranch:
+					typeof error.gitBranch === "string" ? error.gitBranch : null,
+				gitHeadCommit:
+					typeof error.gitHeadCommit === "string" ? error.gitHeadCommit : null,
+				gitDirtyBefore:
+					typeof error.gitDirtyBefore === "boolean" ? error.gitDirtyBefore : null,
+				gitDirtyAfter:
+					typeof error.gitDirtyAfter === "boolean" ? error.gitDirtyAfter : null,
 				executionRouteClass:
 					typeof error.executionRouteClass === "string" ? error.executionRouteClass : null,
 				selectedCapabilityId:

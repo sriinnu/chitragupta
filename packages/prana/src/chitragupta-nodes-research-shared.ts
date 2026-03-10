@@ -44,6 +44,10 @@ export interface ResearchRunData {
 	selectedCapabilityId?: string | null;
 	selectedModelId?: string | null;
 	selectedProviderId?: string | null;
+	gitBranch?: string | null;
+	gitHeadCommit?: string | null;
+	gitDirtyBefore?: boolean | null;
+	gitDirtyAfter?: boolean | null;
 	stdout: string;
 	stderr: string;
 	exitCode: number;

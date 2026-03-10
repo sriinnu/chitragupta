@@ -156,9 +156,21 @@ It compresses experiment context so future runs or handovers can consume a small
 If the daemon is reachable, its `compression.pack_context` decision is authoritative.
 Local packing only activates when the daemon is unavailable.
 The packed research record now preserves the compacted payload itself plus the engine-selected provider/model envelope used for execution, including the selected provider/model pair and the preferred allowed set returned by the daemon route contract.
+Packed blocks can now be normalized or unpacked through daemon compression methods before read-side reuse, so the workflow does not recursively wrap already-packed context.
 
 PAKT does not become the memory authority.
 Smriti remains canonical.
+
+## Experiment provenance
+
+Bounded research records now also preserve git provenance:
+- `gitBranch`
+- `gitHeadCommit`
+- `gitDirtyBefore`
+- `gitDirtyAfter`
+
+The workflow now fails closed if the bounded run changes git refs during execution.
+That protects the experiment ledger from claiming one branch or commit lineage while the run actually mutated into another.
 
 ## Nervous-system fit
 

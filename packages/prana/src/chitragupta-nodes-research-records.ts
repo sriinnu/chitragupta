@@ -66,6 +66,10 @@ export interface ResearchExperimentRecord {
 		selectedModelId: string | null;
 		selectedProviderId: string | null;
 		executionRouteClass: string | null;
+		gitBranch: string | null;
+		gitHeadCommit: string | null;
+		gitDirtyBefore: boolean | null;
+		gitDirtyAfter: boolean | null;
 	};
 	packing: {
 		runtime: string | null;
@@ -144,18 +148,22 @@ export function buildResearchExperimentRecord(
 				scopeGuard: finalize.scopeGuard === "hash-only" ? "hash-only" : "git",
 			}
 			: null,
-		run: {
-			exitCode: typeof run.exitCode === "number" ? run.exitCode : null,
-			timedOut: run.timedOut === true,
-			durationMs: typeof run.durationMs === "number" ? run.durationMs : null,
+			run: {
+				exitCode: typeof run.exitCode === "number" ? run.exitCode : null,
+				timedOut: run.timedOut === true,
+				durationMs: typeof run.durationMs === "number" ? run.durationMs : null,
 			targetFilesChanged: Array.isArray(run.targetFilesChanged)
 				? run.targetFilesChanged.filter((value): value is string => typeof value === "string")
 				: [],
 			selectedCapabilityId: typeof run.selectedCapabilityId === "string" ? run.selectedCapabilityId : null,
-			selectedModelId: typeof run.selectedModelId === "string" ? run.selectedModelId : null,
-			selectedProviderId: typeof run.selectedProviderId === "string" ? run.selectedProviderId : null,
-			executionRouteClass: typeof run.executionRouteClass === "string" ? run.executionRouteClass : null,
-		},
+				selectedModelId: typeof run.selectedModelId === "string" ? run.selectedModelId : null,
+				selectedProviderId: typeof run.selectedProviderId === "string" ? run.selectedProviderId : null,
+				executionRouteClass: typeof run.executionRouteClass === "string" ? run.executionRouteClass : null,
+				gitBranch: typeof run.gitBranch === "string" ? run.gitBranch : null,
+				gitHeadCommit: typeof run.gitHeadCommit === "string" ? run.gitHeadCommit : null,
+				gitDirtyBefore: typeof run.gitDirtyBefore === "boolean" ? run.gitDirtyBefore : null,
+				gitDirtyAfter: typeof run.gitDirtyAfter === "boolean" ? run.gitDirtyAfter : null,
+			},
 		packing: {
 			runtime: typeof packed.runtime === "string" ? packed.runtime : null,
 			source: typeof packed.source === "string" ? packed.source : null,
@@ -221,8 +229,12 @@ export function buildResearchRecord(
 		`- execution selected capability: ${typeof executionRoute?.selectedCapabilityId === "string" ? executionRoute.selectedCapabilityId : "none"}`,
 		`- execution route reason: ${typeof executionRoute?.reason === "string" ? executionRoute.reason : "n/a"}`,
 		`- execution preferred providers: ${Array.isArray((executionRoute as { executionBinding?: { preferredProviderIds?: unknown } } | null)?.executionBinding?.preferredProviderIds) ? ((executionRoute as { executionBinding: { preferredProviderIds: string[] } }).executionBinding.preferredProviderIds.join(", ") || "none") : "none"}`,
-		`- execution preferred models: ${Array.isArray((executionRoute as { executionBinding?: { preferredModelIds?: unknown } } | null)?.executionBinding?.preferredModelIds) ? ((executionRoute as { executionBinding: { preferredModelIds: string[] } }).executionBinding.preferredModelIds.join(", ") || "none") : "none"}`,
-		`- baseline: ${baseline}`,
+			`- execution preferred models: ${Array.isArray((executionRoute as { executionBinding?: { preferredModelIds?: unknown } } | null)?.executionBinding?.preferredModelIds) ? ((executionRoute as { executionBinding: { preferredModelIds: string[] } }).executionBinding.preferredModelIds.join(", ") || "none") : "none"}`,
+			`- git branch: ${experiment.run.gitBranch ?? "none"}`,
+			`- git head: ${experiment.run.gitHeadCommit ?? "none"}`,
+			`- git dirty before: ${experiment.run.gitDirtyBefore == null ? "n/a" : String(experiment.run.gitDirtyBefore)}`,
+			`- git dirty after: ${experiment.run.gitDirtyAfter == null ? "n/a" : String(experiment.run.gitDirtyAfter)}`,
+			`- baseline: ${baseline}`,
 		`- observed: ${observed}`,
 		`- delta: ${delta}`,
 		`- decision: ${experiment.decision}`,

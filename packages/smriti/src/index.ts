@@ -191,8 +191,10 @@ export {
 	autoProcessTextThroughPolicy,
 	compressTextThroughPolicy,
 	getCompressionPolicyStatus,
+	normalizePackedContextText,
 	packCuratedSummaryText,
 	packLiveContextText,
+	unpackPackedContextText,
 } from "./pakt-compression.js";
 export type {
 	CompressionPolicyStatus,

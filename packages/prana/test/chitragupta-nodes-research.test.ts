@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -229,6 +230,11 @@ describe("chitragupta research nodes", () => {
 		researchDir = await fs.mkdtemp(path.join(os.tmpdir(), "chitragupta-research-"));
 		await fs.writeFile(path.join(researchDir, "train.py"), "print('train')\n", "utf8");
 		await fs.writeFile(path.join(researchDir, "prepare.py"), "print('prepare')\n", "utf8");
+		execFileSync("git", ["init"], { cwd: researchDir, stdio: "ignore" });
+		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: researchDir, stdio: "ignore" });
+		execFileSync("git", ["config", "user.name", "Test Runner"], { cwd: researchDir, stdio: "ignore" });
+		execFileSync("git", ["add", "train.py", "prepare.py"], { cwd: researchDir, stdio: "ignore" });
+		execFileSync("git", ["commit", "-m", "init"], { cwd: researchDir, stdio: "ignore" });
 		appendMemory.mockClear();
 		packLiveContextText.mockClear();
 		upsertResearchExperiment.mockClear();
@@ -395,6 +401,10 @@ describe("chitragupta research nodes", () => {
 					metricName: "val_bpb",
 					metric: 0.991,
 					timedOut: false,
+					gitBranch: expect.any(String),
+					gitHeadCommit: expect.stringMatching(/^[0-9a-f]{40}$/),
+					gitDirtyBefore: false,
+					gitDirtyAfter: false,
 				}),
 			);
 		});
@@ -546,6 +556,37 @@ describe("chitragupta research nodes", () => {
 		expect(result.summary).toContain("did not authorize execution");
 	});
 
+	it("fails closed when a bounded run mutates git refs", async () => {
+		const { autoresearchRun } = await import("../src/chitragupta-nodes-research.js");
+		const result = await autoresearchRun(makeContext({
+			stepOutputs: {
+				"acp-research-council": {
+					data: {
+						finalVerdict: "accepted",
+						executionRoute: {
+							routeClass: "tool.use.flex",
+							capability: "model.tool-use",
+							selectedCapabilityId: "discovery.model.ollama.qwen-coder",
+						},
+					},
+				},
+			},
+			extra: {
+				researchCommand: "git",
+				researchArgs: ["commit", "--allow-empty", "-m", "mutate refs"],
+				researchCwd: researchDir,
+			},
+		}));
+
+		expect(result.ok).toBe(false);
+		expect(String(result.summary)).toContain("Git refs changed during experiment execution");
+		expect(result.data).toEqual(expect.objectContaining({
+			scopeGuard: "git",
+			gitBranch: expect.any(String),
+			gitHeadCommit: expect.stringMatching(/^[0-9a-f]{40}$/),
+		}));
+	});
+
 	it("requires a real measured improvement before keeping a result", async () => {
 		const { autoresearchEvaluate } = await import("../src/chitragupta-nodes-research.js");
 		const result = await autoresearchEvaluate(makeContext({
@@ -688,6 +729,12 @@ describe("chitragupta research nodes", () => {
 		expect(recorded.ok).toBe(true);
 		expect(appendMemory).toHaveBeenCalledOnce();
 		expect(databaseGet).toHaveBeenCalledWith("agent");
+		expect(upsertResearchExperiment).toHaveBeenCalledWith(expect.objectContaining({
+			gitBranch: null,
+			gitHeadCommit: null,
+			gitDirtyBefore: null,
+			gitDirtyAfter: null,
+		}));
 		expect(recorded.data).toEqual(expect.objectContaining({ source: "fallback", traceId: "trace-fallback" }));
 	});
 
@@ -745,6 +792,8 @@ describe("chitragupta research nodes", () => {
 	it("reverts target files after a failed discarded run and preserves scope lineage in records", async () => {
 		const { autoresearchRun, autoresearchEvaluate, autoresearchFinalize, autoresearchRecord } = await import("../src/chitragupta-nodes-research.js");
 		await fs.writeFile(path.join(researchDir, "train.py"), "print('before')\n", "utf8");
+		execFileSync("git", ["add", "train.py"], { cwd: researchDir });
+		execFileSync("git", ["commit", "-m", "prepare before state"], { cwd: researchDir });
 
 		const run = await autoresearchRun(makeContext({
 			stepOutputs: {
@@ -780,12 +829,16 @@ describe("chitragupta research nodes", () => {
 			},
 		}));
 
-		expect(run.ok).toBe(false);
-		expect(run.data).toEqual(expect.objectContaining({
-			exitCode: 2,
-			scopeSnapshot: expect.any(Object),
-			selectedCapabilityId: "discovery.model.ollama.qwen-coder",
-		}));
+			expect(run.ok).toBe(false);
+			expect(run.data).toEqual(expect.objectContaining({
+				exitCode: 2,
+				scopeSnapshot: expect.any(Object),
+				selectedCapabilityId: "discovery.model.ollama.qwen-coder",
+				gitBranch: expect.any(String),
+				gitHeadCommit: expect.stringMatching(/^[0-9a-f]{40}$/),
+				gitDirtyBefore: false,
+				gitDirtyAfter: true,
+			}));
 		expect(await fs.readFile(path.join(researchDir, "train.py"), "utf8")).toContain("after");
 
 		const evaluation = await autoresearchEvaluate(makeContext({
@@ -841,11 +894,17 @@ describe("chitragupta research nodes", () => {
 		}));
 		expect(recorded.ok).toBe(true);
 			expect(recorded.data).toEqual(expect.objectContaining({
-				experimentRecord: expect.objectContaining({
-					parentSessionId: "sess-parent",
-					sessionLineageKey: "lineage-alpha",
-					finalize: expect.objectContaining({ action: "reverted" }),
-				}),
+					experimentRecord: expect.objectContaining({
+						parentSessionId: "sess-parent",
+						sessionLineageKey: "lineage-alpha",
+						finalize: expect.objectContaining({ action: "reverted" }),
+						run: expect.objectContaining({
+							gitBranch: expect.any(String),
+							gitHeadCommit: expect.stringMatching(/^[0-9a-f]{40}$/),
+							gitDirtyBefore: false,
+							gitDirtyAfter: true,
+						}),
+					}),
 				experimentId: "exp-daemon-1",
 			}));
 			expect(daemonCall).toHaveBeenCalledWith("research.outcome.record", expect.objectContaining({
@@ -855,6 +914,7 @@ describe("chitragupta research nodes", () => {
 					parentSessionId: "sess-parent",
 					sessionLineageKey: "lineage-alpha",
 					finalizeAction: "reverted",
+					workflow: "autoresearch",
 				}),
 			}));
 		});

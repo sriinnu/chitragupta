@@ -104,9 +104,78 @@ describe("compression services", () => {
 		});
 	});
 
+	it("normalizes packed context through the engine-owned runtime", async () => {
+		const result = await router.handle("compression.normalize_context", {
+			text: "pakt:demo",
+		}) as { text: string; changed: boolean; packed: boolean };
+
+		expect(runtime.auto).toHaveBeenCalledWith({ text: "pakt:demo" });
+		expect(result).toEqual({
+			text: "pakt:demo",
+			changed: false,
+			packed: true,
+		});
+	});
+
+	it("unpacks packed context through the engine-owned runtime", async () => {
+		const result = await router.handle("compression.unpack_context", {
+			text: "pakt:demo",
+		}) as { text: string; unpacked: boolean; packed: boolean };
+
+		expect(runtime.auto).toHaveBeenCalledWith({ text: "pakt:demo" });
+		expect(result).toEqual({
+			text: "pakt:demo",
+			unpacked: false,
+			packed: true,
+		});
+	});
+
+	it("recognizes wrapped packed context blocks", async () => {
+		const wrapped = "[PAKT packed via pakt-core]\npakt:demo";
+		const normalized = await router.handle("compression.normalize_context", {
+			text: wrapped,
+		}) as { text: string; changed: boolean; packed: boolean };
+		const unpacked = await router.handle("compression.unpack_context", {
+			text: wrapped,
+		}) as { text: string; unpacked: boolean; packed: boolean };
+
+		expect(runtime.auto).toHaveBeenCalledWith({ text: "pakt:demo" });
+		expect(normalized.packed).toBe(true);
+		expect(unpacked.packed).toBe(true);
+	});
+
+	it("does not unpack on the normalize path when auto returns decompressed text", async () => {
+		runtime.auto = vi.fn(async () => ({
+			runtime: "pakt-core",
+			action: "decompressed",
+			result: "expanded plain text",
+		}));
+
+		const wrapped = "[PAKT packed via pakt-core]\npakt:demo";
+		const normalized = await router.handle("compression.normalize_context", {
+			text: wrapped,
+		}) as { text: string; changed: boolean; packed: boolean };
+		const unpacked = await router.handle("compression.unpack_context", {
+			text: wrapped,
+		}) as { text: string; unpacked: boolean; packed: boolean };
+
+		expect(normalized).toEqual({
+			text: "pakt:demo",
+			changed: true,
+			packed: true,
+		});
+		expect(unpacked).toEqual({
+			text: "expanded plain text",
+			unpacked: true,
+			packed: true,
+		});
+	});
+
 	it("rejects empty compression input", async () => {
 		await expect(router.handle("compression.compress", { text: "   " })).rejects.toThrow("Missing text");
 		await expect(router.handle("compression.auto", { text: "" })).rejects.toThrow("Missing text");
+		await expect(router.handle("compression.normalize_context", { text: "" })).rejects.toThrow("Missing text");
+		await expect(router.handle("compression.unpack_context", { text: "" })).rejects.toThrow("Missing text");
 	});
 
 	it("does not overclaim PAKT when the runtime is unavailable", async () => {
