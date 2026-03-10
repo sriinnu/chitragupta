@@ -153,11 +153,7 @@ export class TrigunaActuator {
 	private setMaxSubAgents(max: number): void {
 		if (!this.kaala) return;
 		try {
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			const kaala = this.kaala as any;
-			if (typeof kaala.setConfig === "function") {
-				kaala.setConfig({ maxSubAgents: max });
-			}
+			this.kaala.setConfig?.({ maxSubAgents: max });
 		} catch { /* best-effort */ }
 	}
 
@@ -165,11 +161,7 @@ export class TrigunaActuator {
 		if (!this.kaala) return;
 		try {
 			const interval = Number.isFinite(ms) ? Math.max(1000, Math.floor(ms)) : 5000;
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			const kaala = this.kaala as any;
-			if (typeof kaala.setConfig === "function") {
-				kaala.setConfig({ heartbeatInterval: interval });
-			}
+			this.kaala.setConfig?.({ heartbeatInterval: interval });
 		} catch { /* best-effort */ }
 	}
 

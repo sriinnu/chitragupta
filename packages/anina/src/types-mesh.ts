@@ -131,4 +131,6 @@ export interface KaalaLifecycle {
 	healTree(): unknown;
 	/** Get full tree health snapshot. */
 	getTreeHealth(): unknown;
+	/** Optionally update runtime configuration (e.g. maxSubAgents, heartbeatInterval). */
+	setConfig?(config: Record<string, unknown>): void;
 }

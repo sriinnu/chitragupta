@@ -22,22 +22,14 @@ function getSessionsDir(): string {
 	return path.join(os.homedir(), ".chitragupta", "sessions");
 }
 
-type DirentLike = {
-	name: string;
-	isDirectory?: () => boolean;
-	isFile?: () => boolean;
-};
-
 /**
  * Recursively collect markdown session files from nested session directories.
  * Supports both flat and v2 layouts.
  */
 async function listSessionMarkdownFiles(dir: string): Promise<string[]> {
-	let entries: Array<string | DirentLike> | undefined;
+	let entries: fs.Dirent[] | undefined;
 	try {
-		entries = await fs.promises.readdir(dir, { withFileTypes: true } as any) as
-			| Array<string | DirentLike>
-			| undefined;
+		entries = await fs.promises.readdir(dir, { withFileTypes: true });
 	} catch {
 		return [];
 	}
@@ -45,11 +37,6 @@ async function listSessionMarkdownFiles(dir: string): Promise<string[]> {
 
 	const files: string[] = [];
 	for (const entry of entries) {
-		if (typeof entry === "string") {
-			if (entry.endsWith(".md")) files.push(path.join(dir, entry));
-			continue;
-		}
-
 		const fullPath = path.join(dir, entry.name);
 		if (entry.isDirectory?.()) {
 			files.push(...(await listSessionMarkdownFiles(fullPath)));
