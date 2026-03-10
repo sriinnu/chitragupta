@@ -74,6 +74,25 @@ function auditBundlePublishParity(metafile) {
 			`package.publish.json is missing bundled external dependencies: ${missing.join(", ")}`,
 		);
 	}
+	for (const [command, target] of Object.entries(manifest.bin ?? {})) {
+		if (typeof target !== "string" || target.length === 0) {
+			throw new Error(`package.publish.json has invalid bin target for ${command}`);
+		}
+		if (target.startsWith("./")) {
+			throw new Error(
+				`package.publish.json bin target for ${command} must not start with './' (${target})`,
+			);
+		}
+	}
+	const repositoryUrl = manifest.repository?.url;
+	if (
+		typeof repositoryUrl === "string" &&
+		repositoryUrl.startsWith("https://github.com/")
+	) {
+		throw new Error(
+			`package.publish.json repository.url must use git+https form (${repositoryUrl})`,
+		);
+	}
 }
 
 // ── Library entry points (compiled JS from tsc) ──────────────────────────────

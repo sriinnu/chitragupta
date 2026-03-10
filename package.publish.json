@@ -1,6 +1,6 @@
 {
 	"name": "@yugenlab/chitragupta",
-	"version": "0.1.31",
+	"version": "0.1.34",
 	"description": "AI agent memory and observability platform — sessions, GraphRAG, hybrid search, temporal trending, predictive pre-fetching, dream-cycle consolidation, 60+ MCP tools",
 	"type": "module",
 	"author": "Srinivas Pendela",
@@ -12,9 +12,9 @@
 		"access": "public"
 	},
 	"bin": {
-		"chitragupta": "./cli.js",
-		"chitragupta-mcp": "./mcp-entry.js",
-		"chitragupta-code": "./code-entry.js"
+		"chitragupta": "cli.js",
+		"chitragupta-mcp": "mcp-entry.js",
+		"chitragupta-code": "code-entry.js"
 	},
 	"main": "./index.js",
 	"types": "./index.d.ts",
@@ -101,7 +101,7 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/sriinnu/chitragupta.git"
+		"url": "git+https://github.com/sriinnu/chitragupta.git"
 	},
 	"keywords": [
 		"chitragupta",

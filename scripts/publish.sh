@@ -17,6 +17,9 @@ IS_SUBTREE_REPO=false
 if [[ -n "$GIT_TOP" && "$GIT_TOP" != "$ROOT" ]]; then
 	IS_SUBTREE_REPO=true
 fi
+NPM_CACHE_DIR="${NPM_CONFIG_CACHE:-$ROOT/.tmp/npm-cache}"
+mkdir -p "$NPM_CACHE_DIR"
+export npm_config_cache="$NPM_CACHE_DIR"
 
 # ── Defaults ──────────────────────────────────────────────────────────
 DRY_RUN=true
@@ -235,10 +238,10 @@ echo ""
 if [[ "$DRY_RUN" == true ]]; then
 	info "=== DRY RUN ==="
 	echo ""
-	info "Package contents:"
+	info "Package dry-run publish:"
 	(
 		cd "$ROOT/dist"
-		npm pack --dry-run 2>&1 | head -50
+		npm publish --dry-run
 	)
 	echo ""
 	ok "Dry run complete. Use --real to publish for real."
