@@ -6,7 +6,7 @@ const upsertResearchExperiment = vi.fn((input: Record<string, unknown>) => ({ id
 const listResearchExperiments = vi.fn(() => [
 	{ id: "exp-1", decision: "keep", packedContext: "pakt:abc" },
 ]);
-const autoProcessTextThroughPolicy = vi.fn(async () => ({ result: "expanded context" }));
+const unpackPackedContextText = vi.fn(async () => "expanded context");
 const appendMemory = vi.fn(async () => undefined);
 const leave = vi.fn(() => ({ id: "trace-1" }));
 const restore = vi.fn();
@@ -23,7 +23,7 @@ const DatabaseManager = { instance };
 vi.mock("@chitragupta/smriti", () => ({
 	upsertResearchExperiment,
 	listResearchExperiments,
-	autoProcessTextThroughPolicy,
+	unpackPackedContextText,
 	appendMemory,
 	AkashaField,
 	DatabaseManager,
@@ -143,12 +143,29 @@ describe("services-research", () => {
 			decision: "keep",
 			limit: 20,
 		});
-		expect(autoProcessTextThroughPolicy).toHaveBeenCalledWith({ text: "pakt:abc" });
+		expect(unpackPackedContextText).toHaveBeenCalledWith("pakt:abc");
 		expect(result).toEqual({
 			experiments: [
 				expect.objectContaining({
 					id: "exp-1",
 					expandedPackedContext: "expanded context",
+				}),
+			],
+		});
+	});
+
+	it("does not claim expanded packed context when unpack is a no-op", async () => {
+		unpackPackedContextText.mockResolvedValueOnce("pakt:abc");
+
+		const result = await router.handle("research.experiments.list", {
+			projectPath: "/repo/project",
+			expandPackedContext: true,
+		}, {});
+
+		expect(result).toEqual({
+			experiments: [
+				expect.not.objectContaining({
+					expandedPackedContext: expect.anything(),
 				}),
 			],
 		});

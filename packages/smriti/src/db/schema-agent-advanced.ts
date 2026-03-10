@@ -248,7 +248,7 @@ export function applyAdvancedAgentMigrations(db: AgentDb, currentVersion: number
 		`);
 	}
 
-	if (currentVersion < 18) {
+		if (currentVersion < 18) {
 		const cols = db.prepare("PRAGMA table_info(research_experiments)").all() as Array<{ name: string }>;
 		const names = new Set(cols.map((row) => row.name));
 		if (!names.has("experiment_key")) {
@@ -307,6 +307,73 @@ export function applyAdvancedAgentMigrations(db: AgentDb, currentVersion: number
 				}
 			});
 			tx(rows);
+			}
+		}
+
+		if (currentVersion < 19) {
+			const cols = db.prepare("PRAGMA table_info(research_experiments)").all() as Array<{ name: string }>;
+			const names = new Set(cols.map((row) => row.name));
+			if (!names.has("git_branch")) {
+				db.exec("ALTER TABLE research_experiments ADD COLUMN git_branch TEXT;");
+			}
+			if (!names.has("git_head_commit")) {
+				db.exec("ALTER TABLE research_experiments ADD COLUMN git_head_commit TEXT;");
+			}
+			if (!names.has("git_dirty_before")) {
+				db.exec("ALTER TABLE research_experiments ADD COLUMN git_dirty_before INTEGER;");
+			}
+			if (!names.has("git_dirty_after")) {
+				db.exec("ALTER TABLE research_experiments ADD COLUMN git_dirty_after INTEGER;");
+			}
+			const rows = db.prepare(`
+				SELECT id, record_json, git_branch, git_head_commit, git_dirty_before, git_dirty_after
+				FROM research_experiments
+			`).all() as Array<{
+				id: string;
+				record_json: string | null;
+				git_branch: string | null;
+				git_head_commit: string | null;
+				git_dirty_before: number | null;
+				git_dirty_after: number | null;
+			}>;
+			if (rows.length > 0) {
+				const update = db.prepare(`
+					UPDATE research_experiments
+					SET git_branch = ?,
+						git_head_commit = ?,
+						git_dirty_before = ?,
+						git_dirty_after = ?
+					WHERE id = ?
+				`);
+				const tx = db.transaction((pendingRows: typeof rows) => {
+					for (const row of pendingRows) {
+						let parsed: Record<string, unknown> = {};
+						try {
+							parsed = row.record_json ? JSON.parse(row.record_json) as Record<string, unknown> : {};
+						} catch {
+							parsed = {};
+						}
+						const run = parsed.run && typeof parsed.run === "object" ? parsed.run as Record<string, unknown> : {};
+						const gitBranch = typeof row.git_branch === "string" && row.git_branch.trim()
+							? row.git_branch.trim()
+							: typeof run.gitBranch === "string" && run.gitBranch.trim()
+								? run.gitBranch.trim()
+								: null;
+						const gitHeadCommit = typeof row.git_head_commit === "string" && row.git_head_commit.trim()
+							? row.git_head_commit.trim()
+							: typeof run.gitHeadCommit === "string" && run.gitHeadCommit.trim()
+								? run.gitHeadCommit.trim()
+								: null;
+						update.run(
+							gitBranch,
+							gitHeadCommit,
+							row.git_dirty_before ?? (typeof run.gitDirtyBefore === "boolean" ? (run.gitDirtyBefore ? 1 : 0) : null),
+							row.git_dirty_after ?? (typeof run.gitDirtyAfter === "boolean" ? (run.gitDirtyAfter ? 1 : 0) : null),
+							row.id,
+						);
+					}
+				});
+				tx(rows);
+			}
 		}
 	}
-}

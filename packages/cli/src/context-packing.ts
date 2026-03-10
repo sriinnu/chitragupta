@@ -5,6 +5,7 @@ import {
 } from "@chitragupta/smriti";
 import {
 	autoProcessContextViaDaemon,
+	normalizeContextViaDaemon,
 	packContextViaDaemon,
 } from "./modes/daemon-bridge-sessions.js";
 import { allowLocalRuntimeFallback } from "./runtime-daemon-proxies.js";
@@ -74,7 +75,17 @@ export async function autoProcessContextWithFallback(text: string): Promise<Reco
 
 export async function normalizeContextForReuse(text: string): Promise<string> {
 	if (!looksPacked(text)) return text;
-	const processed = await autoProcessContextWithFallback(text);
+	const payload = extractPackedPayload(text);
+	const canFallback = allowLocalRuntimeFallback();
+	try {
+		const normalized = await normalizeContextViaDaemon(payload);
+		return typeof normalized.text === "string" && normalized.text.trim()
+			? normalized.text
+			: text;
+	} catch (error) {
+		if (!canFallback || !shouldFallbackToLocalPacking(error)) return text;
+	}
+	const processed = await autoProcessContextWithFallback(payload);
 	if (!processed) return text;
 	return typeof processed.result === "string" && processed.result.trim()
 		? processed.result

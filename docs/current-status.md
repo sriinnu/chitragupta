@@ -78,6 +78,8 @@ It states what is live, what is partial, and what is still open.
   - `compression.compress`
   - `compression.auto`
   - `compression.pack_context`
+  - `compression.normalize_context`
+  - `compression.unpack_context`
 - Compression is engine-owned:
   - `pakt-core` is the preferred compression runtime and stdio `pakt` is the supported fallback
   - the default runtime only flips on when one of those runtimes is actually available
@@ -86,6 +88,7 @@ It states what is live, what is partial, and what is still open.
   - live-context packing now prefers the daemon compression surface and only falls back to a local in-process packer when the daemon path is unavailable
   - a daemon `packed: false` decision is authoritative and must not trigger local repacking while the daemon is reachable
   - `lucy.live_context` now returns daemon-authored packed guidance and prediction blocks, so CLI and MCP paths do not rebuild those blocks locally when the daemon already produced them
+  - daemon-authored wrapped packed blocks can now be normalized or unpacked before reuse instead of being blindly nested or treated as opaque strings
   - Takumi live prompt synthesis now also packs bulky episodic-hint and recent-decision sections through the same daemon-first packing path instead of only packing repo maps and file excerpts
   - enforced Takumi route envelopes now fail closed before spawn if the authoritative engine lane cannot be transported safely through the structured bridge contract
 - Curated day/monthly/yearly consolidation artifacts can now carry a PAKT-packed derived summary for transport and context packing.
@@ -99,6 +102,12 @@ It states what is live, what is partial, and what is still open.
   - Prana research councils now bind to canonical daemon sessions, preserve optional parent-session and lineage metadata, and use the `research.bounded` lane, which resolves to the engine-owned `engine.research.autoresearch` capability under approval-gated policy
 - bounded research now resolves both the workflow lane and the execution lane through one daemon `route.resolveBatch` call, then fails closed if the daemon does not return an executable engine-selected capability for the run
 - bounded research now also fails closed when `session.open` does not return a canonical engine session id, instead of continuing with advisory-only route metadata
+- bounded research now records git provenance in the durable experiment ledger:
+  - `gitBranch`
+  - `gitHeadCommit`
+  - `gitDirtyBefore`
+  - `gitDirtyAfter`
+- bounded research now fails closed when git refs change during execution instead of silently treating a mutated branch as the same experiment lineage
 - bounded research records now include the packed context payload itself when PAKT packing succeeds, so later recall can inspect the derived compacted context directly without losing provenance to the run/session metadata
 - research records now keep execution-binding provenance, including preferred discovered providers/models when a discovery-backed execution lane was selected
 - bounded research execution now also receives the engine-selected lane directly through its process environment, including selected provider/model ids and preferred discovered candidates, so the runtime behavior matches the recorded route provenance instead of treating it as metadata only

@@ -232,9 +232,13 @@ describe("Schema initialization", () => {
 				expect(row?.name).toBe("research_experiments");
 				const info = db.prepare("PRAGMA table_info(research_experiments)").all() as Array<{ name: string }>;
 				const cols = info.map((entry) => entry.name);
-				expect(cols).toContain("experiment_key");
-				expect(cols).toContain("budget_ms");
-				expect(cols).toContain("sabha_id");
+					expect(cols).toContain("experiment_key");
+					expect(cols).toContain("budget_ms");
+					expect(cols).toContain("sabha_id");
+					expect(cols).toContain("git_branch");
+					expect(cols).toContain("git_head_commit");
+					expect(cols).toContain("git_dirty_before");
+					expect(cols).toContain("git_dirty_after");
 			});
 
 			it("should create sabha_state durability table", () => {
@@ -423,7 +427,7 @@ describe("Schema initialization", () => {
 				initAgentSchema(dbm);
 				const db = dbm.get("agent");
 				const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-				expect(row.version).toBe(18);
+					expect(row.version).toBe(19);
 			});
 
 			it("should skip re-initialization when version matches", () => {
@@ -432,7 +436,7 @@ describe("Schema initialization", () => {
 				initAgentSchema(dbm);
 				const db = dbm.get("agent");
 				const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-				expect(row.version).toBe(18);
+					expect(row.version).toBe(19);
 			});
 
 			it("should rebuild consolidation_log with swapna constraint for legacy databases", () => {
@@ -488,6 +492,95 @@ describe("Schema initialization", () => {
 						version INTEGER NOT NULL DEFAULT 0
 					);
 
+						CREATE TABLE research_experiments (
+							id                    TEXT PRIMARY KEY,
+							project               TEXT NOT NULL,
+						session_id            TEXT,
+						parent_session_id     TEXT,
+						session_lineage_key   TEXT,
+						topic                 TEXT NOT NULL,
+						metric_name           TEXT NOT NULL,
+						objective             TEXT NOT NULL,
+						baseline_metric       REAL,
+						observed_metric       REAL,
+						delta                 REAL,
+						decision              TEXT NOT NULL,
+						council_verdict       TEXT,
+						route_class           TEXT,
+						execution_route_class TEXT,
+							selected_capability_id TEXT,
+							selected_model_id     TEXT,
+							selected_provider_id  TEXT,
+							packed_context        TEXT,
+							packed_runtime        TEXT,
+							packed_source         TEXT,
+							record_json           TEXT NOT NULL,
+							created_at            INTEGER NOT NULL,
+							updated_at            INTEGER NOT NULL
+						);
+				`);
+				db.prepare(`
+					INSERT INTO research_experiments (
+						id, project, session_id, topic, metric_name, objective, decision, record_json, created_at, updated_at
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				`).run(
+					"exp-legacy-1",
+					"/repo/project",
+					"sess-1",
+					"optimizer sweep",
+					"val_bpb",
+					"minimize",
+					"keep",
+					JSON.stringify({
+							experimentKey: "exp-key-legacy",
+							budgetMs: 300000,
+							sabhaId: "sabha-legacy",
+							run: {
+								gitBranch: "main",
+								gitHeadCommit: "abc123abc123abc123abc123abc123abc123abcd",
+								gitDirtyBefore: false,
+								gitDirtyAfter: true,
+							},
+						}),
+					123456,
+					123456,
+				);
+				db.prepare(
+					"INSERT INTO _schema_versions (name, version) VALUES ('agent', 17) ON CONFLICT(name) DO UPDATE SET version = excluded.version",
+				).run();
+
+				initAgentSchema(dbm);
+
+				const row = db.prepare(`
+						SELECT experiment_key, budget_ms, sabha_id, git_branch, git_head_commit, git_dirty_before, git_dirty_after
+						FROM research_experiments
+						WHERE id = ?
+					`).get("exp-legacy-1") as {
+						experiment_key: string | null;
+						budget_ms: number | null;
+						sabha_id: string | null;
+						git_branch: string | null;
+						git_head_commit: string | null;
+						git_dirty_before: number | null;
+						git_dirty_after: number | null;
+					};
+					expect(row.experiment_key).toBe("exp-key-legacy");
+					expect(row.budget_ms).toBe(300000);
+					expect(row.sabha_id).toBe("sabha-legacy");
+					expect(row.git_branch).toBe("main");
+					expect(row.git_head_commit).toBe("abc123abc123abc123abc123abc123abc123abcd");
+					expect(row.git_dirty_before).toBe(0);
+					expect(row.git_dirty_after).toBe(1);
+				});
+
+			it("should normalize legacy git provenance columns while backfilling", () => {
+				const db = dbm.get("agent");
+				db.exec(`
+					CREATE TABLE _schema_versions (
+						name    TEXT PRIMARY KEY,
+						version INTEGER NOT NULL DEFAULT 0
+					);
+
 					CREATE TABLE research_experiments (
 						id                    TEXT PRIMARY KEY,
 						project               TEXT NOT NULL,
@@ -507,6 +600,10 @@ describe("Schema initialization", () => {
 						selected_capability_id TEXT,
 						selected_model_id     TEXT,
 						selected_provider_id  TEXT,
+						git_branch            TEXT,
+						git_head_commit       TEXT,
+						git_dirty_before      INTEGER,
+						git_dirty_after       INTEGER,
 						packed_context        TEXT,
 						packed_runtime        TEXT,
 						packed_source         TEXT,
@@ -517,20 +614,26 @@ describe("Schema initialization", () => {
 				`);
 				db.prepare(`
 					INSERT INTO research_experiments (
-						id, project, session_id, topic, metric_name, objective, decision, record_json, created_at, updated_at
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+						id, project, session_id, topic, metric_name, objective, decision,
+						git_branch, git_head_commit, record_json, created_at, updated_at
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				`).run(
-					"exp-legacy-1",
+					"exp-legacy-2",
 					"/repo/project",
-					"sess-1",
-					"optimizer sweep",
+					"sess-2",
+					"branch normalization",
 					"val_bpb",
 					"minimize",
 					"keep",
+					"  main  ",
+					"   ",
 					JSON.stringify({
-						experimentKey: "exp-key-legacy",
-						budgetMs: 300000,
-						sabhaId: "sabha-legacy",
+						run: {
+							gitBranch: "feature/fallback",
+							gitHeadCommit: "abcd",
+							gitDirtyBefore: true,
+							gitDirtyAfter: false,
+						},
 					}),
 					123456,
 					123456,
@@ -542,17 +645,19 @@ describe("Schema initialization", () => {
 				initAgentSchema(dbm);
 
 				const row = db.prepare(`
-					SELECT experiment_key, budget_ms, sabha_id
+					SELECT git_branch, git_head_commit, git_dirty_before, git_dirty_after
 					FROM research_experiments
 					WHERE id = ?
-				`).get("exp-legacy-1") as {
-					experiment_key: string | null;
-					budget_ms: number | null;
-					sabha_id: string | null;
+				`).get("exp-legacy-2") as {
+					git_branch: string | null;
+					git_head_commit: string | null;
+					git_dirty_before: number | null;
+					git_dirty_after: number | null;
 				};
-				expect(row.experiment_key).toBe("exp-key-legacy");
-				expect(row.budget_ms).toBe(300000);
-				expect(row.sabha_id).toBe("sabha-legacy");
+				expect(row.git_branch).toBe("main");
+				expect(row.git_head_commit).toBe("abcd");
+				expect(row.git_dirty_before).toBe(1);
+				expect(row.git_dirty_after).toBe(0);
 			});
 		});
 	});

@@ -91,6 +91,8 @@ Representative method families (actual inventory grows with daemon services and 
 | `compression.status` | Read | Inspect engine-owned PAKT compression runtime status |
 | `compression.compress` | Tool | Compress text through the engine-owned PAKT runtime |
 | `compression.auto` | Tool | Auto-compress or decompress text through the engine-owned PAKT runtime |
+| `compression.normalize_context` | Tool | Normalize already-packed context so consumers can reuse it safely |
+| `compression.unpack_context` | Tool | Expand a packed context payload back into reusable text |
 | `discovery.info` | Read | Inspect kosha-discovery integration status |
 | `discovery.providers` | Read | Discover providers through the engine control plane |
 | `discovery.models` | Read | Discover/filter models through the engine control plane |

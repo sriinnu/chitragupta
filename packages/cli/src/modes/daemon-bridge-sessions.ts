@@ -251,6 +251,18 @@ export async function autoProcessContextViaDaemon(
 	return daemonCall("compression.auto", { text });
 }
 
+export async function normalizeContextViaDaemon(
+	text: string,
+): Promise<{ text: string; changed: boolean; packed: boolean }> {
+	return daemonCall("compression.normalize_context", { text });
+}
+
+export async function unpackContextViaDaemon(
+	text: string,
+): Promise<{ text: string; unpacked: boolean; packed: boolean }> {
+	return daemonCall("compression.unpack_context", { text });
+}
+
 export async function appendMemoryViaDaemon(
 	scopeType: "global" | "project" | "agent",
 	entry: string,

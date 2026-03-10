@@ -71,6 +71,8 @@ Research nodes keep one canonical project/session path:
 - `researchCwd` may narrow execution inside that project, but may not escape it
 - optional `researchParentSessionId` and `researchSessionLineageKey` propagate lineage into the engine session ledger
 - `route.resolveBatch` is used for the bounded workflow lane plus the execution lane so Prana does not rebuild route policy locally
+- bounded research records now also persist git provenance (`gitBranch`, `gitHeadCommit`, `gitDirtyBefore`, `gitDirtyAfter`) and fail closed when git refs mutate during a bounded run
+- packed research context can now be normalized or unpacked on the read side through daemon compression methods instead of being recursively nested
 - the returned execution envelope now preserves the selected provider/model pair and the preferred allowed set for the bounded run
 - daemon `compression.pack_context` is authoritative while the daemon is reachable
 

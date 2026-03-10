@@ -25,6 +25,8 @@ type ScopeSnapshot = {
 	changedPaths: string[];
 	hashes: Map<string, string | null>;
 	fileContents: Map<string, string | null>;
+	gitBranch: string | null;
+	gitHeadCommit: string | null;
 };
 
 type ExecutableResearchScope = ResearchScope & {
@@ -99,6 +101,22 @@ async function captureScopeSnapshot(scope: ResearchScope): Promise<ScopeSnapshot
 			["-C", scope.cwd, "status", "--porcelain=v1", "--untracked-files=all"],
 			{ maxBuffer: 1024 * 1024 },
 		);
+		const [branchResult, headResult] = await Promise.allSettled([
+			execFileAsync("git", ["-C", scope.cwd, "rev-parse", "--abbrev-ref", "HEAD"], { maxBuffer: 1024 * 1024 }),
+			execFileAsync("git", ["-C", scope.cwd, "rev-parse", "HEAD"], { maxBuffer: 1024 * 1024 }),
+		]);
+		const gitBranch =
+			branchResult.status === "fulfilled" &&
+			typeof branchResult.value.stdout === "string" &&
+			branchResult.value.stdout.trim()
+				? branchResult.value.stdout.trim()
+			: null;
+		const gitHeadCommit =
+			headResult.status === "fulfilled" &&
+			typeof headResult.value.stdout === "string" &&
+			headResult.value.stdout.trim()
+				? headResult.value.stdout.trim()
+			: null;
 		const changedPaths = stdout
 			.split("\n")
 			.map((line) => line.trimEnd())
@@ -108,10 +126,10 @@ async function captureScopeSnapshot(scope: ResearchScope): Promise<ScopeSnapshot
 				const renameIndex = body.indexOf(" -> ");
 				return normalizeRelativePath(renameIndex >= 0 ? body.slice(renameIndex + 4) : body);
 			});
-			return { mode: "git", changedPaths, hashes, fileContents };
-		} catch {
-			return { mode: "hash-only", changedPaths: [], hashes, fileContents };
-		}
+		return { mode: "git", changedPaths, hashes, fileContents, gitBranch, gitHeadCommit };
+	} catch {
+		return { mode: "hash-only", changedPaths: [], hashes, fileContents, gitBranch: null, gitHeadCommit: null };
+	}
 }
 
 function assertScopeSnapshot(scope: ResearchScope, snapshot: ScopeSnapshot, phase: "before" | "after"): void {
@@ -128,6 +146,13 @@ function assertScopeSnapshot(scope: ResearchScope, snapshot: ScopeSnapshot, phas
 function compareScopeSnapshots(scope: ResearchScope, before: ScopeSnapshot, after: ScopeSnapshot): {
 	targetFilesChanged: string[];
 } {
+	if (
+		before.mode === "git" &&
+		after.mode === "git" &&
+		(before.gitBranch !== after.gitBranch || before.gitHeadCommit !== after.gitHeadCommit)
+	) {
+		throw new Error("Git refs changed during experiment execution");
+	}
 	const immutable = immutablePaths(scope);
 	for (const file of immutable) {
 		if ((before.hashes.get(file) ?? null) !== (after.hashes.get(file) ?? null)) {
@@ -139,6 +164,10 @@ function compareScopeSnapshots(scope: ResearchScope, before: ScopeSnapshot, afte
 		return (before.hashes.get(key) ?? null) !== (after.hashes.get(key) ?? null);
 	});
 	return { targetFilesChanged: changedTargets };
+}
+
+function dirtyStateForSnapshot(snapshot: ScopeSnapshot): boolean | null {
+	return snapshot.mode === "git" ? snapshot.changedPaths.length > 0 : null;
 }
 
 function serializeScopeSnapshot(scope: ResearchScope, snapshot: ScopeSnapshot): ResearchScopeSnapshot {
@@ -158,19 +187,19 @@ async function runBoundedCommand(scope: ExecutableResearchScope): Promise<Resear
 	const before = await captureScopeSnapshot(scope);
 	assertScopeSnapshot(scope, before, "before");
 	const startedAt = Date.now();
-		try {
-			const { stdout, stderr } = await execFileAsync(scope.command, scope.commandArgs, {
-				cwd: scope.cwd,
-				env: scope.env ? { ...process.env, ...scope.env } : process.env,
-				timeout: scope.budgetMs,
-				maxBuffer: 10 * 1024 * 1024,
-			});
+	try {
+		const { stdout, stderr } = await execFileAsync(scope.command, scope.commandArgs, {
+			cwd: scope.cwd,
+			env: scope.env ? { ...process.env, ...scope.env } : process.env,
+			timeout: scope.budgetMs,
+			maxBuffer: 10 * 1024 * 1024,
+		});
 		const after = await captureScopeSnapshot(scope);
 		assertScopeSnapshot(scope, after, "after");
 		const compared = compareScopeSnapshots(scope, before, after);
 		const combined = `${stdout}\n${stderr}`;
-			return {
-				command: scope.command,
+		return {
+			command: scope.command,
 			commandArgs: scope.commandArgs,
 			cwd: scope.cwd,
 			metricName: scope.metricName,
@@ -179,15 +208,25 @@ async function runBoundedCommand(scope: ExecutableResearchScope): Promise<Resear
 			stderr,
 			exitCode: 0,
 			timedOut: false,
-				durationMs: Date.now() - startedAt,
-				scopeGuard: after.mode,
-				targetFilesChanged: compared.targetFilesChanged,
-				scopeSnapshot: serializeScopeSnapshot(scope, before),
-			};
-		} catch (error) {
-			const after = await captureScopeSnapshot(scope);
-			assertScopeSnapshot(scope, after, "after");
-			const compared = compareScopeSnapshots(scope, before, after);
+			durationMs: Date.now() - startedAt,
+			scopeGuard: after.mode,
+			targetFilesChanged: compared.targetFilesChanged,
+			gitBranch: before.gitBranch,
+			gitHeadCommit: before.gitHeadCommit,
+			gitDirtyBefore: dirtyStateForSnapshot(before),
+			gitDirtyAfter: dirtyStateForSnapshot(after),
+			scopeSnapshot: serializeScopeSnapshot(scope, before),
+		};
+	} catch (error) {
+		const after = await captureScopeSnapshot(scope);
+		assertScopeSnapshot(scope, after, "after");
+		let compared: { targetFilesChanged: string[] } = { targetFilesChanged: [] };
+		let scopeError: Error | null = null;
+		try {
+			compared = compareScopeSnapshots(scope, before, after);
+		} catch (compareError) {
+			scopeError = compareError instanceof Error ? compareError : new Error(String(compareError));
+		}
 		const err = error as Error & {
 			code?: number | string;
 			stdout?: string;
@@ -195,7 +234,10 @@ async function runBoundedCommand(scope: ExecutableResearchScope): Promise<Resear
 			signal?: string | null;
 		};
 		const combined = `${err.stdout ?? ""}\n${err.stderr ?? ""}`;
-		const enriched = Object.assign(new Error(`Research run failed: ${err.message}`), {
+		const message = scopeError
+			? scopeError.message
+			: `Research run failed: ${err.message}`;
+		const enriched = Object.assign(new Error(message), {
 			stdout: err.stdout ?? "",
 			stderr: err.stderr ?? "",
 			metric: pickMetric(combined, scope.metricPattern),
@@ -204,6 +246,10 @@ async function runBoundedCommand(scope: ExecutableResearchScope): Promise<Resear
 			timedOut: err.signal === "SIGTERM",
 			scopeGuard: after.mode,
 			targetFilesChanged: compared.targetFilesChanged,
+			gitBranch: before.gitBranch,
+			gitHeadCommit: before.gitHeadCommit,
+			gitDirtyBefore: dirtyStateForSnapshot(before),
+			gitDirtyAfter: dirtyStateForSnapshot(after),
 			scopeSnapshot: serializeScopeSnapshot(scope, before),
 		});
 		throw enriched;
