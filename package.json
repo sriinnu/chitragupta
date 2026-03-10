@@ -2,7 +2,7 @@
 	"name": "chitragupta-monorepo",
 	"private": true,
 	"type": "module",
-  "version": "0.1.31",
+  "version": "0.1.34",
 	"license": "MIT",
 	"description": "The Autonomous AI Agent Platform — 17-package TypeScript monorepo with zero-LLM cognitive layer, GraphRAG memory, bi-temporal knowledge graph, centralized daemon, and self-evolving skills",
 	"keywords": [
@@ -31,7 +31,7 @@
 	"scripts": {
 		"setup": "node scripts/env-setup.mjs && pnpm install",
 		"postinstall": "node scripts/verify-native.mjs",
-		"clean": "npm run clean --workspaces --if-present && rm -rf dist",
+		"clean": "pnpm -r --if-present --filter \"@chitragupta/*\" run clean && find packages -name '*.tsbuildinfo' -delete && rm -rf dist",
 		"clean:all": "find packages -name node_modules -type d -prune -exec rm -rf {} + && rm -rf node_modules && find packages -name dist -type d -prune -exec rm -rf {} + && rm -rf dist",
 		"nuke": "find packages -name node_modules -type d -prune -exec rm -rf {} + ; find packages -name dist -type d -prune -exec rm -rf {} + ; find . -name '*.tsbuildinfo' -not -path '*/node_modules/*' -delete ; rm -rf node_modules dist ; echo 'chitragupta: nuked dist + node_modules + tsbuildinfo'",
 		"build": "node scripts/build-workspace.mjs",
