@@ -247,7 +247,7 @@ export type {
 
 // ─── Agent-Actor Bridge (Setu — mesh integration) ───────────────────────────
 export { createAgentBehavior, isAgentMeshMessage } from "./agent-actor-bridge.js";
-export type { AgentMeshMessage, AgentMeshReply } from "./agent-actor-bridge.js";
+export type { AgentBehaviorHandle, AgentMeshMessage, AgentMeshReply } from "./agent-actor-bridge.js";
 
 // ─── Lokapala (लोकपाल — World Guardians) ────────────────────────────────────
 export { LokapalaController } from "./lokapala/index.js";
