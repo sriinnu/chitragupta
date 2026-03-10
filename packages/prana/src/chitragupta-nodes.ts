@@ -77,7 +77,7 @@ export {
 } from "./chitragupta-nodes-quality.js";
 export {
 	autoresearchScope, acpResearchCouncil, autoresearchBaseline,
-	autoresearchRun, autoresearchEvaluate, autoresearchRecord,
+	autoresearchRun, autoresearchEvaluate, autoresearchFinalize, autoresearchRecord,
 	paktPackResearchContext,
 } from "./chitragupta-nodes-research.js";
 
@@ -98,7 +98,7 @@ import {
 } from "./chitragupta-nodes-quality.js";
 import {
 	autoresearchScope, acpResearchCouncil, autoresearchBaseline,
-	autoresearchRun, autoresearchEvaluate, autoresearchRecord,
+	autoresearchRun, autoresearchEvaluate, autoresearchFinalize, autoresearchRecord,
 	paktPackResearchContext,
 } from "./chitragupta-nodes-research.js";
 // ─── Node Registry ───────────────────────────────────────────────────────────
@@ -136,6 +136,7 @@ export const NODE_ADAPTERS: Record<string, (ctx: NodeContext) => Promise<NodeRes
 	"autoresearch-baseline": autoresearchBaseline,
 	"autoresearch-run": autoresearchRun,
 	"autoresearch-evaluate": autoresearchEvaluate,
+	"autoresearch-finalize": autoresearchFinalize,
 	"autoresearch-record": autoresearchRecord,
 	"pakt-pack-research-context": paktPackResearchContext,
 };

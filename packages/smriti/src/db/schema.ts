@@ -12,11 +12,10 @@
 
 import type { DatabaseManager } from "./database.js";
 import { applyAdvancedAgentMigrations } from "./schema-agent-advanced.js";
+import { initGraphSchema, initVectorsSchema } from "./schema-graph-vectors.js";
+import { AGENT_SCHEMA_VERSION, getSchemaVersion, setSchemaVersion } from "./schema-version.js";
 
-// Current schema versions — bump when adding migrations
-const AGENT_SCHEMA_VERSION = 15;
-const GRAPH_SCHEMA_VERSION = 1;
-const VECTORS_SCHEMA_VERSION = 1;
+export { initGraphSchema, initVectorsSchema } from "./schema-graph-vectors.js";
 
 /**
  * Initialize all database schemas. Safe to call multiple times.
@@ -310,132 +309,78 @@ export function initAgentSchema(dbm: DatabaseManager): void {
 
 	// ─── Phase 6 migration: Rename svapna → swapna in consolidation_log ──
 	if (currentVersion < 6) {
-		db.exec(`
-				UPDATE consolidation_log SET cycle_type = 'swapna' WHERE cycle_type = 'svapna';
-				UPDATE consolidation_log SET cycle_id = REPLACE(cycle_id, 'svapna-', 'swapna-')
-					WHERE cycle_id LIKE 'svapna-%';
-			`);
+		const consolidationLogSql = db
+			.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'consolidation_log'")
+			.get() as { sql?: string } | undefined;
+		const hasLegacySvapnaConstraint = consolidationLogSql?.sql?.includes("'svapna'") ?? false;
+		if (!hasLegacySvapnaConstraint) {
+			db.exec(`
+					UPDATE consolidation_log SET cycle_type = 'swapna' WHERE cycle_type = 'svapna';
+					UPDATE consolidation_log SET cycle_id = REPLACE(cycle_id, 'svapna-', 'swapna-')
+						WHERE cycle_id LIKE 'svapna-%';
+				`);
+		}
 	}
 
 		applyAdvancedAgentMigrations(db, currentVersion);
 
-		setSchemaVersion(db, "agent", AGENT_SCHEMA_VERSION);
-}
+	if (currentVersion < 16) {
+		const consolidationLogSql = db
+			.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'consolidation_log'")
+			.get() as { sql?: string } | undefined;
+		if (consolidationLogSql?.sql?.includes("'svapna'")) {
+			db.exec(`
+				ALTER TABLE consolidation_log RENAME TO consolidation_log_old;
 
-/**
- * Initialize graph.db schema: nodes, edges, pagerank.
- */
-export function initGraphSchema(dbm: DatabaseManager): void {
-	const db = dbm.get("graph");
-	const currentVersion = getSchemaVersion(db, "graph");
+				CREATE TABLE consolidation_log (
+					id          INTEGER PRIMARY KEY AUTOINCREMENT,
+					project     TEXT NOT NULL,
+					cycle_type  TEXT NOT NULL CHECK(cycle_type IN ('swapna', 'monthly', 'yearly')),
+					cycle_id    TEXT,
+					phase       TEXT,
+					phase_duration_ms INTEGER,
+					vasanas_created INTEGER DEFAULT 0,
+					vidhis_created INTEGER DEFAULT 0,
+					samskaras_processed INTEGER DEFAULT 0,
+					sessions_processed INTEGER DEFAULT 0,
+					status      TEXT NOT NULL DEFAULT 'running'
+						CHECK(status IN ('running', 'success', 'failed', 'partial')),
+					error_message TEXT,
+					created_at  INTEGER NOT NULL
+				);
 
-	if (currentVersion >= GRAPH_SCHEMA_VERSION) return;
+				INSERT INTO consolidation_log (
+					id, project, cycle_type, cycle_id, phase, phase_duration_ms,
+					vasanas_created, vidhis_created, samskaras_processed, sessions_processed,
+					status, error_message, created_at
+				)
+				SELECT
+					id,
+					project,
+					CASE WHEN cycle_type = 'svapna' THEN 'swapna' ELSE cycle_type END,
+					CASE
+						WHEN cycle_id LIKE 'svapna-%' THEN REPLACE(cycle_id, 'svapna-', 'swapna-')
+						ELSE cycle_id
+					END,
+					phase,
+					phase_duration_ms,
+					vasanas_created,
+					vidhis_created,
+					samskaras_processed,
+					sessions_processed,
+					status,
+					error_message,
+					created_at
+				FROM consolidation_log_old;
 
-	db.exec(`
-		-- ─── Nodes ────────────────────────────────────────────────────────
-		CREATE TABLE IF NOT EXISTS nodes (
-			id          TEXT PRIMARY KEY,
-			type        TEXT NOT NULL,      -- 'session', 'memory', 'concept', 'file', 'decision', 'entity'
-			label       TEXT NOT NULL,
-			content     TEXT NOT NULL DEFAULT '',
-			metadata    TEXT,              -- JSON
-			created_at  INTEGER NOT NULL,
-			updated_at  INTEGER NOT NULL
-		);
+				DROP TABLE consolidation_log_old;
 
-		CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
+				CREATE INDEX IF NOT EXISTS idx_conslog_project ON consolidation_log(project);
+				CREATE INDEX IF NOT EXISTS idx_conslog_type ON consolidation_log(cycle_type);
+				CREATE INDEX IF NOT EXISTS idx_conslog_created ON consolidation_log(created_at DESC);
+			`);
+		}
+	}
 
-		-- ─── Edges ────────────────────────────────────────────────────────
-		CREATE TABLE IF NOT EXISTS edges (
-			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			source      TEXT NOT NULL REFERENCES nodes(id),
-			target      TEXT NOT NULL REFERENCES nodes(id),
-			relationship TEXT NOT NULL,
-			weight      REAL NOT NULL DEFAULT 1.0,
-			pramana     TEXT,              -- Epistemology type: 'pratyaksha', 'anumana', 'shabda', 'upamana', 'arthapatti', 'anupalabdhi'
-			viveka      TEXT,              -- Grounding: 'grounded', 'inferred', 'uncertain'
-			valid_from  INTEGER,           -- Bi-temporal: when relationship became true (epoch ms)
-			valid_until INTEGER,           -- When relationship ended (NULL = still valid)
-			recorded_at INTEGER NOT NULL,  -- When edge was recorded
-			superseded_at INTEGER,         -- When superseded by newer version (NULL = current)
-			UNIQUE(source, target, relationship, recorded_at)
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source);
-		CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target);
-		CREATE INDEX IF NOT EXISTS idx_edges_relationship ON edges(relationship);
-
-		-- ─── PageRank ─────────────────────────────────────────────────────
-		CREATE TABLE IF NOT EXISTS pagerank (
-			node_id     TEXT PRIMARY KEY REFERENCES nodes(id),
-			score       REAL NOT NULL DEFAULT 0.0,
-			updated_at  INTEGER NOT NULL
-		);
-	`);
-
-	setSchemaVersion(db, "graph", GRAPH_SCHEMA_VERSION);
-}
-
-/**
- * Initialize vectors.db schema.
- * Uses a plain table for embeddings. sqlite-vec HNSW can be layered on top
- * when the extension is available.
- */
-export function initVectorsSchema(dbm: DatabaseManager): void {
-	const db = dbm.get("vectors");
-	const currentVersion = getSchemaVersion(db, "vectors");
-
-	if (currentVersion >= VECTORS_SCHEMA_VERSION) return;
-
-	db.exec(`
-		-- ─── Embeddings ───────────────────────────────────────────────────
-		CREATE TABLE IF NOT EXISTS embeddings (
-			id          TEXT PRIMARY KEY,
-			vector      BLOB NOT NULL,     -- Float32Array as binary blob
-			text        TEXT NOT NULL,      -- Source text that was embedded
-			source_type TEXT NOT NULL,      -- 'turn', 'session', 'memory', 'consolidated'
-			source_id   TEXT NOT NULL,      -- ID of the source document
-			dimensions  INTEGER NOT NULL,   -- Vector dimensionality (e.g. 1536)
-			metadata    TEXT,              -- JSON
-			created_at  INTEGER NOT NULL
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings(source_type, source_id);
-	`);
-
-	setSchemaVersion(db, "vectors", VECTORS_SCHEMA_VERSION);
-}
-
-// ─── Schema Version Tracking ────────────────────────────────────────────────
-
-/**
- * Schema version is stored in a `_schema_versions` table within each database.
- * This allows independent versioning per database.
- */
-function ensureVersionTable(db: ReturnType<DatabaseManager["get"]>): void {
-	db.exec(`
-		CREATE TABLE IF NOT EXISTS _schema_versions (
-			name    TEXT PRIMARY KEY,
-			version INTEGER NOT NULL DEFAULT 0
-		)
-	`);
-}
-
-function getSchemaVersion(db: ReturnType<DatabaseManager["get"]>, name: string): number {
-	ensureVersionTable(db);
-	const row = db.prepare("SELECT version FROM _schema_versions WHERE name = ?").get(name) as
-		| { version: number }
-		| undefined;
-	return row?.version ?? 0;
-}
-
-function setSchemaVersion(
-	db: ReturnType<DatabaseManager["get"]>,
-	name: string,
-	version: number,
-): void {
-	ensureVersionTable(db);
-	db.prepare(
-		"INSERT OR REPLACE INTO _schema_versions (name, version) VALUES (?, ?)",
-	).run(name, version);
+	setSchemaVersion(db, "agent", AGENT_SCHEMA_VERSION);
 }

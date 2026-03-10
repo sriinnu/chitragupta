@@ -160,4 +160,22 @@ describe("services-discovery", () => {
 		);
 		expect(discover).not.toHaveBeenCalled();
 	});
+
+	it("dedupes concurrent discovery snapshot refreshes", async () => {
+		let release: (() => void) | null = null;
+		discover.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					release = resolve;
+				}),
+		);
+
+		const first = router.handle("discovery.providers", {}, ctx);
+		const second = router.handle("discovery.models", {}, ctx);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(discover).toHaveBeenCalledTimes(1);
+
+		release?.();
+		await Promise.all([first, second]);
+	});
 });

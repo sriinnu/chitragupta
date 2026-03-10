@@ -18,12 +18,13 @@ import { registerMeshMethods } from "./services-mesh.js";
 import { registerCompressionMethods } from "./services-compression.js";
 import { registerDiscoveryMethods } from "./services-discovery.js";
 import { registerSemanticMethods } from "./services-semantic.js";
+import { registerResearchMethods } from "./services-research.js";
 import {
 	registerReadMethods,
-	registerDaemonMethods,
-	registerWriteMethods,
 	knownProjectsFromStore,
 } from "./services-read.js";
+import { registerDaemonMethods } from "./services-daemon.js";
+import { registerWriteMethods } from "./services-write.js";
 import {
 	normalizeParams,
 	parseNonNegativeInt,
@@ -62,6 +63,7 @@ export async function registerServices(router: RpcRouter): Promise<void> {
 	registerCompressionMethods(router);
 	registerDiscoveryMethods(router);
 	registerSemanticMethods(router);
+	registerResearchMethods(router);
 	registerDaemonMethods(router, sessionDb);
 	registerTelemetryMethods(router);
 	registerBindingMethods(router);
@@ -366,7 +368,7 @@ function registerMemoryMethods(
 				: { type: "project" as const, path: scopePath ?? "" };
 		if (scope.type === "project" && !scope.path) throw new Error("Missing scopePath for project memory");
 		if (scope.type === "agent" && !scope.agentId) throw new Error("Missing agentId for agent memory");
-		await memStore.appendMemory(scope, entry, { dedupe: true });
+		await memStore.appendMemory(scope, entry, { dedupe: params.dedupe !== false });
 		return { appended: true };
 	}, "Append entry to memory (global, project, or agent scope)");
 

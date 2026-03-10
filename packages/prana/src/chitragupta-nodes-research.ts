@@ -17,6 +17,7 @@ import {
 import {
 	executeResearchRun,
 	evaluateResearchResult,
+	finalizeResearchResult,
 	packResearchContext,
 	recordResearchOutcome,
 	runResearchCouncil,
@@ -108,6 +109,14 @@ export async function autoresearchRun(ctx: NodeContext): Promise<NodeResult> {
 			metric?: number | null;
 			durationMs?: number;
 			timedOut?: boolean;
+			exitCode?: number | null;
+			scopeGuard?: "git" | "hash-only";
+			targetFilesChanged?: string[];
+			scopeSnapshot?: unknown;
+			executionRouteClass?: string | null;
+			selectedCapabilityId?: string | null;
+			selectedModelId?: string | null;
+			selectedProviderId?: string | null;
 		};
 		return {
 			ok: false,
@@ -117,6 +126,24 @@ export async function autoresearchRun(ctx: NodeContext): Promise<NodeResult> {
 				stdout: error.stdout ?? "",
 				stderr: error.stderr ?? "",
 				metric: error.metric ?? null,
+				exitCode: typeof error.exitCode === "number" ? error.exitCode : null,
+				timedOut: error.timedOut === true,
+				scopeGuard: error.scopeGuard === "hash-only" ? "hash-only" : "git",
+				targetFilesChanged: Array.isArray(error.targetFilesChanged)
+					? error.targetFilesChanged.filter((value: unknown): value is string => typeof value === "string")
+					: [],
+				scopeSnapshot:
+					error.scopeSnapshot && typeof error.scopeSnapshot === "object"
+						? error.scopeSnapshot
+						: null,
+				executionRouteClass:
+					typeof error.executionRouteClass === "string" ? error.executionRouteClass : null,
+				selectedCapabilityId:
+					typeof error.selectedCapabilityId === "string" ? error.selectedCapabilityId : null,
+				selectedModelId:
+					typeof error.selectedModelId === "string" ? error.selectedModelId : null,
+				selectedProviderId:
+					typeof error.selectedProviderId === "string" ? error.selectedProviderId : null,
 			},
 			durationMs: error.durationMs ?? 0,
 		};
@@ -142,6 +169,31 @@ export async function autoresearchEvaluate(ctx: NodeContext): Promise<NodeResult
 		};
 	} catch (err) {
 		return fail("Autoresearch evaluation failed", 0, err);
+	}
+}
+
+export async function autoresearchFinalize(ctx: NodeContext): Promise<NodeResult> {
+	try {
+		const { result, durationMs } = await timed(async () =>
+			finalizeResearchResult(
+				scopeFromContext(ctx),
+				resultData(ctx.stepOutputs["autoresearch-run"]),
+				resultData(ctx.stepOutputs["autoresearch-evaluate"]),
+			),
+		);
+		return {
+			ok: true,
+			summary:
+				result.action === "reverted"
+					? `Research result discarded and reverted (${result.revertedFiles.length} files)`
+					: result.action === "kept"
+						? "Research result kept"
+						: `Research finalize skipped: ${result.reason ?? "no revert action"}`,
+			data: result,
+			durationMs,
+		};
+	} catch (err) {
+		return fail("Autoresearch finalize failed", 0, err);
 	}
 }
 
@@ -176,7 +228,9 @@ export async function autoresearchRecord(ctx: NodeContext): Promise<NodeResult> 
 			recordResearchOutcome(
 				scopeFromContext(ctx),
 				resultData(ctx.stepOutputs["acp-research-council"]),
+				resultData(ctx.stepOutputs["autoresearch-run"]),
 				resultData(ctx.stepOutputs["autoresearch-evaluate"]),
+				resultData(ctx.stepOutputs["autoresearch-finalize"]),
 				resultData(ctx.stepOutputs["pakt-pack-research-context"]),
 			),
 		);

@@ -206,6 +206,8 @@ export async function getLucyLiveContextViaDaemon(
 	predictions: Array<{ entity: string; confidence: number; source: string }>;
 	hit: { entity: string; content: string; source: string } | null;
 	liveSignals: Array<Record<string, unknown>>;
+	guidanceBlock?: string;
+	predictionsBlock?: string;
 }> {
 	return daemonCall("lucy.live_context", {
 		query,
@@ -241,6 +243,12 @@ export async function packContextViaDaemon(
 	text: string,
 ): Promise<PackedLiveContextResult | { packed: false }> {
 	return daemonCall("compression.pack_context", { text });
+}
+
+export async function autoProcessContextViaDaemon(
+	text: string,
+): Promise<Record<string, unknown>> {
+	return daemonCall("compression.auto", { text });
 }
 
 export async function appendMemoryViaDaemon(

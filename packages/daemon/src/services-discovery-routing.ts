@@ -3,10 +3,15 @@ import type {
 	CapabilityHealthState,
 	ConsumerConstraint,
 	CostClass,
+	RouteClassDescriptor,
+	RouteExecutionBinding,
 	RoutingRequest,
 	TrustLevel,
 } from "./services-contract-catalog-types.js";
-import { extractPreferredModelIds } from "./services-discovery-helpers.js";
+import {
+	extractPreferredModelIds,
+	extractPreferredProviderIds,
+} from "./services-discovery-helpers.js";
 
 export interface DiscoveryRouteQuery {
 	capability?: string;
@@ -116,13 +121,39 @@ function capabilityIdsForModelIds(
 			&& typeof capability.metadata?.discoveredModelId === "string"
 			&& modelIds.includes(capability.metadata.discoveredModelId),
 		)
-		.map((capability) => capability.id);
+			.map((capability) => capability.id);
+}
+
+function discoveredCapabilitiesForIds(
+	capabilityIds: string[],
+	capabilities: CapabilityDescriptor[],
+): CapabilityDescriptor[] {
+	if (capabilityIds.length === 0) return [];
+	return capabilities.filter((capability) =>
+		capabilityIds.includes(capability.id)
+		&& capability.metadata?.discovered === true,
+	);
+}
+
+function normalizeDiscoveredCapabilityMetadata(
+	capability: CapabilityDescriptor | null | undefined,
+): { modelId?: string; providerId?: string } {
+	if (!capability) return {};
+	const modelId = typeof capability.metadata?.discoveredModelId === "string"
+		? capability.metadata.discoveredModelId
+		: undefined;
+	const providerId = typeof capability.metadata?.discoveredProviderId === "string"
+		? capability.metadata.discoveredProviderId
+		: undefined;
+	return { modelId, providerId };
 }
 
 function discoveryCandidateCapabilityIds(
 	capabilities: CapabilityDescriptor[],
 	engineCapability: string,
 ): string[] {
+	const healthRank = (capability: CapabilityDescriptor): number =>
+		capability.health === "healthy" ? 2 : capability.health === "degraded" ? 1 : 0;
 	return capabilities
 		.filter((capability) =>
 			capability.routable !== false
@@ -130,7 +161,11 @@ function discoveryCandidateCapabilityIds(
 			&& capability.capabilities.includes(engineCapability)
 			&& capability.metadata?.discovered === true,
 		)
-		.sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0))
+		.sort((left, right) => {
+			const healthDelta = healthRank(right) - healthRank(left);
+			if (healthDelta !== 0) return healthDelta;
+			return (right.priority ?? 0) - (left.priority ?? 0);
+		})
 		.map((capability) => capability.id);
 }
 
@@ -153,6 +188,35 @@ export function resolveDiscoveryRouteQuery(engineCapability: string): DiscoveryR
 		default:
 			return null;
 	}
+}
+
+export function normalizeEngineCapabilityForRouting(capability: string): string {
+	switch (capability.trim()) {
+		case "chat":
+			return "model.chat";
+		case "function_calling":
+			return "model.tool-use";
+		case "embeddings":
+			return "model.embedding";
+		case "vision":
+			return "model.vision";
+		default:
+			return capability.trim();
+	}
+}
+
+export function resolveDiscoveryRouteQueryForRequest(
+	engineCapability: string,
+	routeClass?: RouteClassDescriptor | null,
+): DiscoveryRouteQuery | null {
+	const direct = resolveDiscoveryRouteQuery(normalizeEngineCapabilityForRouting(engineCapability));
+	if (direct) return direct;
+	if (!routeClass?.discoveryBinding) return null;
+	return {
+		capability: routeClass.discoveryBinding.capability,
+		mode: routeClass.discoveryBinding.mode,
+		role: routeClass.discoveryBinding.role,
+	};
 }
 
 export function mapDiscoveryModelCapabilities(model: DiscoveryModelLike): string[] {
@@ -304,5 +368,100 @@ export function applyDiscoveryRoutePreference(
 			hardCapabilityId,
 		},
 		policyTrace,
+	};
+}
+
+export function buildDiscoveryExecutionBinding(
+	routeClass: RouteClassDescriptor | null,
+	discoveryHints: {
+		query: DiscoveryRouteQuery;
+		models: DiscoveryModelLike[];
+		cheapest?: unknown;
+	} | null,
+	capabilities: CapabilityDescriptor[],
+	selectedCapabilityId?: string | null,
+	fallbackChain: string[] = [],
+): RouteExecutionBinding | null {
+	if (!routeClass?.discoveryBinding || !discoveryHints) return null;
+
+	const selectedCapability = selectedCapabilityId
+		? capabilities.find((capability) => capability.id === selectedCapabilityId)
+		: null;
+	const selectedMetadata = normalizeDiscoveredCapabilityMetadata(selectedCapability);
+	const discoveredCandidates = discoveredCapabilitiesForIds(
+		[selectedCapabilityId ?? "", ...fallbackChain].filter(Boolean),
+		capabilities,
+	);
+	const discoveredModelIds = [...new Set(
+		discoveryHints.models
+			.map((model) => (typeof model.id === "string" ? model.id.trim() : ""))
+			.filter(Boolean),
+	)];
+	const hintedDiscoveredCandidates = discoveredCapabilitiesForIds(
+		capabilityIdsForModelIds(discoveredModelIds, capabilities, routeClass.capability),
+		capabilities,
+	);
+	const allDiscoveredCandidates = [
+		...new Map(
+			[...discoveredCandidates, ...hintedDiscoveredCandidates].map((capability) => [capability.id, capability]),
+		).values(),
+	];
+	const shouldBindDiscoveryLane =
+		routeClass.capability.startsWith("model.")
+		|| selectedCapabilityId === "adapter.takumi.executor"
+		|| Boolean(selectedMetadata.modelId || selectedMetadata.providerId)
+		|| allDiscoveredCandidates.length > 0;
+	if (!shouldBindDiscoveryLane) return null;
+	const candidateModelIds = [...new Set(
+		allDiscoveredCandidates
+			.map((capability) => normalizeDiscoveredCapabilityMetadata(capability).modelId)
+			.filter((value): value is string => typeof value === "string" && value.trim().length > 0),
+	)];
+	const preferredModelIds = extractPreferredModelIds(discoveryHints.cheapest);
+	const preferredProviderIds = [
+		...new Set([
+			...(selectedMetadata.providerId ? [selectedMetadata.providerId] : []),
+			...extractPreferredProviderIds(discoveryHints.cheapest),
+			...allDiscoveredCandidates
+				.map((capability) => normalizeDiscoveredCapabilityMetadata(capability).providerId)
+				.filter((value): value is string => typeof value === "string" && value.trim().length > 0),
+		]),
+	];
+	const selectedModelId = selectedMetadata.modelId
+		?? preferredModelIds[0]
+		?? candidateModelIds[0];
+	const selectedProviderId = selectedMetadata.providerId
+		?? preferredProviderIds[0]
+		?? hintedDiscoveredCandidates
+			.map((capability) => normalizeDiscoveredCapabilityMetadata(capability).providerId)
+			.find((value): value is string => typeof value === "string" && value.trim().length > 0)
+		?? discoveryHints.models.find((model) => model.id === selectedModelId)?.provider;
+
+	return {
+		source: "kosha-discovery",
+		kind: "executor",
+		query: {
+			capability: discoveryHints.query.capability ?? routeClass.discoveryBinding.capability,
+			mode: discoveryHints.query.mode ?? routeClass.discoveryBinding.mode,
+			role: discoveryHints.query.role ?? routeClass.discoveryBinding.role,
+		},
+		selectedModelId,
+		selectedProviderId,
+		candidateModelIds,
+		preferredModelIds: [
+			...new Set([
+				...(selectedModelId ? [selectedModelId] : []),
+				...preferredModelIds,
+			]),
+		],
+		preferredProviderIds: [
+			...new Set([
+				...(selectedProviderId ? [selectedProviderId] : []),
+				...preferredProviderIds,
+			]),
+		],
+		preferLocalProviders: routeClass.discoveryBinding.preferLocalProviders ?? false,
+		allowCrossProvider: routeClass.discoveryBinding.allowCrossProvider
+			?? preferredProviderIds.length > 1,
 	};
 }

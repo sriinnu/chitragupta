@@ -204,4 +204,109 @@ export function applyAdvancedAgentMigrations(db: AgentDb, currentVersion: number
 			ALTER TABLE nidra_state ADD COLUMN preserve_pending_sessions_on_listening INTEGER NOT NULL DEFAULT 0;
 		`);
 	}
+
+	if (currentVersion < 17) {
+		db.exec(`
+			CREATE TABLE IF NOT EXISTS research_experiments (
+				id                    TEXT PRIMARY KEY,
+				project               TEXT NOT NULL,
+				experiment_key        TEXT,
+				budget_ms             INTEGER,
+				session_id            TEXT,
+				parent_session_id     TEXT,
+				session_lineage_key   TEXT,
+				topic                 TEXT NOT NULL,
+				metric_name           TEXT NOT NULL,
+				objective             TEXT NOT NULL,
+				baseline_metric       REAL,
+				observed_metric       REAL,
+				delta                 REAL,
+				decision              TEXT NOT NULL,
+				sabha_id              TEXT,
+				council_verdict       TEXT,
+				route_class           TEXT,
+				execution_route_class TEXT,
+				selected_capability_id TEXT,
+				selected_model_id     TEXT,
+				selected_provider_id  TEXT,
+				packed_context        TEXT,
+				packed_runtime        TEXT,
+				packed_source         TEXT,
+				record_json           TEXT NOT NULL,
+				created_at            INTEGER NOT NULL,
+				updated_at            INTEGER NOT NULL
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_research_experiments_project
+				ON research_experiments(project, updated_at DESC);
+			CREATE INDEX IF NOT EXISTS idx_research_experiments_key
+				ON research_experiments(experiment_key);
+			CREATE INDEX IF NOT EXISTS idx_research_experiments_session
+				ON research_experiments(session_id, updated_at DESC);
+			CREATE INDEX IF NOT EXISTS idx_research_experiments_decision
+				ON research_experiments(decision, updated_at DESC);
+		`);
+	}
+
+	if (currentVersion < 18) {
+		const cols = db.prepare("PRAGMA table_info(research_experiments)").all() as Array<{ name: string }>;
+		const names = new Set(cols.map((row) => row.name));
+		if (!names.has("experiment_key")) {
+			db.exec("ALTER TABLE research_experiments ADD COLUMN experiment_key TEXT;");
+		}
+		if (!names.has("budget_ms")) {
+			db.exec("ALTER TABLE research_experiments ADD COLUMN budget_ms INTEGER;");
+		}
+		if (!names.has("sabha_id")) {
+			db.exec("ALTER TABLE research_experiments ADD COLUMN sabha_id TEXT;");
+		}
+		db.exec(`
+			CREATE INDEX IF NOT EXISTS idx_research_experiments_key
+				ON research_experiments(experiment_key);
+		`);
+		const rows = db.prepare(`
+			SELECT id, record_json, experiment_key, budget_ms, sabha_id
+			FROM research_experiments
+			WHERE experiment_key IS NULL OR budget_ms IS NULL OR sabha_id IS NULL
+		`).all() as Array<{
+			id: string;
+			record_json: string | null;
+			experiment_key: string | null;
+			budget_ms: number | null;
+			sabha_id: string | null;
+		}>;
+		if (rows.length > 0) {
+			const update = db.prepare(`
+				UPDATE research_experiments
+				SET experiment_key = ?,
+					budget_ms = ?,
+					sabha_id = ?
+				WHERE id = ?
+			`);
+			const tx = db.transaction((pendingRows: typeof rows) => {
+				for (const row of pendingRows) {
+					let parsed: Record<string, unknown> = {};
+					try {
+						parsed = row.record_json ? JSON.parse(row.record_json) as Record<string, unknown> : {};
+					} catch {
+						parsed = {};
+					}
+					const experimentKey = row.experiment_key
+						?? (typeof parsed.experimentKey === "string" && parsed.experimentKey.trim()
+							? parsed.experimentKey.trim()
+							: null);
+					const budgetMs = row.budget_ms
+						?? (typeof parsed.budgetMs === "number" && Number.isFinite(parsed.budgetMs)
+							? parsed.budgetMs
+							: null);
+					const sabhaId = row.sabha_id
+						?? (typeof parsed.sabhaId === "string" && parsed.sabhaId.trim()
+							? parsed.sabhaId.trim()
+							: null);
+					update.run(experimentKey, budgetMs, sabhaId, row.id);
+				}
+			});
+			tx(rows);
+		}
+	}
 }

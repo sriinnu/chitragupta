@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockExecFile = vi.fn();
 const mockSpawn = vi.fn();
 const mockPackContextWithFallback = vi.fn();
+const mockNormalizeContextForReuse = vi.fn();
 
 vi.mock("node:child_process", () => ({
 	execFile: (...args: unknown[]) => mockExecFile(...args),
@@ -11,6 +12,7 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("../src/context-packing.js", () => ({
 	packContextWithFallback: (...args: unknown[]) => mockPackContextWithFallback(...args),
+	normalizeContextForReuse: (...args: unknown[]) => mockNormalizeContextForReuse(...args),
 }));
 
 import { parseCliOutput } from "../src/modes/takumi-bridge-helpers.js";
@@ -114,6 +116,7 @@ describe("TakumiBridge", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockPackContextWithFallback.mockResolvedValue(null);
+		mockNormalizeContextForReuse.mockImplementation(async (value: string) => value);
 		bridge = new TakumiBridge({ cwd: "/tmp/project" });
 	});
 
@@ -279,6 +282,202 @@ describe("TakumiBridge", () => {
 			await resultPromise;
 		});
 
+		it("surfaces engine-selected provider and model envelopes in the Takumi prompt and env", async () => {
+			configureTakumiBinary({ streamSupported: false });
+			const proc = createMockProcess();
+			mockSpawn.mockReturnValue(proc);
+
+			const resultPromise = bridge.execute({
+				type: "task",
+				task: "Refactor auth",
+				context: {
+					engineRoute: {
+						routeClass: "coding.deep-reasoning",
+						capability: "model.tool-use",
+						selectedCapabilityId: "discovery.model.openai.gpt-4-1",
+						executionBinding: {
+							source: "kosha-discovery",
+							kind: "executor",
+							query: { capability: "function_calling", mode: "chat" },
+							selectedProviderId: "openai",
+							selectedModelId: "gpt-4.1",
+							preferredProviderIds: ["openai"],
+							preferredModelIds: ["gpt-4.1"],
+							allowCrossProvider: false,
+						},
+						enforced: true,
+						reason: "engine-selected high reasoning lane",
+						policyTrace: ["route-class:coding.deep-reasoning", "selected:discovery.model.openai.gpt-4-1"],
+					},
+					engineRouteEnvelope: {
+						primaryKey: "primary",
+						lanes: [
+							{
+								key: "primary",
+								routeClass: "coding.deep-reasoning",
+								capability: "model.tool-use",
+								selectedCapabilityId: "discovery.model.openai.gpt-4-1",
+								executionBinding: {
+									source: "kosha-discovery",
+									kind: "executor",
+									query: { capability: "function_calling", mode: "chat", role: "planner" },
+									selectedProviderId: "openai",
+									selectedModelId: "gpt-4.1",
+									preferredProviderIds: ["openai"],
+									preferredModelIds: ["gpt-4.1"],
+									allowCrossProvider: false,
+								},
+								enforced: true,
+								reason: "primary planning lane",
+								policyTrace: ["route-class:coding.deep-reasoning"],
+							},
+							{
+								key: "validator",
+								routeClass: "coding.validation-high-trust",
+								capability: "coding.execute",
+								selectedCapabilityId: "adapter.takumi.executor",
+								executionBinding: {
+									source: "kosha-discovery",
+									kind: "model",
+									query: { capability: "chat", mode: "chat", role: "validator" },
+									selectedProviderId: "llamacpp",
+									selectedModelId: "qwen2.5-coder:14b",
+									preferredProviderIds: ["llamacpp"],
+									preferredModelIds: ["qwen2.5-coder:14b"],
+									allowCrossProvider: false,
+								},
+								enforced: true,
+								reason: "validator lane prefers local execution",
+								policyTrace: ["route-class:coding.validation-high-trust"],
+							},
+						],
+					},
+				},
+			});
+
+			await tick();
+			const prompt = String(proc.stdin.write.mock.calls[0][0]);
+			const env = mockSpawn.mock.calls[0][2]?.env as Record<string, string>;
+			expect(prompt).toContain("Selected provider: openai");
+			expect(prompt).toContain("Selected model: gpt-4.1");
+			expect(prompt).toContain("Preferred providers: openai");
+			expect(prompt).toContain("Preferred models: gpt-4.1");
+			expect(prompt).toContain("Engine lane envelope");
+			expect(prompt).toContain("Primary lane: primary");
+			expect(prompt).toContain("planner");
+			expect(prompt).toContain("validator");
+			expect(prompt).toContain("qwen2.5-coder:14b");
+			expect(env.CHITRAGUPTA_SELECTED_PROVIDER_ID).toBe("openai");
+			expect(env.CHITRAGUPTA_SELECTED_MODEL_ID).toBe("gpt-4.1");
+			expect(env.CHITRAGUPTA_PREFERRED_PROVIDER_IDS).toBe("openai");
+			expect(env.CHITRAGUPTA_PREFERRED_MODEL_IDS).toBe("gpt-4.1");
+			expect(env.CHITRAGUPTA_ALLOW_CROSS_PROVIDER).toBe("0");
+			expect(env.CHITRAGUPTA_ENGINE_ROUTE_DIGEST).toMatch(/^[a-f0-9]{16}$/);
+			expect(env.CHITRAGUPTA_ENGINE_ROUTE_ENVELOPE).toBeDefined();
+			expect(env.CHITRAGUPTA_ENGINE_ROUTE_ENVELOPE_DIGEST).toMatch(/^[a-f0-9]{16}$/);
+
+			proc._emit("close", 0);
+			await resultPromise;
+		});
+
+		it("fails closed when an enforced engine route envelope is too large for structured env transport", async () => {
+			configureTakumiBinary({ streamSupported: false });
+
+			const result = await bridge.execute({
+				type: "task",
+				task: "Coordinate multi-lane coding work",
+				context: {
+					engineRouteEnvelope: {
+						primaryKey: "primary",
+						lanes: Array.from({ length: 8 }, (_, index) => ({
+							key: `lane-${index + 1}`,
+							routeClass: "coding.deep-reasoning",
+							capability: "model.tool-use",
+							selectedCapabilityId: `discovery.model.local.${index + 1}`,
+							executionBinding: {
+								source: "kosha-discovery",
+								kind: "model",
+								query: { capability: "chat", mode: "chat", role: "planner" },
+								selectedProviderId: "llamacpp",
+								selectedModelId: `qwen2.5-coder:${index + 1}`,
+								preferredProviderIds: ["llamacpp"],
+								preferredModelIds: [`qwen2.5-coder:${index + 1}`],
+								candidateModelIds: Array.from({ length: 16 }, (_, candidate) => `candidate-${index + 1}-${candidate + 1}`),
+								allowCrossProvider: false,
+							},
+								enforced: true,
+							reason: "engine-owned envelope",
+							policyTrace: [
+								"route-class:coding.deep-reasoning",
+								"discovery:llamacpp",
+								"oversized-envelope-test",
+							],
+						})),
+					},
+				},
+			});
+
+			expect(result.exitCode).toBe(1);
+			expect(result.output).toContain("Takumi execution blocked by the Chitragupta engine route contract.");
+			expect(result.output).toContain("too large for structured Takumi env transport");
+			expect(mockSpawn).not.toHaveBeenCalled();
+		});
+
+		it("packs large engine route envelopes before prompt synthesis", async () => {
+			configureTakumiBinary({ streamSupported: false });
+			const proc = createMockProcess();
+			mockSpawn.mockReturnValue(proc);
+			mockPackContextWithFallback.mockResolvedValue({
+				runtime: "pakt-core",
+				packedText: "packed engine envelope",
+				format: "pakt",
+				savings: 0.37,
+				originalLength: 2600,
+			});
+
+			const resultPromise = bridge.execute({
+				type: "task",
+				task: "Coordinate multi-lane coding work",
+				context: {
+					engineRouteEnvelope: {
+						primaryKey: "primary",
+						lanes: Array.from({ length: 5 }, (_, index) => ({
+							key: `lane-${index + 1}`,
+							routeClass: "coding.deep-reasoning",
+							capability: "model.tool-use",
+							selectedCapabilityId: `discovery.model.local.${index + 1}`,
+							executionBinding: {
+								source: "kosha-discovery",
+								kind: "model",
+								query: { capability: "chat", mode: "chat", role: "planner" },
+								selectedProviderId: "llamacpp",
+								selectedModelId: `qwen2.5-coder:${index + 1}`,
+								preferredProviderIds: ["llamacpp"],
+								preferredModelIds: [`qwen2.5-coder:${index + 1}`],
+								candidateModelIds: Array.from({ length: 8 }, (_, candidate) => `candidate-${index + 1}-${candidate + 1}`),
+								allowCrossProvider: false,
+							},
+								enforced: false,
+							reason: "engine-owned envelope",
+							policyTrace: [
+								"route-class:coding.deep-reasoning",
+								"discovery:llamacpp",
+								"packed-envelope-test",
+							],
+						})),
+					},
+				},
+			});
+
+			await tick();
+			const prompt = String(proc.stdin.write.mock.calls[0][0]);
+			expect(prompt).toContain("Engine lane envelope (packed via pakt-core");
+			expect(prompt).toContain("packed engine envelope");
+
+			proc._emit("close", 0);
+			await resultPromise;
+		});
+
 		it("packs repo and file context before prompt synthesis when the engine allows it", async () => {
 			configureTakumiBinary({ streamSupported: false });
 			const proc = createMockProcess();
@@ -346,6 +545,31 @@ describe("TakumiBridge", () => {
 			await resultPromise;
 		});
 
+		it("normalizes previously packed repo context before reusing it in the Takumi prompt", async () => {
+			configureTakumiBinary({ streamSupported: false });
+			const proc = createMockProcess();
+			mockSpawn.mockReturnValue(proc);
+			mockPackContextWithFallback.mockResolvedValue(null);
+			mockNormalizeContextForReuse.mockResolvedValueOnce("expanded repo map");
+
+			const resultPromise = bridge.execute({
+				type: "task",
+				task: "Inspect auth",
+				context: {
+					repoMap: "[PAKT packed repo map | runtime=pakt-core | savings=41% | original=900]\npakt:repo-map",
+				},
+			});
+
+			await tick();
+			const prompt = String(proc.stdin.write.mock.calls[0][0]);
+			expect(prompt).toContain("Repo map:");
+			expect(prompt).toContain("expanded repo map");
+			expect(prompt).not.toContain("[PAKT packed repo map");
+
+			proc._emit("close", 0);
+			await resultPromise;
+		});
+
 		it("keeps packed Lucy hints materially intact instead of truncating them to generic hint length", async () => {
 			configureTakumiBinary({ streamSupported: false });
 			const proc = createMockProcess();
@@ -376,6 +600,86 @@ describe("TakumiBridge", () => {
 			await resultPromise;
 		});
 
+		it("packs large episodic and recent-decision sections through engine-owned context packing", async () => {
+			configureTakumiBinary({ streamSupported: false });
+			const proc = createMockProcess();
+			mockSpawn.mockReturnValue(proc);
+			mockPackContextWithFallback
+				.mockResolvedValueOnce({
+					runtime: "pakt-core",
+					packedText: "packed episodic block",
+					format: "pakt",
+					savings: 0.38,
+					originalLength: 1200,
+				})
+				.mockResolvedValueOnce({
+					runtime: "pakt-core",
+					packedText: "packed recent decision block",
+					format: "pakt",
+					savings: 0.44,
+					originalLength: 980,
+				});
+
+			const resultPromise = bridge.execute({
+				type: "task",
+				task: "Refactor auth",
+				context: {
+					episodicHints: [
+						"Long episodic hint 1 ".repeat(20),
+						"Long episodic hint 2 ".repeat(20),
+						"Long episodic hint 3 ".repeat(20),
+						"Long episodic hint 4 ".repeat(20),
+					],
+					recentDecisions: [
+						"Long recent decision 1 ".repeat(20),
+						"Long recent decision 2 ".repeat(20),
+						"Long recent decision 3 ".repeat(20),
+						"Long recent decision 4 ".repeat(20),
+					],
+				},
+			});
+
+			await tick();
+			const prompt = String(proc.stdin.write.mock.calls[0][0]);
+			expect(prompt).toContain("Episodic hints (packed via pakt-core, saved 38%)");
+			expect(prompt).toContain("packed episodic block");
+			expect(prompt).toContain("Recent decisions (packed via pakt-core, saved 44%)");
+			expect(prompt).toContain("packed recent decision block");
+
+			proc._emit("close", 0);
+			await resultPromise;
+		});
+
+		it("omits bulky raw env context when it would bypass engine packing policy", async () => {
+			configureTakumiBinary({ streamSupported: false });
+			const proc = createMockProcess();
+			mockSpawn.mockReturnValue(proc);
+
+			const resultPromise = bridge.execute({
+				type: "task",
+				task: "Refactor auth",
+				context: {
+					episodicHints: ["Large hint ".repeat(200)],
+					recentDecisions: ["Large decision ".repeat(200)],
+					fileContext: {
+						"src/auth.ts": "const auth = () => run();\n".repeat(200),
+					},
+				},
+			});
+
+			await tick();
+			const env = mockSpawn.mock.calls[0][2]?.env as Record<string, string>;
+			expect(env.CHITRAGUPTA_EPISODIC_HINTS).toBeUndefined();
+			expect(env.CHITRAGUPTA_RECENT_DECISIONS).toBeUndefined();
+			expect(env.CHITRAGUPTA_FILE_CONTEXT).toBeUndefined();
+			expect(env.CHITRAGUPTA_EPISODIC_HINTS_OMITTED).toBe("1");
+			expect(env.CHITRAGUPTA_RECENT_DECISIONS_OMITTED).toBe("1");
+			expect(env.CHITRAGUPTA_FILE_CONTEXT_OMITTED).toBe("1");
+
+			proc._emit("close", 0);
+			await resultPromise;
+		});
+
 		it("records default cache intent when fresh mode is not requested", async () => {
 			configureTakumiBinary({ streamSupported: false });
 			const proc = createMockProcess();
@@ -394,6 +698,88 @@ describe("TakumiBridge", () => {
 			proc._emit("close", 0);
 			const result = await resultPromise;
 			expect(result.cacheIntent).toBe("default");
+		});
+
+		it("fails closed when Takumi explicitly reports a provider/model outside an enforced engine lane", async () => {
+			configureTakumiBinary({ streamSupported: false });
+			const proc = createMockProcess();
+			mockSpawn.mockReturnValue(proc);
+
+			const resultPromise = bridge.execute({
+				type: "task",
+				task: "Strict review",
+				context: {
+					engineRoute: {
+						routeClass: "coding.review.strict",
+						capability: "coding.review",
+						selectedCapabilityId: "adapter.takumi.executor",
+						executionBinding: {
+							source: "kosha-discovery",
+							kind: "executor",
+							query: { capability: "chat", mode: "chat", role: "reviewer" },
+							selectedProviderId: "openai",
+							selectedModelId: "gpt-4.1",
+							preferredProviderIds: ["openai"],
+							preferredModelIds: ["gpt-4.1"],
+							allowCrossProvider: false,
+						},
+						enforced: true,
+					},
+				},
+			});
+
+			await tick();
+			proc.stdout._emit("data", Buffer.from("Selected provider: anthropic\nSelected model: claude-3.7-sonnet\n"));
+			proc._emit("close", 0);
+
+			const result = await resultPromise;
+			expect(result.exitCode).toBe(1);
+			expect(result.output).toContain("violated the Chitragupta engine route contract");
+			expect(result.contractAudit?.violations).toEqual([
+				"Observed provider 'anthropic' is outside the engine-selected provider set: openai",
+				"Observed model 'claude-3.7-sonnet' is outside the engine-selected model set: gpt-4.1",
+			]);
+		});
+
+		it("accepts explicit Takumi provider/model declarations that stay within the enforced engine lane", async () => {
+			configureTakumiBinary({ streamSupported: false });
+			const proc = createMockProcess();
+			mockSpawn.mockReturnValue(proc);
+
+			const resultPromise = bridge.execute({
+				type: "task",
+				task: "Strict review",
+				context: {
+					engineRoute: {
+						routeClass: "coding.review.strict",
+						capability: "coding.review",
+						selectedCapabilityId: "adapter.takumi.executor",
+						executionBinding: {
+							source: "kosha-discovery",
+							kind: "executor",
+							query: { capability: "chat", mode: "chat", role: "reviewer" },
+							selectedProviderId: "openai",
+							selectedModelId: "gpt-4.1",
+							preferredProviderIds: ["openai"],
+							preferredModelIds: ["gpt-4.1"],
+							allowCrossProvider: false,
+						},
+						enforced: true,
+					},
+				},
+			});
+
+			await tick();
+			proc.stdout._emit("data", Buffer.from("Selected provider: openai\nSelected model: gpt-4.1\n"));
+			proc._emit("close", 0);
+
+			const result = await resultPromise;
+			expect(result.exitCode).toBe(0);
+			expect(result.contractAudit).toEqual({
+				observedProviderIds: ["openai"],
+				observedModelIds: ["gpt-4.1"],
+				violations: [],
+			});
 		});
 	});
 

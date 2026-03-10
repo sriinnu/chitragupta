@@ -105,3 +105,15 @@ export function extractPreferredModelIds(cheapest: unknown): string[] {
 		return typeof modelId === "string" && modelId.trim() ? [modelId.trim()] : [];
 	}))];
 }
+
+export function extractPreferredProviderIds(cheapest: unknown): string[] {
+	if (typeof cheapest !== "object" || cheapest === null || !("matches" in cheapest)) return [];
+	const matches = (cheapest as { matches?: unknown }).matches;
+	if (!Array.isArray(matches)) return [];
+	return [...new Set(matches.flatMap((match) => {
+		if (typeof match !== "object" || match === null) return [];
+		const record = match as Record<string, unknown>;
+		const providerId = record.providerId ?? record.provider ?? record.originProvider;
+		return typeof providerId === "string" && providerId.trim() ? [providerId.trim()] : [];
+	}))];
+}

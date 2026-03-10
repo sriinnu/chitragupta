@@ -40,7 +40,8 @@ It states what is live, what is partial, and what is still open.
 - The daemon now exposes engine-owned route classes on top of the capability surface:
   - `route.classes`
   - `route.resolve` can resolve either a raw capability or a named engine route class
-  - `route.resolve` now also returns `discoveryHints` so kosha-discovery contributes provider/model inventory and cheapest-route guidance alongside the engine-selected lane
+- `route.resolve` now also returns `discoveryHints` plus an optional `executionBinding` envelope so kosha-discovery contributes provider/model inventory, cheapest-route guidance, and the selected provider/model pair the consumer should honor alongside the engine-selected lane
+  - `route.resolveBatch` now resolves multiple named lanes in one call for consumers such as Takumi
   - examples:
     - `coding.fast-local`
     - `coding.review.strict`
@@ -63,9 +64,13 @@ It states what is live, what is partial, and what is still open.
 - Discovery is engine-owned input, not final routing authority:
   - Chitragupta keeps route resolution authority
   - kosha-discovery contributes provider/model inventory, route availability, and pricing health
+  - `discovery.info` now exposes stable control-plane metadata such as `schemaVersion`, `routingAuthority`, `snapshotTtlMs`, and `cacheAgeMs` so consumers can inspect freshness without mutating discovery state
   - discovery-aware route resolution can materialize discovered models into temporary routeable capabilities when the engine lane is generic enough (`model.chat`, `model.tool-use`, `chat.flex`, `tool.use.flex`)
-  - discovery-aware flex lanes now prefer healthy discovered capabilities first, and may hard-pin one explicit discovered model when the caller passes a matching `preferredModelId`/`preferredModelIds` in request context
+  - legacy requests like `chat` and `function_calling` are normalized onto engine `model.*` lanes before routing, so discovery-backed selection is real instead of hint-only
+  - preferred discovered candidates now keep discovery ordering, not just boolean preference membership
+  - Takumi-style coding lanes can now receive a discovery-backed execution envelope with preferred providers/models while still leaving final route authority with Chitragupta
   - read queries use cached discovery state; `discovery.refresh` is the explicit write path
+  - cached discovery state now expires on a short TTL instead of staying sticky forever between refreshes
   - consumers such as Takumi and external Vaayu can ask for route classes instead of hardcoding provider/model vendor choices
   - Takumi now treats compatible engine-selected model/runtime lanes as authoritative execution envelopes instead of rejecting them as non-Takumi overrides
 - The daemon now exposes engine-owned compression methods backed by PAKT:
@@ -80,6 +85,9 @@ It states what is live, what is partial, and what is still open.
   - compressed output remains derived data with provenance requirements
   - live-context packing now prefers the daemon compression surface and only falls back to a local in-process packer when the daemon path is unavailable
   - a daemon `packed: false` decision is authoritative and must not trigger local repacking while the daemon is reachable
+  - `lucy.live_context` now returns daemon-authored packed guidance and prediction blocks, so CLI and MCP paths do not rebuild those blocks locally when the daemon already produced them
+  - Takumi live prompt synthesis now also packs bulky episodic-hint and recent-decision sections through the same daemon-first packing path instead of only packing repo maps and file excerpts
+  - enforced Takumi route envelopes now fail closed before spawn if the authoritative engine lane cannot be transported safely through the structured bridge contract
 - Curated day/monthly/yearly consolidation artifacts can now carry a PAKT-packed derived summary for transport and context packing.
   - raw sessions remain canonical
   - embeddings stay on the original curated summary text
@@ -89,9 +97,11 @@ It states what is live, what is partial, and what is still open.
   - `autoresearch`
   - `acp-research-swarm`
   - Prana research councils now bind to canonical daemon sessions, preserve optional parent-session and lineage metadata, and use the `research.bounded` lane, which resolves to the engine-owned `engine.research.autoresearch` capability under approval-gated policy
-  - bounded research now also resolves a second execution lane, defaulting to `tool.use.flex`, and fails closed if the daemon does not return an executable engine-selected capability for the run
-  - bounded research now also fails closed when `session.open` does not return a canonical engine session id, instead of continuing with advisory-only route metadata
-  - bounded research records now include the packed context payload itself when PAKT packing succeeds, so later recall can inspect the derived compacted context directly without losing provenance to the run/session metadata
+- bounded research now resolves both the workflow lane and the execution lane through one daemon `route.resolveBatch` call, then fails closed if the daemon does not return an executable engine-selected capability for the run
+- bounded research now also fails closed when `session.open` does not return a canonical engine session id, instead of continuing with advisory-only route metadata
+- bounded research records now include the packed context payload itself when PAKT packing succeeds, so later recall can inspect the derived compacted context directly without losing provenance to the run/session metadata
+- research records now keep execution-binding provenance, including preferred discovered providers/models when a discovery-backed execution lane was selected
+- bounded research execution now also receives the engine-selected lane directly through its process environment, including selected provider/model ids and preferred discovered candidates, so the runtime behavior matches the recorded route provenance instead of treating it as metadata only
 - ACP-style subagents now map to engine-owned Sutra/Sabha council roles rather than a second runtime:
   - `planner`
   - `executor`
@@ -175,9 +185,12 @@ It states what is live, what is partial, and what is still open.
 - MCP guidance now shapes generic tool execution input before the tool runs instead of only decorating the response afterward
 - plain Lucy live guidance now follows the same engine-owned PAKT packing policy as the MCP wrapper and Lucy bridge paths
 - Transcendence and Vasana prompt-enrichment blocks now follow that same daemon-first packing path before falling back to local packing
+- Lucy auto-fix now uses that same daemon-first packing path for bulky failure output before issuing a follow-up repair task, instead of always dumping a raw trailing log tail into the fix prompt
+- Takumi prompt synthesis now normalizes previously packed context before reusing it, so PAKT-authored repo or hint blocks are expanded for reuse instead of being blindly nested into another packed section
 - Takumi prompt synthesis now applies that same daemon-first packing policy to bulky repo-map and file-context sections, and preserves packed Lucy hints instead of clipping them to generic hint length
 - Takumi bridge execution can now honor explicit engine-owned route classes and refuses to override a non-Takumi engine-selected coding lane
 - explicit Takumi engine-route requests now fail closed if daemon route resolution fails or if the engine selected Takumi but the Takumi bridge is unavailable
+- Takumi now also performs a best-effort post-run contract audit: if the child process explicitly declares a provider or model outside an enforced engine-selected lane envelope, the bridge fails the run instead of silently accepting the contradiction
 - a canonical coding session now defaults the coding path onto inferred engine route classes even when the caller did not pass one explicitly
 - if that inferred engine route resolves to the local `tool.coding_agent` lane, the Takumi bridge now respects the decision and falls back to the generic local coding CLI path instead of failing
   - Smriti session integrity is materially stronger than earlier note snapshots

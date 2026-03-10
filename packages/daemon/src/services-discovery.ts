@@ -21,6 +21,7 @@ import {
 
 const log = createLogger("daemon:discovery");
 const DISCOVERY_TIMEOUT_MS = 5_000;
+const DISCOVERY_SNAPSHOT_TTL_MS = 60_000;
 
 interface DiscoveryPackage {
 	ModelRegistry: {
@@ -74,6 +75,8 @@ export interface DiscoveryModelInventory {
 let sharedDiscoveryPackagePromise: Promise<DiscoveryPackage | null> | null = null;
 let sharedDiscoveryRegistryPromise: Promise<ModelRegistry> | null = null;
 let sharedDiscoveryRegistry: ModelRegistry | null = null;
+let sharedDiscoverySnapshotCachedAt: number | null = null;
+let sharedDiscoverySnapshotPromise: Promise<{ registry: ModelRegistry; status: DiscoveryStatus }> | null = null;
 let sharedDiscoveryStatus: DiscoveryStatus = {
 	packageAvailable: false,
 	discovered: false,
@@ -152,6 +155,19 @@ function asDiscoveryRegistry(registry: ModelRegistry): DiscoveryRegistry {
 	return registry as unknown as DiscoveryRegistry;
 }
 
+function providerHealthRows(registry: ModelRegistry): DiscoveryProviderHealth[] {
+	const discoveryRegistry = asDiscoveryRegistry(registry) as Partial<DiscoveryRegistry>;
+	if (typeof discoveryRegistry.providerHealth === "function") {
+		return discoveryRegistry.providerHealth();
+	}
+	return registry.providers_list().map((provider) => ({
+		providerId: String((provider as { id?: unknown }).id ?? ""),
+		state: "unknown",
+		failureCount: 0,
+		lastError: null,
+	}));
+}
+
 function providerHealthSummary(rows: DiscoveryProviderHealth[]): Pick<DiscoveryStatus, "healthyProviderCount" | "degradedProviderCount" | "openProviderCount"> {
 	let healthyProviderCount = 0;
 	let degradedProviderCount = 0;
@@ -171,13 +187,13 @@ function providerHealthSummary(rows: DiscoveryProviderHealth[]): Pick<DiscoveryS
 }
 
 function updateDiscoveryStatus(registry: ModelRegistry): DiscoveryStatus {
-	const discoveryRegistry = asDiscoveryRegistry(registry);
 	const providers = registry.providers_list();
 	const models = registry.models();
-	const capabilityCount = discoveryRegistry.capabilities().length;
+	const capabilityCount = asDiscoveryRegistry(registry).capabilities().length;
 	const missingCredentialCount = registry.missingCredentialPrompts().length;
-	const health = providerHealthSummary(discoveryRegistry.providerHealth());
+	const health = providerHealthSummary(providerHealthRows(registry));
 	const discoveredAt = registry.toJSON().discoveredAt || Date.now();
+	sharedDiscoverySnapshotCachedAt = Date.now();
 	sharedDiscoveryStatus = {
 		packageAvailable: true,
 		discovered: true,
@@ -196,7 +212,12 @@ function updateDiscoveryStatus(registry: ModelRegistry): DiscoveryStatus {
 
 async function ensureDiscoverySnapshot(force = false): Promise<{ registry: ModelRegistry; status: DiscoveryStatus }> {
 	const registry = await ensureDiscoveryRegistry();
-	if (!force && sharedDiscoveryStatus.discovered) {
+	if (
+		!force
+		&& sharedDiscoveryStatus.discovered
+		&& sharedDiscoverySnapshotCachedAt
+		&& Date.now() - sharedDiscoverySnapshotCachedAt < DISCOVERY_SNAPSHOT_TTL_MS
+	) {
 		return {
 			registry,
 			status: {
@@ -205,21 +226,28 @@ async function ensureDiscoverySnapshot(force = false): Promise<{ registry: Model
 			},
 		};
 	}
-	try {
-		await registry.discover({
-			force,
-			includeLocal: true,
-			enrichWithPricing: true,
-			timeout: DISCOVERY_TIMEOUT_MS,
+	if (!sharedDiscoverySnapshotPromise || force) {
+		sharedDiscoverySnapshotPromise = (async () => {
+			try {
+				await registry.discover({
+					force,
+					includeLocal: true,
+					enrichWithPricing: true,
+					timeout: DISCOVERY_TIMEOUT_MS,
+				});
+			} catch (error) {
+				updateDiscoveryError(error, { packageAvailable: true });
+				throw error;
+			}
+			return {
+				registry,
+				status: updateDiscoveryStatus(registry),
+			};
+		})().finally(() => {
+			sharedDiscoverySnapshotPromise = null;
 		});
-	} catch (error) {
-		updateDiscoveryError(error, { packageAvailable: true });
-		throw error;
 	}
-	return {
-		registry,
-		status: updateDiscoveryStatus(registry),
-	};
+	return await sharedDiscoverySnapshotPromise;
 }
 
 export async function getDiscoveryStatus(): Promise<DiscoveryStatus> {
@@ -234,14 +262,13 @@ export async function getDiscoveryStatus(): Promise<DiscoveryStatus> {
 export async function getDiscoveryModelInventory(): Promise<DiscoveryModelInventory | null> {
 	const pkg = await loadDiscoveryPackage();
 	if (!pkg) return null;
-	try {
-		const { registry, status } = await ensureDiscoverySnapshot();
-		const discoveryRegistry = asDiscoveryRegistry(registry);
-		return {
-			status,
-			models: registry.models(),
-			providerHealth: discoveryRegistry.providerHealth(),
-		};
+		try {
+			const { registry, status } = await ensureDiscoverySnapshot();
+			return {
+				status,
+				models: registry.models(),
+				providerHealth: providerHealthRows(registry),
+			};
 	} catch (error) {
 		updateDiscoveryError(error, { packageAvailable: true });
 		return null;
@@ -251,17 +278,17 @@ export async function getDiscoveryModelInventory(): Promise<DiscoveryModelInvent
 export async function getDiscoveryRouteHints(
 	capability: string,
 	limit = 3,
+	queryOverride?: DiscoveryRouteQuery | null,
 ): Promise<DiscoveryRouteHints | null> {
 	const normalized = capability.trim();
 	if (!normalized) return null;
-	const query = resolveDiscoveryRouteQuery(normalized);
+	const query = queryOverride ?? resolveDiscoveryRouteQuery(normalized);
 	if (!query) return null;
 	const pkg = await loadDiscoveryPackage();
 	if (!pkg) return null;
 	try {
-		const { registry, status } = await ensureDiscoverySnapshot();
-		const discoveryRegistry = asDiscoveryRegistry(registry);
-		const models = registry.models(normalizeModelQueryOptions(query));
+			const { registry, status } = await ensureDiscoverySnapshot();
+			const models = registry.models(normalizeModelQueryOptions(query));
 		const cheapest = registry.cheapestModels({
 			capability: query.capability,
 			role: query.role,
@@ -273,9 +300,9 @@ export async function getDiscoveryRouteHints(
 			capability: normalized,
 			query,
 			status,
-			capabilities: query.capability ? discoveryRegistry.capabilities({ capability: query.capability }) : [],
-			models,
-			providerHealth: discoveryRegistry.providerHealth(),
+				capabilities: query.capability ? asDiscoveryRegistry(registry).capabilities({ capability: query.capability }) : [],
+				models,
+				providerHealth: providerHealthRows(registry),
 			cheapest: {
 				...(typeof cheapest === "object" && cheapest !== null ? cheapest : {}),
 				preferredModelIds: extractPreferredModelIds(cheapest),
@@ -297,8 +324,12 @@ export async function getDiscoveryRouteHints(
 export function registerDiscoveryMethods(router: RpcRouter): void {
 	router.register("discovery.info", async () => {
 		return {
+			schemaVersion: 1,
 			engineOwned: true,
 			authority: "discovery-only",
+			routingAuthority: "chitragupta",
+			snapshotTtlMs: DISCOVERY_SNAPSHOT_TTL_MS,
+			cacheAgeMs: sharedDiscoverySnapshotCachedAt ? Math.max(0, Date.now() - sharedDiscoverySnapshotCachedAt) : null,
 			status: await getDiscoveryStatus(),
 		};
 	}, "Describe kosha-discovery integration status inside the engine control plane");
@@ -354,10 +385,9 @@ export function registerDiscoveryMethods(router: RpcRouter): void {
 
 	router.register("discovery.capabilities", async (params) => {
 		assertRefreshNotRequested(params);
-		const { registry, status } = await ensureDiscoverySnapshot();
-		const discoveryRegistry = asDiscoveryRegistry(registry);
-		const filter = typeof params.capability === "string" ? params.capability : undefined;
-		const capabilities = discoveryRegistry.capabilities(filter ? { capability: filter } : undefined);
+			const { registry, status } = await ensureDiscoverySnapshot();
+			const filter = typeof params.capability === "string" ? params.capability : undefined;
+			const capabilities = asDiscoveryRegistry(registry).capabilities(filter ? { capability: filter } : undefined);
 		return {
 			status,
 			capabilities,
@@ -366,12 +396,11 @@ export function registerDiscoveryMethods(router: RpcRouter): void {
 
 	router.register("discovery.health", async (params) => {
 		assertRefreshNotRequested(params);
-		const { registry, status } = await ensureDiscoverySnapshot();
-		const discoveryRegistry = asDiscoveryRegistry(registry);
-		return {
-			status,
-			health: discoveryRegistry.providerHealth(),
-		};
+			const { registry, status } = await ensureDiscoverySnapshot();
+			return {
+				status,
+				health: providerHealthRows(registry),
+			};
 	}, "Report provider discovery health and circuit-breaker states from kosha-discovery");
 
 	router.register("discovery.refresh", async (params) => {
@@ -398,6 +427,8 @@ export function _resetDiscoveryStateForTests(): void {
 	sharedDiscoveryPackagePromise = null;
 	sharedDiscoveryRegistryPromise = null;
 	sharedDiscoveryRegistry = null;
+	sharedDiscoverySnapshotCachedAt = null;
+	sharedDiscoverySnapshotPromise = null;
 	sharedDiscoveryStatus = {
 		packageAvailable: false,
 		discovered: false,

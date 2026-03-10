@@ -236,12 +236,66 @@ describe("coding-router bridge integration", () => {
 	});
 
 	it("honors engine-selected Takumi route classes before bridge execution", async () => {
-		mockDaemonCall.mockResolvedValue({
-			request: { capability: "coding.review" },
-			selected: { id: "adapter.takumi.executor" },
-			routeClass: { id: "coding.review.strict", capability: "coding.review" },
-			policyTrace: ["route-class:coding.review.strict", "selected:adapter.takumi.executor"],
-			reason: "strict review requires the Takumi executor",
+		mockDaemonCall.mockImplementation(async (method: string) => {
+			if (method === "route.resolveBatch") {
+				return {
+					resolutions: [
+						{
+							key: "primary",
+							request: { capability: "coding.review" },
+							selected: { id: "adapter.takumi.executor" },
+							routeClass: { id: "coding.review.strict", capability: "coding.review" },
+							executionBinding: {
+								source: "kosha-discovery",
+								kind: "executor",
+								query: { capability: "chat", mode: "chat", role: "reviewer" },
+								selectedModelId: "gpt-4.1",
+								selectedProviderId: "openai",
+								preferredModelIds: ["gpt-4.1"],
+								preferredProviderIds: ["openai"],
+								allowCrossProvider: true,
+							},
+							policyTrace: ["route-class:coding.review.strict", "selected:adapter.takumi.executor"],
+							reason: "strict review requires the Takumi executor",
+						},
+						{
+							key: "planner",
+							request: { capability: "coding.review" },
+							selected: { id: "adapter.takumi.executor" },
+							routeClass: { id: "coding.deep-reasoning", capability: "coding.review" },
+							executionBinding: {
+								source: "kosha-discovery",
+								kind: "model",
+								query: { capability: "chat", mode: "chat", role: "planner" },
+								selectedModelId: "qwen2.5-coder:32b",
+								selectedProviderId: "llamacpp",
+								preferredModelIds: ["qwen2.5-coder:32b"],
+								preferredProviderIds: ["llamacpp"],
+								allowCrossProvider: true,
+							},
+							policyTrace: ["route-class:coding.deep-reasoning", "selected:adapter.takumi.executor"],
+							reason: "planner lane prefers stronger local reasoning",
+						},
+					],
+				};
+			}
+			return {
+				request: { capability: "coding.review" },
+				selected: { id: "adapter.takumi.executor" },
+				routeClass: { id: "coding.review.strict", capability: "coding.review" },
+				executionBinding: {
+					source: "kosha-discovery",
+					kind: "executor",
+					query: { capability: "chat", mode: "chat" },
+					selectedModelId: "gpt-4.1",
+					selectedProviderId: "openai",
+					preferredModelIds: ["gpt-4.1"],
+					preferredProviderIds: ["openai"],
+					allowCrossProvider: true,
+				},
+				policyTrace: ["route-class:coding.review.strict", "selected:adapter.takumi.executor"],
+				reason: "strict review requires the Takumi executor",
+			};
 		});
 		mockBridgeDetect.mockResolvedValue({
 			mode: "rpc",
@@ -269,23 +323,61 @@ describe("coding-router bridge integration", () => {
 			sessionId: "sess-1",
 			routeClass: "coding.review.strict",
 		}));
+		expect(mockDaemonCall).toHaveBeenCalledWith("route.resolveBatch", expect.objectContaining({
+			consumer: "cli:takumi-bridge",
+			sessionId: "sess-1",
+			routes: expect.arrayContaining([
+				expect.objectContaining({ key: "primary", routeClass: "coding.review.strict" }),
+				expect.objectContaining({ key: "planner", routeClass: "coding.deep-reasoning" }),
+				expect.objectContaining({ key: "implementer", routeClass: "coding.patch-cheap" }),
+				expect.objectContaining({ key: "reviewer", routeClass: "coding.review.strict" }),
+				expect.objectContaining({ key: "validator", routeClass: "coding.validation-high-trust" }),
+			]),
+		}));
 		expect(mockBridgeInjectContext).toHaveBeenCalledWith(expect.objectContaining({
 			engineRoute: expect.objectContaining({
 				routeClass: "coding.review.strict",
 				capability: "coding.review",
 				selectedCapabilityId: "adapter.takumi.executor",
+				executionBinding: expect.objectContaining({
+					selectedModelId: "gpt-4.1",
+					selectedProviderId: "openai",
+					preferredModelIds: ["gpt-4.1"],
+					preferredProviderIds: ["openai"],
+				}),
 				enforced: true,
+			}),
+			engineRouteEnvelope: expect.objectContaining({
+				primaryKey: "primary",
+				lanes: expect.arrayContaining([
+					expect.objectContaining({
+						key: "primary",
+						routeClass: "coding.review.strict",
+						selectedCapabilityId: "adapter.takumi.executor",
+					}),
+					expect.objectContaining({
+						key: "planner",
+						routeClass: "coding.deep-reasoning",
+						executionBinding: expect.objectContaining({
+							selectedModelId: "qwen2.5-coder:32b",
+							selectedProviderId: "llamacpp",
+						}),
+					}),
+				]),
 			}),
 		}));
 		expect(mockBridgeExecute).toHaveBeenCalledWith(expect.objectContaining({
 			context: expect.objectContaining({
 				engineRoute: expect.objectContaining({
 					routeClass: "coding.review.strict",
-					selectedCapabilityId: "adapter.takumi.executor",
-					enforced: true,
+						selectedCapabilityId: "adapter.takumi.executor",
+						enforced: true,
+					}),
+					engineRouteEnvelope: expect.objectContaining({
+						primaryKey: "primary",
+					}),
 				}),
-			}),
-		}), expect.any(Function));
+			}), expect.any(Function));
 	});
 
 	it("allows engine-selected local model lanes to execute through Takumi under an enforced route envelope", async () => {
@@ -293,6 +385,16 @@ describe("coding-router bridge integration", () => {
 			request: { capability: "model.local.chat" },
 			selected: { id: "engine.local.llamacpp" },
 			routeClass: { id: "coding.deep-reasoning", capability: "model.local.chat" },
+			executionBinding: {
+				source: "kosha-discovery",
+				kind: "model",
+				query: { capability: "chat", mode: "chat" },
+				selectedModelId: "qwen2.5-coder:32b",
+				selectedProviderId: "llamacpp",
+				preferredModelIds: ["qwen2.5-coder:32b"],
+				preferredProviderIds: ["llamacpp"],
+				allowCrossProvider: false,
+			},
 			policyTrace: ["route-class:coding.deep-reasoning", "selected:engine.local.llamacpp"],
 			reason: "local high-context lane selected by engine policy",
 		});
@@ -324,6 +426,10 @@ describe("coding-router bridge integration", () => {
 				routeClass: "coding.deep-reasoning",
 				capability: "model.local.chat",
 				selectedCapabilityId: "engine.local.llamacpp",
+				executionBinding: expect.objectContaining({
+					selectedModelId: "qwen2.5-coder:32b",
+					selectedProviderId: "llamacpp",
+				}),
 				enforced: true,
 			}),
 		}));
@@ -372,7 +478,7 @@ describe("coding-router bridge integration", () => {
 			expect(result.exitCode).toBe(0);
 		});
 
-		it("fails closed when the engine selected Takumi but Takumi is unavailable", async () => {
+	it("fails closed when the engine selected Takumi but Takumi is unavailable", async () => {
 		mockDaemonCall.mockResolvedValue({
 			request: { capability: "coding.review" },
 			selected: { id: "adapter.takumi.executor" },
@@ -394,6 +500,40 @@ describe("coding-router bridge integration", () => {
 		expect(result.cli).toBe("engine-route");
 		expect(result.exitCode).toBe(1);
 			expect(result.output).toContain("adapter.takumi.executor");
+			expect(result.output).toContain("unavailable");
+			expect(mockSpawn).not.toHaveBeenCalled();
+		});
+
+		it("fails closed when the engine selected a discovery-backed model lane but Takumi is unavailable", async () => {
+			mockDaemonCall.mockResolvedValue({
+				request: { capability: "model.tool-use" },
+				selected: { id: "discovery.model.ollama.qwen-coder" },
+				routeClass: { id: "coding.patch-cheap", capability: "model.tool-use" },
+				executionBinding: {
+					source: "kosha-discovery",
+					kind: "model",
+					query: { capability: "function_calling", mode: "chat" },
+					preferredModelIds: ["qwen-coder"],
+					preferredProviderIds: ["ollama"],
+					allowCrossProvider: false,
+				},
+				policyTrace: ["route-class:coding.patch-cheap", "selected:discovery.model.ollama.qwen-coder"],
+			});
+			mockBridgeDetect.mockResolvedValue({
+				mode: "unavailable",
+				command: "takumi",
+			});
+
+			const result = await routeViaBridge({
+				task: "Patch auth flow cheaply",
+				cwd: "/tmp/project",
+				sessionId: "sess-3b",
+				routeClass: "coding.patch-cheap",
+			});
+
+			expect(result.cli).toBe("engine-route");
+			expect(result.exitCode).toBe(1);
+			expect(result.output).toContain("discovery.model.ollama.qwen-coder");
 			expect(result.output).toContain("unavailable");
 			expect(mockSpawn).not.toHaveBeenCalled();
 		});

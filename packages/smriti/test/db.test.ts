@@ -224,6 +224,19 @@ describe("Schema initialization", () => {
 				}
 			});
 
+			it("should create research_experiments table", () => {
+				const db = dbm.get("agent");
+				const row = db.prepare(
+					"SELECT name FROM sqlite_master WHERE type='table' AND name = 'research_experiments'",
+				).get() as { name?: string } | undefined;
+				expect(row?.name).toBe("research_experiments");
+				const info = db.prepare("PRAGMA table_info(research_experiments)").all() as Array<{ name: string }>;
+				const cols = info.map((entry) => entry.name);
+				expect(cols).toContain("experiment_key");
+				expect(cols).toContain("budget_ms");
+				expect(cols).toContain("sabha_id");
+			});
+
 			it("should create sabha_state durability table", () => {
 				const db = dbm.get("agent");
 				const info = db.prepare("PRAGMA table_info(sabha_state)").all() as Array<{ name: string }>;
@@ -410,7 +423,7 @@ describe("Schema initialization", () => {
 				initAgentSchema(dbm);
 				const db = dbm.get("agent");
 				const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-				expect(row.version).toBe(15);
+				expect(row.version).toBe(18);
 			});
 
 			it("should skip re-initialization when version matches", () => {
@@ -419,7 +432,127 @@ describe("Schema initialization", () => {
 				initAgentSchema(dbm);
 				const db = dbm.get("agent");
 				const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-				expect(row.version).toBe(15);
+				expect(row.version).toBe(18);
+			});
+
+			it("should rebuild consolidation_log with swapna constraint for legacy databases", () => {
+				const db = dbm.get("agent");
+				db.exec(`
+					CREATE TABLE _schema_versions (
+						name    TEXT PRIMARY KEY,
+						version INTEGER NOT NULL DEFAULT 0
+					);
+
+					CREATE TABLE consolidation_log (
+						id          INTEGER PRIMARY KEY AUTOINCREMENT,
+						project     TEXT NOT NULL,
+						cycle_type  TEXT NOT NULL CHECK(cycle_type IN ('svapna', 'monthly', 'yearly')),
+						cycle_id    TEXT,
+						phase       TEXT,
+						phase_duration_ms INTEGER,
+						vasanas_created INTEGER DEFAULT 0,
+						vidhis_created INTEGER DEFAULT 0,
+						samskaras_processed INTEGER DEFAULT 0,
+						sessions_processed INTEGER DEFAULT 0,
+						status      TEXT NOT NULL DEFAULT 'running'
+							CHECK(status IN ('running', 'success', 'failed', 'partial')),
+						error_message TEXT,
+						created_at  INTEGER NOT NULL
+					);
+
+					INSERT INTO consolidation_log (project, cycle_type, cycle_id, status, created_at)
+					VALUES ('demo', 'svapna', 'svapna-legacy', 'success', 123456);
+				`);
+				db.prepare(
+					"INSERT INTO _schema_versions (name, version) VALUES ('agent', 15) ON CONFLICT(name) DO UPDATE SET version = excluded.version",
+				).run();
+
+				initAgentSchema(dbm);
+
+				const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'consolidation_log'").get() as { sql: string };
+				expect(sql.sql).toContain("'swapna'");
+				expect(sql.sql).not.toContain("'svapna'");
+
+				const migrated = db
+					.prepare("SELECT cycle_type, cycle_id FROM consolidation_log WHERE project = ?")
+					.get("demo") as { cycle_type: string; cycle_id: string };
+				expect(migrated.cycle_type).toBe("swapna");
+				expect(migrated.cycle_id).toBe("swapna-legacy");
+			});
+
+			it("should backfill research experiment columns from legacy record_json rows", () => {
+				const db = dbm.get("agent");
+				db.exec(`
+					CREATE TABLE _schema_versions (
+						name    TEXT PRIMARY KEY,
+						version INTEGER NOT NULL DEFAULT 0
+					);
+
+					CREATE TABLE research_experiments (
+						id                    TEXT PRIMARY KEY,
+						project               TEXT NOT NULL,
+						session_id            TEXT,
+						parent_session_id     TEXT,
+						session_lineage_key   TEXT,
+						topic                 TEXT NOT NULL,
+						metric_name           TEXT NOT NULL,
+						objective             TEXT NOT NULL,
+						baseline_metric       REAL,
+						observed_metric       REAL,
+						delta                 REAL,
+						decision              TEXT NOT NULL,
+						council_verdict       TEXT,
+						route_class           TEXT,
+						execution_route_class TEXT,
+						selected_capability_id TEXT,
+						selected_model_id     TEXT,
+						selected_provider_id  TEXT,
+						packed_context        TEXT,
+						packed_runtime        TEXT,
+						packed_source         TEXT,
+						record_json           TEXT NOT NULL,
+						created_at            INTEGER NOT NULL,
+						updated_at            INTEGER NOT NULL
+					);
+				`);
+				db.prepare(`
+					INSERT INTO research_experiments (
+						id, project, session_id, topic, metric_name, objective, decision, record_json, created_at, updated_at
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				`).run(
+					"exp-legacy-1",
+					"/repo/project",
+					"sess-1",
+					"optimizer sweep",
+					"val_bpb",
+					"minimize",
+					"keep",
+					JSON.stringify({
+						experimentKey: "exp-key-legacy",
+						budgetMs: 300000,
+						sabhaId: "sabha-legacy",
+					}),
+					123456,
+					123456,
+				);
+				db.prepare(
+					"INSERT INTO _schema_versions (name, version) VALUES ('agent', 17) ON CONFLICT(name) DO UPDATE SET version = excluded.version",
+				).run();
+
+				initAgentSchema(dbm);
+
+				const row = db.prepare(`
+					SELECT experiment_key, budget_ms, sabha_id
+					FROM research_experiments
+					WHERE id = ?
+				`).get("exp-legacy-1") as {
+					experiment_key: string | null;
+					budget_ms: number | null;
+					sabha_id: string | null;
+				};
+				expect(row.experiment_key).toBe("exp-key-legacy");
+				expect(row.budget_ms).toBe(300000);
+				expect(row.sabha_id).toBe("sabha-legacy");
 			});
 		});
 	});

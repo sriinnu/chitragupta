@@ -77,9 +77,12 @@ function compareCapabilities(
 	right: CapabilityDescriptor,
 	constraints?: ConsumerConstraint,
 ): number {
-	const leftPreferred = constraints?.preferredCapabilityIds?.includes(left.id) ? 1 : 0;
-	const rightPreferred = constraints?.preferredCapabilityIds?.includes(right.id) ? 1 : 0;
-	if (leftPreferred !== rightPreferred) return rightPreferred - leftPreferred;
+	const preferredIds = constraints?.preferredCapabilityIds ?? [];
+	const leftPreferredIndex = preferredIds.indexOf(left.id);
+	const rightPreferredIndex = preferredIds.indexOf(right.id);
+	const leftPreferred = leftPreferredIndex === -1 ? Number.POSITIVE_INFINITY : leftPreferredIndex;
+	const rightPreferred = rightPreferredIndex === -1 ? Number.POSITIVE_INFINITY : rightPreferredIndex;
+	if (leftPreferred !== rightPreferred) return leftPreferred - rightPreferred;
 	if (constraints?.preferLocal) {
 		const trustDelta = TRUST_ORDER[left.trust] - TRUST_ORDER[right.trust];
 		if (trustDelta !== 0) return trustDelta;

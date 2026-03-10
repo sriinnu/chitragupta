@@ -40,6 +40,10 @@ const mockRouteViaBridge = vi.mocked(routeViaBridge);
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mockPackLiveContextText.mockReset();
+	mockPackContextViaDaemon.mockReset();
+	mockAllowLocalRuntimeFallback.mockReset();
+	mockRouteViaBridge.mockReset();
 	mockAllowLocalRuntimeFallback.mockReturnValue(false);
 	mockPackLiveContextText.mockResolvedValue(null);
 	mockPackContextViaDaemon.mockResolvedValue({ packed: false });
@@ -128,11 +132,48 @@ describe("Lucy Bridge", () => {
 			expect(mockRouteViaBridge).toHaveBeenCalledTimes(2);
 		});
 
+		it("packs large failure output before issuing the auto-fix task", async () => {
+			mockPackContextViaDaemon.mockResolvedValueOnce({
+				runtime: "pakt-core",
+				packedText: "packed-failure-output",
+				format: "text",
+				savings: 0.41,
+				originalLength: 5400,
+			});
+			mockRouteViaBridge.mockResolvedValueOnce({
+				cli: "takumi",
+				output: `FAIL 3 tests\nTests: 3 failed, 7 passed\n${"trace ".repeat(900)}`,
+				exitCode: 1,
+			});
+			mockRouteViaBridge.mockResolvedValueOnce({
+				cli: "takumi",
+				output: "All tests pass",
+				exitCode: 0,
+			});
+
+			const config = createConfig();
+			await executeLucy("Fix the build regression", config);
+
+			expect(mockRouteViaBridge).toHaveBeenCalledTimes(2);
+			expect(mockRouteViaBridge).toHaveBeenNthCalledWith(
+				2,
+				expect.objectContaining({
+					task: expect.stringContaining("Recent output (packed via pakt-core"),
+				}),
+			);
+			expect(mockRouteViaBridge).toHaveBeenNthCalledWith(
+				2,
+				expect.objectContaining({
+					task: expect.stringContaining("packed-failure-output"),
+				}),
+			);
+		});
+
 		it("respects maxAutoFixAttempts", async () => {
 			// All calls fail
 			mockRouteViaBridge.mockResolvedValue({
 				cli: "takumi",
-				output: "FAIL 3 tests\n5 failed",
+				output: "FAIL 3 tests\nTests: 5 failed, 2 passed",
 				exitCode: 1,
 			});
 

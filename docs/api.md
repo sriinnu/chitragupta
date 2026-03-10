@@ -35,6 +35,7 @@ Daemon consumer bridge methods:
 - `bridge.capabilities`
 - `route.classes`
 - `route.resolve`
+- `route.resolveBatch`
 - `session.open`
 - `session.collaborate`
 - `session.turn`
@@ -55,13 +56,17 @@ Daemon consumer bridge methods:
 Notes:
 
 - `lucy.live_context` accepts an optional `project` so live Scarlett/Lucy guidance can stay inside the current project boundary while still reflecting global engine health.
-- `route.resolve` now returns both the engine-selected lane and optional `discoveryHints`, so kosha-discovery stays inside the engine control plane instead of forcing consumers to build a separate provider registry.
+- `route.resolve` now returns the engine-selected lane, optional `discoveryHints`, and an optional discovery-backed `executionBinding` envelope for consumers such as Takumi.
+- That `executionBinding` envelope can include the engine-selected provider/model pair as well as the preferred allowed set, so consumers can honor discovery without becoming routing authorities.
+- `route.resolveBatch` resolves multiple named lanes in one call so a consumer can ask for planner/worker/reviewer envelopes without re-implementing engine routing locally.
+- bounded Prana research workflows now use `route.resolveBatch` for both the workflow lane and the execution lane, and persist the chosen execution-binding provenance into the derived record.
 - Day-file and consolidated-artifact recall paths can include `sourceSessionIds` so callers can drill from derived memory back into canonical raw sessions.
 - Day-file summaries may compact low-signal sessions for readability; use `sourceSessionIds` and canonical session APIs when full-fidelity replay is required.
 - `semantic.sync_status` and `semantic.sync_curated` operate on curated day/monthly/yearly consolidation artifacts, not raw turns.
 - curated semantic artifacts may include a derived `packedSummary` payload produced by the engine-owned PAKT lane; embeddings still use the original curated summary text.
 - the compression policy is runtime-aware: `pakt-core` is preferred and stdio `pakt` is the supported fallback.
 - Swapna/Nidra compaction can also emit a derived packed compaction summary; raw turns and raw sessions remain canonical.
+- live Takumi prompt synthesis now also uses the daemon-first packing path for bulky episodic-hint and recent-decision sections.
 - `sabha.submit_perspective` lets a consulted peer write structured council feedback back into Sabha state.
 - `sabha.gather` / `sabha.get` now include consultation fields such as `perspectives`, `respondedParticipantIds`, `pendingParticipantIds`, and `consultationSummary`.
 - `sabha.resume` is the explicit contract for retrying or resuming pending mesh consultations without overloading read-only `sabha.get`.
