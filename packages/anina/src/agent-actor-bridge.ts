@@ -45,6 +45,18 @@ export type AgentMeshReply =
   | { type: "pong"; agentId: string; timestamp: number }
   | { type: "error"; agentId: string; error: string };
 
+function replyUnsupportedOperation(
+  ctx: MeshActorContextCompat,
+  agentId: string,
+  operation: "prompt" | "steer" | "abort" | "status" | "delegate",
+): void {
+  ctx.reply({
+    type: "error",
+    agentId,
+    error: `Agent does not support ${operation}`,
+  } satisfies AgentMeshReply);
+}
+
 // ─── Bridge ─────────────────────────────────────────────────────────────────
 
 /**
@@ -87,7 +99,13 @@ export function createAgentBehavior(agent: AgentBehaviorHandle): MeshActorBehavi
         }
 
         case "steer": {
-          agent.steer?.(msg.text);
+          if (!agent.steer) {
+            if (envelope.type === "ask") {
+              replyUnsupportedOperation(ctx, agent.id, "steer");
+            }
+            break;
+          }
+          agent.steer(msg.text);
           if (envelope.type === "ask") {
             ctx.reply({ type: "status:result", agentId: agent.id, status: agent.getStatus?.() ?? "unknown", messageCount: agent.getMessages?.().length ?? 0 } satisfies AgentMeshReply);
           }
@@ -95,7 +113,13 @@ export function createAgentBehavior(agent: AgentBehaviorHandle): MeshActorBehavi
         }
 
         case "abort": {
-          agent.abort?.();
+          if (!agent.abort) {
+            if (envelope.type === "ask") {
+              replyUnsupportedOperation(ctx, agent.id, "abort");
+            }
+            break;
+          }
+          agent.abort();
           if (envelope.type === "ask") {
             ctx.reply({ type: "status:result", agentId: agent.id, status: "aborted", messageCount: agent.getMessages?.().length ?? 0 } satisfies AgentMeshReply);
           }
@@ -103,10 +127,14 @@ export function createAgentBehavior(agent: AgentBehaviorHandle): MeshActorBehavi
         }
 
         case "status": {
+          if (!agent.getStatus) {
+            replyUnsupportedOperation(ctx, agent.id, "status");
+            break;
+          }
           ctx.reply({
             type: "status:result",
             agentId: agent.id,
-            status: agent.getStatus?.() ?? "unknown",
+            status: agent.getStatus(),
             messageCount: agent.getMessages?.().length ?? 0,
           } satisfies AgentMeshReply);
           break;

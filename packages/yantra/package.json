@@ -1,7 +1,7 @@
 {
 	"name": "@chitragupta/yantra",
 	"private": true,
-	"version": "0.1.0",
+  "version": "0.1.1",
 	"description": "Pluggable tool system with 12 built-in tools for file, search, shell, and web operations",
 	"type": "module",
 	"license": "MIT",

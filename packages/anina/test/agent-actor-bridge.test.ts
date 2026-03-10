@@ -207,6 +207,48 @@ describe("agent-actor-bridge", () => {
 			const reply = ctx.replies[0] as AgentMeshReply;
 			expect(reply).toMatchObject({ type: "error" });
 		});
+
+		it("should error on unsupported steer for minimal mesh handle", async () => {
+			behavior = createAgentBehavior({ id: "mesh-only-agent" });
+			const envelope = createMockEnvelope({ type: "steer", text: "focus" }, "ask");
+
+			await behavior(envelope, ctx);
+
+			const reply = ctx.replies[0] as AgentMeshReply;
+			expect(reply).toMatchObject({
+				type: "error",
+				agentId: "mesh-only-agent",
+				error: "Agent does not support steer",
+			});
+		});
+
+		it("should error on unsupported abort for minimal mesh handle", async () => {
+			behavior = createAgentBehavior({ id: "mesh-only-agent" });
+			const envelope = createMockEnvelope({ type: "abort" }, "ask");
+
+			await behavior(envelope, ctx);
+
+			const reply = ctx.replies[0] as AgentMeshReply;
+			expect(reply).toMatchObject({
+				type: "error",
+				agentId: "mesh-only-agent",
+				error: "Agent does not support abort",
+			});
+		});
+
+		it("should error on unsupported status for minimal mesh handle", async () => {
+			behavior = createAgentBehavior({ id: "mesh-only-agent" });
+			const envelope = createMockEnvelope({ type: "status" });
+
+			await behavior(envelope, ctx);
+
+			const reply = ctx.replies[0] as AgentMeshReply;
+			expect(reply).toMatchObject({
+				type: "error",
+				agentId: "mesh-only-agent",
+				error: "Agent does not support status",
+			});
+		});
 	});
 
 	describe("isAgentMeshMessage", () => {
