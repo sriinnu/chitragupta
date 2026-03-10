@@ -27,9 +27,9 @@ function getSessionsDir(): string {
  * Supports both flat and v2 layouts.
  */
 async function listSessionMarkdownFiles(dir: string): Promise<string[]> {
-	let entries: fs.Dirent[] | undefined;
+	let entries: Array<fs.Dirent | string> | undefined;
 	try {
-		entries = await fs.promises.readdir(dir, { withFileTypes: true });
+		entries = await fs.promises.readdir(dir, { withFileTypes: true }) as Array<fs.Dirent | string>;
 	} catch {
 		return [];
 	}
@@ -37,6 +37,10 @@ async function listSessionMarkdownFiles(dir: string): Promise<string[]> {
 
 	const files: string[] = [];
 	for (const entry of entries) {
+		if (typeof entry === "string") {
+			if (entry.endsWith(".md")) files.push(path.join(dir, entry));
+			continue;
+		}
 		const fullPath = path.join(dir, entry.name);
 		if (entry.isDirectory?.()) {
 			files.push(...(await listSessionMarkdownFiles(fullPath)));
