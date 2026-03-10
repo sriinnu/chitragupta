@@ -10,9 +10,19 @@
 
 import { createLogger } from "@chitragupta/core";
 import type { MeshActorBehavior, MeshActorContextCompat, MeshEnvelopeCompat } from "./types.js";
-import type { Agent } from "./agent.js";
 
 const log = createLogger("anina:agent-actor-bridge");
+
+/** Minimal handle for an agent in the mesh. Only `id` is required at spawn time. */
+export interface AgentBehaviorHandle {
+  readonly id: string;
+  prompt?(text: string): Promise<{ content: readonly unknown[] }>;
+  steer?(text: string): void;
+  abort?(): void;
+  getStatus?(): string;
+  getMessages?(): readonly unknown[];
+  delegate?(config: Record<string, unknown> & { purpose: string }, text: string): Promise<{ agentId: string; response: { content: readonly unknown[] }; status: string }>;
+}
 
 // ─── Message Protocol ───────────────────────────────────────────────────────
 
@@ -46,7 +56,7 @@ export type AgentMeshReply =
  * @param agent - The Agent instance to wrap.
  * @returns An ActorBehavior suitable for ActorSystem.spawn().
  */
-export function createAgentBehavior(agent: Agent): MeshActorBehavior {
+export function createAgentBehavior(agent: AgentBehaviorHandle): MeshActorBehavior {
   return async (envelope: MeshEnvelopeCompat, ctx: MeshActorContextCompat): Promise<void> => {
     const msg = envelope.payload as AgentMeshMessage;
     if (!msg || typeof msg !== "object" || !("type" in msg)) {
@@ -57,34 +67,37 @@ export function createAgentBehavior(agent: Agent): MeshActorBehavior {
     try {
       switch (msg.type) {
         case "prompt": {
+          if (!agent.prompt) {
+            ctx.reply({ type: "prompt:error", agentId: agent.id, error: "Agent does not support prompt" } satisfies AgentMeshReply);
+            break;
+          }
           log.debug("mesh:prompt received", { agentId: agent.id, from: envelope.from });
           const result = await agent.prompt(msg.text);
           const text = result.content
-            .filter((p): p is { type: "text"; text: string } => p.type === "text")
+            .filter((p): p is { type: "text"; text: string } => typeof p === "object" && p !== null && (p as { type?: string }).type === "text")
             .map((p) => p.text)
             .join("");
           ctx.reply({
             type: "prompt:result",
             agentId: agent.id,
             text,
-            status: agent.getStatus(),
+            status: agent.getStatus?.() ?? "unknown",
           } satisfies AgentMeshReply);
           break;
         }
 
         case "steer": {
-          agent.steer(msg.text);
-          // steer is fire-and-forget, no reply needed for tell
+          agent.steer?.(msg.text);
           if (envelope.type === "ask") {
-            ctx.reply({ type: "status:result", agentId: agent.id, status: agent.getStatus(), messageCount: agent.getMessages().length } satisfies AgentMeshReply);
+            ctx.reply({ type: "status:result", agentId: agent.id, status: agent.getStatus?.() ?? "unknown", messageCount: agent.getMessages?.().length ?? 0 } satisfies AgentMeshReply);
           }
           break;
         }
 
         case "abort": {
-          agent.abort();
+          agent.abort?.();
           if (envelope.type === "ask") {
-            ctx.reply({ type: "status:result", agentId: agent.id, status: "aborted", messageCount: agent.getMessages().length } satisfies AgentMeshReply);
+            ctx.reply({ type: "status:result", agentId: agent.id, status: "aborted", messageCount: agent.getMessages?.().length ?? 0 } satisfies AgentMeshReply);
           }
           break;
         }
@@ -93,17 +106,21 @@ export function createAgentBehavior(agent: Agent): MeshActorBehavior {
           ctx.reply({
             type: "status:result",
             agentId: agent.id,
-            status: agent.getStatus(),
-            messageCount: agent.getMessages().length,
+            status: agent.getStatus?.() ?? "unknown",
+            messageCount: agent.getMessages?.().length ?? 0,
           } satisfies AgentMeshReply);
           break;
         }
 
         case "delegate": {
+          if (!agent.delegate) {
+            ctx.reply({ type: "delegate:error", agentId: agent.id, error: "Agent does not support delegate" } satisfies AgentMeshReply);
+            break;
+          }
           log.debug("mesh:delegate received", { agentId: agent.id, purpose: msg.purpose, from: envelope.from });
           const result = await agent.delegate({ purpose: msg.purpose }, msg.text);
           const text = result.response.content
-            .filter((p): p is { type: "text"; text: string } => p.type === "text")
+            .filter((p): p is { type: "text"; text: string } => typeof p === "object" && p !== null && (p as { type?: string }).type === "text")
             .map((p) => p.text)
             .join("");
           ctx.reply({
@@ -137,7 +154,6 @@ export function createAgentBehavior(agent: Agent): MeshActorBehavior {
       const error = err instanceof Error ? err.message : String(err);
       log.warn("agent-actor-bridge error", { agentId: agent.id, messageType: msg.type, error });
 
-      // Reply with appropriate error type based on the message
       if (msg.type === "prompt") {
         ctx.reply({ type: "prompt:error", agentId: agent.id, error } satisfies AgentMeshReply);
       } else if (msg.type === "delegate") {

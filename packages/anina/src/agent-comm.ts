@@ -92,8 +92,7 @@ export function initializeSubsystems(
 		refs.actorSystem = config.actorSystem;
 		refs.samiti = config.samiti ?? null;
 		try {
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			const behavior = createAgentBehavior({ id: agentId } as any);
+				const behavior = createAgentBehavior({ id: agentId });
 			refs.actorRef = config.actorSystem.spawn(`agent:${agentId}`, {
 				behavior,
 				expertise: [config.profile.id, purpose],
