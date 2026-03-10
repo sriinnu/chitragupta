@@ -1,15 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetLocalRuntimePolicyStatusCacheForTests } from "../src/services-local-runtime.js";
 
-const { loadGlobalSettings } = vi.hoisted(() => ({
+const { loadGlobalSettings, createLogger } = vi.hoisted(() => ({
 	loadGlobalSettings: vi.fn(() => ({
 		llamacppEndpoint: "http://llama.local/v1",
 		ollamaEndpoint: "http://ollama.local",
+	})),
+	createLogger: vi.fn(() => ({
+		debug: vi.fn(),
+		info: vi.fn(),
+		warn: vi.fn(),
+		error: vi.fn(),
 	})),
 }));
 
 vi.mock("@chitragupta/core", () => ({
 	loadGlobalSettings,
+	createLogger,
 }));
 
 describe("services-local-runtime", () => {

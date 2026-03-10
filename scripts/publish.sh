@@ -98,11 +98,12 @@ fi
 
 # ── Version bump ──────────────────────────────────────────────────────
 PUBLISH_JSON="$ROOT/package.publish.json"
+ROOT_PACKAGE_JSON="$ROOT/package.json"
 
 if [[ -n "$BUMP" ]]; then
 	info "Bumping version ($BUMP)..."
 
-	CURRENT=$(node -p "JSON.parse(require('fs').readFileSync('$PUBLISH_JSON','utf8')).version")
+	CURRENT=$(node -p "JSON.parse(require('fs').readFileSync('$ROOT_PACKAGE_JSON','utf8')).version")
 	IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
 	case "$BUMP" in
@@ -124,15 +125,26 @@ if [[ -n "$BUMP" ]]; then
 	# Update root package.json to match
 	node -e "
 		const fs = require('fs');
-		const pkg = JSON.parse(fs.readFileSync('$ROOT/package.json', 'utf8'));
+		const pkg = JSON.parse(fs.readFileSync('$ROOT_PACKAGE_JSON', 'utf8'));
 		pkg.version = '$NEW_VERSION';
-		fs.writeFileSync('$ROOT/package.json', JSON.stringify(pkg, null, '\t') + '\n');
+		fs.writeFileSync('$ROOT_PACKAGE_JSON', JSON.stringify(pkg, null, '\t') + '\n');
 	"
 
 	ok "Version bumped: $CURRENT -> $NEW_VERSION"
 fi
 
-VERSION=$(node -p "JSON.parse(require('fs').readFileSync('$PUBLISH_JSON','utf8')).version")
+ROOT_VERSION=$(node -p "JSON.parse(require('fs').readFileSync('$ROOT_PACKAGE_JSON','utf8')).version")
+PUBLISH_VERSION=$(node -p "JSON.parse(require('fs').readFileSync('$PUBLISH_JSON','utf8')).version")
+if [[ "$ROOT_VERSION" != "$PUBLISH_VERSION" ]]; then
+	warn "package.publish.json version ($PUBLISH_VERSION) did not match package.json ($ROOT_VERSION); syncing publish metadata"
+	node -e "
+		const fs = require('fs');
+		const publish = JSON.parse(fs.readFileSync('$PUBLISH_JSON', 'utf8'));
+		publish.version = '$ROOT_VERSION';
+		fs.writeFileSync('$PUBLISH_JSON', JSON.stringify(publish, null, '\t') + '\n');
+	"
+fi
+VERSION="$ROOT_VERSION"
 info "Publishing version: $VERSION"
 
 # ── Clean ─────────────────────────────────────────────────────────────

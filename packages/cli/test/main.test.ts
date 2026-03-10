@@ -80,6 +80,7 @@ const {
 	MockCommHub,
 	mockMessageBus,
 	MockMessageBus,
+	MockSabhaEngine,
 	MockSutraAgentRegistry,
 	mockSandeshaRouter,
 	MockSandeshaRouter,
@@ -263,6 +264,16 @@ const {
 
 	// ─── SutraAgentRegistry mock ───────────────────────────────────────
 	const MockSutraAgentRegistry = vi.fn(function () { return {}; });
+	const mockSabhaEngine = {
+		ask: vi.fn(),
+		getSabha: vi.fn(),
+		listActiveSabhas: vi.fn().mockReturnValue([]),
+		submitPerspective: vi.fn(),
+		gatherPerspectives: vi.fn().mockReturnValue([]),
+		concludeSabha: vi.fn(),
+		syncSabha: vi.fn(),
+	};
+	const MockSabhaEngine = vi.fn(function () { return mockSabhaEngine; });
 
 	// ─── AutonomousOrchestrator mock ───────────────────────────────────
 	const MockAutonomousOrchestrator = vi.fn(function () { return {}; });
@@ -391,6 +402,7 @@ const {
 		MockCommHub,
 		mockMessageBus,
 		MockMessageBus,
+		MockSabhaEngine,
 		MockSutraAgentRegistry,
 		mockSandeshaRouter,
 		MockSandeshaRouter,
@@ -596,6 +608,7 @@ vi.mock("@chitragupta/sutra", () => ({
 	MessageBus: MockMessageBus,
 	AgentRegistry: MockSutraAgentRegistry,
 	SandeshaRouter: MockSandeshaRouter,
+	SabhaEngine: MockSabhaEngine,
 }));
 
 vi.mock("@chitragupta/niyanta", () => ({

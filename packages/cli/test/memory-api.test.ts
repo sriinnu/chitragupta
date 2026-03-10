@@ -13,6 +13,10 @@ import {
 const mockMemoryStore = new Map<string, string>();
 
 vi.mock("@chitragupta/smriti", () => ({
+	createSession: vi.fn(async () => "session-memory-test"),
+	addTurn: vi.fn(async () => undefined),
+	loadSession: vi.fn(async () => null),
+	saveSession: vi.fn(async () => undefined),
 	getMemory: vi.fn((scope: { type: string; path?: string; agentId?: string }) => {
 		const key = scopeToKey(scope);
 		return mockMemoryStore.get(key) ?? "";
@@ -64,6 +68,7 @@ vi.mock("@chitragupta/smriti", () => ({
 		}
 		return results;
 	}),
+	MemoryBridge: class MockMemoryBridge {},
 }));
 
 // Mock @chitragupta/core — pass through the real module, only override getChitraguptaHome
