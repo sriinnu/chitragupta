@@ -2,7 +2,7 @@
 	"name": "chitragupta-monorepo",
 	"private": true,
 	"type": "module",
-  "version": "0.1.34",
+  "version": "0.1.35",
 	"license": "MIT",
 	"description": "The Autonomous AI Agent Platform — 17-package TypeScript monorepo with zero-LLM cognitive layer, GraphRAG memory, bi-temporal knowledge graph, centralized daemon, and self-evolving skills",
 	"keywords": [
