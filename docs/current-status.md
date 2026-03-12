@@ -95,10 +95,24 @@ It states what is live, what is partial, and what is still open.
   - raw sessions remain canonical
   - embeddings stay on the original curated summary text
   - packed summaries are additive derived payloads, not semantic truth
+- Curated semantic artifacts now also carry:
+  - versioned embedding epoch metadata
+  - MDL-style compaction metrics
+  so local and remote semantic mirrors can detect stale embedding generations separately from plain content drift.
+- The engine now exposes selective re-embedding planning and repair for curated semantic artifacts.
+  - epoch drift is treated separately from plain content-hash drift
+  - high-value curated artifacts can be re-embedded selectively instead of forcing a blanket semantic refresh
+  - repair can now be constrained by explicit stale reasons and can resync only the affected remote subset instead of forcing a broad mirror pass
+- The daemon now self-heals curated semantic drift when the active embedding epoch changes.
+  - a startup refresh compares the current embedding epoch against the last curated semantic epoch
+  - a periodic semantic epoch refresh pass reruns curated re-embedding repair when the epoch changes
+  - the curated semantic layer now resolves one canonical engine embedding lane and can honor `CHITRAGUPTA_EMBEDDING_PROVIDER` when operators need to pin the semantic backend explicitly
+  - this repairs the curated semantic mirror automatically without rewriting canonical raw session markdown
 - Swapna/Nidra compaction can now also emit a derived packed compaction summary when compression is available.
 - The engine now exposes Prana-native daemon-first research workflows instead of treating bounded experiment loops as an external pattern only:
   - `autoresearch`
   - `acp-research-swarm`
+  - `autoresearch-overnight`
   - Prana research councils now bind to canonical daemon sessions, preserve optional parent-session and lineage metadata, and use the `research.bounded` lane, which resolves to the engine-owned `engine.research.autoresearch` capability under approval-gated policy
 - bounded research now resolves both the workflow lane and the execution lane through one daemon `route.resolveBatch` call, then fails closed if the daemon does not return an executable engine-selected capability for the run
 - bounded research now also fails closed when `session.open` does not return a canonical engine session id, instead of continuing with advisory-only route metadata
@@ -111,6 +125,33 @@ It states what is live, what is partial, and what is still open.
 - bounded research records now include the packed context payload itself when PAKT packing succeeds, so later recall can inspect the derived compacted context directly without losing provenance to the run/session metadata
 - research records now keep execution-binding provenance, including preferred discovered providers/models when a discovery-backed execution lane was selected
 - bounded research execution now also receives the engine-selected lane directly through its process environment, including selected provider/model ids and preferred discovered candidates, so the runtime behavior matches the recorded route provenance instead of treating it as metadata only
+- the overnight loop now tracks:
+  - `totalBudgetMs`
+  - `totalDurationMs`
+  - `keptRounds`
+  - `revertedRounds`
+  - attempt-safe round records through:
+    - `experimentKey`
+    - `attemptKey`
+    - `attemptNumber`
+    - `status`
+    - `errorMessage`
+  and fails closed on:
+  - `budget-exhausted`
+  - `cancelled`
+  - `unsafe-discard`
+  - `round-failed`
+- overnight loop interrupts are now daemon-owned and test-covered:
+  - `research.loops.start`
+  - `research.loops.heartbeat`
+  - `research.loops.cancel`
+  - `research.loops.complete`
+  - `loopKey` is an immutable run id once terminal
+  - daemon registration is fail-closed; local-only loop control is not accepted as a substitute
+  - terminal loop state cannot be revived by late heartbeats
+  - local loop state is only cleared after daemon completion succeeds
+  - cancellation is checked both during run execution and during closure packing/recording/reuse steps
+  - best-metric progress advances only after the round is durably recorded
 - ACP-style subagents now map to engine-owned Sutra/Sabha council roles rather than a second runtime:
   - `planner`
   - `executor`
@@ -118,6 +159,10 @@ It states what is live, what is partial, and what is still open.
   - `skeptic`
   - `recorder`
 - Research workflow outcomes can now be persisted into project memory and Akasha through the daemon-backed workflow path instead of requiring an external flat experiment ledger.
+- Daily Nidra postprocess now also derives one compact per-project research refinement digest from overnight loop summaries and experiment outcomes, so project memory keeps:
+  - what improved
+  - what regressed
+  - what the next bounded run should try
 - The daemon now exposes live Sabha contract methods:
   - `sabha.ask`
   - `sabha.get`
@@ -184,6 +229,7 @@ It states what is live, what is partial, and what is still open.
   - local fallback is an operator override, not the normal path
   - compression and compaction policy stays inside the engine instead of moving into Vaayu or Takumi
   - bounded research loops and ACP-style council planning now stay inside the engine contract through a daemon-first path instead of moving into Takumi or Vaayu
+  - Prana now also exposes a first daemon-first overnight research loop with a two-agent planner/executor council, round-by-round ledger persistence, packed carry-context reuse, and early stop when improvement stalls
 
 - Nervous-system substrate
   - Scarlett emits anomaly and heal signals

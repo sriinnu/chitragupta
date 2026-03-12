@@ -26,6 +26,9 @@ describe("research experiment ledger", () => {
 		const first = upsertResearchExperiment({
 			projectPath: "/repo/project",
 			experimentKey: "exp-key-top",
+			loopKey: "loop-a",
+			roundNumber: 1,
+			totalRounds: 3,
 			topic: "optimizer sweep",
 			metricName: "val_bpb",
 			objective: "minimize",
@@ -35,10 +38,17 @@ describe("research experiment ledger", () => {
 		const second = upsertResearchExperiment({
 			projectPath: "/repo/project",
 			experimentKey: "exp-key-top",
+			loopKey: "loop-a",
+			roundNumber: 2,
+			totalRounds: 3,
 			topic: "optimizer sweep",
 			metricName: "val_bpb",
 			objective: "minimize",
 			decision: "discard",
+			plannerRouteClass: "coding.deep-reasoning",
+			plannerSelectedCapabilityId: "engine.planner",
+			plannerSelectedModelId: "planner-model",
+			plannerSelectedProviderId: "planner-provider",
 			gitBranch: "main",
 			gitHeadCommit: "0123456789abcdef0123456789abcdef01234567",
 			gitDirtyBefore: false,
@@ -48,11 +58,23 @@ describe("research experiment ledger", () => {
 
 		expect(second.id).toBe(first.id);
 		expect(second.experimentKey).toBe("exp-key-top");
+		expect(second.loopKey).toBe("loop-a");
+		expect(second.roundNumber).toBe(2);
+		expect(second.totalRounds).toBe(3);
+		expect(second.plannerRouteClass).toBe("coding.deep-reasoning");
+		expect(second.plannerSelectedCapabilityId).toBe("engine.planner");
+		expect(second.plannerSelectedModelId).toBe("planner-model");
+		expect(second.plannerSelectedProviderId).toBe("planner-provider");
 
 		const experiments = listResearchExperiments({ projectPath: "/repo/project", limit: 10 });
 		expect(experiments).toHaveLength(1);
 		expect(experiments[0]?.decision).toBe("discard");
 		expect(experiments[0]?.experimentKey).toBe("exp-key-top");
+		expect(experiments[0]?.loopKey).toBe("loop-a");
+		expect(experiments[0]?.roundNumber).toBe(2);
+		expect(experiments[0]?.totalRounds).toBe(3);
+		expect(experiments[0]?.plannerRouteClass).toBe("coding.deep-reasoning");
+		expect(experiments[0]?.plannerSelectedCapabilityId).toBe("engine.planner");
 		expect(experiments[0]?.gitBranch).toBe("main");
 		expect(experiments[0]?.gitHeadCommit).toBe("0123456789abcdef0123456789abcdef01234567");
 		expect(experiments[0]?.gitDirtyBefore).toBe(false);
@@ -78,6 +100,42 @@ describe("research experiment ledger", () => {
 		const experiments = listResearchExperiments({ projectPath: "/repo/project", limit: 10 });
 		expect(experiments[0]?.gitBranch).toBe("main");
 		expect(experiments[0]?.gitHeadCommit).toBeNull();
+	});
+
+	it("stores distinct attempts under the same experiment key", () => {
+		const first = upsertResearchExperiment({
+			projectPath: "/repo/project",
+			experimentKey: "exp-key-attempts",
+			attemptKey: "exp-key-attempts#attempt:1",
+			attemptNumber: 1,
+			topic: "attempt-safe ledger",
+			metricName: "val_bpb",
+			objective: "minimize",
+			decision: "record",
+			status: "failed",
+			errorMessage: "first failure",
+			record: { experimentKey: "nested-a", attemptNumber: 1, status: "failed" },
+		});
+		const second = upsertResearchExperiment({
+			projectPath: "/repo/project",
+			experimentKey: "exp-key-attempts",
+			attemptKey: "exp-key-attempts#attempt:2",
+			attemptNumber: 2,
+			topic: "attempt-safe ledger",
+			metricName: "val_bpb",
+			objective: "minimize",
+			decision: "keep",
+			status: "completed",
+			record: { experimentKey: "nested-b", attemptNumber: 2, status: "completed" },
+		});
+
+		expect(second.id).not.toBe(first.id);
+		const experiments = listResearchExperiments({ projectPath: "/repo/project", limit: 10 });
+		expect(experiments).toHaveLength(2);
+		expect(experiments.map((entry) => entry.attemptKey).sort()).toEqual([
+			"exp-key-attempts#attempt:2",
+			"exp-key-attempts#attempt:1",
+		].sort());
 	});
 
 	it("preserves existing git provenance when a later upsert omits it", () => {

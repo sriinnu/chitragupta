@@ -1,7 +1,7 @@
 {
 	"name": "@chitragupta/anina",
 	"private": true,
-  "version": "0.1.1",
+	"version": "0.1.2",
 	"description": "Autonomous agent framework with self-healing, learning loops, and agent tree lifecycle",
 	"type": "module",
 	"license": "MIT",

@@ -29,19 +29,16 @@ import {
 	type ConsolidationEvent,
 	type DaemonState,
 } from "./chitragupta-daemon-support.js";
+import { runDailyDaemonPostprocess } from "./chitragupta-daemon-postprocess.js";
+import {
+	resolveSessionProjects,
+	runSwapnaForProjects,
+	type SwapnaProjectScope,
+} from "./chitragupta-daemon-swapna.js";
+import { refreshGlobalSemanticEpochDrift } from "./chitragupta-daemon-semantic.js";
 
-// Re-export helpers for backward compatibility
 export { formatDate } from "./daemon-periodic.js";
-export type {
-	ChitraguptaDaemonConfig,
-	ConsolidationEvent,
-	DaemonState,
-} from "./chitragupta-daemon-support.js";
-
-interface SwapnaProjectScope {
-	project: string;
-	sessionIds?: string[];
-}
+export type { ChitraguptaDaemonConfig, ConsolidationEvent, DaemonState } from "./chitragupta-daemon-support.js";
 
 // ─── Daemon ─────────────────────────────────────────────────────────────────
 
@@ -61,9 +58,12 @@ export class ChitraguptaDaemon extends EventEmitter {
 	private cronTimer: ReturnType<typeof setTimeout> | null = null;
 	private monthlyTimer: ReturnType<typeof setTimeout> | null = null;
 	private yearlyTimer: ReturnType<typeof setTimeout> | null = null;
+	private semanticEpochTimer: ReturnType<typeof setInterval> | null = null;
+	private semanticRefreshPromise: Promise<void> | null = null;
 	private running = false;
 	private startTime = 0;
 	private consolidating = false;
+	private semanticRefreshing = false;
 	private lastConsolidationDate: string | null = null;
 	private lastBackfillDate: string | null = null;
 	private consolidatedDates: Set<string> = new Set();
@@ -93,12 +93,14 @@ export class ChitraguptaDaemon extends EventEmitter {
 		this.scheduleDailyCron();
 		this.scheduleMonthlyConsolidation();
 		this.scheduleYearlyConsolidation();
+		this.scheduleSemanticEpochRefresh();
 
 		if (this.config.backfillOnStartup) {
 			this.backfillMissedDays()
 				.then(() => this.backfillPeriodicReports())
 				.catch((err) => { this.emit("error", err); });
 		}
+		void this.runSemanticEpochRefresh();
 		this.emit("started");
 	}
 
@@ -110,6 +112,7 @@ export class ChitraguptaDaemon extends EventEmitter {
 		if (this.cronTimer) { clearTimeout(this.cronTimer); this.cronTimer = null; }
 		if (this.monthlyTimer) { clearTimeout(this.monthlyTimer); this.monthlyTimer = null; }
 		if (this.yearlyTimer) { clearTimeout(this.yearlyTimer); this.yearlyTimer = null; }
+		if (this.semanticEpochTimer) { clearInterval(this.semanticEpochTimer); this.semanticEpochTimer = null; }
 
 		try { await this.consolidateToday(); } catch { /* best-effort */ }
 		if (this.nidra) { await this.nidra.stop(); this.nidra = null; }
@@ -151,6 +154,9 @@ export class ChitraguptaDaemon extends EventEmitter {
 
 	/** Consolidate sessions for a specific date. */
 	async consolidateDate(date: string): Promise<void> {
+		if (this.semanticRefreshPromise) {
+			await this.semanticRefreshPromise;
+		}
 		if (this.consolidating) return;
 		const releaseDateLock = acquireDateLock(date);
 		if (!releaseDateLock) {
@@ -179,45 +185,62 @@ export class ChitraguptaDaemon extends EventEmitter {
 				return;
 			}
 
-				// Run Swapna consolidation per project
-				const { listSessionsByDate } = await import("@chitragupta/smriti/session-store");
-				const sessions = listSessionsByDate(date);
-					await this.runSwapnaForProjects(
-						[...new Set(sessions.map((s: { project: string }) => s.project))].map((project) => ({ project })),
-						date,
-					);
+			// Run Swapna consolidation per project.
+			const { listSessionsByDate } = await import("@chitragupta/smriti/session-store");
+			const sessions = listSessionsByDate(date);
+			await runSwapnaForProjects(
+				[...new Set(sessions.map((s: { project: string }) => s.project))].map((project) => ({ project })),
+				date,
+				"swapna",
+				this.emit.bind(this),
+			);
 
 			// Persist extracted facts to global memory
-				if (result.extractedFacts.length > 0) {
-				try {
-						const { appendMemory } = await import("@chitragupta/smriti/memory-store");
-					for (const fact of result.extractedFacts) {
-						await appendMemory({ type: "global" }, `[${date}] ${fact}`);
-					}
+					if (result.extractedFacts.length > 0) {
+					try {
+							const { appendMemory } = await import("@chitragupta/smriti/memory-store");
+						for (const fact of result.extractedFacts) {
+							await appendMemory({ type: "global" }, `[${date}] ${fact}`);
+						}
 					this.emit("consolidation", {
 						type: "progress", date, phase: "facts",
 						detail: `${result.extractedFacts.length} facts persisted`,
 					});
-					} catch { /* best-effort */ }
-				}
-
-				try {
-					const { syncRemoteSemanticMirror } = await import("@chitragupta/smriti");
-					const remote = await syncRemoteSemanticMirror({
-						levels: ["daily"],
-						dates: [date],
-					});
-					if (remote.status.enabled) {
-						this.emit("consolidation", {
-							type: "progress",
-							date,
-							phase: "remote-sync",
-							detail: `remote semantic mirror synced ${remote.synced} daily artifacts`,
-						});
+						} catch { /* best-effort */ }
 					}
-				} catch {
-					/* best-effort */
+
+			try {
+				const postprocess = await runDailyDaemonPostprocess(date);
+				if (postprocess.research.processed > 0) {
+					this.emit("consolidation", { type: "progress", date, phase: "research-loops", detail: `${postprocess.research.processed} overnight loop summaries across ${postprocess.research.projects} projects` });
 				}
+				if (postprocess.research.refinements.processed > 0) {
+					this.emit("consolidation", {
+						type: "progress",
+						date,
+						phase: "research-refinement",
+						detail: `${postprocess.research.refinements.processed} research refinement digests across ${postprocess.research.refinements.projects} projects`,
+					});
+				}
+				if (postprocess.semantic.reembedded > 0) {
+					this.emit("consolidation", {
+						type: "progress",
+						date,
+						phase: "semantic-reembed",
+						detail: `re-embedded ${postprocess.semantic.reembedded} of ${postprocess.semantic.candidates} stale daily artifacts`,
+					});
+				}
+				if (postprocess.remote.enabled) {
+					this.emit("consolidation", {
+						type: "progress",
+						date,
+						phase: "remote-sync",
+						detail: `remote semantic mirror synced ${postprocess.remote.synced} daily artifacts`,
+					});
+				}
+			} catch {
+				/* best-effort */
+			}
 
 				this.consolidatedDates.add(date);
 			this.lastConsolidationDate = date;
@@ -247,7 +270,7 @@ export class ChitraguptaDaemon extends EventEmitter {
 			detail: `${sessionIds.length} pending sessions`,
 		});
 
-		const sessions = await this.resolveSessionProjects(sessionIds);
+		const sessions = await resolveSessionProjects(sessionIds);
 		const resolvedIds = new Set(sessions.map((session) => session.id));
 		const missingCount = sessionIds.reduce(
 			(count, id) => count + (resolvedIds.has(id) ? 0 : 1),
@@ -280,13 +303,14 @@ export class ChitraguptaDaemon extends EventEmitter {
 			return [];
 		}
 
-		const processedSessionIds = await this.runSwapnaForProjects(
+		const processedSessionIds = await runSwapnaForProjects(
 			[...projects.entries()].map(([project, scopedSessionIds]) => ({
 				project,
 				sessionIds: scopedSessionIds,
 			})),
 			label,
 			"deep-sleep:swapna",
+			this.emit.bind(this),
 		);
 
 		if (processedSessionIds.length !== sessionIds.length) {
@@ -303,67 +327,6 @@ export class ChitraguptaDaemon extends EventEmitter {
 		}
 
 		return processedSessionIds;
-	}
-
-	private async resolveSessionProjects(sessionIds: readonly string[]): Promise<Array<{ id: string; project: string }>> {
-		try {
-			const { DatabaseManager } = await import("@chitragupta/smriti");
-			const db = DatabaseManager.instance().get("agent");
-			const placeholders = sessionIds.map(() => "?").join(",");
-			if (!placeholders) return [];
-			return db.prepare(
-				`SELECT id, project FROM sessions WHERE id IN (${placeholders}) ORDER BY updated_at DESC`,
-			).all(...sessionIds) as Array<{ id: string; project: string }>;
-		} catch {
-			const { listSessions } = await import("@chitragupta/smriti/session-store");
-			const wanted = new Set(sessionIds);
-			return listSessions()
-				.filter((session) => wanted.has(session.id))
-				.map((session) => ({ id: session.id, project: session.project }));
-		}
-	}
-
-	private async runSwapnaForProjects(
-		projects: Iterable<SwapnaProjectScope>,
-		date: string,
-		phasePrefix = "swapna",
-	): Promise<string[]> {
-		const { SwapnaConsolidation } = await import("@chitragupta/smriti");
-		const processedSessionIds: string[] = [];
-
-		for (const scope of projects) {
-			const { project, sessionIds } = scope;
-			try {
-				const swapnaConfig = {
-					project,
-					sessionIds,
-					maxSessionsPerCycle: 50,
-					surpriseThreshold: 0.7,
-					minPatternFrequency: 3,
-					minSequenceLength: 2,
-					minSuccessRate: 0.8,
-				} as ConstructorParameters<typeof SwapnaConsolidation>[0] & { sessionIds?: string[] };
-				const swapna = new SwapnaConsolidation(swapnaConfig);
-				await swapna.run((phase: string, progress: number) => {
-					this.emit("consolidation", {
-						type: "progress",
-						date,
-						phase: `${phasePrefix}:${phase}`,
-						detail: `${project} (${(progress * 100).toFixed(0)}%)`,
-					});
-				});
-				if (sessionIds?.length) processedSessionIds.push(...sessionIds);
-			} catch (err) {
-				this.emit("consolidation", {
-					type: "error",
-					date,
-					phase: phasePrefix,
-					detail: `${project}: ${err instanceof Error ? err.message : String(err)}`,
-				});
-			}
-		}
-
-		return [...new Set(processedSessionIds)];
 	}
 
 	/** Backfill any days that have sessions but no day file. */
@@ -406,6 +369,47 @@ export class ChitraguptaDaemon extends EventEmitter {
 	}
 
 	// ─── Scheduling ──────────────────────────────────────────────────
+
+	private scheduleSemanticEpochRefresh(): void {
+		if (!this.running || this.config.semanticEpochRefreshMinutes <= 0) return;
+		const intervalMs = this.config.semanticEpochRefreshMinutes * 60 * 1000;
+		this.semanticEpochTimer = setInterval(() => {
+			if (!this.running) return;
+			void this.runSemanticEpochRefresh();
+		}, intervalMs);
+		if (this.semanticEpochTimer.unref) this.semanticEpochTimer.unref();
+	}
+
+	private async runSemanticEpochRefresh(): Promise<void> {
+		if (this.semanticRefreshing || this.consolidating) return;
+		this.semanticRefreshing = true;
+		const label = formatDate(new Date());
+		const refreshPromise = (async () => {
+			try {
+				const refreshed = await refreshGlobalSemanticEpochDrift(false);
+				if (refreshed.refreshed || refreshed.repair.reembedded > 0 || refreshed.repair.remoteSynced > 0) {
+					this.emit("consolidation", {
+						type: "progress",
+						date: label,
+						phase: "semantic-epoch-refresh",
+						detail: `${refreshed.reason}: reembedded ${refreshed.repair.reembedded}, remote ${refreshed.repair.remoteSynced}${refreshed.completed ? "" : " (partial)"}`,
+					});
+				}
+			} catch (err) {
+				this.emit("consolidation", {
+					type: "error",
+					date: label,
+					phase: "semantic-epoch-refresh",
+					detail: err instanceof Error ? err.message : String(err),
+				});
+			} finally {
+				this.semanticRefreshing = false;
+				this.semanticRefreshPromise = null;
+			}
+		})();
+		this.semanticRefreshPromise = refreshPromise;
+		await refreshPromise;
+	}
 
 	private scheduleMonthlyConsolidation(): void {
 		if (!this.running) return;

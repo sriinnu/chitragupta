@@ -24,8 +24,8 @@ import { swapnaReplay, swapnaRecombine, parseToolCalls, resolveSwapnaSessionIds 
 import { swapnaCrystallize } from "./swapna-rules.js";
 import { swapnaProceduralize } from "./swapna-vidhi.js";
 import { swapnaExtractSamskaras } from "./swapna-samskara.js";
-import { packCuratedSummaryText } from "./pakt-compression.js";
 import { DEFAULT_CONFIG, PRAMANA_PRESERVATION } from "./swapna-types.js";
+import { prepareSwapnaCompressionDecision } from "./swapna-compression-policy.js";
 import type {
 	SwapnaConfig,
 	ScoredTurn,
@@ -237,16 +237,21 @@ export class SwapnaConsolidation {
 		// Build Pramana-weighted affinity matrix and compress
 		const { compressedTotal, compactionSummaryText } = this.applyCompression(chunks, eligibleTurns, totalOriginalTokens);
 		const compressionRatio = totalOriginalTokens > 0 ? compressedTotal / totalOriginalTokens : 1.0;
-		const compression = compactionSummaryText
-			? await packCuratedSummaryText(compactionSummaryText)
+		const compressionDecision = compactionSummaryText
+			? await prepareSwapnaCompressionDecision(
+				eligibleTurns.map((turn) => turn.content).join("\n\n"),
+				compactionSummaryText,
+			)
 			: null;
 		return {
 			tokensCompressed: totalOriginalTokens,
 			compressionRatio,
 			durationMs: performance.now() - start,
 			summaryText: compactionSummaryText || undefined,
-			packedSummaryText: compression?.packedText,
-			compression: compression ?? undefined,
+			packedSummaryText: compressionDecision?.packedSummaryText,
+			compression: compressionDecision?.compression,
+			mdlMetrics: compressionDecision?.mdlMetrics,
+			packedDecision: compressionDecision?.packedDecision,
 		};
 	}
 

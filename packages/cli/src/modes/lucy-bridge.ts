@@ -28,6 +28,12 @@ import {
 	normalizeContextForReuse,
 	packContextWithFallback,
 } from "../context-packing.js";
+import {
+	buildFixTask,
+	extractFailureHint,
+	hasTestFailures,
+	shouldAutoFix,
+} from "./lucy-bridge-fix.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -145,18 +151,6 @@ const DEFAULT_MAX_AUTOFIX = 2;
 
 /** Default confidence threshold for auto-fix. */
 const DEFAULT_AUTOFIX_THRESHOLD = 0.7;
-
-/** Patterns that indicate test failures in CLI output. */
-const TEST_FAILURE_PATTERNS: readonly RegExp[] = [
-	/FAIL\s+\d+\s+test/i,
-	/(\d+)\s+failed/i,
-	/Tests?:\s+\d+\s+failed/i,
-	/ERROR\s+in\s+test/i,
-	/AssertionError/i,
-	/expect\(.*\)\.to/i,
-	/vitest.*FAIL/i,
-	/jest.*FAIL/i,
-];
 
 // ─── Lucy Bridge ────────────────────────────────────────────────────────────
 
@@ -315,88 +309,6 @@ async function executeWithContext(
 			});
 		},
 	});
-}
-
-// ─── Failure Detection ──────────────────────────────────────────────────────
-
-/** Check if CLI output contains test failure indicators. */
-function hasTestFailures(output: string): boolean {
-	return TEST_FAILURE_PATTERNS.some((p) => p.test(output));
-}
-
-/** Extract a concise failure hint from output for the fix task. */
-function extractFailureHint(output: string): string {
-	const lines = output.split("\n");
-	const failLines = lines.filter((l) =>
-		TEST_FAILURE_PATTERNS.some((p) => p.test(l)),
-	);
-	return failLines.slice(0, 5).join("\n") || "Unknown test failure";
-}
-
-/**
- * Determine if auto-fix should be attempted based on the failure pattern.
- * Returns true if the failure looks like a fixable test regression.
- */
-function shouldAutoFix(
-	result: ReturnType<typeof routeViaBridge> extends Promise<infer T> ? T : never,
-	threshold: number,
-): boolean {
-	// Don't auto-fix if the process crashed (signal kill, timeout)
-	if (result.exitCode > 128) return false;
-
-	// Don't auto-fix if no output (nothing to diagnose)
-	if (result.output.length < 10) return false;
-
-	const output = result.output.toLowerCase();
-	if (
-		output.includes("segmentation fault")
-		|| output.includes("permission denied")
-		|| output.includes("command not found")
-		|| output.includes("timed out")
-		|| output.includes("timeout")
-	) {
-		return false;
-	}
-
-	let confidence = 0;
-	if (hasTestFailures(result.output)) confidence += 0.45;
-	if (/assertionerror|expect\(|vitest|jest|failing test|tests?:\s+\d+\s+failed|\b\d+\s+failed\b/i.test(result.output)) confidence += 0.25;
-	if (result.bridgeResult?.testsRun && result.bridgeResult.testsRun.failed > 0) confidence += 0.2;
-	if (result.bridgeResult?.filesModified?.length) confidence += 0.1;
-
-	return confidence >= threshold;
-}
-
-// ─── Fix Task Builder ───────────────────────────────────────────────────────
-
-/** Build a fix task from the original task and failure output. */
-async function buildFixTask(originalTask: string, failureOutput: string): Promise<string> {
-	const hint = extractFailureHint(failureOutput);
-	const recentOutputSection = await buildFixOutputSection(failureOutput);
-
-	return (
-		`Fix the test failures from the previous task.\n\n` +
-		`Original task: ${originalTask}\n\n` +
-		`Failure summary:\n${hint}\n\n` +
-		recentOutputSection
-	);
-}
-
-async function buildFixOutputSection(failureOutput: string): Promise<string> {
-	const normalized = await normalizeContextForReuse(failureOutput);
-	const sourceText = typeof normalized === "string" && normalized.trim() ? normalized : failureOutput;
-	const shouldPack = sourceText.length >= 420;
-	if (!shouldPack) {
-		return `Recent output (last 2000 chars):\n${sourceText.slice(-2000)}`;
-	}
-	const packed = await packContextWithFallback(sourceText);
-	if (!packed) {
-		return `Recent output (last 2000 chars):\n${sourceText.slice(-2000)}`;
-	}
-	return (
-		`Recent output (packed via ${packed.runtime}, saved ${Math.max(0, Math.round(packed.savings * 100))}%):\n` +
-		packed.packedText
-	);
 }
 
 // ─── Result Recording ───────────────────────────────────────────────────────

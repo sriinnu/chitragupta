@@ -8,6 +8,8 @@ import type { NodeContext } from "../src/chitragupta-nodes.js";
 const {
 	appendMemory,
 	packLiveContextText,
+	normalizePackedContextText,
+	unpackPackedContextText,
 	upsertResearchExperiment,
 	databaseGet,
 	createClient,
@@ -21,6 +23,8 @@ const {
 			savings: 42,
 			packedText: `packed:${text.slice(0, 24)}`,
 		}));
+		const unpackPackedContextText = vi.fn((text: string) => text.replace(/^packed:/, "unpacked:"));
+		const normalizePackedContextText = vi.fn((text: string) => text.replace(/\s+/g, " ").trim());
 		const upsertResearchExperiment = vi.fn(() => ({ id: "exp-fallback-1" }));
 		const databaseGet = vi.fn(() => ({}));
 	const defaultDaemonCallImplementation = async (method: string, params?: Record<string, unknown>) => {
@@ -42,6 +46,26 @@ const {
 									degraded: false,
 									reason: "Selected engine.research.autoresearch for research.autoresearch",
 									policyTrace: ["consumer:prana:autoresearch", "route-class:research.bounded", "selected:engine.research.autoresearch"],
+								},
+								{
+									key: "planner",
+									request: { capability: "coding.review" },
+									routeClass: { id: "coding.deep-reasoning", capability: "coding.review" },
+									selected: { id: "adapter.takumi.executor" },
+									executionBinding: {
+										source: "kosha-discovery",
+										kind: "planner",
+										query: { capability: "chat", mode: "chat", role: "planner" },
+										selectedModelId: "qwen-coder",
+										selectedProviderId: "ollama",
+										preferredModelIds: ["qwen-coder"],
+										preferredProviderIds: ["ollama"],
+										allowCrossProvider: true,
+									},
+									discoverableOnly: false,
+									degraded: false,
+									reason: "Selected adapter.takumi.executor for coding.review",
+									policyTrace: ["consumer:prana:autoresearch:planner", "route-class:coding.deep-reasoning", "selected:adapter.takumi.executor"],
 								},
 								{
 									key: "execution",
@@ -91,16 +115,52 @@ const {
 					savings: 42,
 					packedText: "packed:daemon",
 				};
-			case "research.outcome.record":
+			case "compression.unpack_context":
 				return {
-					recorded: true,
-					memoryScope: "project",
-					traceId: "trace-1",
-					experimentId: "exp-daemon-1",
+					result: String(params?.text ?? "").replace(/^packed:/, "unpacked:"),
 				};
-				default:
-					throw new Error(`Unexpected daemon method: ${method}`);
-			}
+			case "compression.normalize_context":
+				return {
+					result: String(params?.text ?? "").replace(/\s+/g, " ").trim(),
+				};
+				case "research.outcome.record":
+					return {
+						recorded: true,
+						memoryScope: "project",
+						traceId: "trace-1",
+						experimentId: "exp-daemon-1",
+					};
+				case "research.loops.record":
+					return {
+						summary: { id: "loop-summary-daemon-1" },
+					};
+				case "research.loops.start":
+					return {
+						state: {
+							loopKey: params?.loopKey,
+							status: "running",
+							cancelRequestedAt: null,
+						},
+					};
+				case "research.loops.heartbeat":
+					return {
+						state: {
+							loopKey: params?.loopKey,
+							status: "running",
+							cancelRequestedAt: null,
+						},
+					};
+				case "research.loops.complete":
+					return {
+						state: {
+							loopKey: params?.loopKey,
+							status: params?.stopReason === "cancelled" ? "cancelled" : "completed",
+							stopReason: params?.stopReason,
+						},
+					};
+					default:
+						throw new Error(`Unexpected daemon method: ${method}`);
+				}
 	};
 	const daemonCall = vi.fn(defaultDaemonCallImplementation);
 	const disconnect = vi.fn();
@@ -111,6 +171,8 @@ const {
 		return {
 			appendMemory,
 			packLiveContextText,
+			normalizePackedContextText,
+			unpackPackedContextText,
 			upsertResearchExperiment,
 			databaseGet,
 			createClient,
@@ -201,6 +263,8 @@ let researchDir = "";
 vi.mock("@chitragupta/smriti", () => ({
 	appendMemory,
 	packLiveContextText,
+	normalizePackedContextText,
+	unpackPackedContextText,
 	upsertResearchExperiment,
 	AkashaField: MockAkashaField,
 	DatabaseManager: {
@@ -237,6 +301,8 @@ describe("chitragupta research nodes", () => {
 		execFileSync("git", ["commit", "-m", "init"], { cwd: researchDir, stdio: "ignore" });
 		appendMemory.mockClear();
 		packLiveContextText.mockClear();
+		normalizePackedContextText.mockClear();
+		unpackPackedContextText.mockClear();
 		upsertResearchExperiment.mockClear();
 		databaseGet.mockClear();
 		createClient.mockClear();
@@ -311,6 +377,16 @@ describe("chitragupta research nodes", () => {
 							}),
 							discoverableOnly: false,
 						}),
+						plannerRoute: expect.objectContaining({
+							routeClass: "coding.deep-reasoning",
+							capability: "coding.review",
+							selectedCapabilityId: "adapter.takumi.executor",
+							executionBinding: expect.objectContaining({
+								selectedModelId: "qwen-coder",
+								selectedProviderId: "ollama",
+							}),
+							discoverableOnly: false,
+						}),
 					}),
 				);
 		expect(daemonCall).toHaveBeenCalledWith("lucy.live_context", expect.objectContaining({
@@ -333,7 +409,66 @@ describe("chitragupta research nodes", () => {
 					key: "execution",
 					routeClass: "tool.use.flex",
 				}),
+				expect.objectContaining({
+					key: "planner",
+					routeClass: "coding.deep-reasoning",
+				}),
 			]),
+		}));
+	});
+
+	it("supports a two-agent planner/executor council when requested", async () => {
+		const { acpResearchCouncil } = await import("../src/chitragupta-nodes-research.js");
+		const result = await acpResearchCouncil(makeContext({
+			extra: {
+				researchTopic: "Two-agent overnight council",
+				researchAgentCount: 2,
+			},
+		}));
+
+		expect(result.ok).toBe(true);
+		expect(result.data).toEqual(expect.objectContaining({
+			participantCount: 2,
+			participants: [
+				expect.objectContaining({ id: "planner", role: "planner" }),
+				expect.objectContaining({ id: "executor", role: "executor" }),
+			],
+		}));
+	});
+
+	it("uses the executor as the daemon challenge participant when a two-agent council has live warnings", async () => {
+		const defaultImplementation = daemonCall.getMockImplementation();
+		daemonCall.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			if (method === "lucy.live_context") {
+				return {
+					hit: {
+						entity: "sqlite",
+						content: "WAL checkpoint stalled",
+						source: "daemon",
+					},
+					predictions: [],
+					liveSignals: [{ description: "semantic lag" }],
+				};
+			}
+			return defaultImplementation
+				? defaultImplementation(method, params)
+				: undefined;
+		});
+		const { acpResearchCouncil } = await import("../src/chitragupta-nodes-research.js");
+		const result = await acpResearchCouncil(makeContext({
+			extra: {
+				researchTopic: "Two-agent warning council",
+				researchAgentCount: 2,
+			},
+		}));
+
+		expect(result.ok).toBe(true);
+		expect(daemonCall).toHaveBeenCalledWith("sabha.deliberate", expect.objectContaining({
+			challenges: [
+				expect.objectContaining({
+					challengerId: "executor",
+				}),
+			],
 		}));
 	});
 
@@ -382,10 +517,10 @@ describe("chitragupta research nodes", () => {
 		expect(result.summary).toContain("canonical project path");
 	});
 
-		it("runs a bounded experiment only after council approval and extracts the metric", async () => {
-			const { autoresearchRun } = await import("../src/chitragupta-nodes-research.js");
-			const result = await autoresearchRun(makeContext({
-				stepOutputs: {
+	it("runs a bounded experiment only after council approval and extracts the metric", async () => {
+		const { autoresearchRun } = await import("../src/chitragupta-nodes-research.js");
+		const result = await autoresearchRun(makeContext({
+			stepOutputs: {
 					"acp-research-council": { data: { finalVerdict: "accepted" } },
 			},
 			extra: {
@@ -407,7 +542,47 @@ describe("chitragupta research nodes", () => {
 					gitDirtyAfter: false,
 				}),
 			);
-		});
+	});
+
+	it("refuses overnight-style research execution on a dirty workspace by default", async () => {
+		await fs.writeFile(path.join(researchDir, "train.py"), "print('dirty')\n", "utf8");
+		const { autoresearchRun } = await import("../src/chitragupta-nodes-research.js");
+		const result = await autoresearchRun(makeContext({
+			stepOutputs: {
+				"acp-research-council": { data: { finalVerdict: "accepted" } },
+			},
+			extra: {
+				researchCommand: process.execPath,
+				researchArgs: ["-e", "console.log('val_bpb: 0.991000')"],
+				researchCwd: researchDir,
+			},
+		}));
+
+		expect(result.ok).toBe(false);
+		expect(result.summary).toContain("clean workspace");
+	});
+
+	it("allows research execution on a dirty workspace only when explicitly enabled", async () => {
+		await fs.writeFile(path.join(researchDir, "train.py"), "print('dirty')\n", "utf8");
+		const { autoresearchRun } = await import("../src/chitragupta-nodes-research.js");
+		const result = await autoresearchRun(makeContext({
+			stepOutputs: {
+				"acp-research-council": { data: { finalVerdict: "accepted" } },
+			},
+			extra: {
+				researchCommand: process.execPath,
+				researchArgs: ["-e", "console.log('val_bpb: 0.991000')"],
+				researchCwd: researchDir,
+				researchAllowDirtyWorkspace: true,
+			},
+		}));
+
+		expect(result.ok).toBe(true);
+		expect(result.data).toEqual(expect.objectContaining({
+			metric: 0.991,
+			gitDirtyBefore: true,
+		}));
+	});
 
 		it("passes engine-selected execution lane details into bounded research runs", async () => {
 			const { autoresearchRun } = await import("../src/chitragupta-nodes-research.js");
@@ -728,17 +903,53 @@ describe("chitragupta research nodes", () => {
 		}));
 		expect(recorded.ok).toBe(true);
 		expect(appendMemory).toHaveBeenCalledOnce();
-		expect(databaseGet).toHaveBeenCalledWith("agent");
-		expect(upsertResearchExperiment).toHaveBeenCalledWith(expect.objectContaining({
-			gitBranch: null,
-			gitHeadCommit: null,
-			gitDirtyBefore: null,
-			gitDirtyAfter: null,
-		}));
-		expect(recorded.data).toEqual(expect.objectContaining({ source: "fallback", traceId: "trace-fallback" }));
-	});
+			expect(databaseGet).toHaveBeenCalledWith("agent");
+			expect(upsertResearchExperiment).toHaveBeenCalledWith(expect.objectContaining({
+				gitBranch: null,
+				gitHeadCommit: null,
+				gitDirtyBefore: null,
+				gitDirtyAfter: null,
+			}));
+			expect(recorded.data).toEqual(expect.objectContaining({ source: "fallback", traceId: "trace-fallback" }));
+		});
 
-	it("fails closed when the daemon rejects research outcome recording for policy reasons", async () => {
+		it("preserves attempt-safe metadata for successful overnight local-fallback records", async () => {
+			createClient.mockRejectedValueOnce(new Error("daemon unavailable"));
+			const recording = await import("../src/chitragupta-nodes-research-recording.js");
+			const shared = await import("../src/chitragupta-nodes-research-shared.js");
+			const overnightScope = shared.withResearchRoundScope(
+				shared.buildScope(
+					makeContext({
+						extra: {
+							researchTopic: "Fallback overnight",
+							researchHypothesis: "attempt-safe",
+						},
+					}),
+				),
+				"loop-attempt-safe",
+				1,
+				3,
+				2,
+			);
+			const recorded = await recording.recordResearchOutcome(
+				overnightScope,
+				{ finalVerdict: "support", sabhaId: "sabha-local", sessionId: null },
+				{ stdout: "val_bpb: 0.991000", stderr: "", metric: 0.991 },
+				{ observedMetric: 0.991, decision: "keep" },
+				null,
+				{ runtime: "pakt-core", source: "fallback", sourceLength: 120, packedText: "packed:overnight" },
+			);
+			expect(recorded).toEqual(expect.objectContaining({ source: "fallback" }));
+			expect(upsertResearchExperiment).toHaveBeenLastCalledWith(expect.objectContaining({
+				loopKey: "loop-attempt-safe",
+				roundNumber: 1,
+				totalRounds: 3,
+				attemptNumber: 2,
+				attemptKey: expect.stringContaining("#attempt:2"),
+			}));
+		});
+
+		it("fails closed when the daemon rejects research outcome recording for policy reasons", async () => {
 		daemonCall.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
 			if (method === "research.outcome.record") {
 				throw new Error("policy denied");
@@ -951,6 +1162,1265 @@ describe("chitragupta research nodes", () => {
 			source: "daemon",
 			reason: "policy-declined",
 		}));
+	});
+
+	it("runs a bounded two-agent overnight loop with packed context reuse and early stop", async () => {
+		const { autoresearchOvernight } = await import("../src/chitragupta-nodes-research.js");
+		const result = await autoresearchOvernight(makeContext({
+			stepOutputs: {
+				"acp-research-council": {
+					data: {
+						sabhaId: "sabha-daemon",
+						sessionId: "sess-autoresearch",
+						topic: "Overnight bounded loop",
+						participantCount: 2,
+						participants: [
+							{ id: "planner", role: "planner", expertise: 0.84, credibility: 0.82 },
+							{ id: "executor", role: "executor", expertise: 0.8, credibility: 0.84 },
+						],
+						finalVerdict: "accepted",
+						rounds: 1,
+						councilSummary: [{ roundNumber: 1, verdict: "accepted", voteCount: 2, challengeCount: 0 }],
+						lucy: { hitEntity: null, predictionCount: 0, criticalSignalCount: 0, recommendation: "support" },
+						route: {
+							routeClass: "research.bounded",
+							capability: "research.autoresearch",
+							selectedCapabilityId: "engine.research.autoresearch",
+							discoverableOnly: false,
+							degraded: false,
+							reason: "Selected engine.research.autoresearch for research.autoresearch",
+							policyTrace: [],
+						},
+						plannerRoute: {
+							routeClass: "coding.deep-reasoning",
+							capability: "coding.review",
+							selectedCapabilityId: "adapter.takumi.executor",
+							discoverableOnly: false,
+							degraded: false,
+							reason: "Selected adapter.takumi.executor for coding.review",
+							policyTrace: [],
+							executionBinding: {
+								source: "kosha-discovery",
+								kind: "planner",
+								selectedModelId: "qwen-coder",
+								selectedProviderId: "ollama",
+								preferredModelIds: ["qwen-coder"],
+								preferredProviderIds: ["ollama"],
+								allowCrossProvider: true,
+							},
+						},
+						executionRoute: {
+							routeClass: "tool.use.flex",
+							capability: "model.tool-use",
+							selectedCapabilityId: "discovery.model.ollama.qwen-coder",
+							discoverableOnly: false,
+							degraded: false,
+							reason: "Selected discovery.model.ollama.qwen-coder for model.tool-use",
+							policyTrace: [],
+							executionBinding: {
+								source: "kosha-discovery",
+								kind: "executor",
+								selectedModelId: "qwen-coder",
+								selectedProviderId: "ollama",
+								preferredModelIds: ["qwen-coder"],
+								preferredProviderIds: ["ollama"],
+								allowCrossProvider: false,
+							},
+						},
+						source: "daemon",
+					},
+				},
+				"autoresearch-baseline": {
+					data: {
+						metricName: "val_bpb",
+						objective: "minimize",
+						baselineMetric: 1,
+						hypothesis: "overnight bounded loop",
+					},
+				},
+			},
+			extra: {
+				researchCommand: process.execPath,
+				researchArgs: ["-e", "const r=Number(process.env.CHITRAGUPTA_RESEARCH_ROUND_NUMBER||'1'); console.log(`val_bpb: ${r===1?'0.990000':'0.990000'}`);"],
+				researchRounds: 4,
+				researchAgentCount: 2,
+				researchStopAfterNoImprovementRounds: 2,
+				researchTopic: "Overnight bounded loop",
+				researchHypothesis: "round-based optimization",
+			},
+		}));
+
+		expect(result.ok).toBe(true);
+		expect(result.data).toEqual(expect.objectContaining({
+			loopKey: expect.any(String),
+			roundsRequested: 4,
+			roundsCompleted: 3,
+			stopReason: "no-improvement",
+			bestMetric: 0.99,
+			bestRoundNumber: 1,
+			noImprovementStreak: 2,
+			sessionId: "sess-autoresearch",
+			sabhaId: "sabha-daemon",
+			councilVerdict: "accepted",
+			plannerRoute: expect.objectContaining({ routeClass: "coding.deep-reasoning" }),
+			executionRoute: expect.objectContaining({ routeClass: "tool.use.flex" }),
+		}));
+		expect(result.data.rounds).toHaveLength(3);
+		expect(daemonCall).toHaveBeenCalledWith("compression.unpack_context", expect.any(Object));
+		expect(daemonCall).toHaveBeenCalledWith("compression.normalize_context", expect.any(Object));
+		expect(daemonCall.mock.calls.filter(([method]) => method === "research.outcome.record")).toHaveLength(3);
+	});
+
+	it("stops the overnight loop when the total budget is exhausted", async () => {
+		const { autoresearchOvernight } = await import("../src/chitragupta-nodes-research.js");
+		const result = await autoresearchOvernight(makeContext({
+			stepOutputs: {
+				"acp-research-council": {
+					data: {
+						sabhaId: "sabha-daemon",
+						sessionId: "sess-autoresearch",
+						topic: "Budgeted overnight loop",
+						participantCount: 2,
+						participants: [
+							{ id: "planner", role: "planner", expertise: 0.84, credibility: 0.82 },
+							{ id: "executor", role: "executor", expertise: 0.8, credibility: 0.84 },
+						],
+						finalVerdict: "accepted",
+						rounds: 1,
+						councilSummary: [{ roundNumber: 1, verdict: "accepted", voteCount: 2, challengeCount: 0 }],
+						lucy: { hitEntity: null, predictionCount: 0, criticalSignalCount: 0, recommendation: "support" },
+						route: {
+							routeClass: "research.bounded",
+							capability: "research.autoresearch",
+							selectedCapabilityId: "engine.research.autoresearch",
+							discoverableOnly: false,
+							degraded: false,
+							reason: "Selected engine.research.autoresearch for research.autoresearch",
+							policyTrace: [],
+						},
+						plannerRoute: {
+							routeClass: "coding.deep-reasoning",
+							capability: "coding.review",
+							selectedCapabilityId: "adapter.takumi.executor",
+							discoverableOnly: false,
+							degraded: false,
+							reason: "Selected adapter.takumi.executor for coding.review",
+							policyTrace: [],
+							executionBinding: {
+								source: "kosha-discovery",
+								kind: "planner",
+								selectedModelId: "qwen-coder",
+								selectedProviderId: "ollama",
+								preferredModelIds: ["qwen-coder"],
+								preferredProviderIds: ["ollama"],
+								allowCrossProvider: true,
+							},
+						},
+						executionRoute: {
+							routeClass: "tool.use.flex",
+							capability: "model.tool-use",
+							selectedCapabilityId: "discovery.model.ollama.qwen-coder",
+							discoverableOnly: false,
+							degraded: false,
+							reason: "Selected discovery.model.ollama.qwen-coder for model.tool-use",
+							policyTrace: [],
+							executionBinding: {
+								source: "kosha-discovery",
+								kind: "executor",
+								selectedModelId: "qwen-coder",
+								selectedProviderId: "ollama",
+								preferredModelIds: ["qwen-coder"],
+								preferredProviderIds: ["ollama"],
+								allowCrossProvider: false,
+							},
+						},
+						source: "daemon",
+					},
+				},
+				"autoresearch-baseline": {
+					data: {
+						metricName: "val_bpb",
+						objective: "minimize",
+						baselineMetric: 1,
+						hypothesis: "budgeted bounded loop",
+					},
+				},
+			},
+			extra: {
+				researchCommand: process.execPath,
+				researchArgs: [
+					"-e",
+					"setTimeout(() => console.log('val_bpb: 0.990000'), 550);",
+				],
+				researchRounds: 6,
+				researchAgentCount: 2,
+				researchBudgetMs: 1_000,
+				researchTotalBudgetMs: 1_000,
+				researchStopAfterNoImprovementRounds: 6,
+				researchTopic: "Budgeted overnight loop",
+				researchHypothesis: "budget should stop the loop",
+			},
+		}));
+
+		expect(result.ok).toBe(true);
+		expect(result.summary).toContain("total budget was exhausted");
+		expect(result.data).toEqual(expect.objectContaining({
+			roundsCompleted: 1,
+			stopReason: "budget-exhausted",
+			totalBudgetMs: 1_000,
+		}));
+	});
+
+	it("cancels a running overnight round when daemon loop control requests interrupt", async () => {
+		vi.resetModules();
+		const runner = await import("../src/chitragupta-nodes-research-runner.js");
+		const recording = await import("../src/chitragupta-nodes-research-recording.js");
+
+		vi.spyOn(runner, "executeResearchRun").mockImplementation(async (scope) => {
+			const cancellationError = Object.assign(new Error("operator-stop"), {
+				cancelled: true,
+				durationMs: 550,
+				scopeGuard: "git",
+				targetFilesChanged: ["train.py"],
+				scopeSnapshot: {
+					mode: "git",
+					fileContents: {
+						"train.py": "print('train')\n",
+					},
+				},
+				executionRouteClass: scope.executionRouteClass,
+				selectedModelId: "qwen-coder",
+				selectedProviderId: "ollama",
+			});
+
+			await new Promise<never>((_, reject) => {
+				const timeout = setTimeout(() => {
+					reject(new Error("interrupt was never requested"));
+				}, 2_000);
+				scope.interruptSignal?.addEventListener("abort", () => {
+					clearTimeout(timeout);
+					reject(cancellationError);
+				}, { once: true });
+			});
+		});
+		vi.spyOn(runner, "recoverResearchFailure").mockResolvedValue({
+			decision: "discard",
+			action: "reverted",
+			revertedFiles: ["train.py"],
+			reason: "operator cancel cleanup",
+			scopeGuard: "git",
+		});
+		vi.spyOn(recording, "recordResearchOutcome").mockResolvedValue({
+			recorded: true,
+			memoryScope: "project",
+			traceId: "trace-cancelled",
+			experimentId: "exp-cancelled",
+		});
+
+		let heartbeatCount = 0;
+		daemonCall.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			if (method === "research.loops.start") {
+				return {
+					state: {
+						loopKey: params?.loopKey,
+						status: "running",
+						cancelRequestedAt: null,
+					},
+				};
+			}
+			if (method === "research.loops.heartbeat") {
+				heartbeatCount += 1;
+				if (params?.phase === "run" && heartbeatCount >= 2) {
+					return {
+						state: {
+							loopKey: params?.loopKey,
+							status: "cancelling",
+							cancelRequestedAt: Date.now(),
+							cancelReason: "operator-stop",
+						},
+					};
+				}
+				return {
+					state: {
+						loopKey: params?.loopKey,
+						status: "running",
+						cancelRequestedAt: null,
+					},
+				};
+			}
+			if (method === "research.loops.complete") {
+				return {
+					state: {
+						loopKey: params?.loopKey,
+						status: "cancelled",
+						stopReason: params?.stopReason,
+					},
+				};
+			}
+			return defaultDaemonCallImplementation(method, params);
+		});
+
+		const { executeOvernightResearchLoop } = await import("../src/chitragupta-nodes-research-overnight.js");
+		const summary = await executeOvernightResearchLoop({
+			hypothesis: "operator cancel should stop the active round",
+			topic: "Cancelled overnight loop",
+			command: "uv",
+			commandArgs: ["run", "train.py"],
+			projectPath: researchDir,
+			cwd: researchDir,
+			parentSessionId: null,
+			sessionLineageKey: null,
+			targetFiles: ["train.py"],
+			immutableFiles: ["prepare.py"],
+			metricName: "val_bpb",
+			metricPattern: "val_bpb\\s*[:=]\\s*([0-9]+(?:\\.[0-9]+)?)",
+			objective: "minimize",
+			budgetMs: 60_000,
+			totalBudgetMs: 60_000,
+			plannerRouteClass: "coding.deep-reasoning",
+			plannerCapability: null,
+			executionRouteClass: "tool.use.flex",
+			executionCapability: null,
+			maxRounds: 3,
+			agentCount: 2,
+			stopAfterNoImprovementRounds: 2,
+			loopKey: "loop-cancelled",
+			roundNumber: null,
+			totalRounds: null,
+			attemptNumber: null,
+		}, {
+			sabhaId: "sabha-daemon",
+			sessionId: "sess-autoresearch",
+			topic: "Cancelled overnight loop",
+			participantCount: 2,
+			participants: [
+				{ id: "planner", role: "planner", expertise: 0.84, credibility: 0.82 },
+				{ id: "executor", role: "executor", expertise: 0.8, credibility: 0.84 },
+			],
+			finalVerdict: "accepted",
+			rounds: 1,
+			councilSummary: [{ roundNumber: 1, verdict: "accepted", voteCount: 2, challengeCount: 0 }],
+			lucy: { hitEntity: null, predictionCount: 0, criticalSignalCount: 0, recommendation: "support" },
+			route: null,
+			plannerRoute: null,
+			executionRoute: null,
+			source: "daemon",
+		}, {
+			metricName: "val_bpb",
+			objective: "minimize",
+			baselineMetric: 0.99,
+			hypothesis: "operator cancel should stop the active round",
+		});
+
+		expect(summary).toEqual(expect.objectContaining({
+			roundsCompleted: 1,
+			stopReason: "cancelled",
+			revertedRounds: 1,
+			summaryId: "loop-summary-daemon-1",
+			summarySource: "daemon",
+		}));
+		expect(summary.rounds).toEqual([
+			expect.objectContaining({
+				roundNumber: 1,
+				decision: "cancelled",
+				finalizeAction: "reverted",
+				selectedModelId: "qwen-coder",
+				selectedProviderId: "ollama",
+			}),
+		]);
+		expect(daemonCall).toHaveBeenCalledWith("research.loops.complete", expect.objectContaining({
+			loopKey: "loop-cancelled",
+			stopReason: "cancelled",
+		}));
+	});
+
+	it("classifies closure-phase cancellation as cancelled and keeps summary/control state aligned", async () => {
+		vi.resetModules();
+		const runner = await import("../src/chitragupta-nodes-research-runner.js");
+		const recording = await import("../src/chitragupta-nodes-research-recording.js");
+
+		vi.spyOn(runner, "executeResearchRun").mockResolvedValue({
+			command: "uv",
+			commandArgs: ["run", "train.py"],
+			cwd: researchDir,
+			metricName: "val_bpb",
+			metric: 0.989,
+			stdout: "val_bpb: 0.989000",
+			stderr: "",
+			exitCode: 0,
+			timedOut: false,
+			durationMs: 25,
+			scopeGuard: "git",
+			targetFilesChanged: ["train.py"],
+			scopeSnapshot: {
+				mode: "git",
+				fileContents: {
+					"train.py": "print('train')\n",
+				},
+			},
+			selectedModelId: "qwen-coder",
+			selectedProviderId: "ollama",
+			executionRouteClass: "tool.use.flex",
+		});
+		vi.spyOn(runner, "evaluateResearchResult").mockResolvedValue({
+			metricName: "val_bpb",
+			objective: "minimize",
+			baselineMetric: 0.99,
+			observedMetric: 0.989,
+			delta: 0.001,
+			improved: true,
+			decision: "keep",
+			status: "completed",
+		});
+		vi.spyOn(runner, "finalizeResearchResult").mockResolvedValue({
+			decision: "keep",
+			action: "kept",
+			revertedFiles: [],
+			reason: "better metric",
+			scopeGuard: "git",
+		});
+		vi.spyOn(runner, "recoverResearchFailure").mockResolvedValue({
+			decision: "discard",
+			action: "reverted",
+			revertedFiles: ["train.py"],
+			reason: "operator cancel cleanup",
+			scopeGuard: "git",
+		});
+		vi.spyOn(recording, "packResearchContext").mockImplementation(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			throw new Error("socket closed during pack");
+		});
+
+		daemonCall.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			if (method === "research.loops.start") {
+				return {
+					state: {
+						loopKey: params?.loopKey,
+						status: "running",
+						cancelRequestedAt: null,
+					},
+				};
+			}
+			if (method === "research.loops.heartbeat") {
+				if (params?.phase === "closure-error" || params?.phase === "before-complete") {
+					return {
+						state: {
+							loopKey: params?.loopKey,
+							status: "cancelling",
+							cancelRequestedAt: Date.now(),
+							cancelReason: "operator-stop",
+						},
+					};
+				}
+				return {
+					state: {
+						loopKey: params?.loopKey,
+						status: "running",
+						cancelRequestedAt: null,
+					},
+				};
+			}
+			if (method === "research.loops.complete") {
+				return {
+					state: {
+						loopKey: params?.loopKey,
+						status: "cancelled",
+						stopReason: params?.stopReason,
+					},
+				};
+			}
+			return defaultDaemonCallImplementation(method, params);
+		});
+
+		const { executeOvernightResearchLoop } = await import("../src/chitragupta-nodes-research-overnight.js");
+		const summary = await executeOvernightResearchLoop({
+			hypothesis: "closure cancellation should stay cancelled",
+			topic: "Closure-cancelled overnight loop",
+			command: "uv",
+			commandArgs: ["run", "train.py"],
+			projectPath: researchDir,
+			cwd: researchDir,
+			parentSessionId: null,
+			sessionLineageKey: null,
+			targetFiles: ["train.py"],
+			immutableFiles: ["prepare.py"],
+			metricName: "val_bpb",
+			metricPattern: "val_bpb\\s*[:=]\\s*([0-9]+(?:\\.[0-9]+)?)",
+			objective: "minimize",
+			budgetMs: 60_000,
+			totalBudgetMs: 60_000,
+			plannerRouteClass: "coding.deep-reasoning",
+			plannerCapability: null,
+			executionRouteClass: "tool.use.flex",
+			executionCapability: null,
+			maxRounds: 2,
+			agentCount: 2,
+			stopAfterNoImprovementRounds: 2,
+			loopKey: "loop-closure-cancelled",
+			roundNumber: null,
+			totalRounds: null,
+			attemptNumber: null,
+		}, {
+			sabhaId: "sabha-daemon",
+			sessionId: "sess-autoresearch",
+			topic: "Closure-cancelled overnight loop",
+			participantCount: 2,
+			participants: [
+				{ id: "planner", role: "planner", expertise: 0.84, credibility: 0.82 },
+				{ id: "executor", role: "executor", expertise: 0.8, credibility: 0.84 },
+			],
+			finalVerdict: "accepted",
+			rounds: 1,
+			councilSummary: [{ roundNumber: 1, verdict: "accepted", voteCount: 2, challengeCount: 0 }],
+			lucy: { hitEntity: null, predictionCount: 0, criticalSignalCount: 0, recommendation: "support" },
+			route: null,
+			plannerRoute: null,
+			executionRoute: null,
+			source: "daemon",
+		}, {
+			metricName: "val_bpb",
+			objective: "minimize",
+			baselineMetric: 0.99,
+			hypothesis: "closure cancellation should stay cancelled",
+		});
+
+		expect(summary).toEqual(expect.objectContaining({
+			stopReason: "cancelled",
+			closureStatus: "complete",
+			bestMetric: 0.99,
+			bestRoundNumber: null,
+			keptRounds: 0,
+			revertedRounds: 0,
+			roundsCompleted: 1,
+		}));
+		expect(summary.rounds).toEqual([
+			expect.objectContaining({
+				roundNumber: 1,
+				decision: "cancelled",
+				finalizeAction: "kept",
+				selectedModelId: "qwen-coder",
+				selectedProviderId: "ollama",
+			}),
+		]);
+			expect(daemonCall).toHaveBeenCalledWith("research.loops.complete", expect.objectContaining({
+				loopKey: "loop-closure-cancelled",
+				stopReason: "cancelled",
+			}));
+			expect(daemonCall).toHaveBeenCalledWith("research.loops.record", expect.objectContaining({
+				loopKey: "loop-closure-cancelled",
+				stopReason: "cancelled",
+			}));
+			expect(daemonCall.mock.calls.filter(([method]) => method === "research.loops.record")).toHaveLength(1);
+		});
+
+	it("generates a unique runtime loop key when scope.loopKey is omitted", async () => {
+		vi.resetModules();
+		const runner = await import("../src/chitragupta-nodes-research-runner.js");
+		const recording = await import("../src/chitragupta-nodes-research-recording.js");
+
+		vi.spyOn(runner, "executeResearchRun").mockResolvedValue({
+			command: "uv",
+			commandArgs: ["run", "train.py"],
+			cwd: researchDir,
+			metricName: "val_bpb",
+			metric: 0.989,
+			stdout: "val_bpb: 0.989000",
+			stderr: "",
+			exitCode: 0,
+			timedOut: false,
+			durationMs: 25,
+			scopeGuard: "git",
+			targetFilesChanged: ["train.py"],
+			scopeSnapshot: {
+				mode: "git",
+				fileContents: {
+					"train.py": "print('train')\n",
+				},
+			},
+			selectedModelId: "qwen-coder",
+			selectedProviderId: "ollama",
+			executionRouteClass: "tool.use.flex",
+		});
+		vi.spyOn(runner, "evaluateResearchResult").mockResolvedValue({
+			metricName: "val_bpb",
+			objective: "minimize",
+			baselineMetric: 0.99,
+			observedMetric: 0.989,
+			delta: 0.001,
+			improved: true,
+			decision: "keep",
+			status: "completed",
+		});
+		vi.spyOn(runner, "finalizeResearchResult").mockResolvedValue({
+			decision: "keep",
+			action: "kept",
+			revertedFiles: [],
+			reason: "better metric",
+			scopeGuard: "git",
+		});
+		vi.spyOn(recording, "packResearchContext").mockResolvedValue({
+			packed: true,
+			runtime: "pakt-core",
+			source: "daemon",
+			packedText: "packed:daemon",
+			savings: 42,
+			sourceLength: 128,
+		});
+		vi.spyOn(recording, "recordResearchOutcome").mockResolvedValue({
+			recorded: true,
+			memoryScope: "project",
+			traceId: "trace-1",
+			experimentId: "exp-daemon-1",
+		});
+
+		const startedLoopKeys: string[] = [];
+		daemonCall.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			if (method === "research.loops.start") {
+				if (typeof params?.loopKey === "string") startedLoopKeys.push(params.loopKey);
+				return {
+					state: {
+						loopKey: params?.loopKey,
+						status: "running",
+						cancelRequestedAt: null,
+					},
+				};
+			}
+			if (method === "research.loops.heartbeat") {
+				return {
+					state: {
+						loopKey: params?.loopKey,
+						status: "running",
+						cancelRequestedAt: null,
+					},
+				};
+			}
+			if (method === "research.loops.complete") {
+				return {
+					state: {
+						loopKey: params?.loopKey,
+						status: "completed",
+						stopReason: params?.stopReason,
+					},
+				};
+			}
+			return defaultDaemonCallImplementation(method, params);
+		});
+
+		const { executeOvernightResearchLoop } = await import("../src/chitragupta-nodes-research-overnight.js");
+		const sharedScope = {
+			hypothesis: "same scoped run should not reuse implicit loop key",
+			topic: "Autogenerated loop keys",
+			command: "uv",
+			commandArgs: ["run", "train.py"],
+			projectPath: researchDir,
+			cwd: researchDir,
+			parentSessionId: null,
+			sessionLineageKey: null,
+			targetFiles: ["train.py"],
+			immutableFiles: ["prepare.py"],
+			metricName: "val_bpb",
+			metricPattern: "val_bpb\\s*[:=]\\s*([0-9]+(?:\\.[0-9]+)?)",
+			objective: "minimize" as const,
+			budgetMs: 60_000,
+			totalBudgetMs: 60_000,
+			plannerRouteClass: "coding.deep-reasoning",
+			plannerCapability: null,
+			executionRouteClass: "tool.use.flex",
+			executionCapability: null,
+			maxRounds: 1,
+			agentCount: 2,
+			stopAfterNoImprovementRounds: 2,
+			roundNumber: null,
+			totalRounds: null,
+			attemptNumber: null,
+		};
+		const council = {
+			sabhaId: "sabha-daemon",
+			sessionId: "sess-autoresearch",
+			topic: "Autogenerated loop keys",
+			participantCount: 2,
+			participants: [
+				{ id: "planner", role: "planner", expertise: 0.84, credibility: 0.82 },
+				{ id: "executor", role: "executor", expertise: 0.8, credibility: 0.84 },
+			],
+			finalVerdict: "accepted",
+			rounds: 1,
+			councilSummary: [{ roundNumber: 1, verdict: "accepted", voteCount: 2, challengeCount: 0 }],
+			lucy: { hitEntity: null, predictionCount: 0, criticalSignalCount: 0, recommendation: "support" },
+			route: null,
+			plannerRoute: null,
+			executionRoute: null,
+			source: "daemon" as const,
+		};
+		const baseline = {
+			metricName: "val_bpb",
+			objective: "minimize" as const,
+			baselineMetric: 0.99,
+			hypothesis: "same scoped run should not reuse implicit loop key",
+		};
+
+		const first = await executeOvernightResearchLoop({ ...sharedScope }, council, baseline);
+		const second = await executeOvernightResearchLoop({ ...sharedScope }, council, baseline);
+
+		expect(first.loopKey).not.toBe(second.loopKey);
+		expect(startedLoopKeys).toHaveLength(2);
+		expect(startedLoopKeys[0]).not.toBe(startedLoopKeys[1]);
+	});
+
+	it("fails closed when an overnight discarded round cannot be safely reverted", async () => {
+		vi.resetModules();
+		const runner = await import("../src/chitragupta-nodes-research-runner.js");
+		const recording = await import("../src/chitragupta-nodes-research-recording.js");
+		vi.spyOn(runner, "executeResearchRun").mockResolvedValue({
+			command: "uv",
+			commandArgs: ["run", "train.py"],
+			cwd: researchDir,
+			metricName: "val_bpb",
+			metric: 0.995,
+			stdout: "val_bpb: 0.995000",
+			stderr: "",
+			exitCode: 0,
+			timedOut: false,
+			durationMs: 25,
+			scopeGuard: "git",
+			targetFilesChanged: ["train.py"],
+			scopeSnapshot: undefined,
+		});
+		vi.spyOn(runner, "evaluateResearchResult").mockResolvedValue({
+			metricName: "val_bpb",
+			objective: "minimize",
+			baselineMetric: 0.99,
+			observedMetric: 0.995,
+			delta: -0.005,
+			improved: false,
+			decision: "discard",
+			reason: "regression",
+		});
+		vi.spyOn(runner, "finalizeResearchResult").mockResolvedValue({
+			decision: "discard",
+			action: "skipped",
+			revertedFiles: [],
+			reason: "No reusable scope snapshot was available for discard cleanup.",
+			scopeGuard: "git",
+		});
+		vi.spyOn(recording, "packResearchContext").mockResolvedValue({
+			packed: false,
+			runtime: null,
+			source: "none",
+			packedText: "",
+			savings: 0,
+		});
+		vi.spyOn(recording, "recordResearchOutcome").mockResolvedValue({
+			recorded: true,
+			memoryScope: "project",
+			traceId: "trace-overnight",
+			experimentId: "exp-overnight",
+		});
+
+		const { executeOvernightResearchLoop } = await import("../src/chitragupta-nodes-research-overnight.js");
+		const summary = await executeOvernightResearchLoop({
+			hypothesis: "unsafe discard should fail closed",
+			topic: "Unsafe discard overnight loop",
+			command: "uv",
+			commandArgs: ["run", "train.py"],
+			projectPath: researchDir,
+			cwd: researchDir,
+			parentSessionId: null,
+			sessionLineageKey: null,
+			targetFiles: ["train.py"],
+			immutableFiles: ["prepare.py"],
+			metricName: "val_bpb",
+			metricPattern: "val_bpb\\s*[:=]\\s*([0-9]+(?:\\.[0-9]+)?)",
+			objective: "minimize",
+			budgetMs: 60_000,
+			totalBudgetMs: 60_000,
+			plannerRouteClass: "coding.deep-reasoning",
+			plannerCapability: null,
+			executionRouteClass: "tool.use.flex",
+			executionCapability: null,
+			maxRounds: 3,
+			agentCount: 2,
+			stopAfterNoImprovementRounds: 2,
+			loopKey: "loop-unsafe",
+			roundNumber: null,
+			totalRounds: null,
+			attemptNumber: null,
+		}, {
+			sabhaId: "sabha-daemon",
+			sessionId: "sess-autoresearch",
+			topic: "Unsafe discard overnight loop",
+			participantCount: 2,
+			participants: [
+				{ id: "planner", role: "planner", expertise: 0.84, credibility: 0.82 },
+				{ id: "executor", role: "executor", expertise: 0.8, credibility: 0.84 },
+			],
+			finalVerdict: "accepted",
+			rounds: 1,
+			councilSummary: [{ roundNumber: 1, verdict: "accepted", voteCount: 2, challengeCount: 0 }],
+			lucy: { hitEntity: null, predictionCount: 0, criticalSignalCount: 0, recommendation: "support" },
+			route: null,
+			plannerRoute: null,
+			executionRoute: null,
+			source: "daemon",
+		}, {
+			metricName: "val_bpb",
+			objective: "minimize",
+			baselineMetric: 0.99,
+			hypothesis: "unsafe discard should fail closed",
+		});
+
+			expect(summary).toEqual(expect.objectContaining({
+				roundsCompleted: 1,
+				stopReason: "unsafe-discard",
+				keptRounds: 0,
+				revertedRounds: 0,
+				summaryId: "loop-summary-daemon-1",
+				summarySource: "daemon",
+			}));
+		expect(summary.rounds).toEqual([
+			expect.objectContaining({
+				roundNumber: 1,
+				decision: "discard",
+				finalizeAction: "skipped",
+			}),
+		]);
+	});
+
+	it("records a failed overnight round attempt and stops fail-closed", async () => {
+		vi.resetModules();
+		const runner = await import("../src/chitragupta-nodes-research-runner.js");
+		const recording = await import("../src/chitragupta-nodes-research-recording.js");
+		vi.spyOn(runner, "executeResearchRun").mockRejectedValue(Object.assign(new Error("runner exploded"), {
+			stdout: "",
+			stderr: "runner exploded",
+			exitCode: 1,
+			durationMs: 25,
+			scopeGuard: "git",
+			targetFilesChanged: ["train.py"],
+			scopeSnapshot: {
+				mode: "git",
+				fileContents: {
+					"train.py": "print('train')\n",
+				},
+			},
+		}));
+		vi.spyOn(recording, "packResearchContext").mockResolvedValue({
+			packed: false,
+			runtime: null,
+			source: "none",
+			packedText: "",
+			savings: 0,
+		});
+		const recordFailure = vi.spyOn(recording, "recordResearchFailure").mockResolvedValue({
+			recorded: true,
+			memoryScope: "project",
+			traceId: "trace-fail",
+			experimentId: "exp-fail",
+		});
+
+		const { executeOvernightResearchLoop } = await import("../src/chitragupta-nodes-research-overnight.js");
+		const summary = await executeOvernightResearchLoop({
+			hypothesis: "failed round should be recorded",
+			topic: "Failed overnight loop",
+			command: "uv",
+			commandArgs: ["run", "train.py"],
+			projectPath: researchDir,
+			cwd: researchDir,
+			parentSessionId: null,
+			sessionLineageKey: null,
+			targetFiles: ["train.py"],
+			immutableFiles: ["prepare.py"],
+			metricName: "val_bpb",
+			metricPattern: "val_bpb\\s*[:=]\\s*([0-9]+(?:\\.[0-9]+)?)",
+			objective: "minimize",
+			budgetMs: 60_000,
+			totalBudgetMs: 60_000,
+			plannerRouteClass: "coding.deep-reasoning",
+			plannerCapability: null,
+			executionRouteClass: "tool.use.flex",
+			executionCapability: null,
+			maxRounds: 3,
+			agentCount: 2,
+			stopAfterNoImprovementRounds: 2,
+			loopKey: "loop-failed",
+			roundNumber: null,
+			totalRounds: null,
+			attemptNumber: null,
+		}, {
+			sabhaId: "sabha-daemon",
+			sessionId: "sess-autoresearch",
+			topic: "Failed overnight loop",
+			participantCount: 2,
+			participants: [
+				{ id: "planner", role: "planner", expertise: 0.84, credibility: 0.82 },
+				{ id: "executor", role: "executor", expertise: 0.8, credibility: 0.84 },
+			],
+			finalVerdict: "accepted",
+			rounds: 1,
+			councilSummary: [{ roundNumber: 1, verdict: "accepted", voteCount: 2, challengeCount: 0 }],
+			lucy: { hitEntity: null, predictionCount: 0, criticalSignalCount: 0, recommendation: "support" },
+			route: null,
+			plannerRoute: null,
+			executionRoute: null,
+			source: "daemon",
+		}, {
+			metricName: "val_bpb",
+			objective: "minimize",
+			baselineMetric: 0.99,
+			hypothesis: "failed round should be recorded",
+		});
+
+			expect(summary).toEqual(expect.objectContaining({
+				roundsCompleted: 1,
+				stopReason: "round-failed",
+				keptRounds: 0,
+				summaryId: "loop-summary-daemon-1",
+				summarySource: "daemon",
+			}));
+		expect(summary.rounds).toEqual([
+			expect.objectContaining({
+				roundNumber: 1,
+				decision: "record",
+				finalizeAction: "reverted",
+				traceId: "trace-fail",
+				experimentId: "exp-fail",
+			}),
+		]);
+		expect(recordFailure).toHaveBeenCalledTimes(1);
+	});
+
+	it("degrades closure after a successful overnight round instead of reverting it", async () => {
+		vi.resetModules();
+		const runner = await import("../src/chitragupta-nodes-research-runner.js");
+		const recording = await import("../src/chitragupta-nodes-research-recording.js");
+		vi.spyOn(runner, "executeResearchRun").mockResolvedValue({
+			command: "uv",
+			commandArgs: ["run", "train.py"],
+			cwd: researchDir,
+			metricName: "val_bpb",
+			metric: 0.985,
+			stdout: "val_bpb: 0.985000",
+			stderr: "",
+			exitCode: 0,
+			timedOut: false,
+			durationMs: 25,
+			scopeGuard: "git",
+			targetFilesChanged: ["train.py"],
+			scopeSnapshot: undefined,
+		});
+		vi.spyOn(runner, "evaluateResearchResult").mockResolvedValue({
+			metricName: "val_bpb",
+			objective: "minimize",
+			baselineMetric: 0.99,
+			observedMetric: 0.985,
+			delta: 0.005,
+			improved: true,
+			decision: "keep",
+			reason: "improved",
+		});
+		vi.spyOn(runner, "finalizeResearchResult").mockResolvedValue({
+			decision: "keep",
+			action: "kept",
+			revertedFiles: [],
+			reason: null,
+			scopeGuard: "git",
+		});
+		vi.spyOn(recording, "packResearchContext").mockResolvedValue({
+			packed: true,
+			runtime: "pakt-core",
+			source: "daemon",
+			packedText: "packed:daemon",
+			savings: 42,
+		});
+		vi.spyOn(recording, "recordResearchOutcome").mockRejectedValue(new Error("recording failed"));
+
+		const { executeOvernightResearchLoop } = await import("../src/chitragupta-nodes-research-overnight.js");
+		const summary = await executeOvernightResearchLoop({
+			hypothesis: "closure should degrade without reverting a kept round",
+			topic: "Closure failed overnight loop",
+			command: "uv",
+			commandArgs: ["run", "train.py"],
+			projectPath: researchDir,
+			cwd: researchDir,
+			parentSessionId: null,
+			sessionLineageKey: null,
+			targetFiles: ["train.py"],
+			immutableFiles: ["prepare.py"],
+			metricName: "val_bpb",
+			metricPattern: "val_bpb\\s*[:=]\\s*([0-9]+(?:\\.[0-9]+)?)",
+			objective: "minimize",
+			budgetMs: 60_000,
+			totalBudgetMs: 60_000,
+			plannerRouteClass: "coding.deep-reasoning",
+			plannerCapability: null,
+			executionRouteClass: "tool.use.flex",
+			executionCapability: null,
+			maxRounds: 2,
+			agentCount: 2,
+			stopAfterNoImprovementRounds: 2,
+			loopKey: "loop-closure-failed",
+			roundNumber: null,
+			totalRounds: null,
+			attemptNumber: null,
+		}, {
+			sabhaId: "sabha-daemon",
+			sessionId: "sess-autoresearch",
+			topic: "Closure failed overnight loop",
+			participantCount: 2,
+			participants: [
+				{ id: "planner", role: "planner", expertise: 0.84, credibility: 0.82 },
+				{ id: "executor", role: "executor", expertise: 0.8, credibility: 0.84 },
+			],
+			finalVerdict: "accepted",
+			rounds: 1,
+			councilSummary: [{ roundNumber: 1, verdict: "accepted", voteCount: 2, challengeCount: 0 }],
+			lucy: { hitEntity: null, predictionCount: 0, criticalSignalCount: 0, recommendation: "support" },
+			route: null,
+			plannerRoute: null,
+			executionRoute: null,
+			source: "daemon",
+		}, {
+			metricName: "val_bpb",
+			objective: "minimize",
+			baselineMetric: 0.99,
+			hypothesis: "closure should degrade without reverting a kept round",
+		});
+
+		expect(summary).toEqual(expect.objectContaining({
+			roundsCompleted: 1,
+			stopReason: "closure-failed",
+			bestMetric: 0.99,
+			bestRoundNumber: null,
+			keptRounds: 0,
+			revertedRounds: 0,
+			closureStatus: "degraded",
+			closureError: "recording failed",
+			summaryId: "loop-summary-daemon-1",
+			summarySource: "daemon",
+		}));
+		expect(summary.rounds).toEqual([
+			expect.objectContaining({
+				roundNumber: 1,
+				decision: "keep",
+				finalizeAction: "kept",
+				traceId: null,
+				experimentId: null,
+			}),
+		]);
+	});
+
+	it("returns a degraded summary when loop summary recording fails after a successful loop", async () => {
+		vi.resetModules();
+		const runner = await import("../src/chitragupta-nodes-research-runner.js");
+		const recording = await import("../src/chitragupta-nodes-research-recording.js");
+		const loopRecording = await import("../src/chitragupta-nodes-research-loop-recording.js");
+		vi.spyOn(runner, "executeResearchRun").mockResolvedValue({
+			command: "uv",
+			commandArgs: ["run", "train.py"],
+			cwd: researchDir,
+			metricName: "val_bpb",
+			metric: 0.985,
+			stdout: "val_bpb: 0.985000",
+			stderr: "",
+			exitCode: 0,
+			timedOut: false,
+			durationMs: 25,
+			scopeGuard: "git",
+			targetFilesChanged: ["train.py"],
+			scopeSnapshot: undefined,
+		});
+		vi.spyOn(runner, "evaluateResearchResult").mockResolvedValue({
+			metricName: "val_bpb",
+			objective: "minimize",
+			baselineMetric: 0.99,
+			observedMetric: 0.985,
+			delta: 0.005,
+			improved: true,
+			decision: "keep",
+			reason: "improved",
+		});
+		vi.spyOn(runner, "finalizeResearchResult").mockResolvedValue({
+			decision: "keep",
+			action: "kept",
+			revertedFiles: [],
+			reason: null,
+			scopeGuard: "git",
+		});
+		vi.spyOn(recording, "packResearchContext").mockResolvedValue({
+			packed: true,
+			runtime: "pakt-core",
+			source: "daemon",
+			packedText: "packed:daemon",
+			savings: 42,
+		});
+		vi.spyOn(recording, "recordResearchOutcome").mockResolvedValue({
+			recorded: true,
+			memoryScope: "project",
+			traceId: "trace-overnight",
+			experimentId: "exp-overnight",
+		});
+		vi.spyOn(loopRecording, "recordResearchLoopSummary").mockRejectedValue(new Error("summary store down"));
+
+		const { executeOvernightResearchLoop } = await import("../src/chitragupta-nodes-research-overnight.js");
+		const summary = await executeOvernightResearchLoop({
+			hypothesis: "loop summary failures should not throw",
+			topic: "Loop summary degraded overnight loop",
+			command: "uv",
+			commandArgs: ["run", "train.py"],
+			projectPath: researchDir,
+			cwd: researchDir,
+			parentSessionId: null,
+			sessionLineageKey: null,
+			targetFiles: ["train.py"],
+			immutableFiles: ["prepare.py"],
+			metricName: "val_bpb",
+			metricPattern: "val_bpb\\s*[:=]\\s*([0-9]+(?:\\.[0-9]+)?)",
+			objective: "minimize",
+			budgetMs: 60_000,
+			totalBudgetMs: 60_000,
+			plannerRouteClass: "coding.deep-reasoning",
+			plannerCapability: null,
+			executionRouteClass: "tool.use.flex",
+			executionCapability: null,
+			maxRounds: 1,
+			agentCount: 2,
+			stopAfterNoImprovementRounds: 2,
+			loopKey: "loop-summary-degraded",
+			roundNumber: null,
+			totalRounds: null,
+			attemptNumber: null,
+		}, {
+			sabhaId: "sabha-daemon",
+			sessionId: "sess-autoresearch",
+			topic: "Loop summary degraded overnight loop",
+			participantCount: 2,
+			participants: [
+				{ id: "planner", role: "planner", expertise: 0.84, credibility: 0.82 },
+				{ id: "executor", role: "executor", expertise: 0.8, credibility: 0.84 },
+			],
+			finalVerdict: "accepted",
+			rounds: 1,
+			councilSummary: [{ roundNumber: 1, verdict: "accepted", voteCount: 2, challengeCount: 0 }],
+			lucy: { hitEntity: null, predictionCount: 0, criticalSignalCount: 0, recommendation: "support" },
+			route: null,
+			plannerRoute: null,
+			executionRoute: null,
+			source: "daemon",
+		}, {
+			metricName: "val_bpb",
+			objective: "minimize",
+			baselineMetric: 0.99,
+			hypothesis: "loop summary failures should not throw",
+		});
+
+		expect(summary).toEqual(expect.objectContaining({
+			roundsCompleted: 1,
+			stopReason: "max-rounds",
+			closureStatus: "degraded",
+			closureError: "summary store down",
+			summaryId: null,
+			summarySource: null,
+		}));
+		expect(summary.rounds).toEqual([
+			expect.objectContaining({
+				roundNumber: 1,
+				decision: "keep",
+				finalizeAction: "kept",
+				traceId: "trace-overnight",
+				experimentId: "exp-overnight",
+			}),
+		]);
+	});
+
+	it("degrades closure cleanly when failed-round recording cannot complete", async () => {
+		vi.resetModules();
+		const runner = await import("../src/chitragupta-nodes-research-runner.js");
+		const recording = await import("../src/chitragupta-nodes-research-recording.js");
+		vi.spyOn(runner, "executeResearchRun").mockRejectedValue(Object.assign(new Error("runner exploded"), {
+			stdout: "",
+			stderr: "runner exploded",
+			exitCode: 1,
+			durationMs: 25,
+			scopeGuard: "git",
+			targetFilesChanged: ["train.py"],
+			scopeSnapshot: {
+				mode: "git",
+				fileContents: {
+					"train.py": "print('train')\n",
+				},
+			},
+		}));
+		vi.spyOn(recording, "packResearchContext").mockRejectedValue(new Error("failure packing failed"));
+
+		const { executeOvernightResearchLoop } = await import("../src/chitragupta-nodes-research-overnight.js");
+		const summary = await executeOvernightResearchLoop({
+			hypothesis: "failed closure should degrade cleanly",
+			topic: "Failed closure overnight loop",
+			command: "uv",
+			commandArgs: ["run", "train.py"],
+			projectPath: researchDir,
+			cwd: researchDir,
+			parentSessionId: null,
+			sessionLineageKey: null,
+			targetFiles: ["train.py"],
+			immutableFiles: ["prepare.py"],
+			metricName: "val_bpb",
+			metricPattern: "val_bpb\\s*[:=]\\s*([0-9]+(?:\\.[0-9]+)?)",
+			objective: "minimize",
+			budgetMs: 60_000,
+			totalBudgetMs: 60_000,
+			plannerRouteClass: "coding.deep-reasoning",
+			plannerCapability: null,
+			executionRouteClass: "tool.use.flex",
+			executionCapability: null,
+			maxRounds: 2,
+			agentCount: 2,
+			stopAfterNoImprovementRounds: 2,
+			loopKey: "loop-failed-closure",
+			roundNumber: null,
+			totalRounds: null,
+			attemptNumber: null,
+		}, {
+			sabhaId: "sabha-daemon",
+			sessionId: "sess-autoresearch",
+			topic: "Failed closure overnight loop",
+			participantCount: 2,
+			participants: [
+				{ id: "planner", role: "planner", expertise: 0.84, credibility: 0.82 },
+				{ id: "executor", role: "executor", expertise: 0.8, credibility: 0.84 },
+			],
+			finalVerdict: "accepted",
+			rounds: 1,
+			councilSummary: [{ roundNumber: 1, verdict: "accepted", voteCount: 2, challengeCount: 0 }],
+			lucy: { hitEntity: null, predictionCount: 0, criticalSignalCount: 0, recommendation: "support" },
+			route: null,
+			plannerRoute: null,
+			executionRoute: null,
+			source: "daemon",
+		}, {
+			metricName: "val_bpb",
+			objective: "minimize",
+			baselineMetric: 0.99,
+			hypothesis: "failed closure should degrade cleanly",
+		});
+
+		expect(summary).toEqual(expect.objectContaining({
+			roundsCompleted: 1,
+			stopReason: "closure-failed",
+			closureStatus: "degraded",
+			closureError: "failure packing failed",
+			summaryId: "loop-summary-daemon-1",
+			summarySource: "daemon",
+		}));
+		expect(summary.rounds).toEqual([
+			expect.objectContaining({
+				roundNumber: 1,
+				decision: "record",
+				finalizeAction: "reverted",
+				traceId: null,
+				experimentId: null,
+			}),
+		]);
 	});
 
 	it("allows overriding the research execution route class", async () => {

@@ -10,12 +10,14 @@ import type { NodeContext, NodeResult } from "./chitragupta-nodes.js";
 import { fail, timed } from "./chitragupta-nodes.js";
 import {
 	buildScope,
+	type ResearchCouncilSummary,
 	type ResearchScope,
 	pickMetric,
 	resultData,
 } from "./chitragupta-nodes-research-shared.js";
 import {
 	executeResearchRun,
+	executeOvernightResearchLoop,
 	evaluateResearchResult,
 	finalizeResearchResult,
 	packResearchContext,
@@ -159,6 +161,41 @@ export async function autoresearchRun(ctx: NodeContext): Promise<NodeResult> {
 			},
 			durationMs: error.durationMs ?? 0,
 		};
+	}
+}
+
+export async function autoresearchOvernight(ctx: NodeContext): Promise<NodeResult> {
+	try {
+		const { result, durationMs } = await timed(async () =>
+				executeOvernightResearchLoop(
+					scopeFromContext(ctx),
+					resultData(ctx.stepOutputs["acp-research-council"]) as unknown as ResearchCouncilSummary,
+					resultData(ctx.stepOutputs["autoresearch-baseline"]) as unknown as {
+						metricName: string;
+						objective: "minimize" | "maximize";
+					baselineMetric: number | null;
+				},
+			),
+		);
+		return {
+			ok: true,
+				summary:
+					result.stopReason === "no-improvement"
+						? `Overnight research stopped after ${result.roundsCompleted} rounds without improvement`
+						: result.stopReason === "budget-exhausted"
+							? `Overnight research stopped after ${result.roundsCompleted} rounds because the total budget was exhausted`
+							: result.stopReason === "unsafe-discard"
+								? `Overnight research stopped after ${result.roundsCompleted} rounds because a discarded round could not be safely reverted`
+								: result.stopReason === "closure-failed"
+									? `Overnight research stopped after ${result.roundsCompleted} rounds because closure degraded after a successful execution`
+									: result.stopReason === "round-failed"
+										? `Overnight research stopped after ${result.roundsCompleted} rounds because a round failed and was recorded`
+								: `Overnight research completed ${result.roundsCompleted} rounds`,
+			data: result,
+			durationMs,
+		};
+	} catch (err) {
+		return fail("Autoresearch overnight loop failed", 0, err);
 	}
 }
 

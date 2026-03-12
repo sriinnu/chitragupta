@@ -129,12 +129,47 @@ async function resolveResearchExecutionRoute(
 	return toResearchRouteSummary(resolved, scope.executionRouteClass, scope.executionCapability);
 }
 
+async function resolveResearchPlannerRoute(
+	client: DaemonClientLike,
+	scope: ResearchScope,
+	sessionId: string | null,
+): Promise<ResearchRouteSummary | null> {
+	if (!sessionId) return null;
+	const resolved = await client.call("route.resolve", {
+		consumer: "prana:autoresearch:planner",
+		sessionId,
+		routeClass: scope.plannerRouteClass,
+		capability: scope.plannerCapability ?? undefined,
+		context: {
+			topic: scope.topic,
+			projectPath: scope.projectPath,
+			cwd: scope.cwd,
+			targetFiles: scope.targetFiles,
+			immutableFiles: scope.immutableFiles,
+			budgetMs: scope.budgetMs,
+			metricName: scope.metricName,
+			workflow: "autoresearch",
+			role: "planner",
+		},
+	}) as {
+		request?: { capability?: unknown };
+		selected?: { id?: unknown } | null;
+		routeClass?: { id?: unknown; capability?: unknown } | null;
+		executionBinding?: BatchResolvedRoute["executionBinding"];
+		degraded?: unknown;
+		discoverableOnly?: unknown;
+		reason?: unknown;
+		policyTrace?: unknown;
+	};
+	return toResearchRouteSummary(resolved, scope.plannerRouteClass, scope.plannerCapability);
+}
+
 async function resolveResearchRouteBatch(
 	client: DaemonClientLike,
 	scope: ResearchScope,
 	sessionId: string | null,
-): Promise<{ route: ResearchRouteSummary | null; executionRoute: ResearchRouteSummary | null }> {
-	if (!sessionId) return { route: null, executionRoute: null };
+): Promise<{ route: ResearchRouteSummary | null; plannerRoute: ResearchRouteSummary | null; executionRoute: ResearchRouteSummary | null }> {
+	if (!sessionId) return { route: null, plannerRoute: null, executionRoute: null };
 	try {
 		const resolved = await client.call("route.resolveBatch", {
 			consumer: "prana:autoresearch",
@@ -151,6 +186,22 @@ async function resolveResearchRouteBatch(
 						immutableFiles: scope.immutableFiles,
 						budgetMs: scope.budgetMs,
 						metricName: scope.metricName,
+					},
+				},
+				{
+					key: "planner",
+					routeClass: scope.plannerRouteClass,
+					capability: scope.plannerCapability ?? undefined,
+					context: {
+						topic: scope.topic,
+						projectPath: scope.projectPath,
+						cwd: scope.cwd,
+						targetFiles: scope.targetFiles,
+						immutableFiles: scope.immutableFiles,
+						budgetMs: scope.budgetMs,
+						metricName: scope.metricName,
+						workflow: "autoresearch",
+						role: "planner",
 					},
 				},
 				{
@@ -173,16 +224,21 @@ async function resolveResearchRouteBatch(
 		const researchResolution = Array.isArray(resolved.resolutions)
 			? resolved.resolutions.find((entry) => entry?.key === "research")
 			: null;
+		const plannerResolution = Array.isArray(resolved.resolutions)
+			? resolved.resolutions.find((entry) => entry?.key === "planner")
+			: null;
 		const executionResolution = Array.isArray(resolved.resolutions)
 			? resolved.resolutions.find((entry) => entry?.key === "execution")
 			: null;
 		return {
 			route: toResearchRouteSummary(researchResolution, "research.bounded"),
+			plannerRoute: toResearchRouteSummary(plannerResolution, scope.plannerRouteClass, scope.plannerCapability),
 			executionRoute: toResearchRouteSummary(executionResolution, scope.executionRouteClass, scope.executionCapability),
 		};
 	} catch {
 		return {
 			route: await resolveResearchRoute(client, scope, sessionId),
+			plannerRoute: await resolveResearchPlannerRoute(client, scope, sessionId),
 			executionRoute: await resolveResearchExecutionRoute(client, scope, sessionId),
 		};
 	}
@@ -191,7 +247,8 @@ async function resolveResearchRouteBatch(
 export async function runResearchCouncil(scope: ResearchScope): Promise<ResearchCouncilSummary> {
 	validateScope(scope);
 	const lucy = await fetchLucyGuidance(scope);
-	const participants = summarizeCouncilParticipants();
+	const participants = summarizeCouncilParticipants(scope.agentCount);
+	const participantIds = new Set(participants.map((participant) => participant.id));
 	const recommendation = scopeRecommendation(lucy.liveSignals);
 	const daemonCouncil = await withDaemonClient(async (client) => {
 		const sessionId = await ensureResearchSession(client, scope);
@@ -208,6 +265,7 @@ export async function runResearchCouncil(scope: ResearchScope): Promise<Research
 				`Research route authorization unavailable: expected engine.research.autoresearch, got ${route.selectedCapabilityId ?? "none"}.`,
 			);
 		}
+		const plannerRoute = resolvedRoutes.plannerRoute;
 		const executionRoute = resolvedRoutes.executionRoute;
 		const asked = await client.call("sabha.ask", {
 			question: scope.topic,
@@ -222,7 +280,7 @@ export async function runResearchCouncil(scope: ResearchScope): Promise<Research
 			proposal: buildSyllogism(scope),
 			challenges: lucy.liveSignals.length > 0
 				? [{
-					challengerId: "skeptic",
+					challengerId: participantIds.has("skeptic") ? "skeptic" : "executor",
 					targetStep: "hetu",
 					challenge: lucy.hit?.entity
 						? `Explain why this experiment should proceed despite Lucy/Scarlett warning on ${lucy.hit.entity}.`
@@ -230,7 +288,7 @@ export async function runResearchCouncil(scope: ResearchScope): Promise<Research
 				}]
 				: [],
 		});
-		if (lucy.liveSignals.length > 0) {
+		if (lucy.liveSignals.length > 0 && participantIds.has("skeptic")) {
 			const liveSummary = lucy.hit?.content ?? "Live guidance reported regression pressure.";
 			const packedLiveSummary = await packLiveResearchSignalText(liveSummary);
 			const liveReasoning = lucy.liveSignals
@@ -252,25 +310,39 @@ export async function runResearchCouncil(scope: ResearchScope): Promise<Research
 				})),
 			});
 		}
-		const votingPlan = recommendation === "block"
-			? [
-				["planner", "oppose", "Scope is bounded, but the live risk signal blocks execution."],
-				["executor", "oppose", "Execution should not proceed while critical subsystem warnings are active."],
-				["evaluator", "oppose", "A measured result is not trustworthy under current live conditions."],
-				["skeptic", "oppose", "Lucy/Scarlett surfaced blocking conditions."],
-				["recorder", "abstain", "Record the blocked attempt for later retry."],
-			]
-			: [
-				["planner", "support", "The experiment is bounded and the hypothesis is explicit."],
-				["executor", recommendation === "caution" ? "abstain" : "support", recommendation === "caution"
-					? "Proceed with caution and preserve provenance."
-					: "Execution can proceed inside the hard timeout and file scope."],
-				["evaluator", "support", "The metric and keep/discard rule are explicit."],
-				["skeptic", recommendation === "caution" ? "oppose" : "abstain", recommendation === "caution"
-					? "Live warnings warrant skepticism before trusting the outcome."
-					: "No blocking contradiction remains after scope review."],
-				["recorder", "support", "Outcome and provenance will be persisted through the daemon."],
-			];
+		const votingPlan = participants.map<[string, string, string]>((participant) => {
+			switch (participant.id) {
+				case "planner":
+					return [participant.id, recommendation === "block" ? "oppose" : "support",
+						recommendation === "block"
+							? "Scope is bounded, but the live risk signal blocks execution."
+							: "The experiment is bounded and the hypothesis is explicit."];
+				case "executor":
+					return [participant.id, recommendation === "block" ? "oppose" : recommendation === "caution" ? "abstain" : "support",
+						recommendation === "block"
+							? "Execution should not proceed while critical subsystem warnings are active."
+							: recommendation === "caution"
+								? "Proceed with caution and preserve provenance."
+								: "Execution can proceed inside the hard timeout and file scope."];
+				case "evaluator":
+					return [participant.id, recommendation === "block" ? "oppose" : "support",
+						recommendation === "block"
+							? "A measured result is not trustworthy under current live conditions."
+							: "The metric and keep/discard rule are explicit."];
+				case "skeptic":
+					return [participant.id, recommendation === "block" ? "oppose" : recommendation === "caution" ? "oppose" : "abstain",
+						recommendation === "block"
+							? "Lucy/Scarlett surfaced blocking conditions."
+							: recommendation === "caution"
+								? "Live warnings warrant skepticism before trusting the outcome."
+								: "No blocking contradiction remains after scope review."];
+				default:
+					return [participant.id, recommendation === "block" ? "abstain" : "support",
+						recommendation === "block"
+							? "Record the blocked attempt for later retry."
+							: "Outcome and provenance will be persisted through the daemon."];
+			}
+		});
 		for (const [participantId, position, reasoning] of votingPlan.slice(0, -1)) {
 			await client.call("sabha.vote", { id: asked.sabha.id, participantId, position, reasoning });
 		}
@@ -297,7 +369,9 @@ export async function runResearchCouncil(scope: ResearchScope): Promise<Research
 				"daemon",
 				sessionId,
 				route,
+				plannerRoute,
 				executionRoute,
+				participants,
 			),
 			topic: asked.sabha.topic,
 			rounds: concluded.sabha.rounds.length,
@@ -316,9 +390,10 @@ export async function runResearchCouncil(scope: ResearchScope): Promise<Research
 	const sabha = engine.convene(scope.topic, "prana:autoresearch", participants);
 	engine.propose(sabha.id, "planner", buildSyllogism(scope));
 	if (recommendation !== "support") {
+		const challengerId = participantIds.has("skeptic") ? "skeptic" : "executor";
 		engine.challenge(
 			sabha.id,
-			"skeptic",
+			challengerId,
 			"hetu",
 			lucy.hit?.entity
 				? `Explain why this experiment should proceed despite warning on ${lucy.hit.entity}.`
@@ -332,18 +407,26 @@ export async function runResearchCouncil(scope: ResearchScope): Promise<Research
 				: "Fallback council will preserve provenance if it proceeds.",
 		);
 	}
-	if (recommendation === "block") {
-		engine.vote(sabha.id, "planner", "oppose", "Live signals block execution.");
-		engine.vote(sabha.id, "executor", "oppose", "Execution should not proceed under critical signals.");
-		engine.vote(sabha.id, "evaluator", "oppose", "Evaluation would be noisy under critical conditions.");
-		engine.vote(sabha.id, "skeptic", "oppose", "Live guidance is blocking.");
-		engine.vote(sabha.id, "recorder", "abstain", "Persist the blocked attempt.");
-	} else {
-		engine.vote(sabha.id, "planner", "support", "The experiment is bounded.");
-		engine.vote(sabha.id, "executor", recommendation === "caution" ? "abstain" : "support", "Execution respects scope and timeout.");
-		engine.vote(sabha.id, "evaluator", "support", "The metric and decision rule are explicit.");
-		engine.vote(sabha.id, "skeptic", recommendation === "caution" ? "oppose" : "abstain", "Warnings are noted in the record.");
-		engine.vote(sabha.id, "recorder", "support", "Record with provenance.");
+	for (const [participantId, stance, rationale] of participants.map<[string, string, string]>((participant) => {
+		switch (participant.id) {
+			case "planner":
+				return [participant.id, recommendation === "block" ? "oppose" : "support",
+					recommendation === "block" ? "Live signals block execution." : "The experiment is bounded."];
+			case "executor":
+				return [participant.id, recommendation === "block" ? "oppose" : recommendation === "caution" ? "abstain" : "support",
+					recommendation === "block" ? "Execution should not proceed under critical signals." : "Execution respects scope and timeout."];
+			case "evaluator":
+				return [participant.id, recommendation === "block" ? "oppose" : "support",
+					recommendation === "block" ? "Evaluation would be noisy under critical conditions." : "The metric and decision rule are explicit."];
+			case "skeptic":
+				return [participant.id, recommendation === "block" ? "oppose" : recommendation === "caution" ? "oppose" : "abstain",
+					recommendation === "block" ? "Live guidance is blocking." : "Warnings are noted in the record."];
+			default:
+				return [participant.id, recommendation === "block" ? "abstain" : "support",
+					recommendation === "block" ? "Persist the blocked attempt." : "Record with provenance."];
+		}
+	})) {
+		engine.vote(sabha.id, participantId, stance, rationale);
 	}
 	const concluded = engine.conclude(sabha.id) as {
 		id: string;
@@ -352,7 +435,7 @@ export async function runResearchCouncil(scope: ResearchScope): Promise<Research
 		rounds: Array<{ roundNumber: number; verdict: string; votes: unknown[]; challenges: unknown[] }>;
 	};
 	return {
-		...buildCouncilSummary(concluded.id, concluded.finalVerdict, lucy, "local-fallback"),
+		...buildCouncilSummary(concluded.id, concluded.finalVerdict, lucy, "local-fallback", null, null, null, null, participants),
 		topic: concluded.topic,
 		rounds: concluded.rounds.length,
 		councilSummary: concluded.rounds.map((round) => ({

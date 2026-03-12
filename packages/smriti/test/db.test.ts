@@ -224,8 +224,8 @@ describe("Schema initialization", () => {
 				}
 			});
 
-			it("should create research_experiments table", () => {
-				const db = dbm.get("agent");
+				it("should create research_experiments table", () => {
+					const db = dbm.get("agent");
 				const row = db.prepare(
 					"SELECT name FROM sqlite_master WHERE type='table' AND name = 'research_experiments'",
 				).get() as { name?: string } | undefined;
@@ -239,6 +239,28 @@ describe("Schema initialization", () => {
 					expect(cols).toContain("git_head_commit");
 					expect(cols).toContain("git_dirty_before");
 					expect(cols).toContain("git_dirty_after");
+				});
+
+				it("should create research_loop_summaries table", () => {
+					const db = dbm.get("agent");
+					const row = db.prepare(
+						"SELECT name FROM sqlite_master WHERE type='table' AND name = 'research_loop_summaries'",
+					).get() as { name?: string } | undefined;
+					expect(row?.name).toBe("research_loop_summaries");
+					const info = db.prepare("PRAGMA table_info(research_loop_summaries)").all() as Array<{ name: string }>;
+					const cols = info.map((entry) => entry.name);
+					expect(cols).toContain("loop_key");
+					expect(cols).toContain("session_lineage_key");
+					expect(cols).toContain("rounds_requested");
+					expect(cols).toContain("rounds_completed");
+					expect(cols).toContain("summary_json");
+				});
+
+				it("should create remote semantic sync embedding epoch column", () => {
+				const db = dbm.get("agent");
+				const info = db.prepare("PRAGMA table_info(remote_semantic_sync)").all() as Array<{ name: string }>;
+				const cols = info.map((entry) => entry.name);
+				expect(cols).toContain("embedding_epoch");
 			});
 
 			it("should create sabha_state durability table", () => {
@@ -252,17 +274,44 @@ describe("Schema initialization", () => {
 				expect(cols).toContain("perspectives_json");
 			});
 
-			it("should create sabha_event_log durability table", () => {
-				const db = dbm.get("agent");
-				const info = db.prepare("PRAGMA table_info(sabha_event_log)").all() as Array<{ name: string }>;
-				const cols = info.map((row) => row.name);
-				expect(cols).toContain("sabha_id");
+				it("should create sabha_event_log durability table", () => {
+					const db = dbm.get("agent");
+					const info = db.prepare("PRAGMA table_info(sabha_event_log)").all() as Array<{ name: string }>;
+					const cols = info.map((row) => row.name);
+					expect(cols).toContain("sabha_id");
 				expect(cols).toContain("event_id");
 				expect(cols).toContain("revision");
 				expect(cols).toContain("parent_revision");
 				expect(cols).toContain("event_type");
-				expect(cols).toContain("event_json");
-				expect(cols).toContain("created_at");
+					expect(cols).toContain("event_json");
+					expect(cols).toContain("created_at");
+				});
+
+			it("should create semantic_runtime_state table", () => {
+				const db = dbm.get("agent");
+					const info = db.prepare("PRAGMA table_info(semantic_runtime_state)").all() as Array<{ name: string }>;
+					const cols = info.map((row) => row.name);
+					expect(cols).toContain("name");
+					expect(cols).toContain("value_json");
+				expect(cols).toContain("updated_at");
+			});
+
+			it("should add semantic runtime state for legacy schema 23 databases", () => {
+				const db = dbm.get("agent");
+				db.exec("CREATE TABLE IF NOT EXISTS _schema_versions (name TEXT PRIMARY KEY, version INTEGER NOT NULL DEFAULT 0)");
+				db.prepare(
+					"INSERT INTO _schema_versions (name, version) VALUES ('agent', 23) ON CONFLICT(name) DO UPDATE SET version = excluded.version",
+				).run();
+				db.exec("DROP TABLE IF EXISTS semantic_runtime_state");
+
+				initAgentSchema(dbm);
+
+				const row = db.prepare(
+					"SELECT name FROM sqlite_master WHERE type='table' AND name = 'semantic_runtime_state'",
+				).get() as { name?: string } | undefined;
+				expect(row?.name).toBe("semantic_runtime_state");
+				const version = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
+				expect(version.version).toBe(24);
 			});
 
 			it("should add nidra notification counter column", () => {
@@ -423,20 +472,53 @@ describe("Schema initialization", () => {
 	});
 
 		describe("schema versioning", () => {
-			it("should track schema versions", () => {
-				initAgentSchema(dbm);
-				const db = dbm.get("agent");
-				const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-					expect(row.version).toBe(19);
-			});
+				it("should track schema versions", () => {
+					initAgentSchema(dbm);
+					const db = dbm.get("agent");
+					const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
+						expect(row.version).toBe(24);
+				});
 
-			it("should skip re-initialization when version matches", () => {
-				initAgentSchema(dbm);
-				// Second call should be a no-op
-				initAgentSchema(dbm);
+				it("should skip re-initialization when version matches", () => {
+					initAgentSchema(dbm);
+					// Second call should be a no-op
+					initAgentSchema(dbm);
+					const db = dbm.get("agent");
+					const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
+						expect(row.version).toBe(24);
+				});
+
+			it("should add remote semantic embedding epochs for legacy databases", () => {
 				const db = dbm.get("agent");
-				const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-					expect(row.version).toBe(19);
+				db.exec(`
+					CREATE TABLE _schema_versions (
+						name    TEXT PRIMARY KEY,
+						version INTEGER NOT NULL DEFAULT 0
+					);
+
+					CREATE TABLE remote_semantic_sync (
+						target         TEXT NOT NULL,
+						artifact_id    TEXT NOT NULL,
+						level          TEXT NOT NULL,
+						period         TEXT NOT NULL,
+						project        TEXT,
+						content_hash   TEXT NOT NULL,
+						remote_id      TEXT,
+						last_synced_at INTEGER,
+						last_error     TEXT,
+						updated_at     INTEGER NOT NULL,
+						PRIMARY KEY (target, artifact_id)
+					);
+				`);
+				db.prepare(
+					"INSERT INTO _schema_versions (name, version) VALUES ('agent', 20) ON CONFLICT(name) DO UPDATE SET version = excluded.version",
+				).run();
+
+				initAgentSchema(dbm);
+
+				const info = db.prepare("PRAGMA table_info(remote_semantic_sync)").all() as Array<{ name: string }>;
+				const cols = info.map((entry) => entry.name);
+				expect(cols).toContain("embedding_epoch");
 			});
 
 			it("should rebuild consolidation_log with swapna constraint for legacy databases", () => {
@@ -658,6 +740,104 @@ describe("Schema initialization", () => {
 				expect(row.git_head_commit).toBe("abcd");
 				expect(row.git_dirty_before).toBe(1);
 				expect(row.git_dirty_after).toBe(0);
+			});
+
+			it("should backfill overnight research loop metadata from legacy record_json rows", () => {
+				const db = dbm.get("agent");
+				db.exec(`
+					CREATE TABLE _schema_versions (
+						name    TEXT PRIMARY KEY,
+						version INTEGER NOT NULL DEFAULT 0
+					);
+
+					CREATE TABLE research_experiments (
+						id                    TEXT PRIMARY KEY,
+						project               TEXT NOT NULL,
+						experiment_key        TEXT,
+						budget_ms             INTEGER,
+						session_id            TEXT,
+						parent_session_id     TEXT,
+						session_lineage_key   TEXT,
+						topic                 TEXT NOT NULL,
+						metric_name           TEXT NOT NULL,
+						objective             TEXT NOT NULL,
+						baseline_metric       REAL,
+						observed_metric       REAL,
+						delta                 REAL,
+						decision              TEXT NOT NULL,
+						sabha_id              TEXT,
+						council_verdict       TEXT,
+						route_class           TEXT,
+						execution_route_class TEXT,
+						selected_capability_id TEXT,
+						selected_model_id     TEXT,
+						selected_provider_id  TEXT,
+						git_branch            TEXT,
+						git_head_commit       TEXT,
+						git_dirty_before      INTEGER,
+						git_dirty_after       INTEGER,
+						packed_context        TEXT,
+						packed_runtime        TEXT,
+						packed_source         TEXT,
+						record_json           TEXT NOT NULL,
+						created_at            INTEGER NOT NULL,
+						updated_at            INTEGER NOT NULL
+					);
+				`);
+				db.prepare(`
+					INSERT INTO research_experiments (
+						id, project, experiment_key, topic, metric_name, objective, decision, record_json, created_at, updated_at
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				`).run(
+					"exp-legacy-loop-1",
+					"/repo/project",
+					"loop-exp",
+					"overnight refinement",
+					"val_bpb",
+					"minimize",
+					"keep",
+					JSON.stringify({
+						loopKey: "loop-xyz",
+						roundNumber: 3,
+						totalRounds: 6,
+						plannerRoute: {
+							routeClass: "coding.deep-reasoning",
+							selectedCapabilityId: "engine.planner",
+							executionBinding: {
+								selectedModelId: "planner-model",
+								selectedProviderId: "planner-provider",
+							},
+						},
+					}),
+					123456,
+					123456,
+				);
+				db.prepare(
+					"INSERT INTO _schema_versions (name, version) VALUES ('agent', 19) ON CONFLICT(name) DO UPDATE SET version = excluded.version",
+				).run();
+
+				initAgentSchema(dbm);
+
+				const row = db.prepare(`
+					SELECT loop_key, round_number, total_rounds, planner_route_class, planner_selected_capability_id, planner_selected_model_id, planner_selected_provider_id
+					FROM research_experiments
+					WHERE id = ?
+				`).get("exp-legacy-loop-1") as {
+					loop_key: string | null;
+					round_number: number | null;
+					total_rounds: number | null;
+					planner_route_class: string | null;
+					planner_selected_capability_id: string | null;
+					planner_selected_model_id: string | null;
+					planner_selected_provider_id: string | null;
+				};
+				expect(row.loop_key).toBe("loop-xyz");
+				expect(row.round_number).toBe(3);
+				expect(row.total_rounds).toBe(6);
+				expect(row.planner_route_class).toBe("coding.deep-reasoning");
+				expect(row.planner_selected_capability_id).toBe("engine.planner");
+				expect(row.planner_selected_model_id).toBe("planner-model");
+				expect(row.planner_selected_provider_id).toBe("planner-provider");
 			});
 		});
 	});

@@ -8,8 +8,9 @@ Current as of March 8, 2026.
 
 Chitragupta should not only remember and deliberate. It should also support bounded self-improvement and experiment loops without creating a second authority in Takumi or Vaayu.
 
-The runtime now exposes two daemon-first workflow templates through Prana:
+The runtime now exposes three daemon-first workflow templates through Prana:
 - `autoresearch`
+- `autoresearch-overnight`
 - `acp-research-swarm`
 
 These belong in the nervous system because they compose:
@@ -21,7 +22,7 @@ These belong in the nervous system because they compose:
 - Prana: deterministic orchestration
 - PAKT: context/log compression
 
-## The two workflow templates
+## Workflow templates
 
 ### `autoresearch`
 
@@ -42,6 +43,84 @@ Default shape:
 5. `autoresearch-evaluate`
 6. `pakt-pack-research-context`
 7. `autoresearch-record`
+
+### `autoresearch-overnight`
+
+Purpose:
+- run a bounded overnight research loop with a small planner/executor council
+- carry compacted context forward between rounds
+- stop early when improvement stalls
+- record each round durably into the research ledger
+
+Default shape:
+1. `autoresearch-scope`
+2. `acp-research-council`
+3. `autoresearch-baseline`
+4. `autoresearch-overnight`
+
+Default overnight controls:
+- `researchRounds: 6`
+- `researchAgentCount: 2`
+- `researchStopAfterNoImprovementRounds: 2`
+- `researchPlannerRouteClass: coding.deep-reasoning`
+- `researchExecutionRouteClass: tool.use.flex`
+
+The overnight loop keeps one canonical `loopKey`, records `roundNumber` and `totalRounds`, and uses daemon-first `compression.unpack_context` / `compression.normalize_context` when reusing packed carry context between rounds.
+
+It also tracks:
+- `totalBudgetMs`
+- `totalDurationMs`
+- `keptRounds`
+- `revertedRounds`
+- attempt-safe round ledger metadata:
+  - `experimentKey`
+  - `attemptKey`
+  - `attemptNumber`
+  - `status`
+  - `errorMessage`
+
+Fail-closed stop reasons:
+- `no-improvement`
+- `budget-exhausted`
+- `cancelled`
+- `unsafe-discard`
+- `round-failed`
+
+That means the workflow will stop instead of pretending success if:
+- cumulative overnight runtime exceeds the bounded total budget
+- an operator or daemon-owned loop control path requests cancellation
+- a discarded round cannot be safely reverted
+- a round fails after execution starts and the failed attempt has to be preserved instead of being collapsed into the previous round's history
+
+Interrupt semantics:
+- the overnight loop registers a canonical daemon control record through:
+  - `research.loops.start`
+  - `research.loops.heartbeat`
+  - `research.loops.cancel`
+  - `research.loops.complete`
+- `loopKey` is treated as an immutable run id:
+  - terminal keys are not reopened
+  - a new run must use a new `loopKey`
+- daemon registration is mandatory:
+  - if `research.loops.start` cannot be registered with the daemon, the loop does not continue with local-only control state
+- each loop also owns a local `AbortController`
+- cancellation is honored:
+  - before a round starts
+  - during a running round
+  - during closure steps between:
+    - `packResearchContext`
+    - `recordResearchOutcome`
+    - `compression.unpack_context`
+    - `compression.normalize_context`
+- a late heartbeat cannot revive a loop once daemon state is terminal (`completed` or `cancelled`)
+- terminal completion records `stopReason: cancelled` instead of falling back to `max-rounds`
+- local interrupt state is only cleared after daemon completion succeeds:
+  - a transient `research.loops.complete` failure leaves the local loop handle available for retry or inspection
+- loop best-metric progress only advances after the round crosses the durable outcome-record boundary
+- daily Nidra postprocess now derives one per-project research refinement digest from the loop summaries and experiment ledger, so overnight outcomes feed back into project memory as:
+  - what worked
+  - what failed
+  - what to try next
 
 ### `acp-research-swarm`
 
@@ -66,14 +145,16 @@ ACP-style subagents map to Chitragupta's existing runtime primitives:
 
 In this system, ACP does not mean a second runtime. It means Chitragupta uses Sutra/Mesh for peer communication and Sabha for council state inside one daemon-first engine contract.
 
-Default council roles in `acp-research-council`:
+Default council roles in `acp-research-council` are dynamic.
+
+Standard bounded research defaults to a five-role council:
 - `planner`
 - `executor`
 - `evaluator`
 - `skeptic`
 - `recorder`
 
-These roles produce a bounded council verdict before an experiment result is trusted.
+The overnight loop intentionally narrows that to a two-agent planner/executor council so the run stays cheap and repeatable while still preserving structured skepticism through the recorded verdict and measured baseline delta.
 
 ## Bounded experiment contract
 
@@ -149,6 +230,8 @@ The durable record is the experiment summary with:
 - compression metadata
 - execution-binding provenance for discovery-backed lanes
 
+Daily postprocess now also writes a derived research refinement digest per project, so raw loop records are not the only thing Nidra leaves behind.
+
 ## PAKT
 
 PAKT is used here as an engine-managed capability.
@@ -157,6 +240,7 @@ If the daemon is reachable, its `compression.pack_context` decision is authorita
 Local packing only activates when the daemon is unavailable.
 The packed research record now preserves the compacted payload itself plus the engine-selected provider/model envelope used for execution, including the selected provider/model pair and the preferred allowed set returned by the daemon route contract.
 Packed blocks can now be normalized or unpacked through daemon compression methods before read-side reuse, so the workflow does not recursively wrap already-packed context.
+The overnight loop now records failed attempts separately instead of overwriting the previous successful round record, which keeps retry history auditable and gives Nidra later material to consolidate.
 
 PAKT does not become the memory authority.
 Smriti remains canonical.

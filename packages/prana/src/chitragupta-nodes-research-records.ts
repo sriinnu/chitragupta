@@ -34,6 +34,11 @@ export interface ResearchResolvedRouteSummary {
 
 export interface ResearchExperimentRecord {
 	experimentKey: string;
+	attemptKey: string | null;
+	loopKey: string | null;
+	roundNumber: number | null;
+	totalRounds: number | null;
+	attemptNumber: number | null;
 	topic: string;
 	hypothesis: string;
 	command: string;
@@ -50,12 +55,15 @@ export interface ResearchExperimentRecord {
 	sessionId: string | null;
 	sabhaId: string | null;
 	route: ResearchResolvedRouteSummary | null;
+	plannerRoute: ResearchResolvedRouteSummary | null;
 	executionRoute: ResearchResolvedRouteSummary | null;
 	councilVerdict: string;
 	baselineMetric: number | null;
 	observedMetric: number | null;
 	delta: number | null;
 	decision: "keep" | "discard" | "record";
+	status: "completed" | "failed";
+	errorMessage: string | null;
 	finalize: ResearchFinalizeResult | null;
 	run: {
 		exitCode: number | null;
@@ -91,6 +99,9 @@ export function buildResearchExperimentRecord(
 	const route = council.route && typeof council.route === "object"
 		? council.route as ResearchResolvedRouteSummary
 		: null;
+	const plannerRoute = council.plannerRoute && typeof council.plannerRoute === "object"
+		? council.plannerRoute as ResearchResolvedRouteSummary
+		: null;
 	const executionRoute = council.executionRoute && typeof council.executionRoute === "object"
 		? council.executionRoute as ResearchResolvedRouteSummary
 		: null;
@@ -106,12 +117,38 @@ export function buildResearchExperimentRecord(
 		metricName: scope.metricName,
 		objective: scope.objective,
 		executionRouteClass: scope.executionRouteClass,
+		plannerRouteClass: scope.plannerRouteClass,
+		plannerCapability: scope.plannerCapability,
 		executionCapability: scope.executionCapability,
 		sessionLineageKey: scope.sessionLineageKey,
+		loopKey: scope.loopKey,
+		roundNumber: scope.roundNumber,
+		totalRounds: scope.totalRounds,
 		sessionId: typeof council.sessionId === "string" ? council.sessionId : null,
 	});
+	const attemptNumber = typeof scope.attemptNumber === "number" && Number.isFinite(scope.attemptNumber)
+		? scope.attemptNumber
+		: null;
+	const attemptKey = attemptNumber !== null
+		? `${experimentKey}#attempt:${attemptNumber}`
+		: null;
+	const status =
+		typeof evaluation.status === "string" && evaluation.status.trim().toLowerCase() === "failed"
+			? "failed"
+			: "completed";
+	const errorMessage =
+		typeof evaluation.errorMessage === "string" && evaluation.errorMessage.trim()
+			? evaluation.errorMessage.trim()
+			: typeof run.errorMessage === "string" && run.errorMessage.trim()
+				? run.errorMessage.trim()
+				: null;
 	return {
 		experimentKey,
+		attemptKey,
+		loopKey: scope.loopKey,
+		roundNumber: scope.roundNumber,
+		totalRounds: scope.totalRounds,
+		attemptNumber,
 		topic: scope.topic,
 		hypothesis: scope.hypothesis,
 		command: scope.command,
@@ -128,12 +165,15 @@ export function buildResearchExperimentRecord(
 		sessionId: typeof council.sessionId === "string" ? council.sessionId : null,
 		sabhaId: typeof council.sabhaId === "string" ? council.sabhaId : null,
 		route,
+		plannerRoute,
 		executionRoute,
 		councilVerdict: typeof council.finalVerdict === "string" ? council.finalVerdict : "unknown",
 		baselineMetric: typeof evaluation.baselineMetric === "number" ? evaluation.baselineMetric : null,
 		observedMetric: typeof evaluation.observedMetric === "number" ? evaluation.observedMetric : null,
 		delta: typeof evaluation.delta === "number" ? evaluation.delta : null,
 		decision: typeof evaluation.decision === "string" ? evaluation.decision as "keep" | "discard" | "record" : "record",
+		status,
+		errorMessage,
 		finalize: finalize && typeof finalize === "object"
 			? {
 				decision: finalize.decision === "keep" ? "keep" : "discard",
@@ -206,6 +246,10 @@ export function buildResearchRecord(
 		``,
 		`- topic: ${experiment.topic}`,
 		`- experiment key: ${experiment.experimentKey}`,
+		`- attempt key: ${experiment.attemptKey ?? "none"}`,
+		`- loop key: ${experiment.loopKey ?? "none"}`,
+		`- round: ${experiment.roundNumber ?? "n/a"} / ${experiment.totalRounds ?? "n/a"}`,
+		`- attempt: ${experiment.attemptNumber ?? "n/a"}`,
 		`- hypothesis: ${experiment.hypothesis}`,
 		`- command: ${experiment.command} ${experiment.commandArgs.join(" ")}`.trim(),
 		`- cwd: ${experiment.cwd}`,
@@ -224,6 +268,10 @@ export function buildResearchRecord(
 		`- route reason: ${typeof route?.reason === "string" ? route.reason : "n/a"}`,
 		`- route preferred providers: ${Array.isArray((route as { executionBinding?: { preferredProviderIds?: unknown } } | null)?.executionBinding?.preferredProviderIds) ? ((route as { executionBinding: { preferredProviderIds: string[] } }).executionBinding.preferredProviderIds.join(", ") || "none") : "none"}`,
 		`- route preferred models: ${Array.isArray((route as { executionBinding?: { preferredModelIds?: unknown } } | null)?.executionBinding?.preferredModelIds) ? ((route as { executionBinding: { preferredModelIds: string[] } }).executionBinding.preferredModelIds.join(", ") || "none") : "none"}`,
+		`- planner route class: ${typeof experiment.plannerRoute?.routeClass === "string" ? experiment.plannerRoute.routeClass : "none"}`,
+		`- planner capability: ${typeof experiment.plannerRoute?.capability === "string" ? experiment.plannerRoute.capability : "none"}`,
+		`- planner selected capability: ${typeof experiment.plannerRoute?.selectedCapabilityId === "string" ? experiment.plannerRoute.selectedCapabilityId : "none"}`,
+		`- planner route reason: ${typeof experiment.plannerRoute?.reason === "string" ? experiment.plannerRoute.reason : "n/a"}`,
 		`- execution route class: ${typeof executionRoute?.routeClass === "string" ? executionRoute.routeClass : "none"}`,
 		`- execution capability: ${typeof executionRoute?.capability === "string" ? executionRoute.capability : "none"}`,
 		`- execution selected capability: ${typeof executionRoute?.selectedCapabilityId === "string" ? executionRoute.selectedCapabilityId : "none"}`,
@@ -238,6 +286,8 @@ export function buildResearchRecord(
 		`- observed: ${observed}`,
 		`- delta: ${delta}`,
 		`- decision: ${experiment.decision}`,
+		`- status: ${experiment.status}`,
+		`- error: ${experiment.errorMessage ?? "none"}`,
 		`- council verdict: ${experiment.councilVerdict}`,
 		finalizeSummary,
 		`- packed runtime: ${packRuntime}`,

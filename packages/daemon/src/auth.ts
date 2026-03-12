@@ -155,7 +155,11 @@ export function authorizeDaemonMethod(
 			? { allowed: true }
 			: { allowed: false, required: "read" };
 	}
-	if (method === "research.experiments.list") {
+	if (
+		method === "research.experiments.list"
+		|| method === "research.loops.list"
+		|| method === "research.loops.get"
+	) {
 		return hasScope(scopes, "read") || hasScope(scopes, "memory")
 			? { allowed: true }
 			: { allowed: false, required: "read" };
@@ -181,7 +185,12 @@ export function authorizeDaemonMethod(
 		|| method.startsWith("nidra.")
 		|| method.startsWith("consolidation.")
 		|| method === "semantic.sync_curated"
-		|| method === "research.experiments.record"
+			|| method === "research.experiments.record"
+			|| method === "research.loops.record"
+			|| method === "research.loops.start"
+			|| method === "research.loops.heartbeat"
+			|| method === "research.loops.cancel"
+			|| method === "research.loops.complete"
 		|| method.startsWith("fact.")
 		|| method.startsWith("akasha.")
 		|| method === "memory.write"

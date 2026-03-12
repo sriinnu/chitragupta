@@ -12,6 +12,9 @@ export {
 	finalizeResearchResult,
 } from "./chitragupta-nodes-research-runner.js";
 export {
+	executeOvernightResearchLoop,
+} from "./chitragupta-nodes-research-overnight.js";
+export {
 	packResearchContext,
 	recordResearchOutcome,
 } from "./chitragupta-nodes-research-recording.js";

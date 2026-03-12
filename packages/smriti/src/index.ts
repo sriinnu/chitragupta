@@ -184,6 +184,22 @@ export type {
 	RemoteSemanticSyncResult,
 } from "./remote-semantic-sync.js";
 
+/** Epoch-aware selective re-embedding planner/repair for curated semantic artifacts. */
+export {
+	planSelectiveReembedding,
+	repairSelectiveReembedding,
+} from "./selective-reembedding.js";
+export type {
+	SelectiveReembeddingCandidate,
+	SelectiveReembeddingPlan,
+	SelectiveReembeddingRepairResult,
+	SelectiveReembeddingOptions,
+} from "./selective-reembedding.js";
+
+/** Global self-healing refresh when the active embedding epoch changes. */
+export { refreshGlobalSemanticEpochDrift } from "./semantic-epoch-refresh.js";
+export type { SemanticEpochRefreshResult } from "./semantic-epoch-refresh.js";
+
 /** Engine-owned PAKT compression policy with pakt-core default and stdio fallback. */
 export {
 	_setCompressionRuntimeForTests,
@@ -216,6 +232,17 @@ export type {
 	StoredResearchExperiment,
 	ListResearchExperimentsOptions,
 } from "./research-experiments.js";
+
+/** Durable overnight/research loop summaries for daily refinement and recall. */
+export {
+	upsertResearchLoopSummary,
+	listResearchLoopSummaries,
+} from "./research-loop-summaries.js";
+export type {
+	ResearchLoopSummaryInput,
+	StoredResearchLoopSummary,
+	ListResearchLoopSummariesOptions,
+} from "./research-loop-summaries.js";
 
 /** Session compactor that prunes low-signal turns using stream-weighted scoring. */
 export { SessionCompactor } from "./compactor.js";

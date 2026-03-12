@@ -24,6 +24,8 @@ export interface ChitraguptaDaemonConfig {
 	yearlyConsolidationHour: number;
 	/** Retain day files for this many months before archiving. Default: 6. */
 	dayFileRetentionMonths: number;
+	/** Minutes between embedding-epoch self-heal checks. Default: 30. */
+	semanticEpochRefreshMinutes: number;
 }
 
 /** Daemon state snapshot. */
@@ -53,6 +55,7 @@ export const DEFAULT_DAEMON_CONFIG: ChitraguptaDaemonConfig = {
 	monthlyConsolidationHour: 3,
 	yearlyConsolidationHour: 4,
 	dayFileRetentionMonths: 6,
+	semanticEpochRefreshMinutes: 30,
 };
 
 const CONSOLIDATION_LOCK_STALE_MS = 2 * 60 * 60 * 1000;

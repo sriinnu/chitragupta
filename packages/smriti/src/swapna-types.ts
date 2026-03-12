@@ -10,6 +10,7 @@
 
 import type { SessionToolCall, PramanaType } from "./types.js";
 import type { PackedSummaryResult } from "./pakt-compression.js";
+import type { MdlCompactionMetrics, PackedRepresentationDecision } from "./mdl-compaction.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -94,6 +95,8 @@ export interface CompressResult {
 	summaryText?: string;
 	packedSummaryText?: string;
 	compression?: PackedSummaryResult;
+	mdlMetrics?: MdlCompactionMetrics;
+	packedDecision?: PackedRepresentationDecision | null;
 }
 
 /** Full result of a Swapna consolidation cycle. */

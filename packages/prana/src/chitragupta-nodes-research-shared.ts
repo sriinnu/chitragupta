@@ -12,6 +12,10 @@ export const DEFAULT_METRIC_NAME = "val_bpb";
 export const DEFAULT_METRIC_PATTERN = "val_bpb\\s*[:=]\\s*([0-9]+(?:\\.[0-9]+)?)";
 export const DEFAULT_BUDGET_MS = 300_000;
 export const MAX_BUDGET_MS = 300_000;
+export const DEFAULT_PLANNER_ROUTE_CLASS = "coding.deep-reasoning";
+export const DEFAULT_OVERNIGHT_ROUNDS = 6;
+export const DEFAULT_OVERNIGHT_AGENT_COUNT = 5;
+export const DEFAULT_NO_IMPROVEMENT_STOP = 2;
 
 export type ResearchObjective = "minimize" | "maximize";
 
@@ -30,8 +34,20 @@ export interface ResearchScope {
 	metricPattern: string;
 	objective: ResearchObjective;
 	budgetMs: number;
+	totalBudgetMs: number;
+	allowDirtyWorkspace: boolean;
+	plannerRouteClass: string;
+	plannerCapability: string | null;
 	executionRouteClass: string;
 	executionCapability: string | null;
+	maxRounds: number;
+	agentCount: number;
+	stopAfterNoImprovementRounds: number;
+	loopKey: string | null;
+	roundNumber: number | null;
+	totalRounds: number | null;
+	attemptNumber: number | null;
+	interruptSignal?: AbortSignal;
 }
 
 export interface ResearchRunData {
@@ -91,6 +107,7 @@ export interface ResearchCouncilSummary {
 		recommendation: "support" | "caution" | "block";
 	};
 	route: ResearchResolvedRouteSummary | null;
+	plannerRoute: ResearchResolvedRouteSummary | null;
 	executionRoute: ResearchResolvedRouteSummary | null;
 	source: "daemon" | "local-fallback";
 }
@@ -127,6 +144,24 @@ export function clampBudget(ms: number): number {
 	return Math.max(1_000, Math.min(MAX_BUDGET_MS, Math.floor(ms)));
 }
 
+function clampRounds(value: number): number {
+	return Math.max(1, Math.min(24, Math.floor(value)));
+}
+
+function clampTotalBudget(value: number, perRoundBudget: number, rounds: number): number {
+	const fallback = perRoundBudget * rounds;
+	const normalized = Number.isFinite(value) ? Math.floor(value) : fallback;
+	return Math.max(perRoundBudget, Math.min(normalized, MAX_BUDGET_MS * 24));
+}
+
+function clampAgentCount(value: number): number {
+	return Math.max(2, Math.min(5, Math.floor(value)));
+}
+
+function clampNoImprovementRounds(value: number, rounds: number): number {
+	return Math.max(1, Math.min(rounds, Math.floor(value)));
+}
+
 export function normalizeScopeFile(file: string): string {
 	const normalized = file.replace(/\\/g, "/").trim();
 	if (!normalized) return "";
@@ -135,6 +170,10 @@ export function normalizeScopeFile(file: string): string {
 
 function optionalStringValue(value: unknown): string | null {
 	return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function booleanValue(value: unknown, fallback: boolean): boolean {
+	return typeof value === "boolean" ? value : fallback;
 }
 
 function resolveResearchProjectPath(projectPath: string): string {
@@ -160,6 +199,12 @@ function resolveResearchCwd(projectPath: string, researchCwd: unknown): string {
 export function buildScope(ctx: NodeContext): ResearchScope {
 	const projectPath = resolveResearchProjectPath(ctx.projectPath);
 	const cwd = resolveResearchCwd(projectPath, ctx.extra.researchCwd);
+	const maxRounds = clampRounds(
+		numberValue(ctx.extra.researchRounds, DEFAULT_OVERNIGHT_ROUNDS),
+	);
+	const budgetMs = clampBudget(
+		numberValue(ctx.extra.researchBudgetMs, DEFAULT_BUDGET_MS),
+	);
 	return {
 		hypothesis: stringValue(
 			ctx.extra.researchHypothesis,
@@ -195,11 +240,35 @@ export function buildScope(ctx: NodeContext): ResearchScope {
 			DEFAULT_METRIC_PATTERN,
 		),
 		objective: objectiveValue(ctx.extra.researchObjective),
-		budgetMs: clampBudget(
-			numberValue(ctx.extra.researchBudgetMs, DEFAULT_BUDGET_MS),
+		budgetMs,
+		totalBudgetMs: clampTotalBudget(
+			numberValue(ctx.extra.researchTotalBudgetMs, budgetMs * maxRounds),
+			budgetMs,
+			maxRounds,
 		),
+		allowDirtyWorkspace: booleanValue(ctx.extra.researchAllowDirtyWorkspace, false),
+		plannerRouteClass: stringValue(
+			ctx.extra.researchPlannerRouteClass,
+			DEFAULT_PLANNER_ROUTE_CLASS,
+		),
+		plannerCapability: optionalStringValue(ctx.extra.researchPlannerCapability),
 		executionRouteClass: stringValue(ctx.extra.researchExecutionRouteClass, "tool.use.flex"),
 		executionCapability: optionalStringValue(ctx.extra.researchExecutionCapability),
+		maxRounds,
+		agentCount: clampAgentCount(
+			numberValue(ctx.extra.researchAgentCount, DEFAULT_OVERNIGHT_AGENT_COUNT),
+		),
+		stopAfterNoImprovementRounds: clampNoImprovementRounds(
+			numberValue(
+				ctx.extra.researchStopAfterNoImprovementRounds,
+				DEFAULT_NO_IMPROVEMENT_STOP,
+			),
+			maxRounds,
+		),
+		loopKey: optionalStringValue(ctx.extra.researchLoopKey),
+		roundNumber: null,
+		totalRounds: null,
+		attemptNumber: null,
 	};
 }
 
@@ -209,6 +278,9 @@ export function validateScope(scope: ResearchScope): void {
 	if (scope.targetFiles.length === 0) throw new Error("At least one target file is required");
 	if (!scope.executionRouteClass && !scope.executionCapability) {
 		throw new Error("Research execution route class or capability is required");
+	}
+	if (!scope.plannerRouteClass && !scope.plannerCapability) {
+		throw new Error("Research planner route class or capability is required");
 	}
 	const immutableOverlap = scope.targetFiles.filter((file) => scope.immutableFiles.includes(file));
 	if (immutableOverlap.length > 0) {
@@ -240,14 +312,31 @@ export function resultData(step: unknown): Record<string, unknown> {
 	return record;
 }
 
-export function summarizeCouncilParticipants(): CouncilParticipantSummary[] {
-	return [
+export function summarizeCouncilParticipants(agentCount = 5): CouncilParticipantSummary[] {
+	const participants: CouncilParticipantSummary[] = [
 		{ id: "planner", role: "planner", expertise: 0.84, credibility: 0.82 },
 		{ id: "executor", role: "executor", expertise: 0.8, credibility: 0.84 },
 		{ id: "evaluator", role: "evaluator", expertise: 0.9, credibility: 0.88 },
 		{ id: "skeptic", role: "skeptic", expertise: 0.92, credibility: 0.86 },
 		{ id: "recorder", role: "recorder", expertise: 0.74, credibility: 0.83 },
 	];
+	return participants.slice(0, clampAgentCount(agentCount));
+}
+
+export function withResearchRoundScope(
+	scope: ResearchScope,
+	loopKey: string,
+	roundNumber: number,
+	totalRounds: number,
+	attemptNumber = 1,
+): ResearchScope {
+	return {
+		...scope,
+		loopKey,
+		roundNumber,
+		totalRounds,
+		attemptNumber,
+	};
 }
 
 export function buildSyllogism(scope: ResearchScope) {

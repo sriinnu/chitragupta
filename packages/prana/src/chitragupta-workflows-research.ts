@@ -1,5 +1,8 @@
 import type { Workflow } from "./types.js";
 import { WorkflowBuilder } from "./builder.js";
+import { MAX_BUDGET_MS } from "./chitragupta-nodes-research-shared.js";
+
+const OVERNIGHT_WORKFLOW_TIMEOUT_MS = MAX_BUDGET_MS * 24 + 300_000;
 
 export const AUTORESEARCH_WORKFLOW: Workflow = new WorkflowBuilder(
 	"autoresearch",
@@ -73,6 +76,59 @@ export const AUTORESEARCH_WORKFLOW: Workflow = new WorkflowBuilder(
 		.timeout(20000)
 		.done()
 	.build();
+
+export const AUTORESEARCH_OVERNIGHT_WORKFLOW: Workflow = new WorkflowBuilder(
+	"autoresearch-overnight",
+	"Overnight Autoresearch Loop",
+)
+	.describe(
+		"Daemon-first multi-round research workflow: define a hard research scope, " +
+		"convene a two-agent planner/executor council, capture a baseline, then run " +
+		"iterative bounded experiment rounds with keep/discard/revert decisions and " +
+		"packed carryover between rounds.",
+	)
+	.setVersion("1.0.0")
+	.setContext({
+		researchTopic: "Overnight bounded train.py improvement loop",
+		researchHypothesis: "A planner/executor overnight loop can improve validation quality under bounded budgets.",
+		researchCommand: "uv",
+		researchArgs: ["run", "train.py"],
+		researchTargetFiles: ["train.py"],
+		researchImmutableFiles: ["prepare.py"],
+		researchMetricName: "val_bpb",
+		researchMetricPattern: "val_bpb\\s*[:=]\\s*([0-9]+(?:\\.[0-9]+)?)",
+		researchObjective: "minimize",
+		researchBudgetMs: 300_000,
+		researchRounds: 6,
+		researchAgentCount: 2,
+		researchStopAfterNoImprovementRounds: 2,
+		researchPlannerRouteClass: "coding.deep-reasoning",
+		researchExecutionRouteClass: "tool.use.flex",
+	})
+	.step("autoresearch-scope", "Define Overnight Research Scope")
+		.tool("chitragupta:autoresearch-scope", {})
+		.tag("research", "scope", "overnight")
+		.timeout(5000)
+		.done()
+	.step("acp-research-council", "Convene Planner/Executor Council")
+		.tool("chitragupta:acp-research-council", {})
+		.dependsOn("autoresearch-scope")
+		.tag("research", "sabha", "acp", "overnight")
+		.timeout(10000)
+		.done()
+	.step("autoresearch-baseline", "Capture Baseline Metric")
+		.tool("chitragupta:autoresearch-baseline", {})
+		.dependsOn("autoresearch-scope")
+		.tag("research", "baseline")
+		.timeout(5000)
+		.done()
+		.step("autoresearch-overnight", "Run Overnight Experiment Loop")
+			.tool("chitragupta:autoresearch-overnight", {})
+			.dependsOn("acp-research-council", "autoresearch-baseline")
+			.tag("research", "overnight", "loop")
+			.timeout(OVERNIGHT_WORKFLOW_TIMEOUT_MS)
+			.done()
+		.build();
 
 export const ACP_RESEARCH_SWARM_WORKFLOW: Workflow = new WorkflowBuilder(
 	"acp-research-swarm",

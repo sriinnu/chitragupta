@@ -1,6 +1,6 @@
 {
 	"name": "@chitragupta/smriti",
-  "version": "0.1.3",
+	"version": "0.1.4",
 	"description": "Memory system with GraphRAG, information-theoretic compaction, and hybrid search",
 	"type": "module",
 	"license": "MIT",

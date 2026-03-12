@@ -66,6 +66,7 @@ export function registerCompressionMethods(router: RpcRouter): void {
 		const normalized = await normalizePackedContextText(text);
 		return {
 			text: normalized,
+			result: normalized,
 			changed: normalized !== text,
 			packed: isPackedContextText(text),
 		};
@@ -77,6 +78,7 @@ export function registerCompressionMethods(router: RpcRouter): void {
 		const unpacked = await unpackPackedContextText(text);
 		return {
 			text: unpacked,
+			result: unpacked,
 			unpacked: unpacked !== text,
 			packed: isPackedContextText(text),
 		};

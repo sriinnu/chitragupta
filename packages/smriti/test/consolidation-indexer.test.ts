@@ -19,6 +19,7 @@ vi.mock("@chitragupta/core", () => {
 	return {
 		getChitraguptaHome: () => _home,
 		setChitraguptaHome: (h: string) => { _home = h; },
+		loadGlobalSettings: () => ({}),
 		createLogger: () => ({
 			debug: () => {},
 			info: () => {},
@@ -48,7 +49,12 @@ import {
 	repairConsolidationVectorSync,
 	_resetConsolidationIndexer,
 } from "../src/consolidation-indexer.js";
+import {
+	planSelectiveReembedding,
+	repairSelectiveReembedding,
+} from "../src/selective-reembedding.js";
 import { renderConsolidationMetadata } from "../src/consolidation-provenance.js";
+import { computeMdlCompactionMetrics } from "../src/mdl-compaction.js";
 
 // ─── Setup ──────────────────────────────────────────────────────────────────
 
@@ -212,6 +218,29 @@ const CURATED_DAILY_MD = `${renderConsolidationMetadata({
 **Decision**: Keep raw sessions canonical, promote only curated artifacts
 `;
 
+const LOW_MDL_DAILY_MD = `${renderConsolidationMetadata({
+	kind: "day",
+	formatVersion: 1,
+	date: "2026-02-12",
+	generatedAt: "2026-02-12T03:00:00.000Z",
+	sessionCount: 1,
+	projectCount: 1,
+	sourceSessionIds: ["session-low-mdl"],
+	sourceSessions: [
+		{ id: "session-low-mdl", project: "/my/project", title: "Low MDL", created: "2026-02-12T01:00:00.000Z", updated: "2026-02-12T01:10:00.000Z", provider: "claude", branch: null },
+	],
+	projects: [{ project: "/my/project", sessionIds: ["session-low-mdl"] }],
+})}
+
+# 2026-02-12 — Wednesday
+
+${Array.from({ length: 180 }, (_, index) => `Noise shard ${index} unrelated-token-${index} drift-noise-${index} entropy-noise-${index}.`).join("\n")}
+
+## Facts Learned
+
+- [decision] Keep only the essential semantic policy signal
+`;
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe("extractSummaryText", () => {
@@ -301,6 +330,8 @@ describe("indexConsolidationSummary", () => {
 		expect(metadata?.curated).toBe(true);
 		expect(metadata?.sourceSessionIds).toEqual(["session-a", "session-b"]);
 		expect(typeof metadata?.contentHash).toBe("string");
+		expect((metadata?.embeddingEpoch as { epoch?: string } | undefined)?.epoch).toBeTruthy();
+		expect((metadata?.mdlMetrics as { mdlScore?: number } | undefined)?.mdlScore).toBeTypeOf("number");
 	});
 
 	it("stores packed curated summaries as derived metadata without replacing semantic text", async () => {
@@ -321,6 +352,25 @@ describe("indexConsolidationSummary", () => {
 		expect(metadata?.packedSummaryText).toContain("@from text");
 		expect((metadata?.compression as { runtime?: string })?.runtime).toBe("pakt");
 	});
+
+		it("rejects packed curated summaries that lose too much signal", async () => {
+		_setSummaryPackerForTests({
+			packSummary: vi.fn(async () => ({
+				runtime: "pakt",
+				packedText: "pakt:xyz",
+				format: "text",
+				savings: 92,
+			})),
+		});
+
+		await indexConsolidationSummary("daily", "2026-02-10", `${CURATED_DAILY_MD}\n${"Deterministic lineage and semantic promotion. ".repeat(24)}`);
+		const metadata = getEmbeddingMetadata("daily_summary");
+
+		expect(metadata?.packedSummaryText).toBeNull();
+		expect(metadata?.compression).toBeNull();
+			expect((metadata?.packedDecision as { accepted?: boolean; reason?: string } | undefined)?.accepted).toBe(false);
+			expect((metadata?.packedDecision as { accepted?: boolean; reason?: string } | undefined)?.reason).toBe("low_retention");
+		});
 });
 
 describe("searchConsolidationSummaries", () => {
@@ -418,5 +468,339 @@ describe("semantic sync inspection and repair", () => {
 		expect(status.missingCount).toBe(0);
 		expect(status.driftCount).toBe(1);
 		expect(status.issues[0]?.reason).toBe("stale_hash");
+	});
+
+	it("detects stale embedding epochs when curated text is unchanged", async () => {
+		const daysDir = path.join(tmpDir, "days", "2026", "02");
+		fs.mkdirSync(daysDir, { recursive: true });
+		fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
+
+		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
+		const db = DatabaseManager.instance().get("vectors");
+		const row = db.prepare("SELECT metadata FROM embeddings WHERE source_type = ?").get("daily_summary") as { metadata: string };
+		const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+		metadata.embeddingEpoch = {
+			providerId: "legacy-provider",
+			modelId: "legacy-model",
+			dimensions: 384,
+			strategy: "provider",
+			epoch: "legacy-provider:legacy-model:384:provider",
+		};
+		db.prepare("UPDATE embeddings SET metadata = ? WHERE source_type = ?").run(JSON.stringify(metadata), "daily_summary");
+
+		const status = await inspectConsolidationVectorSync();
+		expect(status.missingCount).toBe(0);
+		expect(status.driftCount).toBe(1);
+		expect(status.issues[0]?.reason).toBe("stale_epoch");
+	});
+
+	it("plans selective re-embedding for stale-epoch curated artifacts", async () => {
+		const daysDir = path.join(tmpDir, "days", "2026", "02");
+		fs.mkdirSync(daysDir, { recursive: true });
+		fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
+
+		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
+		const db = DatabaseManager.instance().get("vectors");
+		const row = db.prepare("SELECT metadata FROM embeddings WHERE source_type = ?").get("daily_summary") as { metadata: string };
+		const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+		metadata.embeddingEpoch = {
+			providerId: "legacy-provider",
+			modelId: "legacy-model",
+			dimensions: 384,
+			strategy: "provider",
+			epoch: "legacy-provider:legacy-model:384:provider",
+		};
+		db.prepare("UPDATE embeddings SET metadata = ? WHERE source_type = ?").run(JSON.stringify(metadata), "daily_summary");
+
+		const plan = await planSelectiveReembedding({ candidateLimit: 5 });
+		expect(plan.scanned).toBeGreaterThanOrEqual(1);
+		expect(plan.candidateCount).toBe(1);
+		expect(plan.candidates[0]).toEqual(expect.objectContaining({
+			id: expect.stringContaining("daily_summary:2026-02-10"),
+			localReasons: expect.arrayContaining(["stale_epoch"]),
+		}));
+	});
+
+	it("uses MDL thresholds to skip low-priority re-embedding candidates", async () => {
+		const daysDir = path.join(tmpDir, "days", "2026", "02");
+		fs.mkdirSync(daysDir, { recursive: true });
+		fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
+
+		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
+		const db = DatabaseManager.instance().get("vectors");
+		const row = db.prepare("SELECT metadata FROM embeddings WHERE source_type = ?").get("daily_summary") as { metadata: string };
+		const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+		metadata.embeddingEpoch = {
+			providerId: "legacy-provider",
+			modelId: "legacy-model",
+			dimensions: 384,
+			strategy: "provider",
+			epoch: "legacy-provider:legacy-model:384:provider",
+		};
+		db.prepare("UPDATE embeddings SET metadata = ? WHERE source_type = ?").run(JSON.stringify(metadata), "daily_summary");
+
+			const plan = await planSelectiveReembedding({
+				candidateLimit: 5,
+				minMdlScore: 0.95,
+				reasons: ["stale_epoch"],
+			});
+			expect(plan.candidateCount).toBe(0);
+		});
+
+		it("honors explicit stale reasons beyond epoch drift", async () => {
+		const daysDir = path.join(tmpDir, "days", "2026", "02");
+		fs.mkdirSync(daysDir, { recursive: true });
+		fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
+
+		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
+		fs.writeFileSync(
+			path.join(daysDir, "10.md"),
+			CURATED_DAILY_MD.replace(
+				"**Decision**: Keep raw sessions canonical, promote only curated artifacts",
+				"**Decision**: Prefer selective re-embedding repair over broad semantic rewrites",
+			),
+			"utf-8",
+		);
+
+		const plan = await planSelectiveReembedding({
+			candidateLimit: 1,
+			reasons: ["stale_hash"],
+		});
+			expect(plan.candidateCount).toBe(1);
+			expect(plan.candidates[0]?.localReasons).toContain("stale_hash");
+		});
+
+		it("selects low-MDL curated artifacts even without epoch drift", async () => {
+			const daysDir = path.join(tmpDir, "days", "2026", "02");
+			fs.mkdirSync(daysDir, { recursive: true });
+			fs.writeFileSync(path.join(daysDir, "12.md"), LOW_MDL_DAILY_MD, "utf-8");
+
+			await indexConsolidationSummary("daily", "2026-02-12", LOW_MDL_DAILY_MD);
+
+			const plan = await planSelectiveReembedding({
+				dates: ["2026-02-12"],
+				levels: ["daily"],
+				candidateLimit: 5,
+			});
+
+			expect(plan.candidateCount).toBe(1);
+			expect(plan.candidates[0]?.localReasons).toContain("low_mdl");
+			expect(plan.candidates[0]?.localReasons).not.toContain("stale_epoch");
+		});
+
+		it("selects rejected packed curated artifacts even without epoch drift", async () => {
+			const daysDir = path.join(tmpDir, "days", "2026", "02");
+			fs.mkdirSync(daysDir, { recursive: true });
+			fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
+			_setSummaryPackerForTests({
+				packSummary: vi.fn(async () => ({
+					runtime: "pakt",
+					packedText: "pakt:xyz",
+					format: "text",
+					savings: 92,
+				})),
+			});
+
+			await indexConsolidationSummary("daily", "2026-02-10", `${CURATED_DAILY_MD}\n${"Deterministic lineage and semantic promotion. ".repeat(24)}`);
+
+			const plan = await planSelectiveReembedding({
+				dates: ["2026-02-10"],
+				levels: ["daily"],
+				candidateLimit: 5,
+			});
+
+			expect(plan.candidateCount).toBe(1);
+			expect(plan.candidates[0]?.localReasons).toContain("rejected_packed");
+			expect(plan.candidates[0]?.localReasons).not.toContain("stale_epoch");
+		});
+
+	it("does not truncate explicit artifact id repairs to candidateLimit", async () => {
+		const daysDir = path.join(tmpDir, "days", "2026", "02");
+		fs.mkdirSync(daysDir, { recursive: true });
+		fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
+		fs.writeFileSync(
+			path.join(daysDir, "11.md"),
+			CURATED_DAILY_MD
+				.replaceAll("2026-02-10", "2026-02-11")
+				.replace("remote semantic mirror checks", "second curated summary"),
+			"utf-8",
+		);
+
+		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
+		await indexConsolidationSummary(
+			"daily",
+			"2026-02-11",
+			CURATED_DAILY_MD
+				.replaceAll("2026-02-10", "2026-02-11")
+				.replace("remote semantic mirror checks", "second curated summary"),
+		);
+
+		const db = DatabaseManager.instance().get("vectors");
+		const rows = db.prepare("SELECT id, metadata FROM embeddings WHERE source_type = ?").all("daily_summary") as Array<{
+			id: string;
+			metadata: string;
+		}>;
+		for (const row of rows) {
+			const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+			metadata.embeddingEpoch = {
+				providerId: "legacy-provider",
+				modelId: "legacy-model",
+				dimensions: 384,
+				strategy: "provider",
+				epoch: "legacy-provider:legacy-model:384:provider",
+			};
+			db.prepare("UPDATE embeddings SET metadata = ? WHERE id = ?").run(JSON.stringify(metadata), row.id);
+		}
+
+		const ids = rows.map((row) => row.id).sort();
+		const plan = await planSelectiveReembedding({
+			ids,
+			candidateLimit: 1,
+		});
+		expect(plan.candidateCount).toBe(2);
+		expect(plan.candidates.map((candidate) => candidate.id).sort()).toEqual(ids);
+	});
+
+	it("repairs selective re-embedding candidates and clears epoch drift", async () => {
+		const daysDir = path.join(tmpDir, "days", "2026", "02");
+		fs.mkdirSync(daysDir, { recursive: true });
+		fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
+
+		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
+		const db = DatabaseManager.instance().get("vectors");
+		const row = db.prepare("SELECT metadata FROM embeddings WHERE source_type = ?").get("daily_summary") as { metadata: string };
+		const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+		metadata.embeddingEpoch = {
+			providerId: "legacy-provider",
+			modelId: "legacy-model",
+			dimensions: 384,
+			strategy: "provider",
+			epoch: "legacy-provider:legacy-model:384:provider",
+		};
+		db.prepare("UPDATE embeddings SET metadata = ? WHERE source_type = ?").run(JSON.stringify(metadata), "daily_summary");
+
+		const repaired = await repairSelectiveReembedding({ candidateLimit: 5 });
+		expect(repaired.plan.candidateCount).toBe(1);
+		expect(repaired.reembedded).toBe(1);
+
+		const status = await inspectConsolidationVectorSync();
+		expect(status.issues.map((issue) => issue.reason)).not.toContain("stale_epoch");
+	});
+
+	it("does not count re-embedding when local vector writes fail", async () => {
+		const daysDir = path.join(tmpDir, "days", "2026", "02");
+		fs.mkdirSync(daysDir, { recursive: true });
+		fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
+
+		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
+		const db = DatabaseManager.instance().get("vectors");
+		const row = db.prepare("SELECT metadata FROM embeddings WHERE source_type = ?").get("daily_summary") as { metadata: string };
+		const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+		metadata.embeddingEpoch = {
+			providerId: "legacy-provider",
+			modelId: "legacy-model",
+			dimensions: 384,
+			strategy: "provider",
+			epoch: "legacy-provider:legacy-model:384:provider",
+		};
+		db.prepare("UPDATE embeddings SET metadata = ? WHERE source_type = ?").run(JSON.stringify(metadata), "daily_summary");
+
+		const originalPrepare = db.prepare.bind(db);
+		const prepareSpy = vi.spyOn(db, "prepare").mockImplementation(((sql: string) => {
+			if (sql.includes("INSERT OR REPLACE INTO embeddings")) {
+				throw new Error("disk full");
+			}
+			return originalPrepare(sql);
+		}) as typeof db.prepare);
+
+		const repaired = await repairSelectiveReembedding({ candidateLimit: 5 });
+		expect(repaired.plan.candidateCount).toBe(1);
+		expect(repaired.reembedded).toBe(0);
+
+		prepareSpy.mockRestore();
+
+		const status = await inspectConsolidationVectorSync();
+		expect(status.issues.map((issue) => issue.reason)).toContain("stale_epoch");
+	});
+
+	it("rebuilds low-MDL daily artifacts during selective repair", async () => {
+		const daysDir = path.join(tmpDir, "days", "2026", "02");
+		fs.mkdirSync(daysDir, { recursive: true });
+		const lowMdlPath = path.join(daysDir, "12.md");
+		fs.writeFileSync(lowMdlPath, LOW_MDL_DAILY_MD, "utf-8");
+
+		await indexConsolidationSummary("daily", "2026-02-12", LOW_MDL_DAILY_MD);
+
+		const preRepairPlan = await planSelectiveReembedding({
+			dates: ["2026-02-12"],
+			levels: ["daily"],
+			reasons: ["low_mdl"],
+		});
+		expect(preRepairPlan.candidateCount).toBe(1);
+
+		const dayConsolidation = await import("../src/day-consolidation.js");
+		const consolidateSpy = vi.spyOn(dayConsolidation, "consolidateDay").mockImplementation(async () => {
+			const rebuiltMarkdown = `${renderConsolidationMetadata({
+				kind: "day",
+				formatVersion: 1,
+				date: "2026-02-12",
+				generatedAt: "2026-02-12T04:00:00.000Z",
+				sessionCount: 1,
+				projectCount: 1,
+				sourceSessionIds: ["session-low-mdl"],
+				sourceSessions: [
+					{
+						id: "session-low-mdl",
+						project: "/my/project",
+						title: "Low MDL",
+						created: "2026-02-12T01:00:00.000Z",
+						updated: "2026-02-12T01:10:00.000Z",
+						provider: "claude",
+						branch: null,
+					},
+				],
+				projects: [{ project: "/my/project", sessionIds: ["session-low-mdl"] }],
+			})}
+
+# 2026-02-12 — Wednesday
+
+## Facts Learned
+
+- [decision] keep raw sessions canonical
+- [decision] quality-driven semantic rebuild
+- [fact] deterministic session lineage matters
+- [fact] provenance remains attached to repaired artifacts
+- [fact] canonical sessions preserve deterministic semantic rebuild quality
+- [fact] semantic rebuild improves recall quality and preserves provenance
+
+## Project: /my/project
+
+**Decision**: Keep raw sessions canonical and rebuild low-MDL artifacts when quality improves.
+
+**Summary**: Quality-driven semantic rebuild preserves provenance, deterministic lineage, and canonical sessions.
+`;
+			const rebuiltMetrics = computeMdlCompactionMetrics({
+				originalText: rebuiltMarkdown,
+				summaryText: extractSummaryText(rebuiltMarkdown, "daily"),
+			});
+			expect(rebuiltMetrics.mdlScore).toBeGreaterThan(0.6);
+			fs.writeFileSync(lowMdlPath, rebuiltMarkdown, "utf-8");
+			await indexConsolidationSummary("daily", "2026-02-12", rebuiltMarkdown);
+			return rebuiltMarkdown;
+		});
+
+		try {
+			const repaired = await repairSelectiveReembedding({
+				dates: ["2026-02-12"],
+				levels: ["daily"],
+				reasons: ["low_mdl"],
+				resyncRemote: false,
+			});
+			expect(repaired.plan.candidateCount).toBe(1);
+			expect(repaired.reembedded).toBe(1);
+			expect(repaired.qualityDeferred).toBe(0);
+		} finally {
+			consolidateSpy.mockRestore();
+		}
 	});
 });

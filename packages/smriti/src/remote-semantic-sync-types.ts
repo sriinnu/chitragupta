@@ -14,7 +14,7 @@ export interface RemoteSemanticSyncIssue {
 	level: CuratedConsolidationArtifact["level"];
 	period: string;
 	project?: string;
-	reason: "missing_remote" | "stale_remote" | "remote_error";
+	reason: "missing_remote" | "stale_remote" | "stale_remote_epoch" | "remote_error";
 	error?: string | null;
 }
 

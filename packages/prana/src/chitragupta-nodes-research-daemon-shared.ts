@@ -217,9 +217,10 @@ export function buildCouncilSummary(
 	source: "daemon" | "local-fallback",
 	sessionId: string | null = null,
 	route: ResearchRouteSummary | null = null,
+	plannerRoute: ResearchRouteSummary | null = null,
 	executionRoute: ResearchRouteSummary | null = null,
+	participants = summarizeCouncilParticipants(),
 ): ResearchCouncilSummary {
-	const participants = summarizeCouncilParticipants();
 	return {
 		sabhaId,
 		sessionId,
@@ -245,6 +246,7 @@ export function buildCouncilSummary(
 			recommendation: scopeRecommendation(lucy.liveSignals),
 		},
 		route,
+		plannerRoute,
 		executionRoute,
 		source,
 	};
@@ -329,8 +331,8 @@ export async function resolveResearchRouteBatch(
 	client: DaemonClientLike,
 	scope: ResearchScope,
 	sessionId: string | null,
-): Promise<{ route: ResearchRouteSummary | null; executionRoute: ResearchRouteSummary | null }> {
-	if (!sessionId) return { route: null, executionRoute: null };
+): Promise<{ route: ResearchRouteSummary | null; plannerRoute: ResearchRouteSummary | null; executionRoute: ResearchRouteSummary | null }> {
+	if (!sessionId) return { route: null, plannerRoute: null, executionRoute: null };
 	try {
 		const resolved = await client.call("route.resolveBatch", {
 			consumer: "prana:autoresearch",
@@ -347,6 +349,22 @@ export async function resolveResearchRouteBatch(
 						immutableFiles: scope.immutableFiles,
 						budgetMs: scope.budgetMs,
 						metricName: scope.metricName,
+					},
+				},
+				{
+					key: "planner",
+					routeClass: scope.plannerRouteClass,
+					capability: scope.plannerCapability ?? undefined,
+					context: {
+						topic: scope.topic,
+						projectPath: scope.projectPath,
+						cwd: scope.cwd,
+						targetFiles: scope.targetFiles,
+						immutableFiles: scope.immutableFiles,
+						budgetMs: scope.budgetMs,
+						metricName: scope.metricName,
+						workflow: "autoresearch",
+						role: "planner",
 					},
 				},
 				{
@@ -369,16 +387,21 @@ export async function resolveResearchRouteBatch(
 		const researchResolution = Array.isArray(resolved.resolutions)
 			? resolved.resolutions.find((entry) => entry?.key === "research")
 			: null;
+		const plannerResolution = Array.isArray(resolved.resolutions)
+			? resolved.resolutions.find((entry) => entry?.key === "planner")
+			: null;
 		const executionResolution = Array.isArray(resolved.resolutions)
 			? resolved.resolutions.find((entry) => entry?.key === "execution")
 			: null;
 		return {
 			route: toResearchRouteSummary(researchResolution, "research.bounded"),
+			plannerRoute: toResearchRouteSummary(plannerResolution, scope.plannerRouteClass, scope.plannerCapability),
 			executionRoute: toResearchRouteSummary(executionResolution, scope.executionRouteClass, scope.executionCapability),
 		};
 	} catch {
 		return {
 			route: await resolveResearchRoute(client, scope, sessionId),
+			plannerRoute: await resolveResearchExecutionRoute(client, { ...scope, executionRouteClass: scope.plannerRouteClass, executionCapability: scope.plannerCapability }, sessionId),
 			executionRoute: await resolveResearchExecutionRoute(client, scope, sessionId),
 		};
 	}

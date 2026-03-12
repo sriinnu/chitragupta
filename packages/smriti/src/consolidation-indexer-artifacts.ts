@@ -2,6 +2,12 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { packCuratedSummaryText, type PackedSummaryResult } from "./pakt-compression.js";
 import {
+	computeMdlCompactionMetrics,
+	decidePackedRepresentation,
+	type MdlCompactionMetrics,
+	type PackedRepresentationDecision,
+} from "./mdl-compaction.js";
+import {
 	parseConsolidationMetadata,
 	stripConsolidationMetadata,
 	type ConsolidationMetadata,
@@ -22,7 +28,7 @@ export interface ConsolidationVectorSyncIssue {
 	level: ConsolidationLevel;
 	period: string;
 	project?: string;
-	reason: "missing_vector" | "stale_hash" | "legacy_vector";
+	reason: "missing_vector" | "stale_hash" | "legacy_vector" | "stale_epoch";
 }
 
 export interface ConsolidationVectorSyncStatus {
@@ -35,10 +41,13 @@ export interface ConsolidationVectorSyncStatus {
 export interface CuratedConsolidationArtifactQuery {
 	recentDailyLimit?: number;
 	recentPeriodicPerProject?: number;
+	/** Scan the full curated artifact set instead of the recent-window defaults. */
+	scanAll?: boolean;
 	dates?: string[];
 	projects?: string[];
 	periods?: string[];
 	levels?: ConsolidationLevel[];
+	ids?: string[];
 }
 
 export interface CuratedConsolidationArtifact {
@@ -50,8 +59,17 @@ export interface CuratedConsolidationArtifact {
 	summaryText: string;
 	packedSummaryText?: string;
 	compression?: PackedSummaryResult;
+	mdlMetrics: MdlCompactionMetrics;
+	packedDecision: PackedRepresentationDecision | null;
 	contentHash: string;
 	provenance: ConsolidationMetadata;
+}
+
+export interface CuratedSummaryCompressionDecision {
+	packedSummaryText?: string;
+	compression?: PackedSummaryResult;
+	mdlMetrics: MdlCompactionMetrics;
+	packedDecision: PackedRepresentationDecision | null;
 }
 
 /** Build a stable ID for a consolidation summary embedding. */
@@ -155,8 +173,7 @@ async function buildCuratedArtifact(params: {
 }): Promise<CuratedConsolidationArtifact | null> {
 	const summaryText = extractSummaryText(params.markdown, params.level);
 	if (summaryText.length < 10) return null;
-	const compression = await packCuratedSummaryText(summaryText);
-	const packedSummaryText = compression?.packedText;
+	const compressionDecision = await prepareCuratedSummaryCompression(params.markdown, summaryText);
 	return {
 		id: params.id,
 		level: params.level,
@@ -164,10 +181,43 @@ async function buildCuratedArtifact(params: {
 		project: params.project,
 		markdown: params.markdown,
 		summaryText,
-		packedSummaryText,
-		compression: compression ?? undefined,
+		packedSummaryText: compressionDecision.packedSummaryText,
+		compression: compressionDecision.compression,
+		mdlMetrics: compressionDecision.mdlMetrics,
+		packedDecision: compressionDecision.packedDecision,
 		contentHash: buildArtifactContentHash(summaryText),
 		provenance: params.provenance,
+	};
+}
+
+export async function prepareCuratedSummaryCompression(
+	originalText: string,
+	summaryText: string,
+): Promise<CuratedSummaryCompressionDecision> {
+	const compression = await packCuratedSummaryText(summaryText);
+	const packedSummaryText = compression?.packedText;
+	const candidateMetrics = computeMdlCompactionMetrics({
+		originalText,
+		summaryText,
+		packedText: packedSummaryText,
+	});
+	const packedDecision = packedSummaryText ? decidePackedRepresentation(candidateMetrics) : null;
+	if (!packedSummaryText || !packedDecision || packedDecision.accepted) {
+		return {
+			packedSummaryText: packedSummaryText ?? undefined,
+			compression: compression ?? undefined,
+			mdlMetrics: candidateMetrics,
+			packedDecision,
+		};
+	}
+	return {
+		packedSummaryText: undefined,
+		compression: undefined,
+		mdlMetrics: computeMdlCompactionMetrics({
+			originalText,
+			summaryText,
+		}),
+		packedDecision,
 	};
 }
 
@@ -176,11 +226,12 @@ export async function listCuratedConsolidationArtifacts(
 ): Promise<CuratedConsolidationArtifact[]> {
 	const recentDailyLimit = options.recentDailyLimit ?? 30;
 	const recentPeriodicPerProject = options.recentPeriodicPerProject ?? 6;
+	const scanAll = options.scanAll === true;
 	const artifacts: CuratedConsolidationArtifact[] = [];
 
 	try {
 		const { listDayFiles, getDayFilePath } = await import("./day-consolidation.js");
-		const dayFiles = listDayFiles().slice(0, recentDailyLimit);
+		const dayFiles = scanAll ? listDayFiles() : listDayFiles().slice(0, recentDailyLimit);
 		for (const date of dayFiles) {
 			const dayPath = getDayFilePath(date);
 			if (!fs.existsSync(dayPath)) continue;
@@ -209,7 +260,7 @@ export async function listCuratedConsolidationArtifacts(
 			const reports = pc
 				.listReports()
 				.sort((a, b) => reportSortKey(b).localeCompare(reportSortKey(a)))
-				.slice(0, recentPeriodicPerProject);
+				.slice(0, scanAll ? undefined : recentPeriodicPerProject);
 			for (const report of reports) {
 				try {
 					const markdown = fs.readFileSync(report.path, "utf-8");
@@ -238,8 +289,10 @@ export async function listCuratedConsolidationArtifacts(
 	const dateFilter = options.dates?.length ? new Set(options.dates) : null;
 	const periodFilter = options.periods?.length ? new Set(options.periods) : null;
 	const projectFilter = options.projects?.length ? new Set(options.projects.filter((value) => value.trim())) : null;
+	const idFilter = options.ids?.length ? new Set(options.ids.filter((value) => value.trim())) : null;
 
 	return artifacts.filter((artifact) => {
+		if (idFilter && !idFilter.has(artifact.id)) return false;
 		if (levelFilter && !levelFilter.has(artifact.level)) return false;
 		if (dateFilter && artifact.level === "daily" && !dateFilter.has(artifact.period)) return false;
 		if (periodFilter && !periodFilter.has(artifact.period)) return false;

@@ -976,11 +976,12 @@ describe("SwapnaConsolidation — Phase 5: COMPRESS", () => {
 			SELECT content
 			FROM turns
 			WHERE session_id = ? AND turn_number = 0
-		`).get("s1") as { content: string } | undefined;
+			`).get("s1") as { content: string } | undefined;
 
-		expect(result.summaryText).toBeTruthy();
-		expect(stored?.content).toBe(original);
-	});
+			expect(result.summaryText).toBeTruthy();
+			expect(result.mdlMetrics?.mdlScore).toBeTypeOf("number");
+			expect(stored?.content).toBe(original);
+		});
 
 	it("should apply Pramana-based preservation weights", async () => {
 		insertSession("s1");

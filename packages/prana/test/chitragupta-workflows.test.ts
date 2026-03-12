@@ -3,6 +3,7 @@ import { validateDAG } from "../src/dag.js";
 import type { Workflow } from "../src/types.js";
 import {
 	AUTORESEARCH_WORKFLOW,
+	AUTORESEARCH_OVERNIGHT_WORKFLOW,
 	ACP_RESEARCH_SWARM_WORKFLOW,
 	CHITRAGUPTA_WORKFLOWS,
 	getChitraguptaWorkflow,
@@ -29,21 +30,45 @@ describe("chitragupta research workflows", () => {
 			"guardian-sweep",
 			"full-cycle",
 			"autoresearch",
+			"autoresearch-overnight",
 			"acp-research-swarm",
 		]);
 	});
 
 	it("lists seven engine workflows including research templates", () => {
 		const workflows = listChitraguptaWorkflows();
-		expect(workflows).toHaveLength(7);
+		expect(workflows).toHaveLength(8);
 		expect(workflows.map((workflow) => workflow.id)).toContain("autoresearch");
+		expect(workflows.map((workflow) => workflow.id)).toContain("autoresearch-overnight");
 		expect(workflows.map((workflow) => workflow.id)).toContain("acp-research-swarm");
 	});
 
 	it("returns the autoresearch workflow by id", () => {
 		expect(getChitraguptaWorkflow("autoresearch")).toBe(AUTORESEARCH_WORKFLOW);
+		expect(getChitraguptaWorkflow("autoresearch-overnight")).toBe(
+			AUTORESEARCH_OVERNIGHT_WORKFLOW,
+		);
 		expect(getChitraguptaWorkflow("acp-research-swarm")).toBe(
 			ACP_RESEARCH_SWARM_WORKFLOW,
+		);
+	});
+
+	it("builds a valid overnight autoresearch workflow", () => {
+		assertValidWorkflow(AUTORESEARCH_OVERNIGHT_WORKFLOW);
+		expect(AUTORESEARCH_OVERNIGHT_WORKFLOW.steps.map((step) => step.id)).toEqual([
+			"autoresearch-scope",
+			"acp-research-council",
+			"autoresearch-baseline",
+			"autoresearch-overnight",
+		]);
+		expect(AUTORESEARCH_OVERNIGHT_WORKFLOW.context).toEqual(
+			expect.objectContaining({
+				researchRounds: 6,
+				researchAgentCount: 2,
+				researchStopAfterNoImprovementRounds: 2,
+				researchPlannerRouteClass: "coding.deep-reasoning",
+				researchExecutionRouteClass: "tool.use.flex",
+			}),
 		);
 	});
 

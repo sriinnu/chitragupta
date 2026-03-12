@@ -7,6 +7,13 @@
  */
 
 import type { EmbeddingProvider } from "@chitragupta/swara";
+import {
+	buildEmbeddingEpoch,
+	buildFallbackEmbeddingEpoch,
+	type EmbeddingEpoch,
+	FALLBACK_EMBEDDING_MODEL_ID,
+	FALLBACK_EMBEDDING_PROVIDER_ID,
+} from "./embedding-epoch.js";
 
 const FALLBACK_DIM = 384;
 
@@ -57,6 +64,14 @@ export function fallbackEmbedding(text: string): number[] {
 	return vector;
 }
 
+export interface EmbeddingVectorRecord {
+	embedding: number[];
+	model: string;
+	providerId: string;
+	tokens: number;
+	epoch: EmbeddingEpoch;
+}
+
 /**
  * LRU cache for embedding vectors.
  * Uses a Map's insertion-order iteration for O(1) eviction of oldest entries.
@@ -104,8 +119,10 @@ class LRUCache<K, V> {
 
 export class EmbeddingService {
 	private provider: EmbeddingProvider | undefined;
-	private cache: LRUCache<string, number[]>;
+	private cache: LRUCache<string, EmbeddingVectorRecord>;
 	private providerAvailable: boolean | null = null;
+	private lastResolvedEpoch: EmbeddingEpoch | null = null;
+	private lastProviderCatalogSignature: string | null = null;
 
 	constructor(provider?: EmbeddingProvider, maxCacheSize?: number) {
 		this.provider = provider;
@@ -114,11 +131,16 @@ export class EmbeddingService {
 	}
 
 	async getEmbedding(text: string): Promise<number[]> {
+		return (await this.getEmbeddingRecord(text)).embedding;
+	}
+
+	async getEmbeddingRecord(text: string): Promise<EmbeddingVectorRecord> {
+		this.refreshProviderCatalogState();
 		const cacheKey = fnv1aHash(text);
 		const cached = this.cache.get(cacheKey);
 		if (cached) return cached;
 
-		let vector: number[];
+		let record: EmbeddingVectorRecord;
 
 		if (this.provider) {
 			if (this.providerAvailable === null) {
@@ -132,20 +154,52 @@ export class EmbeddingService {
 			if (this.providerAvailable) {
 				try {
 					const result = await this.provider.embed(text);
-					vector = result.embedding;
+					record = {
+						embedding: result.embedding,
+						model: result.model,
+						providerId: this.provider.id,
+						tokens: result.tokens,
+						epoch: buildEmbeddingEpoch({
+							providerId: this.provider.id,
+							modelId: result.model,
+							dimensions: result.embedding.length,
+							strategy: "provider",
+						}),
+					};
+					this.lastResolvedEpoch = record.epoch;
 				} catch {
 					this.providerAvailable = false;
-					vector = fallbackEmbedding(text);
+					record = this.buildFallbackRecord(text);
 				}
 			} else {
-				vector = fallbackEmbedding(text);
+				record = this.buildFallbackRecord(text);
 			}
 		} else {
-			vector = fallbackEmbedding(text);
+			record = this.buildFallbackRecord(text);
 		}
 
-		this.cache.set(cacheKey, vector);
-		return vector;
+		this.cache.set(cacheKey, record);
+		return record;
+	}
+
+	async getEmbeddingEpoch(): Promise<EmbeddingEpoch> {
+		this.refreshProviderCatalogState();
+		if (this.lastResolvedEpoch) {
+			return this.lastResolvedEpoch;
+		}
+		if (this.provider) {
+			if (this.providerAvailable === null) {
+				try {
+					this.providerAvailable = await this.provider.isConfigured();
+				} catch {
+					this.providerAvailable = false;
+				}
+			}
+			if (this.providerAvailable) {
+				return this.resolveProviderEpoch();
+			}
+		}
+		return buildFallbackEmbeddingEpoch(FALLBACK_DIM);
 	}
 
 	resetAvailability(): void {
@@ -154,10 +208,79 @@ export class EmbeddingService {
 
 	clearCache(): void {
 		this.cache.clear();
+		this.lastResolvedEpoch = null;
+		this.lastProviderCatalogSignature = null;
 	}
 
 	/** Current number of cached embeddings. */
 	get cacheSize(): number {
 		return this.cache.size;
 	}
+
+	private buildFallbackRecord(text: string): EmbeddingVectorRecord {
+		const embedding = fallbackEmbedding(text);
+		const record = {
+			embedding,
+			model: FALLBACK_EMBEDDING_MODEL_ID,
+			providerId: FALLBACK_EMBEDDING_PROVIDER_ID,
+			tokens: 0,
+			epoch: buildFallbackEmbeddingEpoch(embedding.length),
+		};
+		this.lastResolvedEpoch = record.epoch;
+		return record;
+	}
+
+	private refreshProviderCatalogState(): void {
+		if (!this.provider) return;
+		const signature = buildProviderCatalogSignature(this.provider);
+		if (this.lastProviderCatalogSignature === null) {
+			this.lastProviderCatalogSignature = signature;
+			return;
+		}
+		if (this.lastProviderCatalogSignature !== signature) {
+			this.cache.clear();
+			this.lastResolvedEpoch = null;
+			this.providerAvailable = null;
+			this.lastProviderCatalogSignature = signature;
+		}
+	}
+
+	/**
+	 * Resolve the provider epoch from a real embedding call once, then cache it.
+	 *
+	 * Provider model catalogues are advisory and can drift from the actual model
+	 * returned by the backend. A one-time probe keeps stale-epoch detection tied
+	 * to the embedding path that is actually serving vectors.
+	 */
+	private async resolveProviderEpoch(): Promise<EmbeddingEpoch> {
+		if (!this.provider) {
+			return buildFallbackEmbeddingEpoch(FALLBACK_DIM);
+		}
+		try {
+			const result = await this.provider.embed("__chitragupta_embedding_epoch_probe__");
+			const epoch = buildEmbeddingEpoch({
+				providerId: this.provider.id,
+				modelId: result.model,
+				dimensions: result.embedding.length,
+				strategy: "provider",
+			});
+			this.lastResolvedEpoch = epoch;
+			this.lastProviderCatalogSignature = buildProviderCatalogSignature(this.provider);
+			return epoch;
+		} catch {
+			this.providerAvailable = false;
+			return buildFallbackEmbeddingEpoch(FALLBACK_DIM);
+		}
+	}
+}
+
+function buildProviderCatalogSignature(provider: EmbeddingProvider): string {
+	return JSON.stringify({
+		id: provider.id,
+		models: provider.models.map((model) => ({
+			id: model.id,
+			dimensions: model.dimensions,
+			maxTokens: model.maxTokens,
+		})),
+	});
 }

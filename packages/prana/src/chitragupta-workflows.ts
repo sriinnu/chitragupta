@@ -12,11 +12,13 @@ export {
 } from "./chitragupta-workflows-lifecycle.js";
 export {
 	AUTORESEARCH_WORKFLOW,
+	AUTORESEARCH_OVERNIGHT_WORKFLOW,
 	ACP_RESEARCH_SWARM_WORKFLOW,
 } from "./chitragupta-workflows-research.js";
 import {
 	ACP_RESEARCH_SWARM_WORKFLOW,
 	AUTORESEARCH_WORKFLOW,
+	AUTORESEARCH_OVERNIGHT_WORKFLOW,
 } from "./chitragupta-workflows-research.js";
 import {
 	CONSOLIDATION_WORKFLOW,
@@ -33,6 +35,7 @@ export const CHITRAGUPTA_WORKFLOWS: Record<string, Workflow> = {
 	"guardian-sweep": GUARDIAN_SWEEP_WORKFLOW,
 	"full-cycle": FULL_CYCLE_WORKFLOW,
 	autoresearch: AUTORESEARCH_WORKFLOW,
+	"autoresearch-overnight": AUTORESEARCH_OVERNIGHT_WORKFLOW,
 	"acp-research-swarm": ACP_RESEARCH_SWARM_WORKFLOW,
 };
 

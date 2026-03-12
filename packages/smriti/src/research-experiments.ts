@@ -5,6 +5,11 @@ import { getAgentDb } from "./session-db.js";
 export interface ResearchExperimentRecordInput {
 	projectPath: string;
 	experimentKey?: string | null;
+	attemptKey?: string | null;
+	loopKey?: string | null;
+	roundNumber?: number | null;
+	totalRounds?: number | null;
+	attemptNumber?: number | null;
 	budgetMs?: number | null;
 	topic: string;
 	metricName: string;
@@ -16,6 +21,10 @@ export interface ResearchExperimentRecordInput {
 	sabhaId?: string | null;
 	councilVerdict?: string | null;
 	routeClass?: string | null;
+	plannerRouteClass?: string | null;
+	plannerSelectedCapabilityId?: string | null;
+	plannerSelectedModelId?: string | null;
+	plannerSelectedProviderId?: string | null;
 	executionRouteClass?: string | null;
 	selectedCapabilityId?: string | null;
 	selectedModelId?: string | null;
@@ -27,6 +36,8 @@ export interface ResearchExperimentRecordInput {
 	baselineMetric?: number | null;
 	observedMetric?: number | null;
 	delta?: number | null;
+	status?: string | null;
+	errorMessage?: string | null;
 	packedContext?: string | null;
 	packedRuntime?: string | null;
 	packedSource?: string | null;
@@ -43,6 +54,8 @@ export interface ListResearchExperimentsOptions {
 	projectPath?: string;
 	sessionId?: string;
 	decision?: string;
+	updatedAfter?: number;
+	updatedBefore?: number;
 	limit?: number;
 }
 
@@ -84,8 +97,16 @@ function normalizeRecordForExperimentKey(record: Record<string, unknown>): Recor
 
 function buildResearchExperimentId(input: ResearchExperimentRecordInput): string {
 	const normalizedProjectPath = normalizeProjectPath(input.projectPath);
+	const attemptKey =
+		typeof input.attemptKey === "string" && input.attemptKey.trim()
+			? input.attemptKey.trim()
+			: typeof input.record.attemptKey === "string" && input.record.attemptKey.trim()
+				? input.record.attemptKey.trim()
+				: null;
 	const experimentKey =
-		typeof input.experimentKey === "string" && input.experimentKey.trim()
+		attemptKey
+			? attemptKey
+			: typeof input.experimentKey === "string" && input.experimentKey.trim()
 			? input.experimentKey.trim()
 			: typeof input.record.experimentKey === "string" && input.record.experimentKey.trim()
 				? input.record.experimentKey.trim()
@@ -120,6 +141,11 @@ function parseStoredRow(row: Record<string, unknown>): StoredResearchExperiment 
 		id: String(row.id),
 		projectPath: String(row.project),
 		experimentKey: normalizeOptionalString(row.experiment_key),
+		attemptKey: normalizeOptionalString(row.attempt_key),
+		loopKey: normalizeOptionalString(row.loop_key),
+		roundNumber: normalizeOptionalNumber(row.round_number),
+		totalRounds: normalizeOptionalNumber(row.total_rounds),
+		attemptNumber: normalizeOptionalNumber(row.attempt_number),
 		budgetMs: normalizeOptionalNumber(row.budget_ms),
 		topic: String(row.topic),
 		metricName: String(row.metric_name),
@@ -131,6 +157,10 @@ function parseStoredRow(row: Record<string, unknown>): StoredResearchExperiment 
 		sabhaId: normalizeOptionalString(row.sabha_id),
 		councilVerdict: normalizeOptionalString(row.council_verdict),
 		routeClass: normalizeOptionalString(row.route_class),
+		plannerRouteClass: normalizeOptionalString(row.planner_route_class),
+		plannerSelectedCapabilityId: normalizeOptionalString(row.planner_selected_capability_id),
+		plannerSelectedModelId: normalizeOptionalString(row.planner_selected_model_id),
+		plannerSelectedProviderId: normalizeOptionalString(row.planner_selected_provider_id),
 		executionRouteClass: normalizeOptionalString(row.execution_route_class),
 		selectedCapabilityId: normalizeOptionalString(row.selected_capability_id),
 		selectedModelId: normalizeOptionalString(row.selected_model_id),
@@ -142,6 +172,8 @@ function parseStoredRow(row: Record<string, unknown>): StoredResearchExperiment 
 		baselineMetric: normalizeOptionalNumber(row.baseline_metric),
 		observedMetric: normalizeOptionalNumber(row.observed_metric),
 		delta: normalizeOptionalNumber(row.delta),
+		status: normalizeOptionalString(row.status),
+		errorMessage: normalizeOptionalString(row.error_message),
 		packedContext: normalizeOptionalString(row.packed_context),
 		packedRuntime: normalizeOptionalString(row.packed_runtime),
 		packedSource: normalizeOptionalString(row.packed_source),
@@ -161,6 +193,11 @@ export function upsertResearchExperiment(input: ResearchExperimentRecordInput): 
 			id,
 			project,
 			experiment_key,
+			attempt_key,
+			loop_key,
+			round_number,
+			total_rounds,
+			attempt_number,
 			budget_ms,
 			session_id,
 			parent_session_id,
@@ -171,44 +208,63 @@ export function upsertResearchExperiment(input: ResearchExperimentRecordInput): 
 			baseline_metric,
 			observed_metric,
 			delta,
+			status,
+			error_message,
 			decision,
 			sabha_id,
 			council_verdict,
 			route_class,
+			planner_route_class,
+			planner_selected_capability_id,
+			planner_selected_model_id,
+			planner_selected_provider_id,
 			execution_route_class,
-				selected_capability_id,
-				selected_model_id,
-				selected_provider_id,
-				git_branch,
-				git_head_commit,
-				git_dirty_before,
-				git_dirty_after,
-				packed_context,
+			selected_capability_id,
+			selected_model_id,
+			selected_provider_id,
+			git_branch,
+			git_head_commit,
+			git_dirty_before,
+			git_dirty_after,
+			packed_context,
 			packed_runtime,
 			packed_source,
 			record_json,
 			created_at,
 			updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(id) DO UPDATE SET
+		) VALUES (
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		)
+		ON CONFLICT(id) DO UPDATE SET
 			experiment_key = excluded.experiment_key,
+			attempt_key = excluded.attempt_key,
+			loop_key = excluded.loop_key,
+			round_number = excluded.round_number,
+			total_rounds = excluded.total_rounds,
+			attempt_number = excluded.attempt_number,
 			budget_ms = excluded.budget_ms,
 			baseline_metric = excluded.baseline_metric,
 			observed_metric = excluded.observed_metric,
 			delta = excluded.delta,
+			status = excluded.status,
+			error_message = excluded.error_message,
 			decision = excluded.decision,
 			sabha_id = excluded.sabha_id,
 			council_verdict = excluded.council_verdict,
 			route_class = excluded.route_class,
+			planner_route_class = excluded.planner_route_class,
+			planner_selected_capability_id = excluded.planner_selected_capability_id,
+			planner_selected_model_id = excluded.planner_selected_model_id,
+			planner_selected_provider_id = excluded.planner_selected_provider_id,
 			execution_route_class = excluded.execution_route_class,
-				selected_capability_id = excluded.selected_capability_id,
-				selected_model_id = excluded.selected_model_id,
-				selected_provider_id = excluded.selected_provider_id,
-				git_branch = CASE WHEN ? THEN excluded.git_branch ELSE research_experiments.git_branch END,
-				git_head_commit = CASE WHEN ? THEN excluded.git_head_commit ELSE research_experiments.git_head_commit END,
-				git_dirty_before = CASE WHEN ? THEN excluded.git_dirty_before ELSE research_experiments.git_dirty_before END,
-				git_dirty_after = CASE WHEN ? THEN excluded.git_dirty_after ELSE research_experiments.git_dirty_after END,
-				packed_context = excluded.packed_context,
+			selected_capability_id = excluded.selected_capability_id,
+			selected_model_id = excluded.selected_model_id,
+			selected_provider_id = excluded.selected_provider_id,
+			git_branch = CASE WHEN ? THEN excluded.git_branch ELSE research_experiments.git_branch END,
+			git_head_commit = CASE WHEN ? THEN excluded.git_head_commit ELSE research_experiments.git_head_commit END,
+			git_dirty_before = CASE WHEN ? THEN excluded.git_dirty_before ELSE research_experiments.git_dirty_before END,
+			git_dirty_after = CASE WHEN ? THEN excluded.git_dirty_after ELSE research_experiments.git_dirty_after END,
+			packed_context = excluded.packed_context,
 			packed_runtime = excluded.packed_runtime,
 			packed_source = excluded.packed_source,
 			record_json = excluded.record_json,
@@ -217,6 +273,11 @@ export function upsertResearchExperiment(input: ResearchExperimentRecordInput): 
 		id,
 		projectPath,
 		normalizeOptionalString(input.experimentKey) ?? normalizeOptionalString(input.record.experimentKey) ?? null,
+		normalizeOptionalString(input.attemptKey) ?? normalizeOptionalString(input.record.attemptKey) ?? null,
+		input.loopKey ?? null,
+		input.roundNumber ?? null,
+		input.totalRounds ?? null,
+		input.attemptNumber ?? null,
 		input.budgetMs ?? null,
 		input.sessionId ?? null,
 		input.parentSessionId ?? null,
@@ -227,19 +288,25 @@ export function upsertResearchExperiment(input: ResearchExperimentRecordInput): 
 		input.baselineMetric ?? null,
 		input.observedMetric ?? null,
 		input.delta ?? null,
+		normalizeOptionalString(input.status) ?? null,
+		normalizeOptionalString(input.errorMessage) ?? null,
 		input.decision,
 		input.sabhaId ?? null,
 		input.councilVerdict ?? null,
 		input.routeClass ?? null,
+		input.plannerRouteClass ?? null,
+		input.plannerSelectedCapabilityId ?? null,
+		input.plannerSelectedModelId ?? null,
+		input.plannerSelectedProviderId ?? null,
 		input.executionRouteClass ?? null,
-			input.selectedCapabilityId ?? null,
-			input.selectedModelId ?? null,
-			input.selectedProviderId ?? null,
-			normalizeOptionalString(input.gitBranch) ?? null,
-			normalizeOptionalString(input.gitHeadCommit) ?? null,
-			typeof input.gitDirtyBefore === "boolean" ? (input.gitDirtyBefore ? 1 : 0) : null,
-			typeof input.gitDirtyAfter === "boolean" ? (input.gitDirtyAfter ? 1 : 0) : null,
-			input.packedContext ?? null,
+		input.selectedCapabilityId ?? null,
+		input.selectedModelId ?? null,
+		input.selectedProviderId ?? null,
+		normalizeOptionalString(input.gitBranch) ?? null,
+		normalizeOptionalString(input.gitHeadCommit) ?? null,
+		typeof input.gitDirtyBefore === "boolean" ? (input.gitDirtyBefore ? 1 : 0) : null,
+		typeof input.gitDirtyAfter === "boolean" ? (input.gitDirtyAfter ? 1 : 0) : null,
+		input.packedContext ?? null,
 		input.packedRuntime ?? null,
 		input.packedSource ?? null,
 		JSON.stringify(input.record),
@@ -257,7 +324,7 @@ export function upsertResearchExperiment(input: ResearchExperimentRecordInput): 
 	if (!row) {
 		throw new Error(`Research experiment ${id} was not persisted`);
 	}
-		return parseStoredRow(row);
+	return parseStoredRow(row);
 }
 
 export function listResearchExperiments(
@@ -278,6 +345,14 @@ export function listResearchExperiments(
 	if (options.decision) {
 		conditions.push("decision = ?");
 		values.push(options.decision);
+	}
+	if (typeof options.updatedAfter === "number") {
+		conditions.push("updated_at >= ?");
+		values.push(options.updatedAfter);
+	}
+	if (typeof options.updatedBefore === "number") {
+		conditions.push("updated_at < ?");
+		values.push(options.updatedBefore);
 	}
 
 	const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";

@@ -1,9 +1,25 @@
 import crypto from "node:crypto";
-import {
-	normalizeContextForReuse,
-	packContextWithFallback,
-} from "../context-packing.js";
 import type { TakumiContext, TakumiResponse } from "./takumi-bridge-types.js";
+import {
+	auditTakumiResponseAgainstContract,
+	extractTakumiErrorMessage as extractErrorMessage,
+} from "./takumi-bridge-context-audit.js";
+import {
+	buildTakumiPrompt as buildPrompt,
+	isFreshContext,
+	resolveCacheIntent,
+	truncate,
+} from "./takumi-bridge-context-format.js";
+export {
+	buildTakumiPrompt as buildPrompt,
+	isFreshContext,
+	resolveCacheIntent,
+	truncate,
+} from "./takumi-bridge-context-format.js";
+export {
+	auditTakumiResponseAgainstContract,
+	extractTakumiErrorMessage as extractErrorMessage,
+} from "./takumi-bridge-context-audit.js";
 
 export const MAX_REPO_MAP_CHARS = 4_000;
 export const MAX_HINT_CHARS = 280;
@@ -21,6 +37,7 @@ interface SerializedEnvValue {
 	omitted: boolean;
 }
 
+/** Structured env payload plus contract violations detected during Takumi context inspection. */
 export interface TakumiContextContractInspection {
 	env: Record<string, string>;
 	violations: string[];
@@ -31,10 +48,12 @@ interface TakumiExecutionObservation {
 	modelIds: string[];
 }
 
+/** Build the structured env block that Takumi receives for daemon-owned route and memory state. */
 export function buildContextEnv(context?: TakumiContext): Record<string, string> {
 	return inspectTakumiContextContract(context).env;
 }
 
+/** Inspect Takumi context transportability and detect enforced-route omissions before execution. */
 export function inspectTakumiContextContract(context?: TakumiContext): TakumiContextContractInspection {
 	if (!context) return { env: {}, violations: [] };
 	const env: Record<string, string> = {};
@@ -168,312 +187,8 @@ function hasAuthoritativeSelection(
 	);
 }
 
-export async function buildPrompt(
-	task: string,
-	projectPath: string,
-	context?: TakumiContext,
-): Promise<string> {
-	const trimmedTask = task.trim();
-	if (!context) return trimmedTask;
-
-	const sections: string[] = [
-		"Use the following Chitragupta context when it helps complete the task.",
-		`Project root: ${projectPath}`,
-	];
-
-	if (isFreshContext(context)) {
-		sections.unshift(
-			"Fresh mode is required for this run. Do not rely on cached summaries or stale assumptions. Re-read the relevant files and base your answer on the current workspace state.",
-		);
-	}
-
-	if (context.repoMap) {
-		const repoMapSection = await formatPackedSection({
-			title: "Repo map",
-			text: context.repoMap,
-			maxChars: MAX_REPO_MAP_CHARS,
-		});
-		sections.push(repoMapSection);
-	}
-	if (context.episodicHints?.length) {
-		sections.push(await formatHintSection("Episodic hints", context.episodicHints));
-	}
-	if (context.recentDecisions?.length) {
-		sections.push(await formatHintSection("Recent decisions", context.recentDecisions));
-	}
-	if (context.fileContext) {
-		const files = Object.entries(context.fileContext)
-			.slice(0, MAX_FILE_CONTEXT_FILES)
-			.map(([path, content]) => `File: ${path}\n${truncate(content, MAX_FILE_CONTEXT_CHARS)}`);
-		if (files.length > 0) {
-			const fileSection = await formatPackedSection({
-				title: "Relevant file excerpts",
-				text: files.join("\n\n"),
-				maxChars: MAX_PACKED_CONTEXT_CHARS,
-			});
-			sections.push(fileSection);
-		}
-	}
-	if (context.engineRoute) {
-		sections.push(`Engine route:\n${formatEngineRouteSummary(context.engineRoute)}`);
-	}
-	if (context.engineRouteEnvelope?.lanes.length) {
-		const envelopeLines = [
-			`Primary lane: ${context.engineRouteEnvelope.primaryKey}`,
-			...context.engineRouteEnvelope.lanes.map(
-				(lane) => `${lane.key}:\n${indentBlock(formatEngineRouteSummary(lane))}`,
-			),
-		].join("\n\n");
-		const envelopeSection = await formatPackedSection({
-			title: "Engine lane envelope",
-			text: envelopeLines,
-			maxChars: MAX_PACKED_CONTEXT_CHARS,
-		});
-		sections.push(envelopeSection);
-	}
-
-	return `${trimmedTask}\n\n## Chitragupta Context\n${sections.join("\n\n")}`.trim();
-}
-
-async function formatPackedSection(args: {
-	title: string;
-	text: string;
-	maxChars: number;
-}): Promise<string> {
-	const normalized = await normalizeContextForReuse(args.text);
-	const sourceText = typeof normalized === "string" && normalized.trim() ? normalized : args.text;
-	const packed = await packContextWithFallback(sourceText);
-	if (packed) {
-		const packedText = truncate(packed.packedText, args.maxChars);
-		return `${args.title} (packed via ${packed.runtime}, saved ${formatSavingsPercent(packed.savings)}):\n${packedText}`;
-	}
-	return `${args.title}:\n${truncate(sourceText, args.maxChars)}`;
-}
-
-async function formatHintSection(title: string, values: string[]): Promise<string> {
-	const entries = await Promise.all(values.slice(0, MAX_HINT_COUNT).map((value) => formatHintEntry(value)));
-	const raw = entries.map((value) => `- ${value}`).join("\n");
-	const shouldPack = entries.length >= MIN_PACK_HINT_SECTION_ITEMS || raw.length >= MIN_PACK_HINT_SECTION_CHARS;
-	if (!shouldPack) {
-		return `${title}:\n${raw}`;
-	}
-	return formatPackedSection({
-		title,
-		text: raw,
-		maxChars: MAX_PACKED_HINT_CHARS,
-	});
-}
-
-function formatSavingsPercent(value: number): string {
-	if (!Number.isFinite(value)) return "0%";
-	return `${Math.max(0, Math.round(value * 100))}%`;
-}
-
-async function formatHintEntry(value: string): Promise<string> {
-	const normalized = await normalizeContextForReuse(value);
-	const entry = typeof normalized === "string" && normalized.trim() ? normalized : value;
-	if (value.startsWith("[PAKT packed ")) {
-		return truncate(entry, MAX_PACKED_HINT_CHARS);
-	}
-	return truncate(entry, MAX_HINT_CHARS);
-}
-
-function formatEngineRouteSummary(route: NonNullable<TakumiContext["engineRoute"]>): string {
-	const routeBits = [
-		route.routeClass ? `routeClass=${route.routeClass}` : null,
-		route.capability ? `capability=${route.capability}` : null,
-		route.selectedCapabilityId ? `selected=${route.selectedCapabilityId}` : null,
-	]
-		.filter(Boolean)
-		.join(", ");
-	const trace = route.policyTrace?.length
-		? `\nPolicy trace: ${route.policyTrace.join(" -> ")}`
-		: "";
-	const reason = route.reason ? `\nReason: ${route.reason}` : "";
-	const enforcement =
-		route.enforced === true
-			? "\nThis engine-selected lane is authoritative. Do not override it with a different model/runtime choice."
-			: "";
-	const binding = route.executionBinding
-		? [
-				route.executionBinding.query
-					? `\nDiscovery lane: ${route.executionBinding.query.capability}${route.executionBinding.query.mode ? ` (${route.executionBinding.query.mode})` : ""}${route.executionBinding.query.role ? ` [${route.executionBinding.query.role}]` : ""}`
-					: "",
-				route.executionBinding.selectedProviderId
-					? `\nSelected provider: ${route.executionBinding.selectedProviderId}`
-					: "",
-				route.executionBinding.selectedModelId
-					? `\nSelected model: ${route.executionBinding.selectedModelId}`
-					: "",
-				route.executionBinding.preferredProviderIds?.length
-					? `\nPreferred providers: ${route.executionBinding.preferredProviderIds.join(", ")}`
-					: "",
-				route.executionBinding.preferredModelIds?.length
-					? `\nPreferred models: ${route.executionBinding.preferredModelIds.join(", ")}`
-					: "",
-				route.executionBinding.candidateModelIds?.length
-					? `\nAllowed models: ${route.executionBinding.candidateModelIds.join(", ")}`
-					: "",
-				route.executionBinding.allowCrossProvider === false
-					? "\nDo not switch provider families outside the engine-selected set."
-					: "",
-			].join("")
-		: "";
-	return `${routeBits || "engine-selected lane"}${reason}${trace}${binding}${enforcement}`.trim();
-}
-
-function indentBlock(value: string): string {
-	return value
-		.split("\n")
-		.map((line) => `  ${line}`)
-		.join("\n");
-}
-
+/** Detect the older Takumi CLI mode that cannot honor NDJSON streaming yet. */
 export function shouldFallbackToCli(result: TakumiResponse): boolean {
 	if (result.exitCode === 0) return false;
 	return /Unknown option:\s*--stream|invalid .*--stream|unknown .*ndjson/i.test(result.output);
-}
-
-export function isFreshContext(context?: TakumiContext): boolean {
-	return context?.noCache === true || context?.fresh === true;
-}
-
-export function resolveCacheIntent(context?: TakumiContext): "default" | "fresh" {
-	return isFreshContext(context) ? "fresh" : "default";
-}
-
-export function auditTakumiResponseAgainstContract(
-	context: TakumiContext | undefined,
-	response: TakumiResponse,
-): TakumiResponse {
-	if (!context) return response;
-	const observation = observeTakumiExecution(response.output);
-	const violations = findTakumiContractViolations(context, observation);
-	if (violations.length === 0) {
-		if (observation.providerIds.length === 0 && observation.modelIds.length === 0) return response;
-		return {
-			...response,
-			contractAudit: {
-				observedProviderIds: observation.providerIds,
-				observedModelIds: observation.modelIds,
-				violations: [],
-			},
-		};
-	}
-	const prefix = [
-		"Takumi execution violated the Chitragupta engine route contract.",
-		...violations.map((violation) => `- ${violation}`),
-	];
-	return {
-		...response,
-		exitCode: response.exitCode === 0 ? 1 : response.exitCode,
-		output: `${prefix.join("\n")}\n\n${response.output}`.trim(),
-		contractAudit: {
-			observedProviderIds: observation.providerIds,
-			observedModelIds: observation.modelIds,
-			violations,
-		},
-	};
-}
-
-export function extractErrorMessage(error: unknown): string {
-	if (typeof error === "string") return error;
-	if (error && typeof error === "object") {
-		const maybeMessage = (error as { message?: unknown }).message;
-		if (typeof maybeMessage === "string") return maybeMessage;
-	}
-	return "Takumi returned an unknown error.";
-}
-
-export function truncate(value: string, maxChars: number): string {
-	return value.length > maxChars ? `${value.slice(0, maxChars)}...` : value;
-}
-
-function observeTakumiExecution(output: string): TakumiExecutionObservation {
-	const providerIds = new Set<string>();
-	const modelIds = new Set<string>();
-	const providerPatterns = [
-		/^\s*(?:selected\s+)?provider\s*[:=]\s*([A-Za-z0-9._:-]+)\s*$/gim,
-		/^\s*using\s+provider\s+([A-Za-z0-9._:-]+)\s*$/gim,
-	];
-	const modelPatterns = [
-		/^\s*(?:selected\s+)?model\s*[:=]\s*([A-Za-z0-9._:-]+)\s*$/gim,
-		/^\s*using\s+model\s+([A-Za-z0-9._:-]+)\s*$/gim,
-	];
-	for (const pattern of providerPatterns) {
-		for (const match of output.matchAll(pattern)) {
-			const value = match[1]?.trim().toLowerCase();
-			if (value) providerIds.add(value);
-		}
-	}
-	for (const pattern of modelPatterns) {
-		for (const match of output.matchAll(pattern)) {
-			const value = match[1]?.trim().toLowerCase();
-			if (value) modelIds.add(value);
-		}
-	}
-	return {
-		providerIds: [...providerIds],
-		modelIds: [...modelIds],
-	};
-}
-
-function findTakumiContractViolations(
-	context: TakumiContext,
-	observation: TakumiExecutionObservation,
-): string[] {
-	const enforcedLanes = [
-		...(context.engineRoute?.enforced === true ? [context.engineRoute] : []),
-		...(context.engineRouteEnvelope?.lanes.filter((lane) => lane.enforced === true) ?? []),
-	];
-	if (enforcedLanes.length === 0) return [];
-
-	const allowCrossProvider = enforcedLanes.some((lane) => lane.executionBinding?.allowCrossProvider !== false);
-	const allowedProviders = new Set<string>();
-	const allowedModels = new Set<string>();
-
-	for (const lane of enforcedLanes) {
-		const binding = lane.executionBinding;
-		if (!binding) continue;
-		const providerIds = [
-			binding.selectedProviderId,
-			...(binding.preferredProviderIds ?? []),
-		];
-		for (const providerId of providerIds) {
-			if (typeof providerId === "string" && providerId.trim()) {
-				allowedProviders.add(providerId.trim().toLowerCase());
-			}
-		}
-		const modelIds = [
-			binding.selectedModelId,
-			...(binding.preferredModelIds ?? []),
-			...(binding.candidateModelIds ?? []),
-		];
-		for (const modelId of modelIds) {
-			if (typeof modelId === "string" && modelId.trim()) {
-				allowedModels.add(modelId.trim().toLowerCase());
-			}
-		}
-	}
-
-	const violations: string[] = [];
-	if (!allowCrossProvider && allowedProviders.size > 0) {
-		for (const observedProviderId of observation.providerIds) {
-			if (!allowedProviders.has(observedProviderId)) {
-				violations.push(
-					`Observed provider '${observedProviderId}' is outside the engine-selected provider set: ${[...allowedProviders].join(", ")}`,
-				);
-			}
-		}
-	}
-	if (allowedModels.size > 0) {
-		for (const observedModelId of observation.modelIds) {
-			if (!allowedModels.has(observedModelId)) {
-				violations.push(
-					`Observed model '${observedModelId}' is outside the engine-selected model set: ${[...allowedModels].join(", ")}`,
-				);
-			}
-		}
-	}
-	return violations;
 }

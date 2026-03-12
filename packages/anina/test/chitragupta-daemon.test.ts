@@ -2,7 +2,12 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 describe("ChitraguptaDaemon", () => {
-	let daemon: { start(): Promise<void>; stop(): Promise<void>; on(event: string, handler: (event: { phase?: string; detail?: string }) => void): void } | undefined;
+	let daemon: {
+		start(): Promise<void>;
+		stop(): Promise<void>;
+		consolidateDate(date: string): Promise<void>;
+		on(event: string, handler: (event: { phase?: string; detail?: string }) => void): void;
+	} | undefined;
 
 	beforeEach(() => {
 		vi.resetModules();
@@ -15,14 +20,28 @@ describe("ChitraguptaDaemon", () => {
 		}
 	});
 
-		async function loadSubject() {
-			const state = {
-				resolvedSessions: [] as Array<{ id: string; project: string }>,
-				swapnaRuns: [] as Array<{ project: string; sessionIds?: string[] }>,
-				lastNidraInstance: null as {
-					triggerDeepSleepConsolidation(sessionIds: readonly string[]): Promise<void>;
-				} | null,
-		};
+			async function loadSubject() {
+				const state = {
+					resolvedSessions: [] as Array<{ id: string; project: string }>,
+					swapnaRuns: [] as Array<{ project: string; sessionIds?: string[] }>,
+						researchSummaries: [] as Array<{ id: string; projectPath: string; topic: string; stopReason: string }>,
+						researchConsolidationCalls: [] as string[],
+						memoryAppends: [] as Array<{ scope: unknown; entry: string; dedupe?: boolean }>,
+						remoteSyncCalls: [] as Array<Record<string, unknown>>,
+						semanticEpochRefreshCalls: [] as boolean[],
+						semanticEpochRefreshPending: false,
+						releaseSemanticEpochRefresh: null as (() => void) | null,
+						dayResult: {
+						sessionsProcessed: 1,
+						filePath: "/tmp/day.md",
+						extractedFacts: [] as string[],
+						projectCount: 1,
+						durationMs: 12,
+					},
+					lastNidraInstance: null as {
+						triggerDeepSleepConsolidation(sessionIds: readonly string[]): Promise<void>;
+					} | null,
+				};
 
 		vi.doMock("../src/nidra-daemon.js", () => {
 			class MockNidraDaemon extends EventEmitter {
@@ -59,23 +78,74 @@ describe("ChitraguptaDaemon", () => {
 			return { NidraDaemon: MockNidraDaemon };
 		});
 
-		vi.doMock("@chitragupta/core", () => ({
-			getChitraguptaHome: () => "/tmp/chitragupta-daemon-test",
-		}));
+				vi.doMock("@chitragupta/core", () => ({
+					getChitraguptaHome: () => "/tmp/chitragupta-daemon-test",
+				}));
 
-			vi.doMock("@chitragupta/smriti", () => ({
-			DatabaseManager: {
-				instance: () => ({
-					get: () => ({
+					vi.doMock("../src/chitragupta-daemon-support.js", async (importOriginal) => {
+						const actual = await importOriginal<typeof import("../src/chitragupta-daemon-support.js")>();
+						return {
+							...actual,
+							acquireDateLock: () => () => {},
+						};
+					});
+
+					vi.doMock("../src/chitragupta-daemon-semantic.js", () => ({
+						refreshGlobalSemanticEpochDrift: vi.fn(async (force = false) => {
+							state.semanticEpochRefreshCalls.push(force);
+							if (state.semanticEpochRefreshPending) {
+								await new Promise<void>((resolve) => {
+									state.releaseSemanticEpochRefresh = resolve;
+								});
+							}
+						return {
+							currentEpoch: "provider-a:model-a:1536:provider",
+							previousEpoch: null,
+							reason: force ? "forced" : "bootstrap",
+							completed: true,
+							refreshed: true,
+							repair: {
+								plan: { scanned: 3, candidateCount: 1 },
+									reembedded: 1,
+									remoteSynced: 0,
+									qualityDeferred: 0,
+								},
+							};
+						}),
+						repairSelectiveReembeddingForDate: vi.fn(async () => ({
+							candidates: 0,
+							reembedded: 0,
+							scopes: [],
+						})),
+					}));
+
+				const dayConsolidationMock = () => ({
+					consolidateDay: vi.fn(async () => state.dayResult),
+				});
+				vi.doMock("@chitragupta/smriti/day-consolidation", dayConsolidationMock);
+				vi.doMock("@chitragupta/smriti/day-consolidation.js", dayConsolidationMock);
+
+				vi.doMock("@chitragupta/smriti", () => ({
+					DatabaseManager: {
+					instance: () => ({
+						get: () => ({
 						prepare: () => ({
 							all: () => state.resolvedSessions,
 						}),
+						}),
 					}),
+				},
+				appendMemory: vi.fn(async (scope: unknown, entry: string, options?: { dedupe?: boolean }) => {
+					state.memoryAppends.push({ scope, entry, dedupe: options?.dedupe });
 				}),
-			},
+				listResearchLoopSummaries: vi.fn(() => state.researchSummaries),
+				syncRemoteSemanticMirror: vi.fn(async (options: Record<string, unknown>) => {
+					state.remoteSyncCalls.push(options);
+					return { status: { enabled: true }, synced: 1 };
+				}),
 				SwapnaConsolidation: class {
-					private project: string;
-					private sessionIds?: string[];
+						private project: string;
+						private sessionIds?: string[];
 
 					constructor(config: { project: string; sessionIds?: string[] }) {
 						this.project = config.project;
@@ -87,17 +157,17 @@ describe("ChitraguptaDaemon", () => {
 						onProgress?.("REPLAY", 0.5);
 						onProgress?.("COMPRESS", 1);
 					}
-			},
-		}));
+				},
+			}));
 
-		vi.doMock("@chitragupta/smriti/session-store", () => ({
-			listSessions: () => state.resolvedSessions,
-			listSessionsByDate: () => [],
-		}));
+				vi.doMock("@chitragupta/smriti/session-store", () => ({
+					listSessions: () => state.resolvedSessions,
+					listSessionsByDate: () => [],
+				}));
 
-		const mod = await import("../src/chitragupta-daemon.js");
-		return {
-			ChitraguptaDaemon: mod.ChitraguptaDaemon,
+				const mod = await import("../src/chitragupta-daemon.js");
+				return {
+					ChitraguptaDaemon: mod.ChitraguptaDaemon,
 			state,
 		};
 	}
@@ -131,9 +201,9 @@ describe("ChitraguptaDaemon", () => {
 			expect(events.some((event) => event.phase === "deep-sleep:swapna:COMPRESS")).toBe(true);
 	});
 
-	it("reports unresolved pending sessions without running Swapna", async () => {
-		const { ChitraguptaDaemon, state } = await loadSubject();
-		state.resolvedSessions = [];
+		it("reports unresolved pending sessions without running Swapna", async () => {
+			const { ChitraguptaDaemon, state } = await loadSubject();
+			state.resolvedSessions = [];
 
 		const events: Array<{ phase?: string; detail?: string }> = [];
 		daemon = new ChitraguptaDaemon({
@@ -151,4 +221,37 @@ describe("ChitraguptaDaemon", () => {
 			expect(events.some((event) => event.detail === "1 sessions missing from Smriti")).toBe(true);
 			expect(events.some((event) => event.detail === "no matching projects for pending sessions")).toBe(true);
 		});
-});
+
+		it("runs a semantic epoch refresh once on daemon start", async () => {
+			const { ChitraguptaDaemon, state } = await loadSubject();
+			daemon = new ChitraguptaDaemon({
+				consolidateOnIdle: false,
+				backfillOnStartup: false,
+			});
+
+			await daemon.start();
+
+			expect(state.semanticEpochRefreshCalls).toEqual([false]);
+		});
+
+		it("waits for semantic epoch refresh completion before date consolidation starts", async () => {
+			const { ChitraguptaDaemon, state } = await loadSubject();
+			state.semanticEpochRefreshPending = true;
+			daemon = new ChitraguptaDaemon({
+				consolidateOnIdle: false,
+				backfillOnStartup: false,
+			});
+
+			await daemon.start();
+			const consolidation = daemon.consolidateDate("2026-03-11");
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(state.semanticEpochRefreshCalls).toEqual([false]);
+			expect(state.swapnaRuns).toEqual([]);
+
+			state.releaseSemanticEpochRefresh?.();
+			await consolidation;
+		});
+
+			});

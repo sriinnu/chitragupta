@@ -4,9 +4,9 @@
 
 **प्राण (prana) -- Life Force / Vital Breath**
 
-**Workflow DAG engine with topological execution, parallel step processing, worker thread pools (Shramika), 33 Chitragupta node adapters, 7 engine workflow templates, and disk persistence.**
+**Workflow DAG engine with topological execution, parallel step processing, worker thread pools (Shramika), 33 Chitragupta node adapters, 8 engine workflow templates, and disk persistence.**
 
-Prana is Chitragupta's workflow motion layer. It drives multi-step workflows forward as directed acyclic graphs (DAGs), validates execution order, computes the critical path, and runs independent steps in parallel where possible. The Shramika worker pool offloads CPU-intensive tasks to Node.js worker threads. Thirty-three Chitragupta node adapters wrap every subsystem (memory, consciousness, skills, security, performance, and bounded research) as Prana step handlers, and seven engine workflow templates encode both lifecycle and research operational pipelines.
+Prana is Chitragupta's workflow motion layer. It drives multi-step workflows forward as directed acyclic graphs (DAGs), validates execution order, computes the critical path, and runs independent steps in parallel where possible. The Shramika worker pool offloads CPU-intensive tasks to Node.js worker threads. Thirty-three Chitragupta node adapters wrap every subsystem (memory, consciousness, skills, security, performance, and bounded research) as Prana step handlers, and eight engine workflow templates encode both lifecycle and research operational pipelines.
 
 ---
 
@@ -20,7 +20,7 @@ Prana is Chitragupta's workflow motion layer. It drives multi-step workflows for
 - **Built-in templates** -- `CODE_REVIEW_WORKFLOW`, `REFACTOR_WORKFLOW`, `BUG_FIX_WORKFLOW`, `DEPLOY_WORKFLOW`
 - **Shramika worker pool** -- `WorkerPool` manages Node.js worker threads for CPU-bound parallel execution with task queuing, timeouts, and stats
 - **Chitragupta node adapters** -- 33 adapters wrapping subsystem modules as Prana step handlers via `NODE_ADAPTERS` registry and `executeNodeAdapter()`
-- **Chitragupta workflow templates** -- 7 engine DAGs: 5 lifecycle workflows plus daemon-first `autoresearch` and `acp-research-swarm`
+- **Chitragupta workflow templates** -- 8 engine DAGs: 5 lifecycle workflows plus daemon-first `autoresearch`, `autoresearch-overnight`, and `acp-research-swarm`
 - **Persistence** -- Save/load workflows and execution history to disk
 - **Visualization** -- `renderDAG()` produces an ASCII representation of the workflow graph
 
@@ -86,6 +86,7 @@ Research nodes keep one canonical project/session path:
 | **Guardian Sweep** | `guardian-sweep` | Lokapala sweep: parallel security/performance/correctness -> merge -> Sabha deliberation -> apply fixes | 6 |
 | **Full Cycle** | `full-cycle` | Complete lifecycle: self-report -> guardian sweep -> consolidation -> learning check -> health report | 5 |
 | **Autoresearch** | `autoresearch` | Bounded experiment loop: scope -> ACP/Sabha council -> baseline -> run -> evaluate -> PAKT pack -> record | 7 |
+| **Autoresearch Overnight** | `autoresearch-overnight` | Two-agent overnight loop: scope -> council -> baseline -> repeated bounded rounds with carry-context reuse and early stop | 4 |
 | **ACP Research Swarm** | `acp-research-swarm` | ACP/Sutra peer-council planning: scope -> council -> PAKT pack -> record | 4 |
 
 ## API
@@ -170,6 +171,7 @@ import {
   GUARDIAN_SWEEP_WORKFLOW,
   FULL_CYCLE_WORKFLOW,
   AUTORESEARCH_WORKFLOW,
+  AUTORESEARCH_OVERNIGHT_WORKFLOW,
   ACP_RESEARCH_SWARM_WORKFLOW,
   getChitraguptaWorkflow,
   listChitraguptaWorkflows,
@@ -190,6 +192,9 @@ await executor.execute(FULL_CYCLE_WORKFLOW);
 
 // Execute a bounded research loop
 await executor.execute(AUTORESEARCH_WORKFLOW);
+
+// Execute the two-agent overnight refinement loop
+await executor.execute(AUTORESEARCH_OVERNIGHT_WORKFLOW);
 ```
 
 ### Chitragupta Node Adapters

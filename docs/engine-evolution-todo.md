@@ -63,15 +63,25 @@ This file tracks core-engine closure work that should not disappear into ad hoc 
 - [x] Normalize legacy discovery-facing capability requests like `chat` / `function_calling` onto engine `model.*` lanes before routing so discovery-backed selection is real instead of hint-only.
 - [x] Add `route.resolveBatch` plus discovery-backed execution bindings so Takumi-style role schedulers can consume engine-approved provider/model envelopes instead of rebuilding route policy locally.
 - [x] Persist packed research context into derived bounded-research records so recall can reuse the daemon-approved compacted context directly.
+- [x] Add a first daemon-first `autoresearch-overnight` workflow with a two-agent planner/executor council, round-by-round research ledger records, early-stop on stalled improvement, and packed carry-context reuse across rounds.
+- [x] Make daily Nidra postprocess derive one per-project research refinement digest from overnight loop summaries and experiment outcomes so project memory keeps next-step seeds instead of only raw loop exhaust.
 - [x] Resolve Prana bounded-research workflow and execution lanes through one daemon `route.resolveBatch` call and preserve execution-binding provenance in the durable record.
 - [x] Pass the engine-selected execution lane directly into bounded research run environments so the actual experiment process sees the selected provider/model envelope instead of only recording it afterward.
 - [x] Apply daemon-first live packing to bulky Takumi episodic-hint and recent-decision sections, not only repo/file excerpts.
 - [x] Apply that same daemon-first packing policy to Lucy auto-fix failure context so repair tasks do not default to raw uncompressed log tails when the engine packer is healthy.
 - [x] Normalize already-packed live context before reusing it in Takumi and Lucy readback paths so PAKT output is not blindly nested into another packed section.
 - [x] Expose daemon-owned `compression.normalize_context` and `compression.unpack_context` so consumers can safely reuse or expand packed context on the read side instead of treating packed blocks as opaque strings.
+- [x] Persist embedding epochs and MDL-style compaction metrics on curated semantic artifacts so local and remote semantic mirrors can detect stale embedding generations separately from content drift.
+- [x] Add daemon-first selective re-embedding planning/repair for high-value curated semantic artifacts with stale embedding epochs.
+- [x] Tighten selective re-embedding into a first-class policy path with reason-aware repair and subset remote sync, not only candidate planning plus full artifact relisting.
+- [x] Make embedding epoch changes self-heal the curated semantic mirror automatically through daemon startup and periodic refresh instead of waiting for manual reindex commands.
+- [x] Make the semantic self-heal operator-safe by pinning a canonical engine embedding lane, preserving partial-refresh state, and serializing epoch refresh against daily daemon consolidation.
+- [x] Make the overnight research loop fail closed on exhausted total budget and unsafe discard cleanup instead of reporting those states as successful completion.
+- [x] Harden unattended overnight governance with round-level failure recording and attempt-safe experiment history for retried rounds.
 - [x] Make enforced Takumi route envelopes fail closed when the authoritative engine selection cannot be represented safely in the structured bridge payload.
 - [x] Add a best-effort post-run Takumi contract audit that fails closed when the bridge explicitly observes provider/model declarations outside an enforced engine-selected lane.
 - [x] Persist git provenance in bounded research records and fail closed when git refs change during the run so the experiment ledger cannot silently drift across branches or commits.
+- [ ] Tighten unattended overnight governance further with stricter hash-only policy and the remaining keep/discard/revert closure work.
 - [ ] Tighten Vaayu and Takumi consumer contracts around canonical sessions, bridge scopes, and provenance-aware recall.
 - [x] Make explicit Takumi engine-route requests fail closed when daemon route resolution fails or when the engine selected Takumi but the Takumi bridge is unavailable.
 - [x] Move the interactive agent and MCP `coding_agent` surfaces onto the same session-aware engine route-class path so route resolution governs execution beyond the original Takumi bridge entrypoint.

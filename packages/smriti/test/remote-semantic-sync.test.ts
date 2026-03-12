@@ -115,7 +115,16 @@ describe("remote semantic sync", () => {
 				const body = JSON.parse(String(init.body ?? "{}")) as { points?: Array<{ payload?: Record<string, unknown> }> };
 				expect(body.points?.[0]?.payload?.originalId).toBe("daily_summary:2026-02-10");
 				expect(body.points?.[0]?.payload?.curated).toBe(true);
-				expect(body.points?.[0]?.payload?.packedSummary).toContain("@from text");
+				expect(body.points?.[0]?.payload?.mdlMetrics).toEqual(
+					expect.objectContaining({
+						mdlScore: expect.any(Number),
+						summaryReduction: expect.any(Number),
+					}),
+				);
+				expect(
+					body.points?.[0]?.payload?.packedSummary === null
+					|| String(body.points?.[0]?.payload?.packedSummary).includes("@from text"),
+				).toBe(true);
 				return new Response(JSON.stringify({ result: { status: "acknowledged" } }), { status: 200 });
 			}
 			if (url.endsWith("/health") && init?.method === "GET") {
@@ -131,6 +140,13 @@ describe("remote semantic sync", () => {
 		expect(result.status.syncedCount).toBe(1);
 		expect(result.status.missingCount).toBe(0);
 		expect(result.status.driftCount).toBe(0);
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining("/collections/chitragupta_memory/points"),
+			expect.objectContaining({
+				method: "PUT",
+				body: expect.stringContaining("\"embeddingEpoch\""),
+			}),
+		);
 
 		const inspected = await inspectRemoteSemanticSync({ dates: ["2026-02-10"], levels: ["daily"] });
 		expect(inspected.syncedCount).toBe(1);
@@ -164,5 +180,112 @@ describe("remote semantic sync", () => {
 		expect(inspected.syncedCount).toBe(0);
 		expect(inspected.driftCount).toBe(1);
 		expect(inspected.issues[0]?.reason).toBe("stale_remote");
+	});
+
+	it("detects remote epoch drift when the synced artifact epoch no longer matches local embeddings", async () => {
+		writeCuratedDay();
+		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
+		const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			if (url.endsWith("/collections/chitragupta_memory") && init?.method === "GET") {
+				return new Response(JSON.stringify({ result: { config: { params: { vectors: { size: 128 } } } } }), { status: 200 });
+			}
+			if (url.endsWith("/collections/chitragupta_memory/points") && init?.method === "PUT") {
+				return new Response(JSON.stringify({ result: { status: "acknowledged" } }), { status: 200 });
+			}
+			if (url.endsWith("/health") && init?.method === "GET") {
+				return new Response(JSON.stringify({ title: "ok" }), { status: 200 });
+			}
+			throw new Error(`Unexpected fetch: ${init?.method ?? "GET"} ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		await syncRemoteSemanticMirror({ dates: ["2026-02-10"], levels: ["daily"] });
+		const db = DatabaseManager.instance().get("agent");
+		db.prepare("UPDATE remote_semantic_sync SET embedding_epoch = ? WHERE artifact_id = ?").run(
+			"legacy-provider:legacy-model:384:provider",
+			"daily_summary:2026-02-10",
+		);
+
+		const inspected = await inspectRemoteSemanticSync({ dates: ["2026-02-10"], levels: ["daily"] });
+		expect(inspected.syncedCount).toBe(0);
+		expect(inspected.driftCount).toBe(1);
+		expect(inspected.issues[0]?.reason).toBe("stale_remote_epoch");
+	});
+
+	it("reports first-time remote push failures as remote_error instead of missing_remote", async () => {
+		writeCuratedDay();
+		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
+		const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			if (url.endsWith("/collections/chitragupta_memory") && init?.method === "GET") {
+				return new Response(JSON.stringify({ result: { config: { params: { vectors: { size: 128 } } } } }), { status: 200 });
+			}
+			if (url.endsWith("/collections/chitragupta_memory/points") && init?.method === "PUT") {
+				return new Response(JSON.stringify({ status: { error: "boom" } }), { status: 500 });
+			}
+			if (url.endsWith("/health") && init?.method === "GET") {
+				return new Response(JSON.stringify({ title: "ok" }), { status: 200 });
+			}
+			throw new Error(`Unexpected fetch: ${init?.method ?? "GET"} ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		await syncRemoteSemanticMirror({ dates: ["2026-02-10"], levels: ["daily"] });
+		const inspected = await inspectRemoteSemanticSync({ dates: ["2026-02-10"], levels: ["daily"] });
+		expect(inspected.syncedCount).toBe(0);
+		expect(inspected.driftCount).toBe(1);
+		expect(inspected.missingCount).toBe(0);
+		expect(inspected.issues[0]?.reason).toBe("remote_error");
+	});
+
+	it("does not mirror stale local embeddings when repairLocal is disabled", async () => {
+		writeCuratedDay();
+		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
+		const vectorsDb = DatabaseManager.instance().get("vectors");
+		const row = vectorsDb.prepare("SELECT metadata FROM embeddings WHERE id = ?").get("daily_summary:2026-02-10") as {
+			metadata: string;
+		};
+		const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+		metadata.embeddingEpoch = {
+			providerId: "legacy-provider",
+			modelId: "legacy-model",
+			dimensions: 384,
+			strategy: "provider",
+			epoch: "legacy-provider:legacy-model:384:provider",
+		};
+		vectorsDb.prepare("UPDATE embeddings SET metadata = ? WHERE id = ?").run(
+			JSON.stringify(metadata),
+			"daily_summary:2026-02-10",
+		);
+
+		const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			if (url.endsWith("/collections/chitragupta_memory") && init?.method === "GET") {
+				return new Response(JSON.stringify({ result: { config: { params: { vectors: { size: 128 } } } } }), { status: 200 });
+			}
+			if (url.endsWith("/health") && init?.method === "GET") {
+				return new Response(JSON.stringify({ title: "ok" }), { status: 200 });
+			}
+			throw new Error(`Unexpected fetch: ${init?.method ?? "GET"} ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await syncRemoteSemanticMirror({
+			dates: ["2026-02-10"],
+			levels: ["daily"],
+			repairLocal: false,
+		});
+		expect(result.synced).toBe(0);
+		expect(fetchMock).not.toHaveBeenCalledWith(
+			expect.stringContaining("/collections/chitragupta_memory/points"),
+			expect.anything(),
+		);
+
+		const inspected = await inspectRemoteSemanticSync({ dates: ["2026-02-10"], levels: ["daily"] });
+		expect(inspected.syncedCount).toBe(0);
+		expect(inspected.driftCount).toBe(1);
+		expect(inspected.issues[0]?.reason).toBe("remote_error");
+		expect(inspected.issues[0]?.error).toContain("embedding epoch is stale");
 	});
 });

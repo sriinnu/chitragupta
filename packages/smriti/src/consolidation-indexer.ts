@@ -13,18 +13,24 @@ import fs from "node:fs";
 import { DatabaseManager } from "./db/database.js";
 import { initVectorsSchema } from "./db/schema.js";
 import { EmbeddingService, fallbackEmbedding } from "./embedding-service.js";
-import { packCuratedSummaryText } from "./pakt-compression.js";
 import { vectorToBlob, blobToVector } from "./recall.js";
 import { cosineSimilarity } from "./recall-scoring.js";
 import {
 	parseConsolidationMetadata,
 } from "./consolidation-provenance.js";
 import {
+	inspectArtifactVectorSync,
+	parseEmbeddingMetadata,
+	type EmbeddingRow,
+} from "./consolidation-indexer-sync.js";
+import { getEngineEmbeddingService } from "./embedding-runtime.js";
+import {
 	buildArtifactContentHash,
 	buildConsolidationEmbeddingId,
 	buildConsolidationSourceId,
 	extractSummaryText,
 	listCuratedConsolidationArtifacts,
+	prepareCuratedSummaryCompression,
 	type ConsolidationLevel,
 	type ConsolidationSummaryIndex,
 	type ConsolidationVectorSyncIssue,
@@ -48,13 +54,18 @@ export type {
 	CuratedConsolidationArtifactQuery,
 };
 
+export interface ConsolidationIndexResult {
+	indexed: boolean;
+	reason?: "too_short" | "write_failed";
+}
+
 // ─── Embedding helper ────────────────────────────────────────────────────────
 
 let _embeddingService: EmbeddingService | null = null;
 
-function getEmbeddingService(): EmbeddingService {
+async function getEmbeddingService(): Promise<EmbeddingService> {
 	if (!_embeddingService) {
-		_embeddingService = new EmbeddingService();
+		_embeddingService = await getEngineEmbeddingService();
 	}
 	return _embeddingService;
 }
@@ -78,79 +89,6 @@ export function _resetConsolidationIndexer(): void {
 	_embeddingService = null;
 }
 
-interface EmbeddingRow {
-	id: string;
-	vector: Buffer;
-	text: string;
-	source_type: string;
-	source_id: string;
-	metadata: string | null;
-}
-
-function parseEmbeddingMetadata(
-	row: Pick<EmbeddingRow, "metadata"> | undefined,
-): Record<string, unknown> {
-	if (!row?.metadata) return {};
-	try {
-		return JSON.parse(row.metadata) as Record<string, unknown>;
-	} catch {
-		return {};
-	}
-}
-
-function inspectArtifacts(
-	artifacts: readonly CuratedConsolidationArtifact[],
-	rowsById: Map<string, EmbeddingRow>,
-): ConsolidationVectorSyncStatus {
-	const issues: ConsolidationVectorSyncIssue[] = [];
-	let missingCount = 0;
-	let driftCount = 0;
-	for (const artifact of artifacts) {
-		const row = rowsById.get(artifact.id);
-		if (!row) {
-			missingCount++;
-			issues.push({
-				id: artifact.id,
-				level: artifact.level,
-				period: artifact.period,
-				project: artifact.project,
-				reason: "missing_vector",
-			});
-			continue;
-		}
-		const metadata = parseEmbeddingMetadata(row);
-		const storedHash = typeof metadata.contentHash === "string" ? metadata.contentHash : "";
-		const curated = metadata.curated === true;
-		if (!curated) {
-			driftCount++;
-			issues.push({
-				id: artifact.id,
-				level: artifact.level,
-				period: artifact.period,
-				project: artifact.project,
-				reason: "legacy_vector",
-			});
-			continue;
-		}
-		if (storedHash !== artifact.contentHash) {
-			driftCount++;
-			issues.push({
-				id: artifact.id,
-				level: artifact.level,
-				period: artifact.period,
-				project: artifact.project,
-				reason: "stale_hash",
-			});
-		}
-	}
-	return {
-		scanned: artifacts.length,
-		missingCount,
-		driftCount,
-		issues,
-	};
-}
-
 // ─── Index Consolidation Summary ─────────────────────────────────────────────
 
 /**
@@ -162,11 +100,12 @@ export async function indexConsolidationSummary(
 	period: string,
 	markdown: string,
 	project?: string,
-): Promise<void> {
+): Promise<ConsolidationIndexResult> {
 	const summaryText = extractSummaryText(markdown, level);
-	if (!summaryText || summaryText.length < 10) return;
-	const compression = await packCuratedSummaryText(summaryText);
-	const packedSummaryText = compression?.packedText;
+	if (!summaryText || summaryText.length < 10) {
+		return { indexed: false, reason: "too_short" };
+	}
+	const compressionDecision = await prepareCuratedSummaryCompression(markdown, summaryText);
 	const provenance = parseConsolidationMetadata(markdown);
 	const contentHash = buildArtifactContentHash(summaryText);
 	const sourceSessionIds =
@@ -176,11 +115,15 @@ export async function indexConsolidationSummary(
 
 	// Generate embedding
 	let embedding: number[];
+	const embeddingService = await getEmbeddingService();
+	let embeddingEpoch = await embeddingService.getEmbeddingEpoch();
 	try {
-		const svc = getEmbeddingService();
-		embedding = await svc.getEmbedding(summaryText);
+		const record = await embeddingService.getEmbeddingRecord(summaryText);
+		embedding = record.embedding;
+		embeddingEpoch = record.epoch;
 	} catch {
 		embedding = fallbackEmbedding(summaryText);
+		embeddingEpoch = await embeddingService.getEmbeddingEpoch();
 	}
 
 	const id = buildConsolidationEmbeddingId(level, period, project);
@@ -205,16 +148,21 @@ export async function indexConsolidationSummary(
 						project: project ?? null,
 						curated: provenance !== null,
 						contentHash,
-						packedSummaryText: packedSummaryText ?? null,
-						compression: compression ?? null,
+						embeddingEpoch,
+						packedSummaryText: compressionDecision.packedSummaryText ?? null,
+						compression: compressionDecision.compression ?? null,
+						packedDecision: compressionDecision.packedDecision,
+						mdlMetrics: compressionDecision.mdlMetrics,
 						generatedAt: provenance?.generatedAt ?? null,
 						sourceSessionIds,
 						sourcePeriods,
 					}),
 				Date.now(),
 			);
+			return { indexed: true };
 		} catch {
 			// Best-effort — don't break consolidation if vector indexing fails
+			return { indexed: false, reason: "write_failed" };
 		}
 }
 
@@ -234,7 +182,7 @@ export async function searchConsolidationSummaries(
 	// Generate query embedding
 	let queryEmbedding: number[];
 	try {
-		const svc = getEmbeddingService();
+		const svc = await getEmbeddingService();
 		queryEmbedding = await svc.getEmbedding(query);
 	} catch {
 		queryEmbedding = fallbackEmbedding(query);
@@ -287,7 +235,7 @@ export async function inspectConsolidationVectorSync(
 	options: CuratedConsolidationArtifactQuery = {},
 ): Promise<ConsolidationVectorSyncStatus> {
 	try {
-			const artifacts = await listCuratedConsolidationArtifacts(options);
+		const artifacts = await listCuratedConsolidationArtifacts(options);
 		if (artifacts.length === 0) {
 			return { scanned: 0, missingCount: 0, driftCount: 0, issues: [] };
 		}
@@ -297,7 +245,8 @@ export async function inspectConsolidationVectorSync(
 			 FROM embeddings
 			 WHERE source_type IN ('daily_summary', 'monthly_summary', 'yearly_summary')`,
 		).all() as EmbeddingRow[];
-		return inspectArtifacts(artifacts, new Map(rows.map((row) => [row.id, row])));
+		const expectedEpoch = await (await getEmbeddingService()).getEmbeddingEpoch();
+		return await inspectArtifactVectorSync(artifacts, new Map(rows.map((row) => [row.id, row])), expectedEpoch);
 	} catch {
 		return { scanned: 0, missingCount: 0, driftCount: 0, issues: [] };
 	}
@@ -323,7 +272,8 @@ export async function repairConsolidationVectorSync(
 		 FROM embeddings
 		 WHERE source_type IN ('daily_summary', 'monthly_summary', 'yearly_summary')`,
 	).all() as EmbeddingRow[];
-	const status = inspectArtifacts(artifacts, new Map(rows.map((row) => [row.id, row])));
+	const expectedEpoch = await (await getEmbeddingService()).getEmbeddingEpoch();
+	const status = await inspectArtifactVectorSync(artifacts, new Map(rows.map((row) => [row.id, row])), expectedEpoch);
 	if (status.issues.length === 0) return { status, reindexed: 0 };
 
 	const artifactsById = new Map(artifacts.map((artifact) => [artifact.id, artifact]));
