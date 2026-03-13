@@ -2,30 +2,22 @@
 ///
 /// v3: Dynamic popover sizing (content-determined, max 650), width 380.
 /// No forced dark mode — respects system appearance.
+///
+/// ## State-Driven Animation
+///
+/// The torii gate icon animates differently per daemon state:
+/// - **Disconnected**: static gray gate, no timer running.
+/// - **Idle**: 1.2s tick, gentle amber sway.
+/// - **Active/Busy**: 0.4s tick, lively green motion.
+/// - **Consolidating**: 1.5s tick, slow purple float.
+/// - **Deep Sleep**: 2.5s tick, barely-there indigo breathing.
+/// - **Error**: 0.3s tick, rapid red jitter.
+///
+/// Timer interval changes dynamically when the state transitions.
 
 import AppKit
 import SwiftUI
 
-/// Manages the menubar status item (icon + popover) and drives the
-/// torii gate animation loop.
-///
-/// ## Frame Cache
-///
-/// Rather than re-rendering the torii gate on every animation tick,
-/// `frameCache` stores pre-rendered strips of 8 frames keyed by health
-/// color hash. On each tick we just index into the strip. When the health
-/// color changes (e.g. daemon connects/disconnects), a new strip is
-/// rendered and cached. The cache is capped at 3 entries; stale colors
-/// are evicted LRU-ish (first non-current key found) to bound memory.
-///
-/// ## Animation Tick
-///
-/// A 1-second `Timer` calls `tickAnimation()` which:
-/// 1. Determines the current health color from daemon state.
-/// 2. Lazily renders or retrieves the frame strip for that color.
-/// 3. Advances `frameIndex` and sets `statusItem.button.image`.
-/// 4. If "Reduce Motion" is on, only updates the icon when the health
-///    color changes (no frame cycling).
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
@@ -33,16 +25,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover!
     private let client = DaemonClient()
     private var animationTimer: Timer?
-    /// Current position in the frame strip (0..<frameCount).
     private var frameIndex = 0
 
-    /// Pre-rendered frame strips keyed by `NSColor.hash`.
-    /// Each strip contains `frameCount` images covering one full 2π cycle.
-    private var frameCache: [Int: [NSImage]] = [:]
-    /// Hash of the last-rendered health color, used to detect changes.
-    private var lastHealthHash = 0
-    /// Number of frames per animation cycle (evenly divides 2π).
-    private static let frameCount = 8
+    /// Pre-rendered frame strips keyed by DaemonState raw discriminant.
+    private var frameCache: [String: [NSImage]] = [:]
+    private var lastStateKey = ""
+    private static let frameCount = 12
+
+    /// Current daemon state — drives animation character.
+    private var currentState: DaemonState = .disconnected
 
     // MARK: - NSApplicationDelegate
 
@@ -52,8 +43,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Return false so the app stays alive when the popover closes —
-    /// menubar apps have no "last window".
     nonisolated func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
@@ -62,8 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem.button {
-            // Initial static frame (gray = disconnected).
-            button.image = HeartbeatIcon.render(phase: 0, health: .gray)
+            button.image = HeartbeatIcon.render(phase: 0, state: .disconnected)
             button.action = #selector(togglePopover)
             button.target = self
         }
@@ -71,7 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let contentView = MenubarView(client: client)
         popover = NSPopover()
         popover.contentSize = NSSize(width: 380, height: 520)
-        popover.behavior = .transient   // auto-dismiss on click-away
+        popover.behavior = .transient
         popover.animates = true
         popover.contentViewController = NSHostingController(rootView: contentView)
 
@@ -86,91 +74,123 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             popover.performClose(nil)
         } else {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            // Make the popover key so it can receive keyboard events.
             popover.contentViewController?.view.window?.makeKey()
         }
     }
 
     // MARK: - Icon animation
 
-    /// Starts the 1-second animation timer that cycles the torii icon.
+    /// Timer interval per state — faster for active, slower for sleeping.
+    private func timerInterval(for state: DaemonState) -> TimeInterval {
+        switch state {
+        case .disconnected:   return 0    // no timer needed
+        case .idle:           return 1.2
+        case .active:         return 0.4
+        case .consolidating:  return 1.5
+        case .deepSleep:      return 2.5
+        case .error:          return 0.3
+        }
+    }
+
     private func startAnimation() {
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        scheduleTimer(for: currentState)
+    }
+
+    /// (Re)schedule the animation timer for the given state.
+    /// Invalidates any existing timer first.
+    private func scheduleTimer(for state: DaemonState) {
+        animationTimer?.invalidate()
+        animationTimer = nil
+
+        let interval = timerInterval(for: state)
+        guard interval > 0 else {
+            // Static state (disconnected) — just set one frame.
+            statusItem.button?.image = HeartbeatIcon.render(phase: 0, state: state)
+            return
+        }
+
+        animationTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.tickAnimation()
             }
         }
+        // Fire immediately so the icon updates without waiting for the first interval.
+        animationTimer?.fire()
     }
 
-    /// Advance the icon animation by one frame.
-    ///
-    /// The logic:
-    /// 1. Determine the current health color (amber/gray/purple/orange).
-    /// 2. If no cached frame strip exists for this color, pre-render all
-    ///    8 frames (one full 2π cycle) and cache them.
-    /// 3. Evict old cache entries if we have more than 3 colors cached.
-    /// 4. If "Reduce Motion" is enabled, freeze on frame 0 and only
-    ///    update when the color changes.
-    /// 5. Otherwise, advance `frameIndex` and set the button image.
     private func tickAnimation() {
-        let health = currentHealth()
-        let healthHash = health.hash
+        let newState = resolveDaemonState()
+        let stateKey = "\(newState)"
 
-        // Lazily render the frame strip for this health color.
-        if frameCache[healthHash] == nil {
-            var frames: [NSImage] = []
-            let step = (2.0 * .pi) / CGFloat(Self.frameCount)
-            for i in 0..<Self.frameCount {
-                frames.append(HeartbeatIcon.render(phase: CGFloat(i) * step, health: health))
-            }
-            frameCache[healthHash] = frames
-        }
-
-        // Evict stale cache entries — keep at most 3 health colors.
-        // Simple eviction: remove the first non-current key.
-        if frameCache.count > 3 {
-            for key in frameCache.keys where key != healthHash {
-                frameCache.removeValue(forKey: key)
-                break
-            }
-        }
-
-        // Accessibility: "Reduce Motion" preference freezes animation.
-        // Only update the icon when the health color itself changes.
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            if healthHash != lastHealthHash {
-                lastHealthHash = healthHash
-                statusItem.button?.image = frameCache[healthHash]?[0]
-            }
+        // State changed — reschedule timer at new cadence, reset frame index.
+        if stateKey != lastStateKey {
+            currentState = newState
+            frameIndex = 0
+            frameCache.removeAll()     // clear all — new state means new color
+            lastStateKey = stateKey
+            scheduleTimer(for: newState)
             return
         }
 
-        lastHealthHash = healthHash
-        let frames = frameCache[healthHash]!
+        // Build frame strip if not cached.
+        if frameCache[stateKey] == nil {
+            var frames: [NSImage] = []
+            let step = (2.0 * .pi) / CGFloat(Self.frameCount)
+            for i in 0..<Self.frameCount {
+                frames.append(HeartbeatIcon.render(phase: CGFloat(i) * step, state: newState))
+            }
+            frameCache[stateKey] = frames
+        }
+
+        // Reduced motion: static icon, only update on state change.
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            statusItem.button?.image = frameCache[stateKey]?[0]
+            return
+        }
+
+        let frames = frameCache[stateKey]!
         frameIndex = (frameIndex + 1) % frames.count
         statusItem.button?.image = frames[frameIndex]
     }
 
-    /// Whether Nidra is currently running a consolidation pass.
-    private func isConsolidating() -> Bool {
-        guard let state = client.status?.nidra?.state?.lowercased() else { return false }
-        return state == "consolidating" || state == "dreaming"
-    }
+    // MARK: - State resolution
 
-    /// Map daemon state to an `NSColor` for the torii icon.
+    /// Map the full daemon status into a `DaemonState` for icon rendering.
     ///
-    /// Priority order:
-    /// 1. **Gray** — daemon not connected.
-    /// 2. **Purple** — Nidra is consolidating (learning/compacting).
-    /// 3. **Orange** — connected but knowledge base is empty (0 turns).
-    /// 4. **Amber** — healthy, normal operation.
-    private func currentHealth() -> NSColor {
-        guard client.isConnected else { return .gray }
-        if isConsolidating() {
-            return NSColor(red: 0.65, green: 0.45, blue: 0.95, alpha: 1.0)
+    /// Priority:
+    /// 1. Not connected → `.disconnected`
+    /// 2. Nidra consolidating/dreaming → `.consolidating`
+    /// 3. Nidra deep_sleep/sleeping → `.deepSleep`
+    /// 4. Any instance active/busy/thinking → `.active`
+    /// 5. Error state on nidra → `.error`
+    /// 6. Connected with empty DB → `.idle` (orange tint handled in idle)
+    /// 7. Default → `.idle`
+    private func resolveDaemonState() -> DaemonState {
+        guard client.isConnected else { return .disconnected }
+
+        // Nidra state takes priority for consolidation/sleep.
+        if let nidraState = client.status?.nidra?.state?.lowercased() {
+            switch nidraState {
+            case "consolidating", "dreaming":
+                return .consolidating
+            case "deep_sleep", "sleeping", "sushupta":
+                return .deepSleep
+            case "error":
+                return .error
+            default:
+                break
+            }
         }
-        let db = client.status?.db
-        if let turns = db?.turns, turns == 0 { return .systemOrange }
-        return NSColor(red: 0.96, green: 0.72, blue: 0.10, alpha: 1.0)  // Theme.amber
+
+        // Check if any instance is actively working.
+        if let instances = client.status?.active?.instances {
+            let hasActive = instances.contains { inst in
+                let s = inst.state?.lowercased() ?? ""
+                return s == "active" || s == "busy" || s == "thinking"
+            }
+            if hasActive { return .active }
+        }
+
+        return .idle
     }
 }

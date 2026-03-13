@@ -1,92 +1,195 @@
 /// Animated status bar icon — a stylized torii gate (鳥居).
 ///
-/// Clean vector silhouette with subtle animation: the kasagi (top beam)
-/// gently sways and a soft glow radiates from the gate center.
-/// Color reflects daemon health. Respects "Reduce Motion".
+/// The torii renders differently depending on daemon state:
+///
+/// | State          | Color        | Animation                              |
+/// |----------------|--------------|----------------------------------------|
+/// | Disconnected   | Gray         | Static, no movement                    |
+/// | Idle           | Amber        | Gentle slow sway, soft glow            |
+/// | Active/Busy    | Green        | Lively sway, bright pulsing glow       |
+/// | Consolidating  | Purple       | Dreamy slow float, deep glow           |
+/// | Deep Sleep     | Indigo/dim   | Near-still, faint breathing glow       |
+/// | Error          | Coral/red    | Quick jitter, flickering glow          |
 ///
 /// ## Torii Gate Anatomy
 ///
-/// The icon renders a simplified torii gate, a traditional Japanese gate
-/// associated with sacred spaces. The key structural elements:
-///
 /// ```
-///     ╭───────────────────╮   ← kasagi (curved top beam, sways with animation)
+///     ╭───────────────────╮   ← kasagi (curved top beam, animated)
 ///     │    ┌─────────┐    │
 ///     │    │  nuki   │    │   ← nuki (lower crossbar, rigid)
 ///     │    └─────────┘    │
 ///    ┌┤┐                ┌┤┐
 ///    │ │                │ │   ← pillars (tapered, slightly spread outward)
-///    │ │                │ │
 ///    └─┘                └─┘
 /// ```
-///
-/// ## Animation Math
-///
-/// - **sway**: `sin(phase * 0.8) * 0.35` — tilts the kasagi beam endpoints
-///   in opposite directions, creating a gentle rocking motion. The 0.8
-///   multiplier makes it slightly slower than a full sin cycle per 2π of phase.
-/// - **glow**: `0.15 + sin(phase) * 0.08` — pulsing radial gradient behind
-///   the gate center, oscillating between 7% and 23% opacity.
 
 import AppKit
 
+// MARK: - Daemon state for icon rendering
+
+/// Represents the daemon's current state, driving distinct icon animations.
+enum DaemonState {
+    case disconnected        // gray, static
+    case idle                // amber, gentle sway
+    case active              // green, lively
+    case consolidating       // purple, dreamy float
+    case deepSleep           // indigo, near-still breathing
+    case error               // coral, jitter
+
+    /// Primary fill color for the torii gate in this state.
+    var color: NSColor {
+        switch self {
+        case .disconnected:   return .gray
+        case .idle:           return NSColor(red: 0.96, green: 0.72, blue: 0.10, alpha: 1.0)
+        case .active:         return NSColor(red: 0.30, green: 0.78, blue: 0.40, alpha: 1.0)
+        case .consolidating:  return NSColor(red: 0.65, green: 0.45, blue: 0.95, alpha: 1.0)
+        case .deepSleep:      return NSColor(red: 0.40, green: 0.45, blue: 0.75, alpha: 1.0)
+        case .error:          return NSColor(red: 0.95, green: 0.40, blue: 0.35, alpha: 1.0)
+        }
+    }
+
+    /// Kasagi sway amplitude in pixels. Higher = more rocking.
+    var swayAmplitude: CGFloat {
+        switch self {
+        case .disconnected:   return 0.0
+        case .idle:           return 0.30
+        case .active:         return 0.55
+        case .consolidating:  return 0.20
+        case .deepSleep:      return 0.08
+        case .error:          return 0.70
+        }
+    }
+
+    /// Sway frequency multiplier. Higher = faster rocking.
+    var swaySpeed: CGFloat {
+        switch self {
+        case .disconnected:   return 0.0
+        case .idle:           return 0.8
+        case .active:         return 1.6
+        case .consolidating:  return 0.4
+        case .deepSleep:      return 0.25
+        case .error:          return 3.5     // rapid jitter
+        }
+    }
+
+    /// Base glow alpha behind the gate center.
+    var glowBase: CGFloat {
+        switch self {
+        case .disconnected:   return 0.0
+        case .idle:           return 0.12
+        case .active:         return 0.22
+        case .consolidating:  return 0.18
+        case .deepSleep:      return 0.06
+        case .error:          return 0.15
+        }
+    }
+
+    /// Glow pulse amplitude (added/subtracted from base).
+    var glowPulse: CGFloat {
+        switch self {
+        case .disconnected:   return 0.0
+        case .idle:           return 0.06
+        case .active:         return 0.12
+        case .consolidating:  return 0.10
+        case .deepSleep:      return 0.04
+        case .error:          return 0.12
+        }
+    }
+
+    /// Glow pulse speed multiplier.
+    var glowSpeed: CGFloat {
+        switch self {
+        case .disconnected:   return 0.0
+        case .idle:           return 1.0
+        case .active:         return 1.8
+        case .consolidating:  return 0.5     // slow dreamy pulse
+        case .deepSleep:      return 0.3     // very slow breathing
+        case .error:          return 4.0     // rapid flicker
+        }
+    }
+
+    /// Overall opacity of the gate structure.
+    var gateOpacity: CGFloat {
+        switch self {
+        case .disconnected:   return 0.5
+        case .idle:           return 0.92
+        case .active:         return 1.0
+        case .consolidating:  return 0.88
+        case .deepSleep:      return 0.45    // dim, sleeping
+        case .error:          return 0.85
+        }
+    }
+
+    /// Glow radius — consolidating gets a wider aura, deep sleep is tight.
+    var glowRadius: CGFloat {
+        switch self {
+        case .disconnected:   return 0.0
+        case .idle:           return 6.0
+        case .active:         return 7.0
+        case .consolidating:  return 8.5     // wide dreamy halo
+        case .deepSleep:      return 4.0     // tight dim glow
+        case .error:          return 5.5
+        }
+    }
+}
+
+// MARK: - Icon renderer
+
 /// Renders the torii gate icon as an `NSImage` for the status bar.
-/// Stateless — all animation state is passed in via `phase`.
+/// Stateless — all animation state is passed in via `phase` and `state`.
 enum HeartbeatIcon {
 
     /// Fixed 18×18pt — standard macOS status bar icon size.
     private static let size = NSSize(width: 18, height: 18)
 
-    /// Render the torii at a given animation phase and health color.
+    /// Render the torii for a given animation phase and daemon state.
     ///
     /// - Parameters:
     ///   - phase: Animation phase in radians (0...2π per full cycle).
-    ///            Drives kasagi sway and glow pulse.
-    ///   - health: The fill color reflecting daemon state (amber=healthy,
-    ///             gray=disconnected, purple=consolidating, orange=empty DB).
+    ///   - state: Current daemon state — drives color, animation character, and opacity.
     /// - Returns: A non-template `NSImage` suitable for `NSStatusBarButton.image`.
-    static func render(phase: CGFloat, health: NSColor) -> NSImage {
+    static func render(phase: CGFloat, state: DaemonState) -> NSImage {
+        let color = state.color
+        let opacity = state.gateOpacity
+
         let image = NSImage(size: size, flipped: false) { rect in
             let cx = rect.midX
             let bottom: CGFloat = 1.0
             let top: CGFloat = rect.maxY - 1.0
 
-            // Animation parameters derived from phase.
-            let sway = sin(phase * 0.8) * 0.35   // kasagi tilt (px offset at beam ends)
-            let glow = 0.15 + sin(phase) * 0.08   // glow alpha oscillation
+            // Animation parameters shaped by state.
+            let sway = sin(phase * state.swaySpeed) * state.swayAmplitude
+            let glow = state.glowBase + sin(phase * state.glowSpeed) * state.glowPulse
 
             // ── Layout constants ────────────────────
-            let pillarSpread: CGFloat = 4.8        // horizontal distance between pillar centers
-            let pillarW: CGFloat = 1.8             // pillar width at top
-            let kasakiY = top - 2.5                // vertical position of kasagi beam
-            let nukiY = kasakiY - 2.5              // nuki sits below kasagi
-            let pillarTopY = kasakiY + 0.5         // pillars extend slightly above kasagi
-            let overhang: CGFloat = 2.0            // kasagi extends beyond pillars
-            let curve: CGFloat = 1.6               // kasagi upward curve at endpoints
+            let pillarSpread: CGFloat = 4.8
+            let pillarW: CGFloat = 1.8
+            let kasakiY = top - 2.5
+            let nukiY = kasakiY - 2.5
+            let pillarTopY = kasakiY + 0.5
+            let overhang: CGFloat = 2.0
+            let curve: CGFloat = 1.6
 
             // ── Soft glow behind gate ───────────────
-            // Radial gradient centered between nuki and kasagi, pulsing with `glow` alpha.
-            let glowCenter = NSPoint(x: cx, y: (nukiY + kasakiY) / 2)
-            let glowRadius: CGFloat = 6.5
-            if let gradient = NSGradient(
-                colors: [
-                    health.withAlphaComponent(CGFloat(glow)),
-                    health.withAlphaComponent(0),
-                ],
-                atLocations: [0, 1],
-                colorSpace: .deviceRGB
-            ) {
-                gradient.draw(
-                    fromCenter: glowCenter, radius: 0,
-                    toCenter: glowCenter, radius: glowRadius,
-                    options: []
-                )
+            if glow > 0.01 {
+                let glowCenter = NSPoint(x: cx, y: (nukiY + kasakiY) / 2)
+                if let gradient = NSGradient(
+                    colors: [
+                        color.withAlphaComponent(glow),
+                        color.withAlphaComponent(0),
+                    ],
+                    atLocations: [0, 1],
+                    colorSpace: .deviceRGB
+                ) {
+                    gradient.draw(
+                        fromCenter: glowCenter, radius: 0,
+                        toCenter: glowCenter, radius: state.glowRadius,
+                        options: []
+                    )
+                }
             }
 
             // ── Pillars (tapered) ───────────────────
-            // Each pillar is a trapezoid: wider at the base, narrower at top.
-            // `taper` adds extra width at the bottom on the outside edge,
-            // giving the traditional slight outward lean.
             let taper: CGFloat = 0.3
             for sign: CGFloat in [-1, 1] {
                 let baseX = cx + sign * (pillarSpread / 2)
@@ -96,12 +199,11 @@ enum HeartbeatIcon {
                 pillar.line(to: NSPoint(x: baseX + pillarW / 2, y: pillarTopY))
                 pillar.line(to: NSPoint(x: baseX - pillarW / 2, y: pillarTopY))
                 pillar.close()
-                health.withAlphaComponent(0.92).setFill()
+                color.withAlphaComponent(opacity * 0.92).setFill()
                 pillar.fill()
             }
 
             // ── Nuki (lower crossbar) ───────────────
-            // Simple rectangle spanning the pillar width plus a small margin (0.3).
             let nukiHalf = pillarSpread / 2 + pillarW / 2 + 0.3
             let nukiH: CGFloat = 1.3
             let nuki = NSBezierPath(rect: NSRect(
@@ -110,43 +212,28 @@ enum HeartbeatIcon {
                 width: nukiHalf * 2,
                 height: nukiH
             ))
-            health.withAlphaComponent(0.88).setFill()
+            color.withAlphaComponent(opacity * 0.88).setFill()
             nuki.fill()
 
             // ── Kasagi (curved top beam with sway) ──
-            // The kasagi is the most visually distinctive element: it extends
-            // beyond the pillars (overhang) and curves upward at both ends.
-            // The `sway` offset tilts the left end up while the right goes down
-            // (and vice versa), creating the rocking animation.
-            //
-            // Shape: bottom edge is straight, right side goes up, top edge is
-            // a Bézier curve that dips in the middle and rises at the ends
-            // (control points at cx±2 pull the curve down), left side closes.
             let kasakiHalf = pillarSpread / 2 + overhang
             let kasakiH: CGFloat = 1.6
             let kasagi = NSBezierPath()
 
-            // Bottom-left corner (sway tilts this end up)
             kasagi.move(to: NSPoint(
                 x: cx - kasakiHalf,
                 y: kasakiY - kasakiH / 2 + sway * 0.4
             ))
-            // Bottom-right corner (sway tilts this end down)
             kasagi.line(to: NSPoint(
                 x: cx + kasakiHalf,
                 y: kasakiY - kasakiH / 2 - sway * 0.4
             ))
 
-            // Right upturn — the traditional curved-up endpoint
             kasagi.line(to: NSPoint(
                 x: cx + kasakiHalf + 0.3,
                 y: kasakiY + kasakiH / 2 + curve - sway * 0.4
             ))
 
-            // Top curve: cubic Bézier from right to left.
-            // Control points at cx±2 are below the endpoint Y, which pulls
-            // the middle of the curve downward — creating the characteristic
-            // concave (saddle) shape of a torii kasagi.
             kasagi.curve(
                 to: NSPoint(
                     x: cx - kasakiHalf - 0.3,
@@ -163,14 +250,12 @@ enum HeartbeatIcon {
             )
 
             kasagi.close()
-            health.withAlphaComponent(0.95).setFill()
+            color.withAlphaComponent(opacity * 0.95).setFill()
             kasagi.fill()
 
             return true
         }
 
-        // Non-template so the health color renders directly rather than
-        // being tinted by the system's menubar appearance.
         image.isTemplate = false
         return image
     }
