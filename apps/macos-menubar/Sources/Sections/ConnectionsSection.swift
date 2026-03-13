@@ -1,17 +1,25 @@
 /// Connections section — section header with count badges + active/attention
 /// indicators. Full ClientCard list for instances, RuntimeRow fallback
 /// for raw connections, overflow indicator for long lists.
+///
+/// ## Expand/Collapse
+///
+/// The section has two collapsible groups:
+/// - **Instances** (heartbeat clients): tap the chevron or header to expand/collapse
+///   the full client card list. Collapsed state shows a compact summary row.
+/// - **Sockets** (runtime connections): tap to expand all raw socket rows.
+///   Collapsed by default when > 3 connections.
 
 import SwiftUI
 
 /// Displays all connected MCP clients, preferring rich `InstanceInfo` cards
 /// (from heartbeat telemetry) over raw `RuntimeItem` rows (from socket tracking).
-/// Falls back gracefully through four display states: instances list, runtime list,
-/// count-only summary, or empty placeholder.
+/// Both groups are independently expandable/collapsible with smooth spring animations.
 struct ConnectionsSection: View {
     let active: ActiveInfo?
     let runtime: RuntimeInfo?
     let daemon: DaemonInfo
+    @Binding var isExpanded: Bool
 
     /// Rich client instances from heartbeat telemetry (preferred display path).
     private var instances: [InstanceInfo] {
@@ -28,54 +36,68 @@ struct ConnectionsSection: View {
         daemon.connections ?? runtime?.connected ?? 0
     }
 
+    @State private var socketsExpanded = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.sp8) {
-            // Section header with badges
-            HStack(spacing: Theme.sp6) {
-                Text("CONNECTIONS")
-                    .font(.system(size: Theme.miniSize, weight: .medium))
-                    .foregroundColor(Theme.secondaryLabel)
-                    .tracking(0.5)
-
-                if !instances.isEmpty {
-                    headerBadge("\(instances.count) instance\(instances.count == 1 ? "" : "s")")
+            // Section header with badges — tappable to expand/collapse
+            Button(action: {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    isExpanded.toggle()
                 }
+            }) {
+                HStack(spacing: Theme.sp6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(Theme.tertiaryLabel)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
 
-                if totalConnections > 0 {
-                    headerBadge("\(totalConnections) socket\(totalConnections == 1 ? "" : "s")")
-                }
+                    Text("CONNECTIONS")
+                        .font(.system(size: Theme.miniSize, weight: .medium))
+                        .foregroundColor(Theme.secondaryLabel)
+                        .tracking(0.5)
 
-                Spacer()
-
-                if let activeNow = active?.activeNowCount, activeNow > 0 {
-                    HStack(spacing: 3) {
-                        Circle()
-                            .fill(Theme.alive)
-                            .frame(width: 6, height: 6)
-                        Text("\(activeNow) active")
-                            .font(.system(size: Theme.miniSize, weight: .medium))
-                            .foregroundColor(Theme.alive)
+                    if !instances.isEmpty {
+                        headerBadge("\(instances.count) instance\(instances.count == 1 ? "" : "s")")
                     }
-                }
 
-                if let attention = active?.attentionCount, attention > 0 {
-                    HStack(spacing: 3) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 9))
-                            .foregroundColor(Theme.coral)
-                        Text("\(attention)")
-                            .font(.system(size: Theme.miniSize, weight: .medium))
-                            .foregroundColor(Theme.coral)
+                    if totalConnections > 0 {
+                        headerBadge("\(totalConnections) socket\(totalConnections == 1 ? "" : "s")")
+                    }
+
+                    Spacer()
+
+                    if let activeNow = active?.activeNowCount, activeNow > 0 {
+                        HStack(spacing: 3) {
+                            Circle()
+                                .fill(Theme.alive)
+                                .frame(width: 6, height: 6)
+                            Text("\(activeNow) active")
+                                .font(.system(size: Theme.miniSize, weight: .medium))
+                                .foregroundColor(Theme.alive)
+                        }
+                    }
+
+                    if let attention = active?.attentionCount, attention > 0 {
+                        HStack(spacing: 3) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 9))
+                                .foregroundColor(Theme.coral)
+                            Text("\(attention)")
+                                .font(.system(size: Theme.miniSize, weight: .medium))
+                                .foregroundColor(Theme.coral)
+                        }
                     }
                 }
             }
+            .buttonStyle(.plain)
             .padding(.horizontal, Theme.sp16)
 
-            // Network topology visualization — shows when there are connections
+            // Network topology visualization — always visible when connections exist
             if totalConnections > 0 || !instances.isEmpty {
                 HStack {
                     Spacer()
-                    ConnectionTopology(
+                    NeuralMesh(
                         instances: instances,
                         runtimeItems: runtimeItems,
                         totalConnections: totalConnections
@@ -85,16 +107,77 @@ struct ConnectionsSection: View {
                 .padding(.vertical, Theme.sp4)
             }
 
-            // Content — cascading fallback: instances > runtime items > count-only > empty
-            InsetGroupedSection {
-                if totalConnections == 0 && instances.isEmpty {
-                    emptyState
-                } else if !instances.isEmpty {
-                    instancesList
-                } else if !runtimeItems.isEmpty {
-                    runtimeList
-                } else {
-                    countOnlyState
+            // Collapsed summary
+            if !isExpanded && (totalConnections > 0 || !instances.isEmpty) {
+                collapsedSummary
+            }
+
+            // Expanded content
+            if isExpanded {
+                InsetGroupedSection {
+                    if totalConnections == 0 && instances.isEmpty {
+                        emptyState
+                    } else if !instances.isEmpty {
+                        instancesList
+                    } else if !runtimeItems.isEmpty {
+                        runtimeList
+                    } else {
+                        countOnlyState
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+
+                // Sockets sub-section (when we have both instances AND sockets)
+                if !instances.isEmpty && !runtimeItems.isEmpty {
+                    socketsSubSection
+                }
+            }
+        }
+    }
+
+    // MARK: - Collapsed Summary
+
+    /// Compact one-line summary when collapsed — shows instance count, active status.
+    private var collapsedSummary: some View {
+        InsetGroupedSection {
+            HStack(spacing: Theme.sp12) {
+                Image(systemName: "app.connected.to.app.below.fill")
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.blue)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    if !instances.isEmpty {
+                        let activeOnes = instances.filter { $0.isCurrentlyActive }
+                        Text("\(instances.count) client\(instances.count == 1 ? "" : "s")\(activeOnes.isEmpty ? "" : " · \(activeOnes.count) active")")
+                            .font(.system(size: Theme.bodySize, weight: .medium))
+                            .foregroundColor(Theme.label)
+                    } else {
+                        Text("\(totalConnections) connection\(totalConnections == 1 ? "" : "s")")
+                            .font(.system(size: Theme.bodySize, weight: .medium))
+                            .foregroundColor(Theme.label)
+                    }
+
+                    // Show names of connected instances
+                    if !instances.isEmpty {
+                        Text(instances.prefix(3).map { $0.displayName }.joined(separator: ", ")
+                             + (instances.count > 3 ? " +\(instances.count - 3)" : ""))
+                            .font(.system(size: Theme.captionSize))
+                            .foregroundColor(Theme.tertiaryLabel)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer()
+
+                Text("Tap to expand")
+                    .font(.system(size: Theme.miniSize))
+                    .foregroundColor(Theme.tertiaryLabel)
+            }
+            .padding(Theme.sp12)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    isExpanded = true
                 }
             }
         }
@@ -115,9 +198,7 @@ struct ConnectionsSection: View {
         .padding(Theme.sp16)
     }
 
-    /// Sorted instance cards: active instances first, then by ascending uptime
-    /// (newest on top). Shows an overflow indicator when daemon reports more
-    /// connections than the heartbeat list contains.
+    /// Full expanded instance cards — sorted with active first.
     @ViewBuilder
     private var instancesList: some View {
         let sorted = instances.sorted { instanceSort($0, $1) }
@@ -130,9 +211,9 @@ struct ConnectionsSection: View {
             }
         }
 
-        // Overflow: daemon may track more connections than heartbeat instances
+        // Overflow indicator
         let extra = totalConnections - instances.count
-        if extra > 0 {
+        if extra > 0 && runtimeItems.isEmpty {
             VStack(spacing: 0) {
                 Divider().padding(.leading, Theme.sp16)
                 HStack(spacing: Theme.sp6) {
@@ -148,31 +229,58 @@ struct ConnectionsSection: View {
         }
     }
 
-    /// Fallback list using raw `RuntimeItem` data (no heartbeat telemetry).
-    /// Capped at 6 visible rows to keep the popover compact.
-    @ViewBuilder
-    private var runtimeList: some View {
-        ForEach(Array(runtimeItems.prefix(6).enumerated()), id: \.element.id) { idx, item in
-            VStack(spacing: 0) {
-                RuntimeRow(item: item)
-                if idx < min(runtimeItems.count, 6) - 1 {
-                    Divider().padding(.leading, Theme.sp16)
+    /// Sockets sub-section — collapsible list of raw RuntimeItem connections.
+    private var socketsSubSection: some View {
+        VStack(alignment: .leading, spacing: Theme.sp6) {
+            Button(action: {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                    socketsExpanded.toggle()
+                }
+            }) {
+                HStack(spacing: Theme.sp4) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(Theme.tertiaryLabel)
+                        .rotationEffect(.degrees(socketsExpanded ? 90 : 0))
+
+                    Text("SOCKETS")
+                        .font(.system(size: Theme.miniSize, weight: .medium))
+                        .foregroundColor(Theme.tertiaryLabel)
+                        .tracking(0.5)
+
+                    headerBadge("\(runtimeItems.count)")
+
+                    Spacer()
                 }
             }
-        }
+            .buttonStyle(.plain)
+            .padding(.horizontal, Theme.sp16)
 
-        if runtimeItems.count > 6 {
-            VStack(spacing: 0) {
-                Divider().padding(.leading, Theme.sp16)
-                HStack(spacing: Theme.sp6) {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 10))
-                        .foregroundColor(Theme.tertiaryLabel)
-                    Text("+ \(runtimeItems.count - 6) more")
-                        .font(.system(size: Theme.captionSize))
-                        .foregroundColor(Theme.tertiaryLabel)
+            if socketsExpanded {
+                InsetGroupedSection {
+                    ForEach(Array(runtimeItems.enumerated()), id: \.element.id) { idx, item in
+                        VStack(spacing: 0) {
+                            RuntimeRow(item: item)
+                            if idx < runtimeItems.count - 1 {
+                                Divider().padding(.leading, Theme.sp16)
+                            }
+                        }
+                    }
                 }
-                .padding(Theme.sp12)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    /// Fallback list using raw `RuntimeItem` data (no heartbeat telemetry).
+    @ViewBuilder
+    private var runtimeList: some View {
+        ForEach(Array(runtimeItems.enumerated()), id: \.element.id) { idx, item in
+            VStack(spacing: 0) {
+                RuntimeRow(item: item)
+                if idx < runtimeItems.count - 1 {
+                    Divider().padding(.leading, Theme.sp16)
+                }
             }
         }
     }
@@ -202,8 +310,6 @@ struct ConnectionsSection: View {
             .clipShape(Capsule())
     }
 
-    /// Sort order: active instances bubble to top, then ascending uptime
-    /// (most recently started first) among peers of equal activity status.
     private func instanceSort(_ a: InstanceInfo, _ b: InstanceInfo) -> Bool {
         if a.isCurrentlyActive != b.isCurrentlyActive { return a.isCurrentlyActive }
         let aUp = a.uptime ?? 0
@@ -215,16 +321,12 @@ struct ConnectionsSection: View {
 // MARK: - RuntimeRow (simpler connection data)
 
 /// Compact row for a raw MCP socket connection (no heartbeat telemetry).
-/// Shows transport icon, truncated connection ID, activity dot, request count,
-/// and relative "last seen" timestamp. Used as a fallback when `InstanceInfo`
-/// data is not available.
 struct RuntimeRow: View {
     let item: RuntimeItem
     @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: Theme.sp12) {
-            // Transport icon
             transportIcon
                 .frame(width: 24, height: 24)
                 .background(Theme.label.opacity(0.06))
@@ -250,10 +352,19 @@ struct RuntimeRow: View {
                     }
                 }
 
-                if let reqs = item.requestCount, reqs > 0 {
-                    Text("\(reqs) request\(reqs == 1 ? "" : "s")")
-                        .font(.system(size: Theme.captionSize))
-                        .foregroundColor(Theme.tertiaryLabel)
+                HStack(spacing: Theme.sp4) {
+                    if let reqs = item.requestCount, reqs > 0 {
+                        Text("\(reqs) req\(reqs == 1 ? "" : "s")")
+                            .font(.system(size: Theme.captionSize))
+                            .foregroundColor(Theme.tertiaryLabel)
+                    }
+                    if let notifs = item.notificationCount, notifs > 0 {
+                        Text("\u{00B7}")
+                            .foregroundColor(Theme.tertiaryLabel)
+                        Text("\(notifs) notif\(notifs == 1 ? "" : "s")")
+                            .font(.system(size: Theme.captionSize))
+                            .foregroundColor(Theme.tertiaryLabel)
+                    }
                 }
             }
 
@@ -276,8 +387,6 @@ struct RuntimeRow: View {
         }
     }
 
-    /// Maps transport type to a themed SF Symbol:
-    /// socket/sse -> network (blue), stdio -> terminal (amber), unknown -> link (gray).
     @ViewBuilder
     private var transportIcon: some View {
         let t = item.transport?.lowercased() ?? ""
@@ -296,8 +405,6 @@ struct RuntimeRow: View {
         }
     }
 
-    /// Formats elapsed seconds into a human-friendly relative timestamp.
-    /// Under 10s shows "now"; otherwise picks the largest fitting unit (s/m/h/d).
     private func formatElapsed(_ seconds: TimeInterval) -> String {
         if seconds < 10 { return "now" }
         if seconds < 60 { return "\(Int(seconds))s ago" }

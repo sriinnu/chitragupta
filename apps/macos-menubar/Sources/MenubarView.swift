@@ -33,6 +33,7 @@ struct MenubarView: View {
 
     @ObservedObject var client: DaemonClient
     @State private var showKnowledgeDetail = false
+    @State private var showConnectionsDetail = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,7 +62,11 @@ struct MenubarView: View {
     private func connectedContent(_ status: AggregatedStatus) -> some View {
         HeaderSection(daemon: status.daemon, isConnected: client.isConnected)
 
-        Divider()
+        // Aura ring — ambient state energy band between header and content
+        AuraRing(
+            state: resolveDaemonState(status),
+            connections: status.daemon.connections ?? 0
+        )
 
         // Prāṇa ECG strip — live heartbeat of the daemon
         PranaECG(
@@ -86,7 +91,8 @@ struct MenubarView: View {
                 ConnectionsSection(
                     active: status.active,
                     runtime: status.runtime,
-                    daemon: status.daemon
+                    daemon: status.daemon,
+                    isExpanded: $showConnectionsDetail
                 )
             }
             .padding(.horizontal, Theme.sp16)
