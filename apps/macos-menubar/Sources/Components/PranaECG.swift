@@ -38,8 +38,12 @@ final class WaveformEngine: ObservableObject {
 
     static let bufferSize = 220
 
-    @Published var waveBuffer: [CGFloat] = Array(repeating: 0, count: bufferSize)
-    @Published var writeHead: Int = 0
+    /// Single tick counter — the only @Published property. Canvas reads
+    /// `waveBuffer` and `writeHead` directly (no copy, no diff overhead).
+    /// This avoids publishing a 220-element array 60 times per second.
+    @Published var tick: UInt64 = 0
+    var waveBuffer: [CGFloat] = Array(repeating: 0, count: bufferSize)
+    var writeHead: Int = 0
 
     var state: DaemonState = .disconnected
     var connections: Int = 0
@@ -53,7 +57,7 @@ final class WaveformEngine: ObservableObject {
         guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.tick()
+                self?.advanceFrame()
             }
         }
     }
@@ -63,7 +67,7 @@ final class WaveformEngine: ObservableObject {
         timer = nil
     }
 
-    private func tick() {
+    private func advanceFrame() {
         let dt: CGFloat = 1.0 / 60.0
         let bpm = stateBPM
         guard bpm > 0 else {
@@ -80,6 +84,7 @@ final class WaveformEngine: ObservableObject {
 
         waveBuffer[writeHead] = generateSample(phase: phase)
         writeHead = (writeHead + 1) % Self.bufferSize
+        tick &+= 1  // notify Canvas to redraw
     }
 
     // MARK: - BPM
@@ -202,6 +207,8 @@ struct PranaECG: View {
     @StateObject private var engine = WaveformEngine()
 
     var body: some View {
+        // Reference engine.tick to trigger Canvas redraws on each frame.
+        let _ = engine.tick
         Canvas { context, size in
             drawGrid(context: &context, size: size)
             drawWaveform(context: &context, size: size)

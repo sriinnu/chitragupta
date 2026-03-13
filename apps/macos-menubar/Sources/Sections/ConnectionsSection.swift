@@ -127,10 +127,7 @@ struct ConnectionsSection: View {
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
 
-                // Sockets sub-section (when we have both instances AND sockets)
-                if !instances.isEmpty && !runtimeItems.isEmpty {
-                    socketsSubSection
-                }
+                // (Sockets now expand inline within instancesList overflow)
             }
         }
     }
@@ -211,53 +208,14 @@ struct ConnectionsSection: View {
             }
         }
 
-        // Overflow indicator
+        // Expandable overflow — shows remaining runtime socket connections
         let extra = totalConnections - instances.count
-        if extra > 0 && runtimeItems.isEmpty {
+        if extra > 0 {
             VStack(spacing: 0) {
                 Divider().padding(.leading, Theme.sp16)
-                HStack(spacing: Theme.sp6) {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 10))
-                        .foregroundColor(Theme.tertiaryLabel)
-                    Text("+ \(extra) more connection\(extra == 1 ? "" : "s")")
-                        .font(.system(size: Theme.captionSize))
-                        .foregroundColor(Theme.tertiaryLabel)
-                }
-                .padding(Theme.sp12)
-            }
-        }
-    }
 
-    /// Sockets sub-section — collapsible list of raw RuntimeItem connections.
-    private var socketsSubSection: some View {
-        VStack(alignment: .leading, spacing: Theme.sp6) {
-            Button(action: {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                    socketsExpanded.toggle()
-                }
-            }) {
-                HStack(spacing: Theme.sp4) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(Theme.tertiaryLabel)
-                        .rotationEffect(.degrees(socketsExpanded ? 90 : 0))
-
-                    Text("SOCKETS")
-                        .font(.system(size: Theme.miniSize, weight: .medium))
-                        .foregroundColor(Theme.tertiaryLabel)
-                        .tracking(0.5)
-
-                    headerBadge("\(runtimeItems.count)")
-
-                    Spacer()
-                }
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, Theme.sp16)
-
-            if socketsExpanded {
-                InsetGroupedSection {
+                if socketsExpanded {
+                    // Show all runtime items inline
                     ForEach(Array(runtimeItems.enumerated()), id: \.element.id) { idx, item in
                         VStack(spacing: 0) {
                             RuntimeRow(item: item)
@@ -266,8 +224,45 @@ struct ConnectionsSection: View {
                             }
                         }
                     }
+
+                    // Collapse button
+                    Button(action: {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                            socketsExpanded = false
+                        }
+                    }) {
+                        HStack(spacing: Theme.sp6) {
+                            Image(systemName: "chevron.up")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(Theme.blue)
+                            Text("Collapse")
+                                .font(.system(size: Theme.captionSize, weight: .medium))
+                                .foregroundColor(Theme.blue)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(Theme.sp8)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    // Tappable "show more" row
+                    Button(action: {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                            socketsExpanded = true
+                        }
+                    }) {
+                        HStack(spacing: Theme.sp6) {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(Theme.blue)
+                            Text("+ \(extra) more connection\(extra == 1 ? "" : "s")")
+                                .font(.system(size: Theme.captionSize, weight: .medium))
+                                .foregroundColor(Theme.blue)
+                            Spacer()
+                        }
+                        .padding(Theme.sp12)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
     }
