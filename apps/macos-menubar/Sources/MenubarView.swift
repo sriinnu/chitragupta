@@ -14,6 +14,7 @@ import SwiftUI
 ///   ┌─────────────────────┐
 ///   │   HeaderSection     │  ← fixed
 ///   ├─────────────────────┤
+///   │   Prāṇa ECG strip  │  ← live heartbeat
 ///   │   SystemSection     │
 ///   │   KnowledgeSection  │  ← scrollable body
 ///   │   NidraSection      │
@@ -22,6 +23,9 @@ import SwiftUI
 ///   │   FooterSection     │  ← fixed
 ///   └─────────────────────┘
 /// ```
+///
+/// The Prāṇa ECG provides a live heartbeat that reflects the daemon's
+/// current state — idle, active, consolidating, deep sleep, or error.
 ///
 /// When disconnected, the scrollable body is replaced by `DisconnectedView`
 /// which shows the error state and a "Start Daemon" button.
@@ -59,6 +63,15 @@ struct MenubarView: View {
 
         Divider()
 
+        // Prāṇa ECG strip — live heartbeat of the daemon
+        PranaECG(
+            state: resolveDaemonState(status),
+            connections: status.daemon.connections ?? 0,
+            activeCount: status.active?.activeNowCount ?? 0
+        )
+        .padding(.horizontal, Theme.sp16)
+        .padding(.top, Theme.sp8)
+
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: Theme.sp16) {
                 SystemSection(daemon: status.daemon)
@@ -79,5 +92,34 @@ struct MenubarView: View {
             .padding(.horizontal, Theme.sp16)
             .padding(.vertical, Theme.sp12)
         }
+    }
+
+    // MARK: - State Resolution
+
+    /// Derive `DaemonState` from the aggregated status for ECG and animations.
+    /// Mirrors the priority logic in `AppDelegate.resolveDaemonState()`.
+    private func resolveDaemonState(_ status: AggregatedStatus) -> DaemonState {
+        if let nidraState = status.nidra?.state?.lowercased() {
+            switch nidraState {
+            case "consolidating", "dreaming":
+                return .consolidating
+            case "deep_sleep", "sleeping", "sushupta":
+                return .deepSleep
+            case "error":
+                return .error
+            default:
+                break
+            }
+        }
+
+        if let instances = status.active?.instances {
+            let hasActive = instances.contains { inst in
+                let s = inst.state?.lowercased() ?? ""
+                return s == "active" || s == "busy" || s == "thinking"
+            }
+            if hasActive { return .active }
+        }
+
+        return .idle
     }
 }

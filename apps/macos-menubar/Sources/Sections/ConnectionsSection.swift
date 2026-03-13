@@ -71,6 +71,20 @@ struct ConnectionsSection: View {
             }
             .padding(.horizontal, Theme.sp16)
 
+            // Network topology visualization — shows when there are connections
+            if totalConnections > 0 || !instances.isEmpty {
+                HStack {
+                    Spacer()
+                    ConnectionTopology(
+                        instances: instances,
+                        runtimeItems: runtimeItems,
+                        totalConnections: totalConnections
+                    )
+                    Spacer()
+                }
+                .padding(.vertical, Theme.sp4)
+            }
+
             // Content — cascading fallback: instances > runtime items > count-only > empty
             InsetGroupedSection {
                 if totalConnections == 0 && instances.isEmpty {

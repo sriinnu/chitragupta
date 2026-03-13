@@ -21,12 +21,21 @@ struct ClientCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.sp6) {
-            // Line 1: icon + name + state badge
+            // Line 1: icon with activity orbit + name + state badge
             HStack(spacing: Theme.sp8) {
-                clientIcon
-                    .frame(width: 28, height: 28)
-                    .background(Theme.label.opacity(0.06))
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSm, style: .continuous))
+                ZStack {
+                    ActivityOrbit(
+                        isActive: instance.isCurrentlyActive,
+                        intensity: activityIntensity,
+                        color: activityColor,
+                        size: 32
+                    )
+                    clientIcon
+                        .frame(width: 28, height: 28)
+                        .background(Theme.label.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSm, style: .continuous))
+                }
+                .frame(width: 32, height: 32)
 
                 Text(instance.displayName)
                     .font(.system(size: Theme.bodySize, weight: .semibold))
@@ -159,6 +168,27 @@ struct ClientCard: View {
             Image(systemName: "app.connected.to.app.below.fill")
                 .font(.system(size: 13))
                 .foregroundColor(Theme.secondaryLabel)
+        }
+    }
+
+    /// Activity intensity level derived from tool calls, turn count, and active state.
+    /// Drives the orbit dot count and speed on the ActivityOrbit overlay.
+    private var activityIntensity: Int {
+        if !instance.isCurrentlyActive { return 0 }
+        let tools = instance.toolCallCount ?? 0
+        let turns = instance.turnCount ?? 0
+        if tools > 20 || turns > 10 { return 3 }
+        if tools > 5 || turns > 3 { return 2 }
+        return 1
+    }
+
+    /// Color for the activity orbit — matches the state badge color.
+    private var activityColor: Color {
+        let s = instance.state?.lowercased() ?? ""
+        switch s {
+        case "active", "thinking", "busy": return Theme.alive
+        case "idle": return Theme.amber
+        default: return Theme.secondaryLabel
         }
     }
 
