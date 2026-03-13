@@ -26,6 +26,7 @@
 /// and occasional extra-systole frequency, making the ECG truly reactive to
 /// daemon activity — not a canned animation.
 
+import AppKit
 import SwiftUI
 
 // MARK: - Waveform Engine
@@ -206,36 +207,72 @@ struct PranaECG: View {
 
     @StateObject private var engine = WaveformEngine()
 
+    /// Whether the system accessibility preference "Reduce Motion" is enabled.
+    private var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
     var body: some View {
-        // Reference engine.tick to trigger Canvas redraws on each frame.
-        let _ = engine.tick
-        Canvas { context, size in
-            drawGrid(context: &context, size: size)
-            drawWaveform(context: &context, size: size)
-        }
-        .frame(height: Self.stripHeight)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.radiusSm, style: .continuous)
-                .fill(Color.black.opacity(0.15))
-        )
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSm, style: .continuous))
-        .onAppear {
-            engine.state = state
-            engine.connections = connections
-            engine.activeCount = activeCount
-            engine.start()
-        }
-        .onDisappear {
-            engine.stop()
-        }
-        .onChange(of: state) { newState in
-            engine.state = newState
-        }
-        .onChange(of: connections) { n in
-            engine.connections = n
-        }
-        .onChange(of: activeCount) { n in
-            engine.activeCount = n
+        if reduceMotion {
+            // Reduce-motion: static horizontal line with subtle glow, no animation.
+            Canvas { context, size in
+                drawGrid(context: &context, size: size)
+                let midY = size.height / 2
+                var line = Path()
+                line.move(to: CGPoint(x: 0, y: midY))
+                line.addLine(to: CGPoint(x: size.width, y: midY))
+
+                let color = stateColor
+
+                // Subtle glow pass
+                var glowCtx = context
+                glowCtx.addFilter(.blur(radius: 4))
+                glowCtx.stroke(line, with: .color(color.opacity(0.35)), lineWidth: 2.5)
+
+                // Sharp trace
+                context.stroke(line, with: .color(color.opacity(0.7)), lineWidth: 1.0)
+            }
+            .frame(height: Self.stripHeight)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.radiusSm, style: .continuous)
+                    .fill(Color.black.opacity(0.15))
+            )
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSm, style: .continuous))
+            .onAppear {
+                engine.stop()
+            }
+        } else {
+            // Normal ECG animation.
+            // Reference engine.tick to trigger Canvas redraws on each frame.
+            let _ = engine.tick
+            Canvas { context, size in
+                drawGrid(context: &context, size: size)
+                drawWaveform(context: &context, size: size)
+            }
+            .frame(height: Self.stripHeight)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.radiusSm, style: .continuous)
+                    .fill(Color.black.opacity(0.15))
+            )
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSm, style: .continuous))
+            .onAppear {
+                engine.state = state
+                engine.connections = connections
+                engine.activeCount = activeCount
+                engine.start()
+            }
+            .onDisappear {
+                engine.stop()
+            }
+            .onChange(of: state) { newState in
+                engine.state = newState
+            }
+            .onChange(of: connections) { n in
+                engine.connections = n
+            }
+            .onChange(of: activeCount) { n in
+                engine.activeCount = n
+            }
         }
     }
 

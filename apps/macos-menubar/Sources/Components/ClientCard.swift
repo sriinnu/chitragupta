@@ -7,6 +7,7 @@
 /// Line 5: attention warnings (if any)
 ///
 /// Smooth spring hover with subtle scale lift.
+/// Right-click context menu: Copy PID, Copy Session ID, Open Status Page, Copy Details.
 
 import SwiftUI
 
@@ -133,6 +134,31 @@ struct ClientCard: View {
                 isHovered = hovering
             }
         }
+        .contextMenu {
+            if let pid = instance.pid {
+                Button("Copy PID") {
+                    copyToClipboard("\(pid)")
+                }
+            }
+
+            if let sessionId = instance.sessionId, !sessionId.isEmpty {
+                Button("Copy Session ID") {
+                    copyToClipboard(sessionId)
+                }
+            }
+
+            Button("Open in Status Page") {
+                if let url = URL(string: "http://localhost:3690/status/ui") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+
+            Divider()
+
+            Button("Copy Details") {
+                copyToClipboard(formattedDetails)
+            }
+        }
     }
 
     // MARK: - Client Icon
@@ -208,5 +234,35 @@ struct ClientCard: View {
         case "busy_too_long": return "Busy too long"
         default: return reason.replacingOccurrences(of: "_", with: " ").capitalized
         }
+    }
+
+    // MARK: - Context menu helpers
+
+    /// Copy a string to the system clipboard.
+    private func copyToClipboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// Formatted multi-line summary of all instance details for clipboard export.
+    private var formattedDetails: String {
+        var lines: [String] = []
+        lines.append("Name: \(instance.displayName)")
+        if let pid = instance.pid { lines.append("PID: \(pid)") }
+        if let state = instance.state { lines.append("State: \(state)") }
+        if let sessionId = instance.sessionId { lines.append("Session: \(sessionId)") }
+        if let ws = instance.workspace { lines.append("Workspace: \(ws)") }
+        if let transport = instance.transport { lines.append("Transport: \(transport)") }
+        if let model = instance.model { lines.append("Model: \(model)") }
+        if let provider = instance.provider { lines.append("Provider: \(provider)") }
+        if let uptime = instance.uptimeString { lines.append("Uptime: \(uptime)") }
+        if let tools = instance.toolCallCount { lines.append("Tool Calls: \(tools)") }
+        if let turns = instance.turnCount { lines.append("Turns: \(turns)") }
+        if let pressure = instance.contextPressure {
+            lines.append("Context Pressure: \(Int(pressure * 100))%")
+        }
+        if let agent = instance.agent { lines.append("Agent: \(agent)") }
+        if let role = instance.agentRole { lines.append("Role: \(role)") }
+        return lines.joined(separator: "\n")
     }
 }

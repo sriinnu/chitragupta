@@ -38,7 +38,7 @@ struct AggregatedStatus: Codable, Equatable {
 struct DaemonInfo: Codable, Equatable {
     let alive: Bool
     let pid: Int?
-    let uptime: Int?
+    let uptime: Double?
     let memory: MemoryValue?
     let connections: Int?
     let methods: Int?
@@ -117,6 +117,16 @@ struct RuntimeItem: Codable, Equatable, Identifiable {
     let lastSeenAt: Int?
     let requestCount: Int?
     let notificationCount: Int?
+    /// Workspace/project root path (when daemon enriches socket data).
+    let workspace: String?
+    /// Provider or CLI tool identity (e.g. "anthropic", "claude-code").
+    let provider: String?
+
+    /// Last path component of the workspace (e.g. "/Users/x/project" → "project").
+    var workspaceName: String? {
+        guard let ws = workspace else { return nil }
+        return ws.split(separator: "/").last.map(String.init)
+    }
 
     /// Elapsed seconds since the daemon last saw traffic on this connection.
     /// Uses epoch-ms from `lastSeenAt` compared to wall clock.
@@ -130,6 +140,38 @@ struct RuntimeItem: Codable, Equatable, Identifiable {
         guard let elapsed = secondsSinceLastSeen else { return false }
         return elapsed < 60
     }
+
+    /// How long this connection has been open, in seconds.
+    var connectionDuration: TimeInterval? {
+        guard let ts = connectedAt else { return nil }
+        return Date().timeIntervalSince1970 - Double(ts) / 1000
+    }
+
+    /// Connection duration as human-readable string ("30s", "5m", "2h 15m", "1d 3h").
+    var durationString: String? {
+        guard let dur = connectionDuration, dur > 0 else { return nil }
+        let secs = Int(dur)
+        if secs < 60 { return "\(secs)s" }
+        if secs < 3600 { return "\(secs / 60)m" }
+        if secs < 86400 { return "\(secs / 3600)h \((secs % 3600) / 60)m" }
+        return "\(secs / 86400)d \((secs % 86400) / 3600)h"
+    }
+
+    /// Activity level: "active" if seen within 30s, "idle" if within 5min, "stale" otherwise.
+    var activityLevel: String {
+        guard let elapsed = secondsSinceLastSeen else { return "unknown" }
+        if elapsed < 30 { return "active" }
+        if elapsed < 300 { return "idle" }
+        return "stale"
+    }
+
+    /// Total interaction count (requests + notifications).
+    var totalInteractions: Int {
+        (requestCount ?? 0) + (notificationCount ?? 0)
+    }
+
+    /// Whether this connection is stale (no traffic for >5min).
+    var isStale: Bool { activityLevel == "stale" }
 }
 
 // MARK: - Nidra (Consolidation)

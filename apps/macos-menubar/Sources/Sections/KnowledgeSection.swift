@@ -13,6 +13,7 @@ struct KnowledgeSection: View {
     let db: DbCounts?
     /// Externally controlled expansion toggle (persisted by parent view).
     @Binding var isExpanded: Bool
+    @State private var isHeaderHovered = false
 
     var body: some View {
         InsetGroupedSection("Knowledge") {
@@ -45,6 +46,9 @@ struct KnowledgeSection: View {
                                 .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
+                        .onHover { isHeaderHovered = $0 }
+                        .background(isHeaderHovered ? Theme.label.opacity(0.04) : Color.clear)
+                        .cornerRadius(Theme.radiusSm)
                     }
                     .padding(.horizontal, Theme.sp16)
                     .padding(.top, Theme.sp12)

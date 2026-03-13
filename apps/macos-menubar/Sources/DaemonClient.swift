@@ -307,10 +307,11 @@ final class DaemonClient: ObservableObject {
     }
 
     /// Format seconds as "Xd Yh", "Xh Ym", or "Xm".
-    static func formatUptime(_ seconds: Int) -> String {
-        let days = seconds / 86400
-        let hours = (seconds % 86400) / 3600
-        let mins = (seconds % 3600) / 60
+    static func formatUptime(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        let days = total / 86400
+        let hours = (total % 86400) / 3600
+        let mins = (total % 3600) / 60
         if days > 0 { return "\(days)d \(hours)h" }
         if hours > 0 { return "\(hours)h \(mins)m" }
         return "\(mins)m"

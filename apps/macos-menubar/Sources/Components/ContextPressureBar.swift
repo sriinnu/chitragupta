@@ -48,5 +48,6 @@ struct ContextPressureBar: View {
                 .foregroundColor(barColor)
                 .frame(width: 32, alignment: .trailing)
         }
+        .help("Context window usage. High pressure (>80%) may reduce response quality.")
     }
 }

@@ -48,17 +48,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupUI() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem.button {
             button.image = HeartbeatIcon.render(phase: 0, state: .disconnected)
+            button.imagePosition = .imageLeading
             button.action = #selector(togglePopover)
             button.target = self
         }
 
         let contentView = MenubarView(client: client)
+        let screenHeight = NSScreen.main?.visibleFrame.height ?? 800
+        let maxHeight = min(650, screenHeight * 0.75)
+
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 380, height: 520)
+        popover.contentSize = NSSize(width: 380, height: maxHeight)
         popover.behavior = .transient
         popover.animates = true
         popover.contentViewController = NSHostingController(rootView: contentView)
@@ -104,8 +108,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let interval = timerInterval(for: state)
         guard interval > 0 else {
-            // Static state (disconnected) — just set one frame.
+            // Static state (disconnected) — just set one frame, clear badge.
             statusItem.button?.image = HeartbeatIcon.render(phase: 0, state: state)
+            statusItem.button?.attributedTitle = NSAttributedString(string: "")
             return
         }
 
@@ -145,12 +150,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Reduced motion: static icon, only update on state change.
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             statusItem.button?.image = frameCache[stateKey]?[0]
+            updateBadgeTitle()
             return
         }
 
         let frames = frameCache[stateKey]!
         frameIndex = (frameIndex + 1) % frames.count
         statusItem.button?.image = frames[frameIndex]
+        updateBadgeTitle()
+    }
+
+    // MARK: - Badge title (active count / consolidation progress)
+
+    /// Updates the status item button title to show:
+    /// 1. Consolidation progress percentage when Nidra is consolidating/dreaming
+    /// 2. Active instance count badge when instances are actively working
+    /// 3. Empty string otherwise (icon only)
+    ///
+    /// Title is styled with a small 9pt medium-weight font via attributed string.
+    private func updateBadgeTitle() {
+        guard let button = statusItem.button else { return }
+
+        let badgeText: String
+
+        // Priority 1: consolidation progress (shown as "47%")
+        if currentState == .consolidating,
+           let progress = client.status?.nidra?.consolidationProgress,
+           progress > 0 {
+            let pct = Int(progress * 100)
+            badgeText = "\(pct)%"
+        }
+        // Priority 2: active instance count badge
+        else if let activeCount = client.status?.active?.activeNowCount, activeCount > 0 {
+            badgeText = "\(activeCount)"
+        }
+        // Nothing to show — clear title
+        else {
+            if button.attributedTitle.length > 0 {
+                button.attributedTitle = NSAttributedString(string: "")
+            }
+            return
+        }
+
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 9, weight: .medium),
+            .baselineOffset: 1.0,
+        ]
+        let attributed = NSAttributedString(string: badgeText, attributes: attrs)
+        if button.attributedTitle != attributed {
+            button.attributedTitle = attributed
+        }
     }
 
     // MARK: - State resolution

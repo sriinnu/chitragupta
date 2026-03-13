@@ -32,8 +32,8 @@ import SwiftUI
 struct MenubarView: View {
 
     @ObservedObject var client: DaemonClient
-    @State private var showKnowledgeDetail = false
-    @State private var showConnectionsDetail = true
+    @AppStorage("showKnowledgeDetail") private var showKnowledgeDetail = false
+    @AppStorage("showConnectionsDetail") private var showConnectionsDetail = true
 
     var body: some View {
         VStack(spacing: 0) {
