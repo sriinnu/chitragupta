@@ -134,7 +134,9 @@ struct ConnectionsSection: View {
 
     // MARK: - Collapsed Summary
 
-    /// Compact one-line summary when collapsed — shows instance count, active status.
+    /// Compact one-line summary when collapsed — tap anywhere to expand.
+    /// Uses `.onTapGesture` on the outer container (not just inside
+    /// InsetGroupedSection) to ensure taps aren't swallowed by clipShape.
     private var collapsedSummary: some View {
         InsetGroupedSection {
             HStack(spacing: Theme.sp12) {
@@ -154,7 +156,6 @@ struct ConnectionsSection: View {
                             .foregroundColor(Theme.label)
                     }
 
-                    // Show names of connected instances
                     if !instances.isEmpty {
                         Text(instances.prefix(3).map { $0.displayName }.joined(separator: ", ")
                              + (instances.count > 3 ? " +\(instances.count - 3)" : ""))
@@ -166,16 +167,16 @@ struct ConnectionsSection: View {
 
                 Spacer()
 
-                Text("Tap to expand")
-                    .font(.system(size: Theme.miniSize))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundColor(Theme.tertiaryLabel)
             }
             .padding(Theme.sp12)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                    isExpanded = true
-                }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                isExpanded = true
             }
         }
     }
@@ -208,60 +209,57 @@ struct ConnectionsSection: View {
             }
         }
 
-        // Expandable overflow — shows remaining runtime socket connections
+        // Expandable overflow — shows remaining runtime socket connections.
+        // Uses .onTapGesture + .contentShape instead of Button to avoid
+        // hit-testing issues inside InsetGroupedSection's clipShape.
         let extra = totalConnections - instances.count
         if extra > 0 {
-            VStack(spacing: 0) {
+            Divider().padding(.leading, Theme.sp16)
+
+            if socketsExpanded {
+                // All runtime socket rows, expanded inline
+                ForEach(Array(runtimeItems.enumerated()), id: \.element.id) { idx, item in
+                    RuntimeRow(item: item)
+                    if idx < runtimeItems.count - 1 {
+                        Divider().padding(.leading, Theme.sp16)
+                    }
+                }
+
+                // Collapse handle
                 Divider().padding(.leading, Theme.sp16)
-
-                if socketsExpanded {
-                    // Show all runtime items inline
-                    ForEach(Array(runtimeItems.enumerated()), id: \.element.id) { idx, item in
-                        VStack(spacing: 0) {
-                            RuntimeRow(item: item)
-                            if idx < runtimeItems.count - 1 {
-                                Divider().padding(.leading, Theme.sp16)
-                            }
-                        }
+                HStack(spacing: Theme.sp6) {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(Theme.blue)
+                    Text("Collapse sockets")
+                        .font(.system(size: Theme.captionSize, weight: .medium))
+                        .foregroundColor(Theme.blue)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(Theme.sp8)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                        socketsExpanded = false
                     }
-
-                    // Collapse button
-                    Button(action: {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                            socketsExpanded = false
-                        }
-                    }) {
-                        HStack(spacing: Theme.sp6) {
-                            Image(systemName: "chevron.up")
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(Theme.blue)
-                            Text("Collapse")
-                                .font(.system(size: Theme.captionSize, weight: .medium))
-                                .foregroundColor(Theme.blue)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(Theme.sp8)
+                }
+            } else {
+                // Tappable "show more" row
+                HStack(spacing: Theme.sp6) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(Theme.blue)
+                    Text("+ \(extra) more connection\(extra == 1 ? "" : "s")")
+                        .font(.system(size: Theme.captionSize, weight: .medium))
+                        .foregroundColor(Theme.blue)
+                    Spacer()
+                }
+                .padding(Theme.sp12)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                        socketsExpanded = true
                     }
-                    .buttonStyle(.plain)
-                } else {
-                    // Tappable "show more" row
-                    Button(action: {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                            socketsExpanded = true
-                        }
-                    }) {
-                        HStack(spacing: Theme.sp6) {
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(Theme.blue)
-                            Text("+ \(extra) more connection\(extra == 1 ? "" : "s")")
-                                .font(.system(size: Theme.captionSize, weight: .medium))
-                                .foregroundColor(Theme.blue)
-                            Spacer()
-                        }
-                        .padding(Theme.sp12)
-                    }
-                    .buttonStyle(.plain)
                 }
             }
         }
