@@ -5,6 +5,16 @@ import { getEngineEmbeddingService } from "./embedding-runtime.js";
 import { parseEmbeddingEpoch } from "./embedding-epoch.js";
 import { blobToVector } from "./recall.js";
 import {
+	buildArtifactQualityHash,
+	getRemoteSemanticPromotionDecision,
+} from "./remote-semantic-sync-quality.js";
+import {
+	buildRemoteSemanticSyncStatus,
+	parseEmbeddingMetadata,
+	type EmbeddingRow,
+	type RemoteSemanticSyncRow,
+} from "./remote-semantic-sync-helpers.js";
+import {
 	checkRemoteSemanticHealth,
 	ensureRemoteSemanticCollection,
 	normalizeQdrantId,
@@ -25,29 +35,9 @@ export type {
 	RemoteSemanticSyncStatus,
 } from "./remote-semantic-sync-types.js";
 
-interface RemoteSemanticSyncRow {
-	artifact_id: string;
-	level: string;
-	period: string;
-	project: string | null;
-	content_hash: string;
-	embedding_epoch: string | null;
-	remote_id: string | null;
-	last_synced_at: number | null;
-	last_error: string | null;
-	updated_at: number;
-}
-
 type RemoteSemanticSyncOptions = CuratedConsolidationArtifactQuery & {
 	repairLocal?: boolean;
 };
-
-interface EmbeddingRow {
-	id: string;
-	vector: Buffer;
-	text: string;
-	metadata: string | null;
-}
 
 function getAgentDb() {
 	const dbm = DatabaseManager.instance();
@@ -64,9 +54,9 @@ function getVectorsDb() {
 function selectRemoteSyncRows(): Map<string, RemoteSemanticSyncRow> {
 	const db = getAgentDb();
 	const rows = db.prepare(
-		`SELECT artifact_id, level, period, project, content_hash, embedding_epoch, remote_id, last_synced_at, last_error, updated_at
-		 FROM remote_semantic_sync
-		 WHERE target = ?`,
+			`SELECT artifact_id, level, period, project, content_hash, embedding_epoch, quality_hash, remote_id, last_synced_at, last_error, updated_at
+			 FROM remote_semantic_sync
+			 WHERE target = ?`,
 	).all("qdrant") as RemoteSemanticSyncRow[];
 	return new Map(rows.map((row) => [row.artifact_id, row]));
 }
@@ -77,32 +67,35 @@ function upsertRemoteSyncSuccess(
 	embeddingEpoch: string | null,
 ): void {
 	const now = Date.now();
+	const qualityHash = buildArtifactQualityHash(artifact);
 	getAgentDb().prepare(
-		`INSERT INTO remote_semantic_sync (
-			target, artifact_id, level, period, project, content_hash, embedding_epoch, remote_id, last_synced_at, last_error, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
-		ON CONFLICT(target, artifact_id) DO UPDATE SET
-			level = excluded.level,
-			period = excluded.period,
-			project = excluded.project,
-			content_hash = excluded.content_hash,
-			embedding_epoch = excluded.embedding_epoch,
-			remote_id = excluded.remote_id,
-			last_synced_at = excluded.last_synced_at,
-			last_error = NULL,
-			updated_at = excluded.updated_at`,
-	).run(
+			`INSERT INTO remote_semantic_sync (
+				target, artifact_id, level, period, project, content_hash, embedding_epoch, quality_hash, remote_id, last_synced_at, last_error, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+			ON CONFLICT(target, artifact_id) DO UPDATE SET
+				level = excluded.level,
+				period = excluded.period,
+				project = excluded.project,
+				content_hash = excluded.content_hash,
+				embedding_epoch = excluded.embedding_epoch,
+				quality_hash = excluded.quality_hash,
+				remote_id = excluded.remote_id,
+				last_synced_at = excluded.last_synced_at,
+				last_error = NULL,
+				updated_at = excluded.updated_at`,
+		).run(
 		"qdrant",
 		artifact.id,
 		artifact.level,
 		artifact.period,
-		artifact.project ?? null,
-		artifact.contentHash,
-		embeddingEpoch,
-		remoteId,
-		now,
-		now,
-	);
+			artifact.project ?? null,
+			artifact.contentHash,
+			embeddingEpoch,
+			qualityHash,
+			remoteId,
+			now,
+			now,
+		);
 }
 
 function upsertRemoteSyncError(
@@ -111,39 +104,32 @@ function upsertRemoteSyncError(
 	embeddingEpoch: string | null,
 ): void {
 	const now = Date.now();
+	const qualityHash = buildArtifactQualityHash(artifact);
 	getAgentDb().prepare(
-		`INSERT INTO remote_semantic_sync (
-			target, artifact_id, level, period, project, content_hash, embedding_epoch, remote_id, last_synced_at, last_error, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
-		ON CONFLICT(target, artifact_id) DO UPDATE SET
-			level = excluded.level,
-			period = excluded.period,
-			project = excluded.project,
-			content_hash = excluded.content_hash,
-			embedding_epoch = excluded.embedding_epoch,
-			last_error = excluded.last_error,
-			updated_at = excluded.updated_at`,
-	).run(
+			`INSERT INTO remote_semantic_sync (
+				target, artifact_id, level, period, project, content_hash, embedding_epoch, quality_hash, remote_id, last_synced_at, last_error, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+			ON CONFLICT(target, artifact_id) DO UPDATE SET
+				level = excluded.level,
+				period = excluded.period,
+				project = excluded.project,
+				content_hash = excluded.content_hash,
+				embedding_epoch = excluded.embedding_epoch,
+				quality_hash = excluded.quality_hash,
+				last_error = excluded.last_error,
+				updated_at = excluded.updated_at`,
+		).run(
 		"qdrant",
 		artifact.id,
 		artifact.level,
 		artifact.period,
-		artifact.project ?? null,
-		artifact.contentHash,
-		embeddingEpoch,
-		error,
-		now,
-	);
-}
-
-
-function parseEmbeddingMetadata(row: EmbeddingRow | undefined): Record<string, unknown> {
-	if (!row?.metadata) return {};
-	try {
-		return JSON.parse(row.metadata) as Record<string, unknown>;
-	} catch {
-		return {};
-	}
+			artifact.project ?? null,
+			artifact.contentHash,
+			embeddingEpoch,
+			qualityHash,
+			error,
+			now,
+		);
 }
 
 function selectEmbeddingRows(): Map<string, EmbeddingRow> {
@@ -160,10 +146,13 @@ function buildRemotePayload(artifact: CuratedConsolidationArtifact, row: Embeddi
 	return {
 		originalId: artifact.id,
 		summary: artifact.summaryText,
-		packedSummary: artifact.packedSummaryText ?? metadata.packedSummaryText ?? null,
-		compression: artifact.compression ?? metadata.compression ?? null,
+		packedSummary: artifact.packedSummaryText ?? null,
+		compression: artifact.compression ?? null,
+		embeddingInputHash: artifact.embeddingInputHash,
 		embeddingEpoch: metadata.embeddingEpoch ?? null,
-		mdlMetrics: artifact.mdlMetrics ?? metadata.mdlMetrics ?? null,
+		mdlMetrics: artifact.mdlMetrics,
+		compactionDecision: artifact.compactionDecision,
+		packedDecision: artifact.packedDecision ?? null,
 		level: artifact.level,
 		period: artifact.period,
 		project: artifact.project ?? null,
@@ -176,107 +165,6 @@ function buildRemotePayload(artifact: CuratedConsolidationArtifact, row: Embeddi
 	};
 }
 
-function buildStatusFromRows(
-	artifacts: readonly CuratedConsolidationArtifact[],
-	rowsById: Map<string, RemoteSemanticSyncRow>,
-	embeddingRowsById: Map<string, EmbeddingRow>,
-	config: RemoteSemanticMirrorConfig | null,
-	remoteHealth?: RemoteSemanticSyncStatus["remoteHealth"],
-): RemoteSemanticSyncStatus {
-	const issues: RemoteSemanticSyncIssue[] = [];
-	let syncedCount = 0;
-	let missingCount = 0;
-	let driftCount = 0;
-	let lastSyncAt: string | null = null;
-	let lastError: string | null = null;
-
-	for (const row of rowsById.values()) {
-		if (row.last_synced_at && (!lastSyncAt || row.last_synced_at > Date.parse(lastSyncAt))) {
-			lastSyncAt = new Date(row.last_synced_at).toISOString();
-		}
-		if (row.last_error && !lastError) lastError = row.last_error;
-	}
-
-	for (const artifact of artifacts) {
-		const row = rowsById.get(artifact.id);
-		const embeddingMetadata = parseEmbeddingMetadata(embeddingRowsById.get(artifact.id));
-		const currentEpoch = parseEmbeddingEpoch(embeddingMetadata.embeddingEpoch)?.epoch ?? null;
-		if (!row) {
-			missingCount++;
-			issues.push({
-				id: artifact.id,
-				level: artifact.level,
-				period: artifact.period,
-				project: artifact.project,
-				reason: "missing_remote",
-			});
-			continue;
-		}
-		if (row.last_error) {
-			driftCount++;
-			issues.push({
-				id: artifact.id,
-				level: artifact.level,
-				period: artifact.period,
-				project: artifact.project,
-				reason: "remote_error",
-				error: row.last_error,
-			});
-			continue;
-		}
-		if (!row.last_synced_at) {
-			missingCount++;
-			issues.push({
-				id: artifact.id,
-				level: artifact.level,
-				period: artifact.period,
-				project: artifact.project,
-				reason: "missing_remote",
-			});
-			continue;
-		}
-		if (row.content_hash !== artifact.contentHash) {
-			driftCount++;
-			issues.push({
-				id: artifact.id,
-				level: artifact.level,
-				period: artifact.period,
-				project: artifact.project,
-				reason: "stale_remote",
-			});
-			continue;
-		}
-		if (!row.embedding_epoch || !currentEpoch || row.embedding_epoch !== currentEpoch) {
-			driftCount++;
-			issues.push({
-				id: artifact.id,
-				level: artifact.level,
-				period: artifact.period,
-				project: artifact.project,
-				reason: "stale_remote_epoch",
-			});
-			continue;
-		}
-		syncedCount++;
-	}
-
-	return {
-		enabled: Boolean(config),
-		provider: config ? "qdrant" : "disabled",
-		configured: Boolean(config),
-		scanned: artifacts.length,
-		syncedCount,
-		missingCount,
-		driftCount,
-		lastSyncAt,
-		lastError,
-		collection: config?.collection,
-		baseUrl: config?.baseUrl,
-		remoteHealth,
-		issues,
-	};
-}
-
 export async function inspectRemoteSemanticSync(
 	options: CuratedConsolidationArtifactQuery = {},
 ): Promise<RemoteSemanticSyncStatus> {
@@ -284,7 +172,20 @@ export async function inspectRemoteSemanticSync(
 	const config = resolveRemoteSemanticMirrorConfig();
 	const health = config ? await checkRemoteSemanticHealth(config) : undefined;
 	const rowsById = selectRemoteSyncRows();
-	return buildStatusFromRows(artifacts, rowsById, selectEmbeddingRows(), config, health);
+	let currentEmbeddingEpoch: string | null = null;
+	try {
+		currentEmbeddingEpoch = (await (await getEngineEmbeddingService()).getEmbeddingEpoch()).epoch;
+	} catch {
+		currentEmbeddingEpoch = null;
+	}
+	return buildRemoteSemanticSyncStatus(
+		artifacts,
+		rowsById,
+		selectEmbeddingRows(),
+		config,
+		currentEmbeddingEpoch,
+		health,
+	);
 }
 
 export async function syncRemoteSemanticMirror(
@@ -323,6 +224,8 @@ export async function syncRemoteSemanticMirror(
 		const batch = artifacts.slice(i, i + config.batchSize);
 		const points: Array<{ id: string; vector: number[]; payload: Record<string, unknown> }> = [];
 		for (const artifact of batch) {
+			const promotion = getRemoteSemanticPromotionDecision(artifact);
+			if (!promotion.eligible) continue;
 			const row = rowsById.get(artifact.id);
 			const metadata = parseEmbeddingMetadata(row);
 			const embeddingEpoch = parseEmbeddingEpoch(metadata.embeddingEpoch)?.epoch ?? null;
@@ -333,12 +236,19 @@ export async function syncRemoteSemanticMirror(
 			if (metadata.curated !== true) {
 				upsertRemoteSyncError(artifact, "local semantic mirror requires curated reindex before remote sync", embeddingEpoch);
 				continue;
-			}
-			const storedHash = typeof metadata.contentHash === "string" ? metadata.contentHash : null;
-			if (!storedHash || storedHash !== artifact.contentHash) {
-				upsertRemoteSyncError(artifact, "local semantic mirror content hash is stale; repair required", embeddingEpoch);
-				continue;
-			}
+				}
+				const storedHash = typeof metadata.contentHash === "string" ? metadata.contentHash : null;
+				const storedEmbeddingInputHash = typeof metadata.embeddingInputHash === "string"
+					? metadata.embeddingInputHash
+					: storedHash;
+				if (
+					!storedHash
+					|| storedHash !== artifact.contentHash
+					|| storedEmbeddingInputHash !== artifact.embeddingInputHash
+				) {
+					upsertRemoteSyncError(artifact, "local semantic mirror content hash is stale; repair required", embeddingEpoch);
+					continue;
+				}
 			if (!embeddingEpoch || (currentEmbeddingEpoch && embeddingEpoch !== currentEmbeddingEpoch)) {
 				upsertRemoteSyncError(artifact, "local semantic mirror embedding epoch is stale; repair required", embeddingEpoch);
 				continue;

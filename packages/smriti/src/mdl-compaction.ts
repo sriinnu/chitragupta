@@ -1,4 +1,9 @@
-/** Measured compression/retention profile for a curated semantic artifact. */
+/**
+ * Measured compression/retention profile for a curated semantic artifact.
+ *
+ * `mdlScore` is a practical compaction utility score, not a formal MDL proof.
+ * It intentionally rewards signal preservation more than raw reduction.
+ */
 export interface MdlCompactionMetrics {
 	originalChars: number;
 	summaryChars: number;
@@ -16,16 +21,60 @@ export interface PackedRepresentationDecision {
 	reason: "accepted" | "missing_packed" | "low_reduction" | "low_retention" | "low_mdl";
 }
 
+/**
+ * Semantic mirrors need a version stamp that changes when the compaction
+ * policy changes materially enough to warrant re-embedding.
+ */
+export const MDL_COMPACTION_POLICY_VERSION = "mdl-v1";
+
+/**
+ * Selected summary text plus the MDL-style metrics that justified the choice.
+ *
+ * I persist both so repair paths can explain why the preferred summary was
+ * kept or widened into a representative fallback.
+ */
+export interface MdlSummarySelection {
+	summaryText: string;
+	metrics: MdlCompactionMetrics;
+	selection: "preferred" | "representative_fallback";
+}
+
+/** Steering decision for whether a curated summary is healthy, marginal, or needs repair. */
+export interface MdlCompactionDecision {
+	disposition: "healthy" | "watch" | "repair";
+	reason:
+		| "accepted"
+		| "low_mdl"
+		| "low_retention"
+		| "low_reduction"
+		| "borderline_mdl"
+		| "borderline_reduction";
+}
+
 const MIN_PACKED_REDUCTION = 0.08;
 const MIN_PACKED_SIGNAL_RETENTION = 0.05;
 const MIN_PACKED_MDL_SCORE = 0.5;
+/** Minimum MDL score required before a summary is considered durable and healthy. */
+export const MIN_SUMMARY_MDL_SCORE = 0.45;
+const MIN_SUMMARY_SIGNAL_RETENTION = 0.12;
+const MIN_SUMMARY_MDL_GAIN = 0.08;
+const MIN_SUMMARY_REDUCTION = 0.35;
+const MIN_SUMMARY_STRONG_GAIN = 0.15;
+const DEFAULT_REPRESENTATIVE_SUMMARY_CHARS = 2000;
+/** Borderline threshold where I keep the summary but continue to watch it. */
+export const WATCH_SUMMARY_MDL_SCORE = 0.55;
+const WATCH_SUMMARY_REDUCTION = 0.4;
+
+function normalizeToken(token: string): string {
+	return token.replace(/\d+/g, "#");
+}
 
 function tokenize(text: string): Set<string> {
 	return new Set(
 		text
 			.toLowerCase()
 			.match(/[a-z0-9][a-z0-9_-]{2,}/g)
-			?.map((token) => token.trim())
+			?.map((token) => normalizeToken(token.trim()))
 			.filter(Boolean) ?? [],
 	);
 }
@@ -45,6 +94,101 @@ function clamp01(value: number): number {
 
 function roundMetric(value: number | null): number | null {
 	return value === null ? null : Math.round(value * 1000) / 1000;
+}
+
+function normalizeLineSignature(line: string): string {
+	return line
+		.toLowerCase()
+		.replace(/\d+/g, "#")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+/**
+ * Build a deterministic representative fallback summary from the original
+ * source text.
+ *
+ * I use this during repair so the compaction layer can widen a lossy summary
+ * without introducing another model dependency.
+ */
+export function buildRepresentativeSummaryText(
+	originalText: string,
+	maxChars = DEFAULT_REPRESENTATIVE_SUMMARY_CHARS,
+): string {
+	const selected: string[] = [];
+	const seen = new Set<string>();
+	let totalChars = 0;
+
+	for (const rawLine of originalText.split(/\r?\n/)) {
+		const line = rawLine.replace(/\s+/g, " ").trim();
+		if (!line) continue;
+		const signature = normalizeLineSignature(line);
+		if (!signature || seen.has(signature)) continue;
+		const nextChars = totalChars === 0 ? line.length : totalChars + 1 + line.length;
+		if (selected.length > 0 && nextChars > maxChars) break;
+		seen.add(signature);
+		selected.push(line);
+		totalChars = nextChars;
+		if (totalChars >= maxChars) break;
+	}
+
+	return selected.join(" ").trim();
+}
+
+/**
+ * Pick the effective compaction summary, widening to a representative fallback
+ * only when the preferred summary is too lossy and the fallback materially
+ * improves MDL-style utility while staying compact.
+ */
+export function selectMdlSummaryText(args: {
+	originalText: string;
+	preferredSummaryText: string;
+	fallbackSummaryText?: string;
+	maxFallbackChars?: number;
+}): MdlSummarySelection {
+	const sourceText = args.originalText.trim();
+	const preferredSummaryText = args.preferredSummaryText.trim();
+	const preferredMetrics = computeMdlCompactionMetrics({
+		originalText: sourceText,
+		summaryText: preferredSummaryText,
+	});
+
+	const fallbackSummaryText = (args.fallbackSummaryText?.trim()
+		|| buildRepresentativeSummaryText(sourceText, args.maxFallbackChars)).trim();
+	if (!fallbackSummaryText || fallbackSummaryText === preferredSummaryText) {
+		return {
+			summaryText: preferredSummaryText,
+			metrics: preferredMetrics,
+			selection: "preferred",
+		};
+	}
+
+	const fallbackMetrics = computeMdlCompactionMetrics({
+		originalText: sourceText,
+		summaryText: fallbackSummaryText,
+	});
+	// I only widen into the representative fallback when the preferred summary is
+	// objectively weak and the wider fallback buys materially better MDL utility.
+	// This avoids oscillating to a larger summary for tiny metric changes.
+	const preferredIsWeak = preferredMetrics.mdlScore < MIN_SUMMARY_MDL_SCORE
+		|| preferredMetrics.summarySignalRetention < MIN_SUMMARY_SIGNAL_RETENTION;
+	const fallbackIsMeaningfullyBetter = fallbackMetrics.mdlScore >= preferredMetrics.mdlScore + MIN_SUMMARY_MDL_GAIN
+		&& fallbackMetrics.summaryReduction >= MIN_SUMMARY_REDUCTION;
+	const fallbackClearlyDominates = fallbackMetrics.mdlScore >= preferredMetrics.mdlScore + MIN_SUMMARY_STRONG_GAIN
+		&& fallbackMetrics.summaryReduction >= preferredMetrics.summaryReduction - 0.1;
+	if (fallbackIsMeaningfullyBetter && (preferredIsWeak || fallbackClearlyDominates)) {
+		return {
+			summaryText: fallbackSummaryText,
+			metrics: fallbackMetrics,
+			selection: "representative_fallback",
+		};
+	}
+
+	return {
+		summaryText: preferredSummaryText,
+		metrics: preferredMetrics,
+		selection: "preferred",
+	};
 }
 
 /**
@@ -74,11 +218,20 @@ export function computeMdlCompactionMetrics(args: {
 	const summarySignalRetention = clamp01(overlapRatio(originalTokens, summaryTokens));
 	const packedSignalRetention = packedTokens ? clamp01(overlapRatio(summaryTokens, packedTokens)) : null;
 
-	const mdlScore = clamp01(
-		(summarySignalRetention * 0.7)
-		+ (summaryReduction * 0.2)
-		+ ((packedReduction ?? 0) * 0.1),
-	);
+	// Signal retention has the highest weight because retrieval quality degrades
+	// faster from semantic loss than from a slightly larger artifact.
+	const mdlScore = packedSignalRetention === null
+		? clamp01(
+			(summarySignalRetention * 0.7)
+			+ (summaryReduction * 0.2)
+			+ ((packedReduction ?? 0) * 0.1),
+		)
+		: clamp01(
+			(summarySignalRetention * 0.55)
+			+ (summaryReduction * 0.2)
+			+ (packedSignalRetention * 0.15)
+			+ ((packedReduction ?? 0) * 0.1),
+		);
 
 	return {
 		originalChars,
@@ -113,4 +266,28 @@ export function decidePackedRepresentation(metrics: MdlCompactionMetrics): Packe
 		return { accepted: false, reason: "low_mdl" };
 	}
 	return { accepted: true, reason: "accepted" };
+}
+
+/**
+ * Decide whether the summary itself is good enough to promote as the durable
+ * semantic representation, or whether it should be revisited during a repair
+ * cycle before it keeps propagating through the mirror.
+ */
+export function decideMdlCompaction(metrics: MdlCompactionMetrics): MdlCompactionDecision {
+	if (metrics.summarySignalRetention < MIN_SUMMARY_SIGNAL_RETENTION) {
+		return { disposition: "repair", reason: "low_retention" };
+	}
+	if (metrics.mdlScore < MIN_SUMMARY_MDL_SCORE) {
+		return { disposition: "repair", reason: "low_mdl" };
+	}
+	if (metrics.summaryReduction < MIN_SUMMARY_REDUCTION) {
+		return { disposition: "repair", reason: "low_reduction" };
+	}
+	if (metrics.mdlScore < WATCH_SUMMARY_MDL_SCORE) {
+		return { disposition: "watch", reason: "borderline_mdl" };
+	}
+	if (metrics.summaryReduction < WATCH_SUMMARY_REDUCTION) {
+		return { disposition: "watch", reason: "borderline_reduction" };
+	}
+	return { disposition: "healthy", reason: "accepted" };
 }

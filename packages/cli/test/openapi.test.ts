@@ -82,7 +82,13 @@ describe("OpenAPI Spec: Paths", () => {
 	});
 
 	it("should include core endpoints", () => {
-		const coreEndpoints = ["/api/health", "/api/sessions", "/api/memory/{scope}"];
+		const coreEndpoints = [
+			"/api/health",
+			"/api/sessions",
+			"/api/memory/{scope}",
+			"/api/agent/tasks/checkpoints",
+			"/api/agent/tasks/checkpoints/{taskKey}",
+		];
 		for (const ep of coreEndpoints) {
 			expect(paths).toContain(ep);
 		}

@@ -5,6 +5,7 @@
 import { dynamicImport } from "./chitragupta-nodes.js";
 import { throwIfResearchAborted } from "./chitragupta-nodes-research-abort.js";
 import type { ResearchScope } from "./chitragupta-nodes-research-shared.js";
+import { buildDefaultResearchUpdateBudgets } from "./chitragupta-nodes-research-shared-defaults.js";
 import {
 	buildResearchExperimentRecord,
 	buildResearchRecord,
@@ -19,6 +20,8 @@ import {
 
 const DAEMON_UNAVAILABLE_CODES = new Set(["ECONNREFUSED", "ENOENT", "EACCES", "EPIPE", "ECONNRESET"]);
 
+type ResearchRecordingFallbackPolicy = "allow-local" | "daemon-only";
+
 function shouldFallbackToLocalResearchRecording(error: unknown): boolean {
 	const code = (error as NodeJS.ErrnoException | undefined)?.code;
 	if (typeof code === "string" && DAEMON_UNAVAILABLE_CODES.has(code)) return true;
@@ -26,6 +29,14 @@ function shouldFallbackToLocalResearchRecording(error: unknown): boolean {
 	return /daemon unavailable|connect econnrefused|enoent|eacces|epipe|econnreset|socket hang up|socket closed/i.test(
 		error.message.toLowerCase(),
 	);
+}
+
+function daemonOnlyRecordingError(): Error {
+	return new Error("overnight research recording requires the daemon-owned persistence path");
+}
+
+function sliceBudgetedText(value: unknown, maxChars: number): string {
+	return String(value ?? "").slice(0, maxChars);
 }
 
 /**
@@ -37,7 +48,12 @@ export async function packResearchContext(
 	run: Record<string, unknown>,
 	evaluation?: Record<string, unknown>,
 	signal?: AbortSignal,
+	options?: { fallbackPolicy?: ResearchRecordingFallbackPolicy },
 ): Promise<Record<string, unknown>> {
+	const fallbackPolicy = options?.fallbackPolicy ?? "allow-local";
+	const packingBudget =
+		scope.updateBudgets?.packing
+		?? buildDefaultResearchUpdateBudgets().packing;
 	throwIfResearchAborted(signal);
 	const route = council.executionRoute && typeof council.executionRoute === "object"
 		? council.executionRoute as {
@@ -62,8 +78,10 @@ export async function packResearchContext(
 		typeof evaluation?.observedMetric === "number" ? `observed: ${evaluation.observedMetric}` : "",
 		typeof evaluation?.delta === "number" ? `delta: ${evaluation.delta}` : "",
 		typeof evaluation?.decision === "string" ? `decision: ${evaluation.decision}` : "",
-		`stdout:\n${String(run.stdout ?? "").slice(0, 8_000)}`,
-		`stderr:\n${String(run.stderr ?? "").slice(0, 4_000)}`,
+		// I cap raw process output per loop because packed carry context should
+		// stay useful, not silently absorb entire logs forever.
+		`stdout:\n${sliceBudgetedText(run.stdout, packingBudget.maxStdoutChars)}`,
+		`stderr:\n${sliceBudgetedText(run.stderr, packingBudget.maxStderrChars)}`,
 	].filter(Boolean).join("\n\n").trim();
 	if (!text) {
 		return { packed: false, runtime: null, savings: 0, sourceLength: 0, source: "none" };
@@ -71,7 +89,7 @@ export async function packResearchContext(
 	const daemonPacked = await withDaemonClient(async (client) => {
 		throwIfResearchAborted(signal);
 		try {
-			return await client.call("compression.pack_context", { text }) as Record<string, unknown>;
+			return await client.call("compression.pack_context", { text }, { signal }) as Record<string, unknown>;
 		} catch {
 			return null;
 		}
@@ -86,6 +104,9 @@ export async function packResearchContext(
 			sourceLength: text.length,
 			source: "daemon",
 		};
+	}
+	if (fallbackPolicy === "daemon-only") {
+		throw daemonOnlyRecordingError();
 	}
 	const { packLiveContextText } = await dynamicImport("@chitragupta/smriti");
 	throwIfResearchAborted(signal);
@@ -104,6 +125,13 @@ export async function packResearchContext(
 	};
 }
 
+/**
+ * Persist one completed research outcome through the daemon-owned ledger first,
+ * then fall back to local Smriti only when the daemon is actually unavailable.
+ *
+ * I fail closed on policy or validation errors because those indicate a real
+ * contract violation, not a transport outage.
+ */
 export async function recordResearchOutcome(
 	scope: ResearchScope,
 	council: Record<string, unknown>,
@@ -112,7 +140,9 @@ export async function recordResearchOutcome(
 	finalize: Record<string, unknown> | null,
 	packed: Record<string, unknown>,
 	signal?: AbortSignal,
+	options?: { fallbackPolicy?: ResearchRecordingFallbackPolicy },
 ): Promise<Record<string, unknown>> {
+	const fallbackPolicy = options?.fallbackPolicy ?? "allow-local";
 	throwIfResearchAborted(signal);
 	const experimentRecord = buildResearchExperimentRecord(scope, council, run, evaluation, finalize, packed);
 	const entry = buildResearchRecord(scope, council, run, evaluation, finalize, packed);
@@ -137,7 +167,7 @@ export async function recordResearchOutcome(
 				packed,
 				traceContent: `${scope.hypothesis}\nDecision: ${String(evaluation.decision ?? "record")}\nMetric: ${String(evaluation.observedMetric ?? "unknown")}`,
 				traceMetadata,
-			})) as { traceId: string; experimentId: string };
+			}), { signal }) as { traceId: string; experimentId: string };
 			return {
 				...(typeof outcome === "object" && outcome !== null ? outcome : {}),
 				recorded: true,
@@ -148,7 +178,10 @@ export async function recordResearchOutcome(
 			};
 		});
 	} catch (error) {
+		// I only permit the local fallback when the daemon path is genuinely
+		// unavailable. Policy/contract failures must remain visible to the caller.
 		if (!shouldFallbackToLocalResearchRecording(error)) throw error;
+		if (fallbackPolicy === "daemon-only") throw daemonOnlyRecordingError();
 		daemonRecorded = null;
 	}
 	throwIfResearchAborted(signal);
@@ -174,7 +207,9 @@ export async function recordResearchFailure(
 	packed: Record<string, unknown>,
 	finalize: Record<string, unknown> | null,
 	signal?: AbortSignal,
+	options?: { fallbackPolicy?: ResearchRecordingFallbackPolicy },
 ): Promise<Record<string, unknown>> {
+	const fallbackPolicy = options?.fallbackPolicy ?? "allow-local";
 	throwIfResearchAborted(signal);
 	const evaluation = {
 		metricName: scope.metricName,
@@ -215,7 +250,7 @@ export async function recordResearchFailure(
 				packed,
 				traceContent: `${scope.hypothesis}\nDecision: record\nError: ${experimentRecord.errorMessage ?? "unknown failure"}`,
 				traceMetadata,
-			})) as { traceId: string; experimentId: string };
+			}), { signal }) as { traceId: string; experimentId: string };
 			return {
 				...(typeof outcome === "object" && outcome !== null ? outcome : {}),
 				recorded: true,
@@ -227,6 +262,7 @@ export async function recordResearchFailure(
 		});
 	} catch (error) {
 		if (!shouldFallbackToLocalResearchRecording(error)) throw error;
+		if (fallbackPolicy === "daemon-only") throw daemonOnlyRecordingError();
 		daemonRecorded = null;
 	}
 	throwIfResearchAborted(signal);

@@ -32,6 +32,12 @@ function shouldFallbackToLocalLoopRecording(error: unknown): boolean {
 	);
 }
 
+/**
+ * Persist one terminal loop summary through the daemon-first research ledger.
+ *
+ * On success this guarantees one durable summary id and reports whether the
+ * daemon or local fallback store accepted the write.
+ */
 export async function recordResearchLoopSummary(
 	scope: ResearchScope,
 	council: ResearchCouncilSummary,

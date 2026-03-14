@@ -16,6 +16,7 @@ import type {
 } from "@chitragupta/core";
 import type { ContentPart, StreamEvent, EmbeddingProvider } from "@chitragupta/swara";
 import type { MemoryBridge } from "./memory-bridge.js";
+import type { AgentTaskCheckpointStore } from "./agent-task-checkpoint-types.js";
 
 // ─── Mesh Structural Types ──────────────────────────────────────────────────
 // Imported for local use (AgentConfig) and re-exported for backward compatibility.
@@ -144,6 +145,20 @@ export interface AgentConfig {
 	onToolNotFound?: (toolName: string) => Promise<ToolHandler | undefined>;
 	/** Optional callback invoked when tool execution fails for skill-gap tracking. */
 	onSkillGap?: (toolName: string) => void;
+	/** Optional durable task checkpoint store for timeout pickup/resume. */
+	taskCheckpointStore?: AgentTaskCheckpointStore;
+	/** Stable logical task key for the agent root task. */
+	taskKey?: string;
+	/** Resolver for session-bound task keys that are known after agent creation. */
+	taskKeyResolver?: () => string | null | undefined;
+	/** Logical task type used for durable timeout inspection. */
+	taskType?: string;
+	/** Parent task key when this agent belongs to a larger task tree. */
+	parentTaskKey?: string | null;
+	/** Canonical session-lineage key tied to the task. */
+	sessionLineageKey?: string | null;
+	/** Resolver for the canonical daemon-backed session ID, when available. */
+	taskSessionIdResolver?: () => string | null | undefined;
 	/** Optional file path used to persist LearningLoop session snapshots. */
 	learningPersistPath?: string;
 	/** Optional custom system prompt (overrides profile-generated prompt). */
@@ -286,6 +301,8 @@ export const MAX_SUB_AGENTS = DEFAULT_MAX_SUB_AGENTS;
 export interface SpawnConfig {
 	/** A purpose label for this sub-agent (e.g. "code-reviewer", "test-runner"). */
 	purpose: string;
+	/** Optional stable logical task key for durable timeout pickup/resume. */
+	taskKey?: string;
 	/** Override the agent profile. Inherits parent's if omitted. */
 	profile?: AgentProfile;
 	/** Override the model. Inherits parent's if omitted. */

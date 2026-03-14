@@ -107,6 +107,7 @@ It states what is live, what is partial, and what is still open.
   - a startup refresh compares the current embedding epoch against the last curated semantic epoch
   - a periodic semantic epoch refresh pass reruns curated re-embedding repair when the epoch changes
   - the curated semantic layer now resolves one canonical engine embedding lane and can honor `CHITRAGUPTA_EMBEDDING_PROVIDER` when operators need to pin the semantic backend explicitly
+  - same-epoch quality debt repair is now budget-aware, so research-derived refinement pressure can widen repair within bounded daily and project limits instead of forcing a blanket refresh
   - this repairs the curated semantic mirror automatically without rewriting canonical raw session markdown
 - Swapna/Nidra compaction can now also emit a derived packed compaction summary when compression is available.
 - The engine now exposes Prana-native daemon-first research workflows instead of treating bounded experiment loops as an external pattern only:
@@ -146,12 +147,24 @@ It states what is live, what is partial, and what is still open.
   - `research.loops.heartbeat`
   - `research.loops.cancel`
   - `research.loops.complete`
+  - `research.loops.active`
   - `loopKey` is an immutable run id once terminal
   - daemon registration is fail-closed; local-only loop control is not accepted as a substitute
   - terminal loop state cannot be revived by late heartbeats
   - local loop state is only cleared after daemon completion succeeds
   - cancellation is checked both during run execution and during closure packing/recording/reuse steps
   - best-metric progress advances only after the round is durably recorded
+  - durable phase checkpoints mean a timed-out overnight loop can resume from the last safe phase boundary instead of rerunning completed rounds
+  - if the active checkpoint is gone, fallback resume now rebuilds governance from the persisted loop summary plus the latest durable round slice rather than treating the recent experiment tail as the whole loop
+  - `research.loops.get`, `research.loops.active`, `research.loops.checkpoint.get`, and `research.loops.checkpoint.list` now return a bounded `resumeContext` plus a machine-usable `resumePlan`, so operators and future automation can inspect where a loop stopped without reading raw checkpoint JSON
+  - generic long-running agent tasks now also persist daemon-owned task checkpoints and carry forward the last durable phase/status metadata into the next prompt run
+  - those generic checkpoints now include a bounded recent-event trail for tool/subagent/error breadcrumbs, and that resume context is injected into the next system prompt so timeout pickup does not start blind
+  - operators can inspect generic timeout pickup state through `agent.tasks.checkpoint.list` or `agent.tasks.checkpoint.get`; both now return a bounded `resumeContext` plus a machine-usable `resumePlan` alongside the raw checkpoint row so pickup does not depend on live in-memory runtime state
+  - the same generic checkpoint state is now exposed through the serve/API surface:
+    - `GET /api/agent/tasks/checkpoints`
+    - `GET /api/agent/tasks/checkpoints/{taskKey}`
+  - complex side effects still need deeper task-specific resume semantics where phase + breadcrumbs are not enough
+  - success-closure pickup is therefore strongest at the durable phase boundary; it does not yet claim full semantic replay for every closure-side effect after the checkpointed step
 - ACP-style subagents now map to engine-owned Sutra/Sabha council roles rather than a second runtime:
   - `planner`
   - `executor`
@@ -163,6 +176,21 @@ It states what is live, what is partial, and what is still open.
   - what improved
   - what regressed
   - what the next bounded run should try
+- Research-originated semantic repair now has a durable deferred path:
+  - immediate repair still runs inline for the touched day/project horizon
+  - remaining quality debt is persisted as `queuedResearch`
+  - degraded inline repair now persists the exact deferred repair intent instead of only the coarse project/session scope, so the daemon can replay the same narrowed daily/project repair plan later
+  - idempotent outcome retries now finish missing semantic repair work instead of treating an existing trace id as proof that repair already completed
+  - daily daemon postprocess reconstructs one bounded refinement budget from overnight loop summaries, experiment outcomes, and queued repair pressure before draining deferred repair
+  - scopes that overflow the current project cap are carried forward durably instead of being dropped
+  - clean remote semantic sync is held until the outstanding repair backlog and epoch-refresh completion are both clear
+- Overnight research now also has a durable queue/lease surface in the daemon:
+  - queued loops persist objective registries, stop conditions, and update budgets
+  - dispatchable work can be listed without guessing from active loop state alone
+  - the resident daemon now polls that queue itself on a short cadence, dispatches one loop at a time, and stays behind semantic refresh plus daily consolidation so overnight work does not start in the middle of repair
+  - resident dispatch now forwards a process-unique durable lease owner into the loop control plane, so queued overnight workers no longer reuse one shared default lease identity
+  - incomplete or stale queued workflow envelopes fail closed as `dispatch-failed` instead of letting the daemon guess missing loop context
+  - the daemon’s daily refinement result now exposes the exact governor plan and remote-hold reasons it used for that cycle
 - The daemon now exposes live Sabha contract methods:
   - `sabha.ask`
   - `sabha.get`
@@ -203,6 +231,8 @@ It states what is live, what is partial, and what is still open.
   - replicated reads can now use `sabha.repl.pull` without resuming pending mesh consultations as a read-side effect
   - replicated snapshots can now be applied through `sabha.repl.apply` and rehydrated into runtime state
   - replicated peers can now use `sabha.repl.merge` to fast-forward on matching oplog ancestry instead of treating every higher revision as a blind snapshot overwrite
+  - Sabha inspection surfaces now also expose a machine-usable `resumePlan`, so callers can distinguish "resume pending mesh dispatches", "await perspectives", and "inspect failed dispatches" without re-deriving state from the event log
+  - this is restart-safe consultation resume, not full arbitrary task pickup inside a long-running peer execution; that broader timeout/pickup contract is still open work
 - Sabha recordings now carry consultation provenance into Buddhi metadata instead of only the final round verdict.
 - Main CLI, API, serve, and MCP-facing Sabha paths now resolve through the daemon-backed council contract by default.
 - MCP transport support now includes:
@@ -230,11 +260,15 @@ It states what is live, what is partial, and what is still open.
   - compression and compaction policy stays inside the engine instead of moving into Vaayu or Takumi
   - bounded research loops and ACP-style council planning now stay inside the engine contract through a daemon-first path instead of moving into Takumi or Vaayu
   - Prana now also exposes a first daemon-first overnight research loop with a two-agent planner/executor council, round-by-round ledger persistence, packed carry-context reuse, and early stop when improvement stalls
+  - overnight research now keeps hard total budgets, keep/discard or revert decisions, git provenance, objective registries, stop conditions, Pareto-tracked round summaries, and durable phase checkpoints instead of acting like a best-effort long run
+  - overnight outcomes now feed back into project memory, Akasha, daily refinement digests, and selective semantic repair instead of remaining isolated experiment exhaust
 
 - Nervous-system substrate
   - Scarlett emits anomaly and heal signals
   - Lucy consumes daemon-backed live context
   - Buddhi records higher-signal decisions
+  - embedding epochs and MDL-style compaction metrics now exist on curated semantic artifacts, so semantic refresh can distinguish stale generations from content drift, rank the repair frontier, and automatically widen repair when the active embedding epoch changes
+  - deferred semantic repair now preserves the exact narrowed repair plan across retries, which makes timeout recovery and degraded remote repair less lossy than a plain scope replay
 - MCP tool execution now gets Lucy live guidance and Vasana context preambles on generic task tools instead of bypassing the nervous system entirely
 - MCP tool execution now also feeds Buddhi decision recording and Triguna health updates through the daemon-backed path
 - MCP guidance now shapes generic tool execution input before the tool runs instead of only decorating the response afterward
@@ -267,6 +301,11 @@ It states what is live, what is partial, and what is still open.
 - Vaayu is correctly framed as the primary consumer, but the full consumer contract is still being tightened and documented.
 - Proactive memory surfacing exists through Lucy/live-context paths, but not every future push-style behavior is fully generalized.
 - Same-session multi-writer semantics are storage-safe, but still cognitively noisy if many tabs intentionally share one session thread.
+- Research refinement is now materially daemon-owned, but full systems-lab closure is still partial:
+  - immediate semantic repair pressure exists
+  - daily research refinement digests exist
+  - queued research repair now drains under a bounded priority budget
+  - broader retrieval replay and more aggressive self-optimization passes are still future work
 
 ## What Is Still Open
 
@@ -284,6 +323,11 @@ It states what is live, what is partial, and what is still open.
 - Deeper PAKT adoption:
   - extend the current curated-summary and Swapna compaction packing paths into more Nidra/Smriti flows
   - expose richer operator insight around compression availability and failures
+
+- Generalized timeout/pickup semantics:
+  - overnight research has durable phase checkpoints and resume
+  - Sabha has lease-backed pending consultation resume
+  - generic long-running agent tasks now resume from the last durable checkpoint at the prompt-context level; deeper side-effect-aware resume remains the next hardening layer
 
 - Dedicated Takumi adapter protocol beyond CLI-compatible bridging
 

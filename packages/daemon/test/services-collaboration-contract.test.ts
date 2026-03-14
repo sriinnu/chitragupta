@@ -518,7 +518,7 @@ describe("collaboration + consumer bridge contract services", () => {
 		});
 	});
 
-		it("runs sabha ask, deliberate, gather, record, and escalate through the daemon contract", async () => {
+	it("runs sabha ask, deliberate, gather, record, and escalate through the daemon contract", async () => {
 			const project = path.join(tmpDir, "proj-b");
 			const opened = await router.handle("session.open", {
 			project,
@@ -2184,5 +2184,27 @@ describe("collaboration + consumer bridge contract services", () => {
 			}, ctx) as { sabha: { revision: number } };
 
 			expect(accepted.sabha.revision).toBe(asked.sabha.revision + 1);
+		});
+		it("returns a bounded Sabha resume context for pending consultations", async () => {
+			const asked = await router.handle("sabha.ask", {
+				question: "Who still needs to respond to the staged rollout?",
+				convener: "lead",
+				participants: [
+					{ id: "planner", role: "planner", clientId: "planner-client" },
+					{ id: "reviewer", role: "reviewer", target: "capability:memory-recall", mode: "ask", timeoutMs: 1_500 },
+				],
+			}, ctx) as {
+				sabha: { id: string; resumeContext: string };
+			};
+
+			expect(asked.sabha.resumeContext).toContain("Durable Sabha resume context:");
+			expect(asked.sabha.resumeContext).toContain("pending participants:");
+			expect(asked.sabha.resumeContext).toContain("reviewer");
+
+			const fetched = await router.handle("sabha.get", { id: asked.sabha.id }, ctx) as {
+				sabha: { resumeContext: string };
+			};
+			expect(fetched.sabha.resumeContext).toContain("recent Sabha events:");
+			expect(fetched.sabha.resumeContext).toContain("Resume from the last durable revision");
 		});
 	});

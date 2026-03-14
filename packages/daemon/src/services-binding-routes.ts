@@ -82,6 +82,19 @@ export function registerBindingQueryMethods(router: RpcRouter): void {
 		};
 	}, "Predict likely next actions/files/failure risk");
 
+	router.register("client.identify", async (rawParams, context) => {
+		const params = normalizeParams(rawParams);
+		const clientId = resolveClientId(params, context);
+		if (!clientId) throw new Error("No client context");
+		const patch: Record<string, unknown> = {};
+		if (typeof params.pid === "number") patch.pid = params.pid;
+		if (typeof params.provider === "string") patch.provider = params.provider;
+		if (typeof params.workspace === "string") patch.workspace = params.workspace;
+		if (typeof params.agent === "string") patch.agent = params.agent;
+		const snap = router.updateClientPreferences(clientId, patch);
+		return { ok: true, clientId, preferences: snap.preferences };
+	}, "Register client identity (PID, provider, workspace) on the socket connection");
+
 	router.register("health.status", async () => {
 		const db = getAgentDb();
 		const now = Date.now();
@@ -113,7 +126,7 @@ export function registerBindingQueryMethods(router: RpcRouter): void {
 			});
 		}
 		const runtime = router.getRuntimeState();
-		const memory = process.memoryUsage().heapUsed;
+		const memory = process.memoryUsage();
 		const methods = router.listMethods().length;
 		return {
 			status: anomalies.length > 0 ? "attention" : "ok",

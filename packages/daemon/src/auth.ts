@@ -150,15 +150,22 @@ export function authorizeDaemonMethod(
 			? { allowed: true }
 			: { allowed: false, required: "memory" };
 	}
-	if (method === "semantic.sync_status") {
-		return hasScope(scopes, "read") || hasScope(scopes, "memory")
-			? { allowed: true }
-			: { allowed: false, required: "read" };
-	}
+		if (method === "semantic.sync_status" || method === "semantic.epoch_status") {
+			return hasScope(scopes, "read") || hasScope(scopes, "memory")
+				? { allowed: true }
+				: { allowed: false, required: "read" };
+		}
 	if (
 		method === "research.experiments.list"
 		|| method === "research.loops.list"
+		|| method === "research.loops.active"
 		|| method === "research.loops.get"
+		|| method === "research.loops.schedule.get"
+		|| method === "research.loops.dispatchable"
+		|| method === "research.loops.checkpoint.list"
+		|| method === "research.loops.checkpoint.get"
+		|| method === "agent.tasks.checkpoint.list"
+		|| method === "agent.tasks.checkpoint.get"
 	) {
 		return hasScope(scopes, "read") || hasScope(scopes, "memory")
 			? { allowed: true }
@@ -184,13 +191,20 @@ export function authorizeDaemonMethod(
 		|| method.startsWith("preference.")
 		|| method.startsWith("nidra.")
 		|| method.startsWith("consolidation.")
-		|| method === "semantic.sync_curated"
+			|| method === "semantic.sync_curated"
+			|| method === "semantic.epoch_refresh"
 			|| method === "research.experiments.record"
 			|| method === "research.loops.record"
+			|| method === "research.loops.enqueue"
 			|| method === "research.loops.start"
+			|| method === "research.loops.resume"
 			|| method === "research.loops.heartbeat"
 			|| method === "research.loops.cancel"
 			|| method === "research.loops.complete"
+			|| method === "research.loops.checkpoint.save"
+			|| method === "research.loops.checkpoint.clear"
+			|| method === "agent.tasks.checkpoint.save"
+			|| method === "agent.tasks.checkpoint.clear"
 		|| method.startsWith("fact.")
 		|| method.startsWith("akasha.")
 		|| method === "memory.write"

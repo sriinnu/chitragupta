@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Sabha } from "@chitragupta/sutra";
-import { shouldResumeMeshBinding } from "../src/services-collaboration-helpers.js";
+import {
+	gatherSabhaState,
+	shouldResumeMeshBinding,
+} from "../src/services-collaboration-helpers.js";
 import {
 	appendSabhaDispatchRecord,
+	getSabhaPerspectiveMap,
 	resetCollaborationStateMaps,
 } from "../src/services-collaboration-state.js";
 import type { SabhaMeshBinding } from "../src/services-collaboration-types.js";
@@ -88,5 +92,41 @@ describe("services-collaboration helpers", () => {
 			forceFailed: true,
 			leaseOwner: "sabha-daemon",
 		})).toBe(true);
+	});
+
+	it("builds a machine-usable Sabha resume plan for timed-out mesh work", () => {
+		const sabha = createSabha("sabha-resume-plan");
+		sabha.participants = [
+			{ id: "mesh-peer", role: "memory", expertise: 0.8, credibility: 0.9 },
+			{ id: "session-peer", role: "session", expertise: 0.7, credibility: 0.85 },
+		];
+		appendSabhaDispatchRecord(sabha.id, {
+			participantId: "mesh-peer",
+			target: "capability:sabha.consult.memory",
+			mode: "ask",
+			status: "pending",
+			attemptedAt: Date.now(),
+		});
+		getSabhaPerspectiveMap(sabha.id).set("session-peer", {
+			participantId: "session-peer",
+			submittedAt: Date.now(),
+			summary: "Existing session context",
+			reasoning: "Already answered",
+			position: "support",
+			recommendedAction: null,
+			evidence: [],
+			clientId: null,
+			transport: "unknown",
+			metadata: {},
+		});
+
+		const state = gatherSabhaState(sabha) as {
+			resumePlan?: { nextAction?: string; pendingDispatchParticipantIds?: string[]; pendingParticipantIds?: string[] };
+		};
+		expect(state.resumePlan).toEqual(expect.objectContaining({
+			nextAction: "resume-mesh-dispatches",
+			pendingDispatchParticipantIds: ["mesh-peer"],
+		}));
+		expect(state.resumePlan?.pendingParticipantIds).toEqual(["mesh-peer"]);
 	});
 });

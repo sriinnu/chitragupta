@@ -37,9 +37,11 @@ function immutablePaths(scope: ResearchScope): Set<string> {
 	return new Set(scope.immutableFiles.map(normalizeRelativePath));
 }
 
-async function hashFile(filePath: string): Promise<string | null> {
+async function hashFile(filePath: string, signal?: AbortSignal): Promise<string | null> {
+	throwIfRestoreAborted(signal);
 	try {
 		const content = await fs.readFile(filePath);
+		throwIfRestoreAborted(signal);
 		return createHash("sha256").update(content).digest("hex");
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -47,9 +49,12 @@ async function hashFile(filePath: string): Promise<string | null> {
 	}
 }
 
-async function readFileContent(filePath: string): Promise<string | null> {
+async function readFileContent(filePath: string, signal?: AbortSignal): Promise<string | null> {
+	throwIfRestoreAborted(signal);
 	try {
-		return await fs.readFile(filePath, "utf8");
+		const content = await fs.readFile(filePath, "utf8");
+		throwIfRestoreAborted(signal);
+		return content;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
 		throw error;
@@ -60,26 +65,30 @@ async function readFileContent(filePath: string): Promise<string | null> {
  * Capture the exact file and git state a bounded research round is allowed to touch.
  * This snapshot is the basis for both safety checks and deterministic revert-on-discard.
  */
-export async function captureScopeSnapshot(scope: ResearchScope): Promise<ScopeSnapshot> {
+export async function captureScopeSnapshot(scope: ResearchScope, signal?: AbortSignal): Promise<ScopeSnapshot> {
 	const hashes = new Map<string, string | null>();
 	const fileContents = new Map<string, string | null>();
 	for (const file of uniqueScopeFiles(scope)) {
+		throwIfRestoreAborted(signal);
 		const fullPath = path.join(scope.cwd, file);
-		hashes.set(file, await hashFile(fullPath));
+		hashes.set(file, await hashFile(fullPath, signal));
 		if (allowedPaths(scope).has(file)) {
-			fileContents.set(file, await readFileContent(fullPath));
+			fileContents.set(file, await readFileContent(fullPath, signal));
 		}
 	}
 	try {
+		throwIfRestoreAborted(signal);
 		const { stdout } = await execFileAsync(
 			"git",
 			["-C", scope.cwd, "status", "--porcelain=v1", "--untracked-files=all"],
 			{ maxBuffer: 1024 * 1024 },
 		);
+		throwIfRestoreAborted(signal);
 		const [branchResult, headResult] = await Promise.allSettled([
 			execFileAsync("git", ["-C", scope.cwd, "rev-parse", "--abbrev-ref", "HEAD"], { maxBuffer: 1024 * 1024 }),
 			execFileAsync("git", ["-C", scope.cwd, "rev-parse", "HEAD"], { maxBuffer: 1024 * 1024 }),
 		]);
+		throwIfRestoreAborted(signal);
 		const gitBranch =
 			branchResult.status === "fulfilled" &&
 			typeof branchResult.value.stdout === "string" &&
@@ -160,6 +169,10 @@ export function dirtyStateForSnapshot(snapshot: ScopeSnapshot): boolean | null {
 }
 
 export function serializeScopeSnapshot(scope: ResearchScope, snapshot: ScopeSnapshot): ResearchScopeSnapshot {
+	const hashes: Record<string, string | null> = {};
+	for (const file of uniqueScopeFiles(scope)) {
+		hashes[file] = snapshot.hashes.get(file) ?? null;
+	}
 	const fileContents: Record<string, string | null> = {};
 	for (const file of scope.targetFiles) {
 		const key = normalizeRelativePath(file);
@@ -167,8 +180,19 @@ export function serializeScopeSnapshot(scope: ResearchScope, snapshot: ScopeSnap
 	}
 	return {
 		mode: snapshot.mode,
+		changedPaths: snapshot.mode === "git" ? [...snapshot.changedPaths] : undefined,
+		gitBranch: snapshot.mode === "git" ? snapshot.gitBranch : undefined,
+		gitHeadCommit: snapshot.mode === "git" ? snapshot.gitHeadCommit : undefined,
+		hashes,
 		fileContents,
 	};
+}
+
+function throwIfRestoreAborted(signal?: AbortSignal): void {
+	if (!signal?.aborted) return;
+	const reason = signal.reason;
+	if (reason instanceof Error) throw reason;
+	throw new Error(typeof reason === "string" && reason.trim() ? reason : "Research restore cancelled");
 }
 
 /**
@@ -178,13 +202,16 @@ export function serializeScopeSnapshot(scope: ResearchScope, snapshot: ScopeSnap
 export async function restoreScopeFromSnapshot(
 	scope: ResearchScope,
 	snapshot: ResearchScopeSnapshot,
+	signal?: AbortSignal,
 ): Promise<string[]> {
 	const revertedFiles: string[] = [];
 	for (const [file, content] of Object.entries(snapshot.fileContents)) {
+		throwIfRestoreAborted(signal);
 		const fullPath = path.join(scope.cwd, file);
 		if (content === null) {
 			try {
 				await fs.rm(fullPath, { force: true });
+				throwIfRestoreAborted(signal);
 				revertedFiles.push(file);
 			} catch {
 				// Ignore cleanup errors for absent files.
@@ -192,7 +219,9 @@ export async function restoreScopeFromSnapshot(
 			continue;
 		}
 		await fs.mkdir(path.dirname(fullPath), { recursive: true });
+		throwIfRestoreAborted(signal);
 		await fs.writeFile(fullPath, content, "utf8");
+		throwIfRestoreAborted(signal);
 		revertedFiles.push(file);
 	}
 	return revertedFiles;

@@ -168,8 +168,11 @@ export class EmbeddingService {
 					};
 					this.lastResolvedEpoch = record.epoch;
 				} catch {
-					this.providerAvailable = false;
-					record = this.buildFallbackRecord(text);
+					// A transient embed failure should not permanently poison the
+					// process into fallback mode. Keep the fallback record honest,
+					// but force the next call to re-probe provider availability.
+					this.providerAvailable = null;
+					record = this.buildFallbackRecord(text, { preserveResolvedEpoch: true });
 				}
 			} else {
 				record = this.buildFallbackRecord(text);
@@ -217,7 +220,10 @@ export class EmbeddingService {
 		return this.cache.size;
 	}
 
-	private buildFallbackRecord(text: string): EmbeddingVectorRecord {
+	private buildFallbackRecord(
+		text: string,
+		options: { preserveResolvedEpoch?: boolean } = {},
+	): EmbeddingVectorRecord {
 		const embedding = fallbackEmbedding(text);
 		const record = {
 			embedding,
@@ -226,7 +232,9 @@ export class EmbeddingService {
 			tokens: 0,
 			epoch: buildFallbackEmbeddingEpoch(embedding.length),
 		};
-		this.lastResolvedEpoch = record.epoch;
+		if (options.preserveResolvedEpoch !== true) {
+			this.lastResolvedEpoch = record.epoch;
+		}
 		return record;
 	}
 
@@ -268,8 +276,8 @@ export class EmbeddingService {
 			this.lastProviderCatalogSignature = buildProviderCatalogSignature(this.provider);
 			return epoch;
 		} catch {
-			this.providerAvailable = false;
-			return buildFallbackEmbeddingEpoch(FALLBACK_DIM);
+			this.providerAvailable = null;
+			return this.lastResolvedEpoch ?? buildFallbackEmbeddingEpoch(FALLBACK_DIM);
 		}
 	}
 }

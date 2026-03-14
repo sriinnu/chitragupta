@@ -114,6 +114,21 @@ export async function getDaemonClient(config?: DaemonClientConfig): Promise<Daem
 
 		currentMode = "daemon";
 		bindRegisteredNotifications(sharedClient);
+
+		// Identify this client's PID, provider, and workspace on the socket
+		// so the daemon can enrich runtime items for the menubar display.
+		sharedClient.call("client.identify", {
+			pid: process.pid,
+			provider: process.env.CLAUDE_CODE_ENTRYPOINT ? "claude"
+				: process.env.CODEX_THREAD_ID ? "codex"
+				: (process.env._ ?? "").toLowerCase().includes("claude") ? "claude"
+				: (process.env._ ?? "").toLowerCase().includes("codex") ? "codex"
+				: "unknown",
+			workspace: process.cwd(),
+		}).catch((err: unknown) => {
+			log.debug("client.identify failed (non-fatal)", { err: err instanceof Error ? err.message : err });
+		});
+
 		log.info("Connected to daemon");
 		return sharedClient;
 	})();

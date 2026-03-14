@@ -105,19 +105,20 @@ export function applyAgentC8Migrations(db: AgentDbLike, currentVersion: number):
 
 	if (currentVersion < 9) {
 		db.exec(`
-			CREATE TABLE IF NOT EXISTS remote_semantic_sync (
-				target         TEXT NOT NULL,
-				artifact_id    TEXT NOT NULL,
-				level          TEXT NOT NULL,
-				period         TEXT NOT NULL,
-				project        TEXT,
-				content_hash   TEXT NOT NULL,
-				remote_id      TEXT,
-				last_synced_at INTEGER,
-				last_error     TEXT,
-				updated_at     INTEGER NOT NULL,
-				PRIMARY KEY (target, artifact_id)
-			);
+				CREATE TABLE IF NOT EXISTS remote_semantic_sync (
+					target         TEXT NOT NULL,
+					artifact_id    TEXT NOT NULL,
+					level          TEXT NOT NULL,
+					period         TEXT NOT NULL,
+					project        TEXT,
+					content_hash   TEXT NOT NULL,
+					remote_id      TEXT,
+					quality_hash   TEXT,
+					last_synced_at INTEGER,
+					last_error     TEXT,
+					updated_at     INTEGER NOT NULL,
+					PRIMARY KEY (target, artifact_id)
+				);
 
 			CREATE INDEX IF NOT EXISTS idx_remote_semantic_target ON remote_semantic_sync(target, updated_at DESC);
 			CREATE INDEX IF NOT EXISTS idx_remote_semantic_project ON remote_semantic_sync(project, level, period);

@@ -47,6 +47,7 @@ export async function loadSoulPrompt(): Promise<string> {
 
 export async function buildDynamicSystemPrompt(args: {
 	baseSystemPrompt: string;
+	taskCheckpointResumeContext?: string;
 	memoryBridge: MemoryBridge | null;
 	project: string;
 	agentId: string;
@@ -55,6 +56,9 @@ export async function buildDynamicSystemPrompt(args: {
 	setCachedMemoryPromptContext: (value: string | null) => void;
 }): Promise<string> {
 	const parts: string[] = [args.baseSystemPrompt];
+	if (typeof args.taskCheckpointResumeContext === "string" && args.taskCheckpointResumeContext.trim()) {
+		parts.push(args.taskCheckpointResumeContext.trim());
+	}
 	const memCtx = await loadMemoryPromptContext({
 		memoryBridge: args.memoryBridge,
 		project: args.project,

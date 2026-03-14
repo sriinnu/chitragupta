@@ -20,12 +20,12 @@ import {
 } from "./consolidation-provenance.js";
 import {
 	inspectArtifactVectorSync,
-	parseEmbeddingMetadata,
 	type EmbeddingRow,
 } from "./consolidation-indexer-sync.js";
 import { getEngineEmbeddingService } from "./embedding-runtime.js";
 import {
 	buildArtifactContentHash,
+	buildArtifactEmbeddingInputHash,
 	buildConsolidationEmbeddingId,
 	buildConsolidationSourceId,
 	extractSummaryText,
@@ -38,6 +38,11 @@ import {
 	type CuratedConsolidationArtifact,
 	type CuratedConsolidationArtifactQuery,
 } from "./consolidation-indexer-artifacts.js";
+import {
+	ensureSemanticEpochFreshnessOnRead,
+	parseSearchMetadata,
+	scoreCuratedSearchHit,
+} from "./consolidation-indexer-search.js";
 
 export {
 	buildConsolidationEmbeddingId,
@@ -89,6 +94,7 @@ export function _resetConsolidationIndexer(): void {
 	_embeddingService = null;
 }
 
+
 // ─── Index Consolidation Summary ─────────────────────────────────────────────
 
 /**
@@ -101,13 +107,22 @@ export async function indexConsolidationSummary(
 	markdown: string,
 	project?: string,
 ): Promise<ConsolidationIndexResult> {
-	const summaryText = extractSummaryText(markdown, level);
+	const extractedSummaryText = extractSummaryText(markdown, level);
+	const compressionDecision = await prepareCuratedSummaryCompression(markdown, extractedSummaryText);
+	const summaryText = compressionDecision.summaryText;
 	if (!summaryText || summaryText.length < 10) {
 		return { indexed: false, reason: "too_short" };
 	}
-	const compressionDecision = await prepareCuratedSummaryCompression(markdown, summaryText);
+	const embeddingInputText =
+		compressionDecision.packedSummaryText && compressionDecision.packedDecision?.accepted
+			? compressionDecision.packedSummaryText
+			: summaryText;
+	const embeddingInputMode =
+		embeddingInputText === summaryText ? "summary" : "packed";
 	const provenance = parseConsolidationMetadata(markdown);
 	const contentHash = buildArtifactContentHash(summaryText);
+	const embeddingInputHash = compressionDecision.embeddingInputHash
+		|| buildArtifactEmbeddingInputHash(embeddingInputText);
 	const sourceSessionIds =
 		provenance && "sourceSessionIds" in provenance ? provenance.sourceSessionIds : [];
 	const sourcePeriods =
@@ -118,11 +133,11 @@ export async function indexConsolidationSummary(
 	const embeddingService = await getEmbeddingService();
 	let embeddingEpoch = await embeddingService.getEmbeddingEpoch();
 	try {
-		const record = await embeddingService.getEmbeddingRecord(summaryText);
+		const record = await embeddingService.getEmbeddingRecord(embeddingInputText);
 		embedding = record.embedding;
 		embeddingEpoch = record.epoch;
 	} catch {
-		embedding = fallbackEmbedding(summaryText);
+		embedding = fallbackEmbedding(embeddingInputText);
 		embeddingEpoch = await embeddingService.getEmbeddingEpoch();
 	}
 
@@ -146,11 +161,15 @@ export async function indexConsolidationSummary(
 					level,
 					period,
 						project: project ?? null,
-						curated: provenance !== null,
-						contentHash,
-						embeddingEpoch,
+							curated: provenance !== null,
+							contentHash,
+							embeddingInputHash,
+							embeddingEpoch,
+							embeddingInputMode,
+						summarySelection: compressionDecision.summarySelection,
 						packedSummaryText: compressionDecision.packedSummaryText ?? null,
 						compression: compressionDecision.compression ?? null,
+						compactionDecision: compressionDecision.compactionDecision,
 						packedDecision: compressionDecision.packedDecision,
 						mdlMetrics: compressionDecision.mdlMetrics,
 						generatedAt: provenance?.generatedAt ?? null,
@@ -178,12 +197,15 @@ export async function searchConsolidationSummaries(
 	options?: { limit?: number; project?: string },
 ): Promise<Array<{ period: string; score: number; snippet: string; project?: string }>> {
 	const limit = options?.limit ?? 5;
+	await ensureSemanticEpochFreshnessOnRead();
 
 	// Generate query embedding
 	let queryEmbedding: number[];
+	let expectedEpoch: string | null = null;
 	try {
 		const svc = await getEmbeddingService();
 		queryEmbedding = await svc.getEmbedding(query);
+		expectedEpoch = (await svc.getEmbeddingEpoch()).epoch;
 	} catch {
 		queryEmbedding = fallbackEmbedding(query);
 	}
@@ -200,22 +222,21 @@ export async function searchConsolidationSummaries(
 		const scored: Array<{ period: string; score: number; snippet: string; project?: string }> = [];
 
 		for (const row of rows) {
-			// Parse metadata for project filtering
-			let meta: { level?: string; period?: string; project?: string | null } = {};
-			try { meta = JSON.parse(row.metadata ?? "{}"); } catch { /* skip */ }
+			const meta = parseSearchMetadata(row, expectedEpoch);
 
 			// Filter by project if specified
 			if (options?.project && meta.project && meta.project !== options.project) continue;
 
 			const vector = blobToVector(row.vector);
-			const score = cosineSimilarity(queryEmbedding, vector);
+			const baseScore = cosineSimilarity(queryEmbedding, vector);
+			const score = scoreCuratedSearchHit(baseScore, meta);
 
-			if (score > 0.1) {
+			if (baseScore > 0.1) {
 				scored.push({
-					period: meta.period ?? row.source_id,
+					period: meta.period,
 					score,
 					snippet: row.text.slice(0, 300),
-					project: meta.project ?? undefined,
+					project: meta.project,
 				});
 			}
 		}
@@ -281,15 +302,17 @@ export async function repairConsolidationVectorSync(
 	for (const issue of status.issues) {
 		const artifact = artifactsById.get(issue.id);
 		if (!artifact) continue;
-		await indexConsolidationSummary(
+		const reindex = await indexConsolidationSummary(
 			artifact.level,
 			artifact.period,
 			artifact.markdown,
 			artifact.project,
 		);
+		if (reindex.indexed) {
+			reindexed += 1;
+		}
 	}
 	const repairedStatus = await inspectConsolidationVectorSync(options);
-	reindexed = Math.max(0, status.issues.length - repairedStatus.issues.length);
 	return { status: repairedStatus, reindexed };
 }
 

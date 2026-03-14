@@ -62,6 +62,7 @@ import { guideProviderSetup } from "./provider-setup.js";
 import { handleDaemonCommand, handleSwapnaCommand } from "./main-subcommands.js";
 import { handleServeCommand } from "./main-serve-mode.js";
 import { wireTuiInfrastructure } from "./main-tui-wiring.js";
+import { createDaemonBackedTaskCheckpointStore } from "./runtime-daemon-task-checkpoints.js";
 import { createToolNotFoundResolver } from "./shared-factories.js";
 import { createDaemonBuddhiProxy } from "./runtime-daemon-proxies.js";
 import { enrichFromTranscendence, wireBuddhiRecorder, wireSkillGapRecorder } from "./nervous-system-wiring.js";
@@ -286,6 +287,10 @@ export async function main(args: ParsedArgs): Promise<void> {
 		enableLearning: true, enableAutonomy: true, enableMemory: true,
 		memoryBridge: wiring.memoryBridge,
 		project: projectPath,
+		taskCheckpointStore: createDaemonBackedTaskCheckpointStore(),
+		taskKeyResolver: () => currentSessionId ? `cli:${currentSessionId}:root` : null,
+		taskType: "cli.root",
+		taskSessionIdResolver: () => currentSessionId ?? null,
 		chetanaConfig: { triguna: { enabled: true } },
 		onEvent: eventHandlers.length > 0
 			? (event, data) => {

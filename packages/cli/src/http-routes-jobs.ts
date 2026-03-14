@@ -38,7 +38,12 @@ function createJobRunner(deps: ApiDeps): (
 				sessionId = opened.id;
 				if (metadata) metadata.sessionId = opened.id;
 			}
-			return deps.prompt(message, { onEvent, signal, sessionId });
+			return deps.prompt(message, {
+				onEvent,
+				signal,
+				sessionId,
+				requestId: typeof metadata?.requestId === "string" ? metadata.requestId : undefined,
+			});
 		}
 		const agent = deps.getAgent() as Record<string, unknown> | null;
 		if (!agent || typeof agent.run !== "function") {

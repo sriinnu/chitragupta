@@ -177,6 +177,27 @@ export function getSessionMetaFromDb(sessionId: string): SessionMeta | undefined
 	}
 }
 
+/**
+ * Check whether a table exists in the agent database.
+ *
+ * I use this in read-side fallback paths so callers can degrade quietly when
+ * tests or bootstrap phases have not initialized the full session schema yet.
+ *
+ * @param tableName - SQLite table name to probe.
+ * @returns True when the named table exists.
+ */
+export function hasAgentTable(tableName: string): boolean {
+	try {
+		const db = getAgentDb();
+		const row = db.prepare(
+			"SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+		).get(tableName) as Record<string, unknown> | undefined;
+		return Boolean(row);
+	} catch {
+		return false;
+	}
+}
+
 // ─── Write-Through Helpers ──────────────────────────────────────────────────
 
 /**

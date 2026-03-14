@@ -14,6 +14,7 @@
 import net from "node:net";
 import { parseBridgeKey } from "@chitragupta/core";
 import { resolveDaemonClientToken } from "./auth.js";
+import { NotificationRegistry } from "./client-notifications.js";
 import {
 	DaemonUnavailableError,
 	type NotificationHandler,
@@ -44,6 +45,11 @@ export interface DaemonClientConfig {
 	heartbeat?: boolean;
 }
 
+export interface DaemonClientCallOptions {
+	/** Abort a waiting client-side request without waiting for the daemon response. */
+	signal?: AbortSignal;
+}
+
 /** Client connection to the chitragupta daemon. */
 export class DaemonClient {
 	private socket: net.Socket | null = null;
@@ -54,8 +60,7 @@ export class DaemonClient {
 	private readonly timeout: number;
 	private readonly autoStart: boolean;
 	private readonly maxRetries: number;
-	private readonly notificationHandlers = new Map<string, Set<NotificationHandler>>();
-	private readonly wildcardNotificationHandlers = new Set<NotificationHandler>();
+	private readonly notifications = new NotificationRegistry();
 	private connected = false;
 	private healing = false;
 
@@ -105,7 +110,11 @@ export class DaemonClient {
 	 * 5. On repeated failures: transitions HEALTHY → DEGRADED → HEALING
 	 * 6. After 3 failed restarts: circuit opens (DEAD)
 	 */
-	async call(method: string, params?: Record<string, unknown>): Promise<unknown> {
+	async call(
+		method: string,
+		params?: Record<string, unknown>,
+		options?: DaemonClientCallOptions,
+	): Promise<unknown> {
 		// Circuit open — don't even try
 		if (this.health.isCircuitOpen()) {
 			throw new DaemonUnavailableError(
@@ -120,12 +129,12 @@ export class DaemonClient {
 			} catch (err) {
 				const reason = err instanceof Error ? err.message : String(err);
 				const shouldHeal = this.health.recordFailure(reason);
-				return this.selfHeal(method, params, shouldHeal);
+				return this.selfHeal(method, params, shouldHeal, options);
 			}
 		}
 
 		try {
-			const result = await this.sendRequest(method, params);
+			const result = await this.sendRequest(method, params, options);
 			this.health.recordSuccess();
 			return result;
 		} catch (err) {
@@ -134,7 +143,7 @@ export class DaemonClient {
 
 			// If socket died, attempt self-healing
 			if (!this.connected || this.socket?.destroyed) {
-				return this.selfHeal(method, params, shouldHeal);
+				return this.selfHeal(method, params, shouldHeal, options);
 			}
 			throw err;
 		}
@@ -153,6 +162,7 @@ export class DaemonClient {
 		method: string,
 		params: Record<string, unknown> | undefined,
 		shouldRestart: boolean,
+		options?: DaemonClientCallOptions,
 	): Promise<unknown> {
 		if (this.healing) {
 			throw new DaemonUnavailableError("Already healing — request dropped");
@@ -165,7 +175,7 @@ export class DaemonClient {
 			// Try simple reconnect first (daemon may have recovered)
 			try {
 				await this.connect();
-				const result = await this.sendRequest(method, params);
+				const result = await this.sendRequest(method, params, options);
 				this.health.recordSuccess();
 				return result;
 			} catch {
@@ -176,10 +186,10 @@ export class DaemonClient {
 			if (shouldRestart && this.autoStart) {
 				const healed = await this.attemptRestart();
 				if (healed) {
-					const result = await this.sendRequest(method, params);
-					this.health.recordSuccess();
-					return result;
-				}
+			const result = await this.sendRequest(method, params, options);
+			this.health.recordSuccess();
+			return result;
+		}
 			}
 
 			throw new DaemonUnavailableError(
@@ -221,21 +231,48 @@ export class DaemonClient {
 	}
 
 	/** Internal: send a request and await correlation. */
-	private sendRequest(method: string, params?: Record<string, unknown>): Promise<unknown> {
+	private sendRequest(
+		method: string,
+		params?: Record<string, unknown>,
+		options?: DaemonClientCallOptions,
+	): Promise<unknown> {
 		const req = createRequest(method, params);
 		return new Promise<unknown>((resolve, reject) => {
+			if (options?.signal?.aborted) {
+				reject(options.signal.reason instanceof Error ? options.signal.reason : new Error(`Request aborted: ${method}`));
+				return;
+			}
 			const timer = setTimeout(() => {
 				this.pending.delete(req.id);
 				reject(new Error(`Request timeout: ${method} (${this.timeout}ms)`));
 			}, this.timeout);
 
-			this.pending.set(req.id, { resolve, reject, timer });
+			const onAbort = () => {
+				const pending = this.pending.get(req.id);
+				if (!pending) return;
+				this.pending.delete(req.id);
+				clearTimeout(timer);
+				reject(
+					options?.signal?.reason instanceof Error
+						? options.signal.reason
+						: new Error(`Request aborted: ${method}`),
+				);
+			};
+			options?.signal?.addEventListener("abort", onAbort, { once: true });
+
+			this.pending.set(req.id, {
+				resolve,
+				reject,
+				timer,
+				cleanup: () => options?.signal?.removeEventListener("abort", onAbort),
+			});
 
 			try {
 				this.socket!.write(serialize(req));
 			} catch (err) {
 				this.pending.delete(req.id);
 				clearTimeout(timer);
+				options?.signal?.removeEventListener("abort", onAbort);
 				reject(err);
 			}
 		});
@@ -243,37 +280,20 @@ export class DaemonClient {
 
 	/** Send a notification (fire-and-forget, no response). */
 	notify(method: string, params?: Record<string, unknown>): void {
-		if (!this.connected || !this.socket) return;
-		const msg = { jsonrpc: "2.0" as const, method, params };
-		try {
-			this.socket.write(JSON.stringify(msg) + "\n");
-		} catch {
-			// Best-effort — notifications are fire-and-forget
-		}
+		if (!this.connected) return;
+		this.notifications.notify(this.socket, method, params);
 	}
 
 	/** Subscribe to daemon-push notifications. Use `*` to receive every notification. */
 	onNotification(method: string, handler: NotificationHandler): () => void {
-		if (method === "*") {
-			this.wildcardNotificationHandlers.add(handler);
-			return () => { this.wildcardNotificationHandlers.delete(handler); };
-		}
-		const handlers = this.notificationHandlers.get(method) ?? new Set<NotificationHandler>();
-		handlers.add(handler);
-		this.notificationHandlers.set(method, handlers);
-		return () => {
-			const current = this.notificationHandlers.get(method);
-			current?.delete(handler);
-			if (current && current.size === 0) {
-				this.notificationHandlers.delete(method);
-			}
-		};
+		return this.notifications.on(method, handler);
 	}
 
 	/** Disconnect from the daemon. */
 	disconnect(): void {
 		for (const [, pending] of this.pending) {
 			clearTimeout(pending.timer);
+			pending.cleanup?.();
 			pending.reject(new Error("Client disconnected"));
 		}
 		this.pending.clear();
@@ -370,7 +390,7 @@ export class DaemonClient {
 			const msg = parseMessage(line);
 			if (!msg) continue;
 			if ("method" in msg && !("id" in msg)) {
-				this.dispatchNotification(msg as RpcNotification);
+				this.notifications.dispatch(msg as RpcNotification);
 				continue;
 			}
 			if (!("id" in msg)) continue;
@@ -381,6 +401,7 @@ export class DaemonClient {
 
 			clearTimeout(pending.timer);
 			this.pending.delete(resp.id);
+			pending.cleanup?.();
 
 			if (resp.error) {
 				pending.reject(new Error(`${resp.error.message} (code: ${resp.error.code})`));
@@ -398,27 +419,6 @@ export class DaemonClient {
 		};
 		if (result?.authenticated !== true) {
 			throw new Error("Daemon bridge authentication failed");
-		}
-	}
-
-	private dispatchNotification(msg: RpcNotification): void {
-		const params = (msg.params ?? {}) as Record<string, unknown>;
-		const handlers = this.notificationHandlers.get(msg.method);
-		if (handlers) {
-			for (const handler of handlers) {
-				try {
-					handler(params, msg.method);
-				} catch {
-					// Best-effort — notification consumers must not break the client.
-				}
-			}
-		}
-		for (const handler of this.wildcardNotificationHandlers) {
-			try {
-				handler(params, msg.method);
-			} catch {
-				// Best-effort — notification consumers must not break the client.
-			}
 		}
 	}
 

@@ -47,4 +47,24 @@ describe("daemon auth helpers", () => {
 		});
 		expect(authorizeDaemonMethod("discovery.refresh", ["write"])).toEqual({ allowed: true });
 	});
+
+	it("authorizes generic agent task checkpoint reads and writes correctly", () => {
+		expect(authorizeDaemonMethod("agent.tasks.checkpoint.list", ["read"])).toEqual({ allowed: true });
+		expect(authorizeDaemonMethod("agent.tasks.checkpoint.get", ["read"])).toEqual({ allowed: true });
+		expect(authorizeDaemonMethod("agent.tasks.checkpoint.get", ["write"])).toEqual({
+			allowed: false,
+			required: "read",
+		});
+		expect(authorizeDaemonMethod("agent.tasks.checkpoint.save", ["write"])).toEqual({ allowed: true });
+		expect(authorizeDaemonMethod("agent.tasks.checkpoint.clear", ["write"])).toEqual({ allowed: true });
+	});
+
+	it("authorizes research loop inspection while keeping mutation methods gated", () => {
+		expect(authorizeDaemonMethod("research.loops.active", ["read"])).toEqual({ allowed: true });
+		expect(authorizeDaemonMethod("research.loops.list", ["read"])).toEqual({ allowed: true });
+		expect(authorizeDaemonMethod("research.loops.cancel", ["read"])).toEqual({
+			allowed: false,
+			required: "write",
+		});
+	});
 });

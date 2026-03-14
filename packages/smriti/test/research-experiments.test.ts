@@ -138,6 +138,40 @@ describe("research experiment ledger", () => {
 		].sort());
 	});
 
+	it("derives attempt identity from attempt number when attempt key is omitted", () => {
+		const first = upsertResearchExperiment({
+			projectPath: "/repo/project",
+			experimentKey: "exp-key-derived-attempt",
+			attemptNumber: 1,
+			topic: "derived attempt identity",
+			metricName: "val_bpb",
+			objective: "minimize",
+			decision: "record",
+			status: "failed",
+			record: { experimentKey: "nested-a", attemptNumber: 1, status: "failed" },
+		});
+		const second = upsertResearchExperiment({
+			projectPath: "/repo/project",
+			experimentKey: "exp-key-derived-attempt",
+			attemptNumber: 2,
+			topic: "derived attempt identity",
+			metricName: "val_bpb",
+			objective: "minimize",
+			decision: "keep",
+			status: "completed",
+			record: { experimentKey: "nested-b", attemptNumber: 2, status: "completed" },
+		});
+
+		expect(second.id).not.toBe(first.id);
+		const experiments = listResearchExperiments({ projectPath: "/repo/project", limit: 10 });
+		expect(experiments).toHaveLength(2);
+		expect(experiments.map((entry) => entry.attemptKey).sort()).toEqual([
+			"exp-key-derived-attempt#attempt:2",
+			"exp-key-derived-attempt#attempt:1",
+		].sort());
+		expect(experiments.map((entry) => entry.attemptNumber).sort()).toEqual([1, 2]);
+	});
+
 	it("preserves existing git provenance when a later upsert omits it", () => {
 		const first = upsertResearchExperiment({
 			projectPath: "/repo/project",

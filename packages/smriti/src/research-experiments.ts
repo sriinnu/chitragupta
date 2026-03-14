@@ -52,6 +52,7 @@ export interface StoredResearchExperiment extends ResearchExperimentRecordInput 
 
 export interface ListResearchExperimentsOptions {
 	projectPath?: string;
+	loopKey?: string;
 	sessionId?: string;
 	decision?: string;
 	updatedAfter?: number;
@@ -65,6 +66,27 @@ function normalizeOptionalString(value: unknown): string | null {
 
 function normalizeOptionalNumber(value: unknown): number | null {
 	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeExperimentKey(input: ResearchExperimentRecordInput): string | null {
+	return normalizeOptionalString(input.experimentKey)
+		?? normalizeOptionalString(input.record.experimentKey);
+}
+
+function normalizeAttemptNumber(input: ResearchExperimentRecordInput): number | null {
+	return normalizeOptionalNumber(input.attemptNumber)
+		?? normalizeOptionalNumber(input.record.attemptNumber);
+}
+
+function normalizeAttemptKey(input: ResearchExperimentRecordInput): string | null {
+	return normalizeOptionalString(input.attemptKey)
+		?? normalizeOptionalString(input.record.attemptKey)
+		?? (() => {
+			const experimentKey = normalizeExperimentKey(input);
+			const attemptNumber = normalizeAttemptNumber(input);
+			if (!experimentKey || attemptNumber === null) return null;
+			return `${experimentKey}#attempt:${attemptNumber}`;
+		})();
 }
 
 function normalizeProjectPath(projectPath: string): string {
@@ -97,22 +119,16 @@ function normalizeRecordForExperimentKey(record: Record<string, unknown>): Recor
 
 function buildResearchExperimentId(input: ResearchExperimentRecordInput): string {
 	const normalizedProjectPath = normalizeProjectPath(input.projectPath);
-	const attemptKey =
-		typeof input.attemptKey === "string" && input.attemptKey.trim()
-			? input.attemptKey.trim()
-			: typeof input.record.attemptKey === "string" && input.record.attemptKey.trim()
-				? input.record.attemptKey.trim()
-				: null;
+	const attemptKey = normalizeAttemptKey(input);
+	const experimentKeyForIdentity = normalizeExperimentKey(input);
 	const experimentKey =
-		attemptKey
-			? attemptKey
-			: typeof input.experimentKey === "string" && input.experimentKey.trim()
-			? input.experimentKey.trim()
-			: typeof input.record.experimentKey === "string" && input.record.experimentKey.trim()
-				? input.record.experimentKey.trim()
-			: JSON.stringify({
-				projectPath: normalizedProjectPath,
-				topic: input.topic,
+			attemptKey
+				? attemptKey
+				: experimentKeyForIdentity
+				? experimentKeyForIdentity
+				: JSON.stringify({
+					projectPath: normalizedProjectPath,
+					topic: input.topic,
 				metricName: input.metricName,
 				objective: input.objective,
 				sessionId: input.sessionId ?? null,
@@ -272,12 +288,12 @@ export function upsertResearchExperiment(input: ResearchExperimentRecordInput): 
 	`).run(
 		id,
 		projectPath,
-		normalizeOptionalString(input.experimentKey) ?? normalizeOptionalString(input.record.experimentKey) ?? null,
-		normalizeOptionalString(input.attemptKey) ?? normalizeOptionalString(input.record.attemptKey) ?? null,
+		normalizeExperimentKey(input),
+		normalizeAttemptKey(input),
 		input.loopKey ?? null,
 		input.roundNumber ?? null,
 		input.totalRounds ?? null,
-		input.attemptNumber ?? null,
+		normalizeAttemptNumber(input),
 		input.budgetMs ?? null,
 		input.sessionId ?? null,
 		input.parentSessionId ?? null,
@@ -337,6 +353,10 @@ export function listResearchExperiments(
 	if (options.projectPath) {
 		conditions.push("project = ?");
 		values.push(normalizeProjectPath(options.projectPath));
+	}
+	if (options.loopKey) {
+		conditions.push("loop_key = ?");
+		values.push(options.loopKey);
 	}
 	if (options.sessionId) {
 		conditions.push("session_id = ?");

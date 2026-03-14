@@ -121,6 +121,7 @@ function deriveClientKey(): string | null {
 }
 
 function deriveProviderName(): ProviderName {
+	// Explicit session/thread env vars (highest confidence)
 	if (typeof process.env.CODEX_THREAD_ID === "string" && process.env.CODEX_THREAD_ID.trim()) return "codex";
 	if (
 		(typeof process.env.CLAUDE_CODE_SESSION_ID === "string" && process.env.CLAUDE_CODE_SESSION_ID.trim())
@@ -129,6 +130,15 @@ function deriveProviderName(): ProviderName {
 	if (typeof process.env.GEMINI_SESSION_ID === "string" && process.env.GEMINI_SESSION_ID.trim()) return "gemini";
 	if (typeof process.env.COPILOT_SESSION_ID === "string" && process.env.COPILOT_SESSION_ID.trim()) return "copilot";
 
+	// Entrypoint markers (Claude Code sets CLAUDE_CODE_ENTRYPOINT when spawning MCP children)
+	if (typeof process.env.CLAUDE_CODE_ENTRYPOINT === "string" && process.env.CLAUDE_CODE_ENTRYPOINT.trim()) return "claude";
+
+	// Parent process binary name heuristic (macOS: check _ env var)
+	const parentBin = (process.env._ ?? "").toLowerCase();
+	if (parentBin.includes("/claude")) return "claude";
+	if (parentBin.includes("/codex")) return "codex";
+
+	// PATH-based fallback
 	const pathLower = (process.env.PATH ?? "").toLowerCase();
 	if (pathLower.includes("/.gemini/")) return "gemini";
 	if (pathLower.includes("/.copilot/")) return "copilot";

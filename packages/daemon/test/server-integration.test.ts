@@ -32,6 +32,11 @@ describe("Server integration (real socket)", () => {
 		router.register("add", async (params) => ({
 			sum: Number(params.a) + Number(params.b),
 		}), "Add two numbers");
+		router.register("sleep", async (params) => {
+			const duration = Math.max(0, Number(params.ms) || 0);
+			await new Promise((resolve) => setTimeout(resolve, duration));
+			return { ok: true };
+		}, "Sleep for a short test duration");
 
 		server = await startServer({ paths, router });
 		client = new DaemonClient({ socketPath: paths.socket, autoStart: false, timeout: 5_000 });
@@ -84,6 +89,16 @@ describe("Server integration (real socket)", () => {
 		client.disconnect();
 		expect(client.isConnected()).toBe(false);
 		// Server should have 0 connections after a moment
+	});
+
+	it("honors abort signals on the normal request path", async () => {
+		const controller = new AbortController();
+		const request = client.call("sleep", { ms: 100 }, { signal: controller.signal });
+		setTimeout(() => {
+			controller.abort(new Error("operator-stop"));
+		}, 10);
+
+		await expect(request).rejects.toThrow("operator-stop");
 	});
 
 	it("should support health check", async () => {

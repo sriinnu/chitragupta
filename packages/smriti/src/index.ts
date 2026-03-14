@@ -85,6 +85,18 @@ export type {
 	HealOutcome,
 	HealReportInput,
 } from "./session-db-c8.js";
+export {
+	clearAgentTaskCheckpoint,
+	getAgentTaskCheckpoint,
+	listAgentTaskCheckpoints,
+	upsertAgentTaskCheckpoint,
+} from "./agent-task-checkpoints.js";
+export type {
+	AgentTaskCheckpointInput,
+	ListAgentTaskCheckpointsOptions,
+	AgentTaskCheckpointStatus,
+	StoredAgentTaskCheckpoint,
+} from "./agent-task-checkpoints.js";
 
 /** Key-value memory store for scoped persistent memory (project, global, user). */
 export {
@@ -194,11 +206,47 @@ export type {
 	SelectiveReembeddingPlan,
 	SelectiveReembeddingRepairResult,
 	SelectiveReembeddingOptions,
+	SelectiveReembeddingReason,
 } from "./selective-reembedding.js";
+/** Shared daemon-owned semantic repair budgets and request builders. */
+export {
+	buildImmediateResearchRefinementRequests,
+	buildTemporalSelectiveReembeddingRequest,
+	semanticRepairReasonsForLevel,
+} from "./semantic-refinement-policy.js";
+export type {
+	ResearchRefinementBudgetOverride,
+	SemanticRepairReason,
+	TemporalReembeddingLevel,
+} from "./semantic-refinement-policy.js";
+/** Durable daemon-owned refinement budget state shared across research and periodic repair. */
+export {
+	clearResearchRefinementBudget,
+	readActiveResearchRefinementBudget,
+	upsertResearchRefinementBudget,
+} from "./research-refinement-budget.js";
+export type {
+	ResearchNidraBudgetOverride,
+	ResearchRefinementBudgetState,
+} from "./research-refinement-budget.js";
+
+/** Inspect local vector/embedding sync status for curated consolidation artifacts. */
+export { inspectConsolidationVectorSync } from "./consolidation-indexer.js";
 
 /** Global self-healing refresh when the active embedding epoch changes. */
-export { refreshGlobalSemanticEpochDrift } from "./semantic-epoch-refresh.js";
-export type { SemanticEpochRefreshResult } from "./semantic-epoch-refresh.js";
+export {
+	getSemanticEpochRefreshStatus,
+	persistSemanticEpochRepairState,
+	refreshGlobalSemanticEpochDrift,
+} from "./semantic-epoch-refresh.js";
+export type {
+	SemanticEpochRefreshResult,
+	SemanticEpochRefreshStatus,
+} from "./semantic-epoch-refresh.js";
+export {
+	SEMANTIC_EMBEDDING_POLICY_VERSION,
+	buildEmbeddingEpoch,
+} from "./embedding-epoch.js";
 
 /** Engine-owned PAKT compression policy with pakt-core default and stdio fallback. */
 export {
@@ -243,6 +291,49 @@ export type {
 	StoredResearchLoopSummary,
 	ListResearchLoopSummariesOptions,
 } from "./research-loop-summaries.js";
+
+/** Durable active-loop checkpoints for exact research timeout/resume recovery. */
+export {
+	upsertResearchLoopCheckpoint,
+	listResearchLoopCheckpoints,
+	getResearchLoopCheckpoint,
+	clearResearchLoopCheckpoint,
+} from "./research-loop-checkpoints.js";
+export type {
+	ResearchLoopCheckpointInput,
+	StoredResearchLoopCheckpoint,
+} from "./research-loop-checkpoints.js";
+
+/** Durable daemon-owned schedule/lease state for resident overnight research dispatch. */
+export {
+	upsertResearchLoopSchedule,
+	getResearchLoopSchedule,
+	listResearchLoopSchedules,
+	claimResearchLoopSchedule,
+	heartbeatResearchLoopSchedule,
+	cancelResearchLoopSchedule,
+	completeResearchLoopSchedule,
+} from "./research-loop-scheduler.js";
+export type {
+	ResearchLoopScheduleStatus,
+	ResearchLoopScheduleState,
+	ResearchLoopScheduleUpsertInput,
+	ListResearchLoopSchedulesOptions,
+	ResearchLoopLeaseUpdateInput,
+} from "./research-loop-scheduler.js";
+
+/** Durable queue for deferred research-scoped semantic refinement retries. */
+export {
+	upsertResearchRefinementQueue,
+	countQueuedResearchRefinementScopes,
+	listQueuedResearchRefinementScopes,
+	deferQueuedResearchRefinementScope,
+	clearQueuedResearchRefinementScope,
+} from "./research-refinement-queue.js";
+export type {
+	ResearchRefinementQueuedScope,
+	ResearchRefinementRepairIntent,
+} from "./research-refinement-queue.js";
 
 /** Session compactor that prunes low-signal turns using stream-weighted scoring. */
 export { SessionCompactor } from "./compactor.js";

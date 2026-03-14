@@ -39,6 +39,8 @@ Daemon consumer bridge methods:
 - `session.open`
 - `session.collaborate`
 - `session.turn`
+- `agent.tasks.checkpoint.list`
+- `agent.tasks.checkpoint.get`
 - `lucy.live_context`
 - `compression.status`
 - `compression.compress`
@@ -46,6 +48,12 @@ Daemon consumer bridge methods:
 - `semantic.sync_status`
 - `semantic.sync_curated`
 - `sabha.ask`
+- `research.loops.get`
+- `research.loops.active`
+- `research.loops.schedule.get`
+- `research.loops.dispatchable`
+- `research.loops.checkpoint.get`
+- `research.loops.checkpoint.list`
 - `sabha.resume`
 - `sabha.submit_perspective`
 - `sabha.gather`
@@ -70,7 +78,40 @@ Notes:
 - `sabha.submit_perspective` lets a consulted peer write structured council feedback back into Sabha state.
 - `sabha.gather` / `sabha.get` now include consultation fields such as `perspectives`, `respondedParticipantIds`, `pendingParticipantIds`, and `consultationSummary`.
 - `sabha.resume` is the explicit contract for retrying or resuming pending mesh consultations without overloading read-only `sabha.get`.
+- Sabha inspection surfaces now also include a machine-usable `resumePlan` so callers can distinguish "resume mesh dispatches", "await perspectives", and "inspect failed dispatches" without replaying the event log themselves.
 - use `session.collaborate` or `POST /api/sessions/collaborate` when multiple tabs or agents should intentionally share one same-day lineage thread.
+- use `agent.tasks.checkpoint.list` or `agent.tasks.checkpoint.get` to inspect timed-out generic agent work before retrying from scratch. Both now return a bounded `resumeContext` plus a machine-usable `resumePlan` alongside the raw durable checkpoint row.
+- the same generic timeout/pickup state is now available over HTTP through:
+  - `GET /api/agent/tasks/checkpoints`
+  - `GET /api/agent/tasks/checkpoints/{taskKey}?project=...`
+- use `research.loops.active` or `research.loops.get` to inspect current daemon loop ownership and whether an overnight run is resumable.
+- `research.loops.get`, `research.loops.active`, `research.loops.checkpoint.get`, and `research.loops.checkpoint.list` now return a bounded `resumeContext` plus a machine-usable `resumePlan` so timeout pickup does not depend on raw checkpoint JSON alone.
+- overnight loop summaries and persisted research records now carry optimizer-facing metadata:
+  - per-round objective scores
+  - explicit stop-condition hits
+  - Pareto frontier annotations
+- daemon-owned loop scheduling now also has a durable queue/lease surface:
+  - `research.loops.enqueue` persists a queued overnight loop with its objective registry, stop conditions, and update budgets
+  - `research.loops.schedule.get` inspects the durable queue/lease row for one `loopKey`
+  - `research.loops.dispatchable` lists queued loops whose lease is free or expired so a resident scheduler can pick them up deterministically
+  - the resident daemon now polls that dispatchable queue on `researchDispatchMinutes`, dispatches at most one loop at a time, and refuses to guess when the persisted workflow envelope is incomplete
+  - resident dispatch also injects a process-unique `researchLeaseOwner`, and the overnight loop now forwards that owner through daemon start plus heartbeat control calls
+- `research.outcome.record` is no longer ledger-only:
+  - it can trigger bounded immediate semantic repair for the touched day and project horizon
+  - any residual quality debt is persisted as deferred `queuedResearch` repair work
+  - degraded inline repair now persists the exact deferred repair intent, not only the coarse scope identifiers
+  - the daemon’s daily postprocess later drains that durable queue under the remaining cycle budget, carries capped-overflow scopes forward durably, and only allows clean remote semantic sync after outstanding repair backlog plus epoch-refresh completion are both clear
+- daily daemon postprocess now returns an explicit refinement governor summary:
+  - fixed phase order: `date-repair`, `research-repair`, `queued-repair`, `epoch-refresh`
+  - the merged budget envelope actually used for that cycle
+  - the bounded `researchSignalCount` and `queuedDrainLimit`
+  - machine-usable `remoteHoldReasons` instead of only a boolean skip flag
+- semantic refresh is epoch-aware:
+  - stale embedding generations are tracked separately from content drift
+  - curated semantic repair can be triggered by epoch drift, MDL quality debt, or research-originated refinement pressure
+  - same-epoch quality debt repair now honors the active research refinement budget before widening repair
+  - remote semantic publish is gated on full epoch-refresh completion, not only on deferred-quality counts
+  - timeout pickup remains phase-safe rather than fully semantic for every closure-side effect; callers should treat `resumePlan` as the authoritative next action, not as proof that every prior tail action already replayed
 
 ---
 

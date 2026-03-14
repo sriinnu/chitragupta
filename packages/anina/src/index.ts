@@ -7,6 +7,21 @@ export { SteeringManager } from "./steering.js";
 export type { SteeringInstruction, SteeringPriority, SteeringMode } from "./steering.js";
 export { MemoryBridge } from "./memory-bridge.js";
 export type { MemoryBridgeConfig, MemoryBridgePersistence } from "./memory-bridge.js";
+export { AgentTaskCheckpointRuntime } from "./agent-task-checkpoint-runtime.js";
+export {
+	buildTaskCheckpointResumeContext,
+	buildTaskCheckpointResumePlan,
+	buildTaskCheckpointResumeContextFromRecord,
+	buildTaskCheckpointResumePlanFromRecord,
+} from "./agent-task-checkpoint-bindings.js";
+export type {
+	AgentTaskCheckpointSnapshot,
+	AgentTaskCheckpointStatus,
+	AgentTaskResumeAction,
+	AgentTaskResumePlan,
+	AgentTaskCheckpointStore,
+	StoredAgentTaskCheckpointRecord,
+} from "./agent-task-checkpoint-types.js";
 export {
 	MAX_SUB_AGENTS,
 	MAX_AGENT_DEPTH,

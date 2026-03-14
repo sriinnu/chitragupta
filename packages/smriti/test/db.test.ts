@@ -224,6 +224,17 @@ describe("Schema initialization", () => {
 				}
 			});
 
+			it("should create agent_task_checkpoints table", () => {
+				const db = dbm.get("agent");
+				const info = db.prepare("PRAGMA table_info(agent_task_checkpoints)").all() as Array<{ name: string }>;
+				const cols = info.map((r) => r.name);
+				expect(cols).toContain("project");
+				expect(cols).toContain("task_key");
+				expect(cols).toContain("status");
+				expect(cols).toContain("phase");
+				expect(cols).toContain("checkpoint_json");
+			});
+
 				it("should create research_experiments table", () => {
 					const db = dbm.get("agent");
 				const row = db.prepare(
@@ -256,12 +267,43 @@ describe("Schema initialization", () => {
 					expect(cols).toContain("summary_json");
 				});
 
-				it("should create remote semantic sync embedding epoch column", () => {
-				const db = dbm.get("agent");
-				const info = db.prepare("PRAGMA table_info(remote_semantic_sync)").all() as Array<{ name: string }>;
-				const cols = info.map((entry) => entry.name);
-				expect(cols).toContain("embedding_epoch");
-			});
+					it("should create research_loop_checkpoints table", () => {
+						const db = dbm.get("agent");
+						const row = db.prepare(
+						"SELECT name FROM sqlite_master WHERE type='table' AND name = 'research_loop_checkpoints'",
+					).get() as { name?: string } | undefined;
+					expect(row?.name).toBe("research_loop_checkpoints");
+					const info = db.prepare("PRAGMA table_info(research_loop_checkpoints)").all() as Array<{ name: string }>;
+					const cols = info.map((entry) => entry.name);
+					expect(cols).toContain("loop_key");
+					expect(cols).toContain("phase");
+						expect(cols).toContain("status");
+						expect(cols).toContain("checkpoint_json");
+					});
+
+					it("should create research_refinement_queue table", () => {
+						const db = dbm.get("agent");
+						const row = db.prepare(
+							"SELECT name FROM sqlite_master WHERE type='table' AND name = 'research_refinement_queue'",
+						).get() as { name?: string } | undefined;
+						expect(row?.name).toBe("research_refinement_queue");
+						const info = db.prepare("PRAGMA table_info(research_refinement_queue)").all() as Array<{ name: string }>;
+						const cols = info.map((entry) => entry.name);
+						expect(cols).toContain("scope_key");
+						expect(cols).toContain("label");
+						expect(cols).toContain("project");
+						expect(cols).toContain("scope_json");
+						expect(cols).toContain("attempt_count");
+						expect(cols).toContain("next_attempt_at");
+					});
+
+						it("should create remote semantic sync embedding epoch column", () => {
+							const db = dbm.get("agent");
+						const info = db.prepare("PRAGMA table_info(remote_semantic_sync)").all() as Array<{ name: string }>;
+					const cols = info.map((entry) => entry.name);
+					expect(cols).toContain("embedding_epoch");
+					expect(cols).toContain("quality_hash");
+				});
 
 			it("should create sabha_state durability table", () => {
 				const db = dbm.get("agent");
@@ -311,7 +353,7 @@ describe("Schema initialization", () => {
 				).get() as { name?: string } | undefined;
 				expect(row?.name).toBe("semantic_runtime_state");
 				const version = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-				expect(version.version).toBe(24);
+		expect(version.version).toBe(29);
 			});
 
 			it("should add nidra notification counter column", () => {
@@ -476,7 +518,7 @@ describe("Schema initialization", () => {
 					initAgentSchema(dbm);
 					const db = dbm.get("agent");
 					const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-						expect(row.version).toBe(24);
+			expect(row.version).toBe(29);
 				});
 
 				it("should skip re-initialization when version matches", () => {
@@ -485,7 +527,7 @@ describe("Schema initialization", () => {
 					initAgentSchema(dbm);
 					const db = dbm.get("agent");
 					const row = db.prepare("SELECT version FROM _schema_versions WHERE name = 'agent'").get() as { version: number };
-						expect(row.version).toBe(24);
+			expect(row.version).toBe(29);
 				});
 
 			it("should add remote semantic embedding epochs for legacy databases", () => {
@@ -503,6 +545,7 @@ describe("Schema initialization", () => {
 						period         TEXT NOT NULL,
 						project        TEXT,
 						content_hash   TEXT NOT NULL,
+						quality_hash   TEXT,
 						remote_id      TEXT,
 						last_synced_at INTEGER,
 						last_error     TEXT,
@@ -516,10 +559,11 @@ describe("Schema initialization", () => {
 
 				initAgentSchema(dbm);
 
-				const info = db.prepare("PRAGMA table_info(remote_semantic_sync)").all() as Array<{ name: string }>;
-				const cols = info.map((entry) => entry.name);
-				expect(cols).toContain("embedding_epoch");
-			});
+					const info = db.prepare("PRAGMA table_info(remote_semantic_sync)").all() as Array<{ name: string }>;
+					const cols = info.map((entry) => entry.name);
+					expect(cols).toContain("embedding_epoch");
+					expect(cols).toContain("quality_hash");
+				});
 
 			it("should rebuild consolidation_log with swapna constraint for legacy databases", () => {
 				const db = dbm.get("agent");

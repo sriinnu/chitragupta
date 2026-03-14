@@ -2,7 +2,7 @@
 	"name": "chitragupta-monorepo",
 	"private": true,
 	"type": "module",
-  "version": "0.1.37",
+  "version": "0.1.38",
 	"license": "MIT",
 	"description": "The Autonomous AI Agent Platform — 17-package TypeScript monorepo with zero-LLM cognitive layer, GraphRAG memory, bi-temporal knowledge graph, centralized daemon, and self-evolving skills",
 	"keywords": [
@@ -63,7 +63,8 @@
 		"subtree:split": "bash scripts/subtree-sync.sh",
 		"subtree:push": "bash scripts/subtree-sync.sh --push",
 		"publish:dry": "bash scripts/publish.sh",
-		"publish:real": "bash scripts/publish.sh --real"
+		"publish:real": "bash scripts/publish.sh --real",
+		"menubar": "cd apps/macos-menubar && xcodegen generate && xcodebuild -project ChitraguptaMenubar.xcodeproj -scheme ChitraguptaMenubar -configuration Debug build 2>&1 | tail -5 && open $(xcodebuild -project ChitraguptaMenubar.xcodeproj -scheme ChitraguptaMenubar -configuration Debug -showBuildSettings 2>/dev/null | grep ' BUILT_PRODUCTS_DIR' | awk '{print $3}')/ChitraguptaMenubar.app"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.14",

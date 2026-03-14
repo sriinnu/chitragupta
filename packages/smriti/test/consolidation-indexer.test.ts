@@ -54,7 +54,7 @@ import {
 	repairSelectiveReembedding,
 } from "../src/selective-reembedding.js";
 import { renderConsolidationMetadata } from "../src/consolidation-provenance.js";
-import { computeMdlCompactionMetrics } from "../src/mdl-compaction.js";
+import { computeMdlCompactionMetrics, MIN_SUMMARY_MDL_SCORE } from "../src/mdl-compaction.js";
 
 // ─── Setup ──────────────────────────────────────────────────────────────────
 
@@ -96,6 +96,16 @@ function getEmbeddingMetadata(sourceType: string): Record<string, unknown> | nul
 	const row = db.prepare("SELECT metadata FROM embeddings WHERE source_type = ?").get(sourceType) as { metadata?: string | null } | null;
 	if (!row?.metadata) return null;
 	return JSON.parse(row.metadata) as Record<string, unknown>;
+}
+
+function alphaShard(index: number): string {
+	let value = index;
+	let out = "";
+	do {
+		out = String.fromCharCode(97 + (value % 26)) + out;
+		value = Math.floor(value / 26) - 1;
+	} while (value >= 0);
+	return out;
 }
 
 // ─── Sample Markdown ─────────────────────────────────────────────────────────
@@ -218,7 +228,7 @@ const CURATED_DAILY_MD = `${renderConsolidationMetadata({
 **Decision**: Keep raw sessions canonical, promote only curated artifacts
 `;
 
-const LOW_MDL_DAILY_MD = `${renderConsolidationMetadata({
+const MDL_STEERED_DAILY_MD = `${renderConsolidationMetadata({
 	kind: "day",
 	formatVersion: 1,
 	date: "2026-02-12",
@@ -235,6 +245,32 @@ const LOW_MDL_DAILY_MD = `${renderConsolidationMetadata({
 # 2026-02-12 — Wednesday
 
 ${Array.from({ length: 180 }, (_, index) => `Noise shard ${index} unrelated-token-${index} drift-noise-${index} entropy-noise-${index}.`).join("\n")}
+
+## Facts Learned
+
+- [decision] Keep only the essential semantic policy signal
+`;
+
+const LOW_MDL_DAILY_MD = `${renderConsolidationMetadata({
+	kind: "day",
+	formatVersion: 1,
+	date: "2026-02-13",
+	generatedAt: "2026-02-13T03:00:00.000Z",
+	sessionCount: 1,
+	projectCount: 1,
+	sourceSessionIds: ["session-low-mdl-alpha"],
+	sourceSessions: [
+		{ id: "session-low-mdl-alpha", project: "/my/project", title: "Low MDL Alpha", created: "2026-02-13T01:00:00.000Z", updated: "2026-02-13T01:10:00.000Z", provider: "claude", branch: null },
+	],
+	projects: [{ project: "/my/project", sessionIds: ["session-low-mdl-alpha"] }],
+})}
+
+# 2026-02-13 — Thursday
+
+${Array.from({ length: 180 }, (_, index) => {
+	const shard = alphaShard(index);
+	return `Noise shard ${shard} unrelated-token-${shard} drift-noise-${shard} entropy-noise-${shard}.`;
+}).join("\n")}
 
 ## Facts Learned
 
@@ -332,6 +368,12 @@ describe("indexConsolidationSummary", () => {
 		expect(typeof metadata?.contentHash).toBe("string");
 		expect((metadata?.embeddingEpoch as { epoch?: string } | undefined)?.epoch).toBeTruthy();
 		expect((metadata?.mdlMetrics as { mdlScore?: number } | undefined)?.mdlScore).toBeTypeOf("number");
+		expect((metadata?.compactionDecision as { disposition?: string; reason?: string } | undefined)).toEqual(
+			expect.objectContaining({
+				disposition: expect.stringMatching(/^(healthy|watch|repair)$/),
+				reason: expect.any(String),
+			}),
+		);
 	});
 
 	it("stores packed curated summaries as derived metadata without replacing semantic text", async () => {
@@ -350,10 +392,25 @@ describe("indexConsolidationSummary", () => {
 
 		expect(row?.text).toContain("deterministic session lineage");
 		expect(metadata?.packedSummaryText).toContain("@from text");
+		expect(metadata?.embeddingInputMode).toBe("packed");
 		expect((metadata?.compression as { runtime?: string })?.runtime).toBe("pakt");
 	});
 
-		it("rejects packed curated summaries that lose too much signal", async () => {
+	it("uses an MDL-steered representative summary when the extracted summary is too lossy", async () => {
+		await indexConsolidationSummary("daily", "2026-02-12", MDL_STEERED_DAILY_MD);
+
+		const row = getFirstEmbedding("daily_summary");
+		const metadata = getEmbeddingMetadata("daily_summary");
+
+		expect(row?.text).toContain("Noise shard 0 unrelated-token-0 drift-noise-0 entropy-noise-0.");
+		expect(row?.text).toContain("Keep only the essential semantic policy signal");
+		expect(row?.text).not.toContain("Noise shard 179 unrelated-token-179");
+		expect(metadata?.summarySelection).toBe("representative_fallback");
+		expect((metadata?.mdlMetrics as { mdlScore?: number } | undefined)?.mdlScore).toBeGreaterThan(0.5);
+		expect((metadata?.compactionDecision as { disposition?: string } | undefined)?.disposition).toBe("healthy");
+	});
+
+	it("rejects packed curated summaries that lose too much signal", async () => {
 		_setSummaryPackerForTests({
 			packSummary: vi.fn(async () => ({
 				runtime: "pakt",
@@ -368,9 +425,11 @@ describe("indexConsolidationSummary", () => {
 
 		expect(metadata?.packedSummaryText).toBeNull();
 		expect(metadata?.compression).toBeNull();
-			expect((metadata?.packedDecision as { accepted?: boolean; reason?: string } | undefined)?.accepted).toBe(false);
-			expect((metadata?.packedDecision as { accepted?: boolean; reason?: string } | undefined)?.reason).toBe("low_retention");
-		});
+		expect(metadata?.embeddingInputMode).toBe("summary");
+		expect((metadata?.compactionDecision as { disposition?: string } | undefined)?.disposition).toBe("healthy");
+		expect((metadata?.packedDecision as { accepted?: boolean; reason?: string } | undefined)?.accepted).toBe(false);
+		expect((metadata?.packedDecision as { accepted?: boolean; reason?: string } | undefined)?.reason).toBe("low_retention");
+	});
 });
 
 describe("searchConsolidationSummaries", () => {
@@ -402,6 +461,22 @@ describe("searchConsolidationSummaries", () => {
 
 		const results = await searchConsolidationSummaries("JWT tokens auth authentication", "daily", { limit: 2 });
 		expect(results.length).toBeLessThanOrEqual(2);
+	});
+
+	it("downranks low-MDL summaries behind healthier curated artifacts", async () => {
+		await indexConsolidationSummary("daily", "2026-02-12", MDL_STEERED_DAILY_MD);
+		await indexConsolidationSummary("daily", "2026-02-13", LOW_MDL_DAILY_MD);
+
+		const results = await searchConsolidationSummaries(
+			"semantic policy signal canonical sessions deterministic lineage",
+			"daily",
+			{ limit: 2 },
+		);
+
+		expect(results).toHaveLength(2);
+		expect(results[0]?.period).toBe("2026-02-12");
+		expect(results[1]?.period).toBe("2026-02-13");
+		expect(results[0]?.score).toBeGreaterThan(results[1]?.score ?? 0);
 	});
 });
 
@@ -470,10 +545,10 @@ describe("semantic sync inspection and repair", () => {
 		expect(status.issues[0]?.reason).toBe("stale_hash");
 	});
 
-	it("detects stale embedding epochs when curated text is unchanged", async () => {
-		const daysDir = path.join(tmpDir, "days", "2026", "02");
-		fs.mkdirSync(daysDir, { recursive: true });
-		fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
+		it("detects stale embedding epochs when curated text is unchanged", async () => {
+			const daysDir = path.join(tmpDir, "days", "2026", "02");
+			fs.mkdirSync(daysDir, { recursive: true });
+			fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
 
 		await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
 		const db = DatabaseManager.instance().get("vectors");
@@ -490,9 +565,38 @@ describe("semantic sync inspection and repair", () => {
 
 		const status = await inspectConsolidationVectorSync();
 		expect(status.missingCount).toBe(0);
-		expect(status.driftCount).toBe(1);
-		expect(status.issues[0]?.reason).toBe("stale_epoch");
-	});
+			expect(status.driftCount).toBe(1);
+			expect(status.issues[0]?.reason).toBe("stale_epoch");
+		});
+
+		it("detects local drift when packed embedding input changes but the summary text does not", async () => {
+			const daysDir = path.join(tmpDir, "days", "2026", "02");
+			fs.mkdirSync(daysDir, { recursive: true });
+			fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
+			_setSummaryPackerForTests({
+				packSummary: vi.fn(async () => ({
+					runtime: "pakt",
+					packedText: "@from text\nsemantic sync checks|packed-alpha",
+					format: "text",
+					savings: 18,
+				})),
+			});
+
+			await indexConsolidationSummary("daily", "2026-02-10", CURATED_DAILY_MD);
+			_setSummaryPackerForTests({
+				packSummary: vi.fn(async () => ({
+					runtime: "pakt",
+					packedText: "@from text\nsemantic sync checks|packed-beta",
+					format: "text",
+					savings: 18,
+				})),
+			});
+
+			const status = await inspectConsolidationVectorSync();
+			expect(status.missingCount).toBe(0);
+			expect(status.driftCount).toBe(1);
+			expect(status.issues[0]?.reason).toBe("stale_hash");
+		});
 
 	it("plans selective re-embedding for stale-epoch curated artifacts", async () => {
 		const daysDir = path.join(tmpDir, "days", "2026", "02");
@@ -544,7 +648,9 @@ describe("semantic sync inspection and repair", () => {
 				minMdlScore: 0.95,
 				reasons: ["stale_epoch"],
 			});
-			expect(plan.candidateCount).toBe(0);
+			// Explicit freshness-repair reasons now bypass MDL gates so stale
+			// embedding epochs cannot be stranded behind quality thresholds.
+			expect(plan.candidateCount).toBe(1);
 		});
 
 		it("honors explicit stale reasons beyond epoch drift", async () => {
@@ -570,22 +676,42 @@ describe("semantic sync inspection and repair", () => {
 			expect(plan.candidates[0]?.localReasons).toContain("stale_hash");
 		});
 
-		it("selects low-MDL curated artifacts even without epoch drift", async () => {
-			const daysDir = path.join(tmpDir, "days", "2026", "02");
-			fs.mkdirSync(daysDir, { recursive: true });
-			fs.writeFileSync(path.join(daysDir, "12.md"), LOW_MDL_DAILY_MD, "utf-8");
+			it("selects low-MDL curated artifacts even without epoch drift", async () => {
+				const daysDir = path.join(tmpDir, "days", "2026", "02");
+				fs.mkdirSync(daysDir, { recursive: true });
+				_setSummaryPackerForTests({ packSummary: vi.fn(async () => null) });
+				fs.writeFileSync(path.join(daysDir, "13.md"), LOW_MDL_DAILY_MD, "utf-8");
 
-			await indexConsolidationSummary("daily", "2026-02-12", LOW_MDL_DAILY_MD);
+				await indexConsolidationSummary("daily", "2026-02-13", LOW_MDL_DAILY_MD);
 
-			const plan = await planSelectiveReembedding({
-				dates: ["2026-02-12"],
-				levels: ["daily"],
-				candidateLimit: 5,
-			});
+				const plan = await planSelectiveReembedding({
+					dates: ["2026-02-13"],
+					levels: ["daily"],
+					candidateLimit: 5,
+				});
 
 			expect(plan.candidateCount).toBe(1);
 			expect(plan.candidates[0]?.localReasons).toContain("low_mdl");
 			expect(plan.candidates[0]?.localReasons).not.toContain("stale_epoch");
+		});
+
+			it("does not filter explicit low-MDL repairs behind the priority gate", async () => {
+				const daysDir = path.join(tmpDir, "days", "2026", "02");
+				fs.mkdirSync(daysDir, { recursive: true });
+				_setSummaryPackerForTests({ packSummary: vi.fn(async () => null) });
+				fs.writeFileSync(path.join(daysDir, "13.md"), LOW_MDL_DAILY_MD, "utf-8");
+
+				await indexConsolidationSummary("daily", "2026-02-13", LOW_MDL_DAILY_MD);
+
+				const plan = await planSelectiveReembedding({
+					dates: ["2026-02-13"],
+					levels: ["daily"],
+					reasons: ["low_mdl"],
+					minPriorityScore: 99,
+			});
+
+			expect(plan.candidateCount).toBe(1);
+			expect(plan.candidates[0]?.localReasons).toContain("low_mdl");
 		});
 
 		it("selects rejected packed curated artifacts even without epoch drift", async () => {
@@ -614,9 +740,69 @@ describe("semantic sync inspection and repair", () => {
 			expect(plan.candidates[0]?.localReasons).not.toContain("stale_epoch");
 		});
 
-	it("does not truncate explicit artifact id repairs to candidateLimit", async () => {
-		const daysDir = path.join(tmpDir, "days", "2026", "02");
-		fs.mkdirSync(daysDir, { recursive: true });
+		it("does not remote-sync artifacts that remain quality-deferred after rebuild", async () => {
+			const daysDir = path.join(tmpDir, "days", "2026", "02");
+			fs.mkdirSync(daysDir, { recursive: true });
+			const rejectedPackedMarkdown = `${CURATED_DAILY_MD}\n${"Deterministic lineage and semantic promotion. ".repeat(24)}`;
+			fs.writeFileSync(path.join(daysDir, "10.md"), rejectedPackedMarkdown, "utf-8");
+			_setSummaryPackerForTests({
+				packSummary: vi.fn(async () => ({
+					runtime: "pakt",
+					packedText: "pakt:xyz",
+					format: "text",
+					savings: 92,
+				})),
+			});
+
+			await indexConsolidationSummary("daily", "2026-02-10", rejectedPackedMarkdown);
+
+			const dayConsolidation = await import("../src/day-consolidation.js");
+			const consolidateSpy = vi.spyOn(dayConsolidation, "consolidateDay").mockImplementation(async () => rejectedPackedMarkdown);
+			const remoteQuality = await import("../src/remote-semantic-sync-quality.js");
+			const promotionSpy = vi.spyOn(remoteQuality, "getRemoteSemanticPromotionDecision").mockReturnValue({
+				eligible: true,
+				reason: "eligible",
+			});
+			const remoteSync = await import("../src/remote-semantic-sync.js");
+			const syncSpy = vi.spyOn(remoteSync, "syncRemoteSemanticMirror").mockResolvedValue({
+				synced: 1,
+				status: {
+					enabled: true,
+					provider: "qdrant",
+					configured: true,
+					scanned: 1,
+					syncedCount: 1,
+					missingCount: 0,
+					driftCount: 0,
+					qualityDeferredCount: 0,
+					lastSyncAt: null,
+					lastError: null,
+					issues: [],
+				},
+			});
+
+			try {
+				const repaired = await repairSelectiveReembedding({
+					dates: ["2026-02-10"],
+					levels: ["daily"],
+					reasons: ["rejected_packed"],
+				});
+				expect(consolidateSpy).toHaveBeenCalledWith("2026-02-10", { force: true });
+				expect(repaired.plan.candidateCount).toBe(1);
+				expect(repaired.reembedded).toBe(1);
+				expect(repaired.qualityDeferred).toBe(1);
+				expect(repaired.remoteSynced).toBe(0);
+				expect(syncSpy).not.toHaveBeenCalled();
+			} finally {
+				syncSpy.mockRestore();
+				promotionSpy.mockRestore();
+				consolidateSpy.mockRestore();
+			}
+		});
+
+		it("does not truncate explicit artifact id repairs to candidateLimit", async () => {
+			const daysDir = path.join(tmpDir, "days", "2026", "02");
+			fs.mkdirSync(daysDir, { recursive: true });
 		fs.writeFileSync(path.join(daysDir, "10.md"), CURATED_DAILY_MD, "utf-8");
 		fs.writeFileSync(
 			path.join(daysDir, "11.md"),
@@ -723,16 +909,17 @@ describe("semantic sync inspection and repair", () => {
 		expect(status.issues.map((issue) => issue.reason)).toContain("stale_epoch");
 	});
 
-	it("rebuilds low-MDL daily artifacts during selective repair", async () => {
-		const daysDir = path.join(tmpDir, "days", "2026", "02");
-		fs.mkdirSync(daysDir, { recursive: true });
-		const lowMdlPath = path.join(daysDir, "12.md");
-		fs.writeFileSync(lowMdlPath, LOW_MDL_DAILY_MD, "utf-8");
+		it("rebuilds low-MDL daily artifacts during selective repair", async () => {
+			const daysDir = path.join(tmpDir, "days", "2026", "02");
+			fs.mkdirSync(daysDir, { recursive: true });
+				const lowMdlPath = path.join(daysDir, "13.md");
+			_setSummaryPackerForTests({ packSummary: vi.fn(async () => null) });
+			fs.writeFileSync(lowMdlPath, LOW_MDL_DAILY_MD, "utf-8");
 
-		await indexConsolidationSummary("daily", "2026-02-12", LOW_MDL_DAILY_MD);
+				await indexConsolidationSummary("daily", "2026-02-13", LOW_MDL_DAILY_MD);
 
 		const preRepairPlan = await planSelectiveReembedding({
-			dates: ["2026-02-12"],
+					dates: ["2026-02-13"],
 			levels: ["daily"],
 			reasons: ["low_mdl"],
 		});
@@ -743,26 +930,26 @@ describe("semantic sync inspection and repair", () => {
 			const rebuiltMarkdown = `${renderConsolidationMetadata({
 				kind: "day",
 				formatVersion: 1,
-				date: "2026-02-12",
-				generatedAt: "2026-02-12T04:00:00.000Z",
+						date: "2026-02-13",
+						generatedAt: "2026-02-13T04:00:00.000Z",
 				sessionCount: 1,
 				projectCount: 1,
-				sourceSessionIds: ["session-low-mdl"],
+						sourceSessionIds: ["session-low-mdl-alpha"],
 				sourceSessions: [
 					{
-						id: "session-low-mdl",
+								id: "session-low-mdl-alpha",
 						project: "/my/project",
-						title: "Low MDL",
-						created: "2026-02-12T01:00:00.000Z",
-						updated: "2026-02-12T01:10:00.000Z",
+								title: "Low MDL Alpha",
+								created: "2026-02-13T01:00:00.000Z",
+								updated: "2026-02-13T01:10:00.000Z",
 						provider: "claude",
 						branch: null,
 					},
 				],
-				projects: [{ project: "/my/project", sessionIds: ["session-low-mdl"] }],
+						projects: [{ project: "/my/project", sessionIds: ["session-low-mdl-alpha"] }],
 			})}
 
-# 2026-02-12 — Wednesday
+# 2026-02-13 — Thursday
 
 ## Facts Learned
 
@@ -772,35 +959,131 @@ describe("semantic sync inspection and repair", () => {
 - [fact] provenance remains attached to repaired artifacts
 - [fact] canonical sessions preserve deterministic semantic rebuild quality
 - [fact] semantic rebuild improves recall quality and preserves provenance
+- [fact] repaired summaries stay compact and reusable
 
 ## Project: /my/project
 
 **Decision**: Keep raw sessions canonical and rebuild low-MDL artifacts when quality improves.
-
-**Summary**: Quality-driven semantic rebuild preserves provenance, deterministic lineage, and canonical sessions.
+**Fact**: Repaired artifacts keep semantic signal compact and reusable.
+> Quality-driven semantic rebuild preserves provenance, deterministic lineage, and canonical sessions.
 `;
 			const rebuiltMetrics = computeMdlCompactionMetrics({
 				originalText: rebuiltMarkdown,
 				summaryText: extractSummaryText(rebuiltMarkdown, "daily"),
 			});
-			expect(rebuiltMetrics.mdlScore).toBeGreaterThan(0.6);
+			expect(rebuiltMetrics.mdlScore).toBeGreaterThan(MIN_SUMMARY_MDL_SCORE);
 			fs.writeFileSync(lowMdlPath, rebuiltMarkdown, "utf-8");
-			await indexConsolidationSummary("daily", "2026-02-12", rebuiltMarkdown);
+					await indexConsolidationSummary("daily", "2026-02-13", rebuiltMarkdown);
 			return rebuiltMarkdown;
 		});
 
-		try {
-			const repaired = await repairSelectiveReembedding({
-				dates: ["2026-02-12"],
-				levels: ["daily"],
-				reasons: ["low_mdl"],
-				resyncRemote: false,
+			try {
+				const repaired = await repairSelectiveReembedding({
+					dates: ["2026-02-13"],
+					levels: ["daily"],
+					reasons: ["low_mdl"],
+					resyncRemote: false,
+				});
+				expect(consolidateSpy).toHaveBeenCalledWith("2026-02-13", { force: true });
+				expect(repaired.plan.candidateCount).toBe(1);
+				expect(repaired.reembedded).toBe(1);
+			} finally {
+					consolidateSpy.mockRestore();
+			}
 			});
-			expect(repaired.plan.candidateCount).toBe(1);
-			expect(repaired.reembedded).toBe(1);
-			expect(repaired.qualityDeferred).toBe(0);
-		} finally {
-			consolidateSpy.mockRestore();
-		}
+
+		it("rebuilds quality defects even when epoch drift also needs repair", async () => {
+			const daysDir = path.join(tmpDir, "days", "2026", "02");
+			fs.mkdirSync(daysDir, { recursive: true });
+			const lowMdlPath = path.join(daysDir, "13.md");
+			_setSummaryPackerForTests({ packSummary: vi.fn(async () => null) });
+			fs.writeFileSync(lowMdlPath, LOW_MDL_DAILY_MD, "utf-8");
+
+				await indexConsolidationSummary("daily", "2026-02-13", LOW_MDL_DAILY_MD);
+			const db = DatabaseManager.instance().get("vectors");
+			const row = db.prepare("SELECT metadata FROM embeddings WHERE source_type = ?").get("daily_summary") as { metadata: string };
+			const metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+			metadata.embeddingEpoch = {
+				providerId: "legacy-provider",
+				modelId: "legacy-model",
+				dimensions: 384,
+				strategy: "provider",
+				epoch: "legacy-provider:legacy-model:384:provider",
+			};
+			db.prepare("UPDATE embeddings SET metadata = ? WHERE source_type = ?").run(JSON.stringify(metadata), "daily_summary");
+
+					const preRepairPlan = await planSelectiveReembedding({
+						dates: ["2026-02-13"],
+						levels: ["daily"],
+					});
+			expect(preRepairPlan.candidateCount).toBe(1);
+			expect(preRepairPlan.candidates[0]?.localReasons).toEqual(expect.arrayContaining(["stale_epoch", "low_mdl"]));
+
+			const dayConsolidation = await import("../src/day-consolidation.js");
+			const consolidateSpy = vi.spyOn(dayConsolidation, "consolidateDay").mockImplementation(async () => {
+				const rebuiltMarkdown = `${renderConsolidationMetadata({
+					kind: "day",
+					formatVersion: 1,
+					date: "2026-02-13",
+					generatedAt: "2026-02-13T04:00:00.000Z",
+					sessionCount: 1,
+					projectCount: 1,
+					sourceSessionIds: ["session-low-mdl-alpha"],
+					sourceSessions: [
+						{
+							id: "session-low-mdl-alpha",
+							project: "/my/project",
+							title: "Low MDL Alpha",
+							created: "2026-02-13T01:00:00.000Z",
+							updated: "2026-02-13T01:10:00.000Z",
+							provider: "claude",
+							branch: null,
+						},
+					],
+					projects: [{ project: "/my/project", sessionIds: ["session-low-mdl-alpha"] }],
+				})}
+
+# 2026-02-13 — Thursday
+
+## Facts Learned
+
+- [decision] keep raw sessions canonical
+- [decision] quality-driven semantic rebuild
+- [fact] deterministic session lineage matters
+- [fact] deterministic lineage preserves repair quality
+- [fact] provenance remains attached to repaired artifacts
+- [fact] repaired artifacts keep semantic signal compact and reusable
+- [fact] canonical sessions preserve deterministic semantic rebuild quality
+- [fact] semantic rebuild improves recall quality and preserves provenance
+- [fact] repaired summaries stay compact and reusable
+
+## Project: /my/project
+
+**Decision**: Keep raw sessions canonical and rebuild low-MDL artifacts when quality improves.
+**Fact**: Repaired artifacts keep semantic signal compact and reusable.
+> Quality-driven semantic rebuild preserves provenance, deterministic lineage, and canonical sessions.
+`;
+			const rebuiltMetrics = computeMdlCompactionMetrics({
+				originalText: rebuiltMarkdown,
+				summaryText: extractSummaryText(rebuiltMarkdown, "daily"),
+			});
+			expect(rebuiltMetrics.mdlScore).toBeGreaterThan(MIN_SUMMARY_MDL_SCORE);
+				fs.writeFileSync(lowMdlPath, rebuiltMarkdown, "utf-8");
+				await indexConsolidationSummary("daily", "2026-02-13", rebuiltMarkdown);
+				return rebuiltMarkdown;
+			});
+
+				try {
+						const repaired = await repairSelectiveReembedding({
+							dates: ["2026-02-13"],
+							levels: ["daily"],
+							resyncRemote: false,
+						});
+					expect(consolidateSpy).toHaveBeenCalledWith("2026-02-13", { force: true });
+					expect(repaired.plan.candidateCount).toBe(1);
+					expect(repaired.reembedded).toBe(1);
+				} finally {
+					consolidateSpy.mockRestore();
+				}
+			});
 	});
-});

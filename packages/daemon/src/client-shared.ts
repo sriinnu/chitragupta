@@ -2,6 +2,7 @@ export interface PendingRequest {
 	resolve: (result: unknown) => void;
 	reject: (error: Error) => void;
 	timer: ReturnType<typeof setTimeout>;
+	cleanup?: () => void;
 }
 
 export type NotificationHandler = (params: Record<string, unknown>, method: string) => void;

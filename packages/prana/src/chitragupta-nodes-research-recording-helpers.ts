@@ -159,7 +159,66 @@ export async function persistResearchFallback(args: {
 }): Promise<Record<string, unknown>> {
 	const { scope, entry, experimentRecord, traceType, traceContent, traceMetadata, packed, decision, finalizeAction } = args;
 	const { appendMemory, AkashaField, DatabaseManager, upsertResearchExperiment } = await dynamicImport("@chitragupta/smriti");
-	await appendMemory({ type: "project", path: scope.projectPath }, entry, { dedupe: false });
+	const existingExperiment = upsertResearchExperiment({
+		projectPath: scope.projectPath,
+		experimentKey: experimentRecord.experimentKey,
+		attemptKey: experimentRecord.attemptKey,
+		loopKey: experimentRecord.loopKey,
+		roundNumber: experimentRecord.roundNumber,
+		totalRounds: experimentRecord.totalRounds,
+		attemptNumber: experimentRecord.attemptNumber,
+		budgetMs: experimentRecord.budgetMs,
+		topic: experimentRecord.topic,
+		metricName: experimentRecord.metricName,
+		objective: experimentRecord.objective,
+		decision: experimentRecord.decision,
+		sessionId: experimentRecord.sessionId,
+		parentSessionId: experimentRecord.parentSessionId,
+		sessionLineageKey: experimentRecord.sessionLineageKey,
+		sabhaId: experimentRecord.sabhaId,
+		councilVerdict: experimentRecord.councilVerdict,
+		routeClass: experimentRecord.route?.routeClass ?? null,
+		plannerRouteClass: experimentRecord.plannerRoute?.routeClass ?? null,
+		plannerSelectedCapabilityId: experimentRecord.plannerRoute?.selectedCapabilityId ?? null,
+		plannerSelectedModelId: experimentRecord.plannerRoute?.executionBinding?.selectedModelId ?? null,
+		plannerSelectedProviderId: experimentRecord.plannerRoute?.executionBinding?.selectedProviderId ?? null,
+		executionRouteClass: experimentRecord.executionRoute?.routeClass ?? null,
+		selectedCapabilityId: experimentRecord.executionRoute?.selectedCapabilityId ?? experimentRecord.route?.selectedCapabilityId ?? null,
+		selectedModelId: experimentRecord.executionRoute?.executionBinding?.selectedModelId ?? null,
+		selectedProviderId: experimentRecord.executionRoute?.executionBinding?.selectedProviderId ?? null,
+		gitBranch: experimentRecord.run.gitBranch,
+		gitHeadCommit: experimentRecord.run.gitHeadCommit,
+		gitDirtyBefore: experimentRecord.run.gitDirtyBefore,
+		gitDirtyAfter: experimentRecord.run.gitDirtyAfter,
+		baselineMetric: experimentRecord.baselineMetric,
+		observedMetric: experimentRecord.observedMetric,
+		delta: experimentRecord.delta,
+		status: experimentRecord.status,
+		errorMessage: experimentRecord.errorMessage,
+		packedContext: typeof packed.packedText === "string" ? packed.packedText : null,
+		packedRuntime: experimentRecord.packing.runtime,
+		packedSource: experimentRecord.packing.source,
+		record: experimentRecord as Record<string, unknown>,
+	});
+	const existingTraceId =
+		existingExperiment.record && typeof existingExperiment.record === "object"
+			? typeof existingExperiment.record.traceId === "string"
+				? existingExperiment.record.traceId
+				: null
+			: null;
+	if (existingTraceId) {
+		return {
+			recorded: true,
+			memoryScope: "project",
+			traceId: existingTraceId,
+			experimentId: existingExperiment.id,
+			experimentRecord,
+			decision: decision ?? experimentRecord.decision ?? "record",
+			finalizeAction: finalizeAction ?? null,
+			source: "fallback",
+		};
+	}
+	await appendMemory({ type: "project", path: scope.projectPath }, entry, { dedupe: true });
 	const db = DatabaseManager.instance().get("agent");
 	const akasha = new AkashaField();
 	akasha.restore(db);
@@ -204,7 +263,12 @@ export async function persistResearchFallback(args: {
 		packedContext: typeof packed.packedText === "string" ? packed.packedText : null,
 		packedRuntime: experimentRecord.packing.runtime,
 		packedSource: experimentRecord.packing.source,
-		record: experimentRecord as Record<string, unknown>,
+		record: {
+			...(experimentRecord as Record<string, unknown>),
+			traceId: trace.id,
+			memoryEntryRecorded: true,
+			recordedAt: Date.now(),
+		},
 	});
 	return {
 		recorded: true,

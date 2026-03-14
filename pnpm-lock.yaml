@@ -42,6 +42,9 @@ importers:
       '@chitragupta/core':
         specifier: workspace:*
         version: link:../core
+      '@chitragupta/prana':
+        specifier: workspace:*
+        version: link:../prana
       '@chitragupta/smriti':
         specifier: workspace:*
         version: link:../smriti

@@ -2,9 +2,13 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { packCuratedSummaryText, type PackedSummaryResult } from "./pakt-compression.js";
 import {
+	selectMdlSummaryText,
 	computeMdlCompactionMetrics,
+	decideMdlCompaction,
 	decidePackedRepresentation,
+	type MdlCompactionDecision,
 	type MdlCompactionMetrics,
+	type MdlSummarySelection,
 	type PackedRepresentationDecision,
 } from "./mdl-compaction.js";
 import {
@@ -13,8 +17,10 @@ import {
 	type ConsolidationMetadata,
 } from "./consolidation-provenance.js";
 
+/** Supported curated-consolidation periods. */
 export type ConsolidationLevel = "daily" | "monthly" | "yearly";
 
+/** Minimal embedding index row used during curated summary sync. */
 export interface ConsolidationSummaryIndex {
 	level: ConsolidationLevel;
 	period: string;
@@ -23,6 +29,7 @@ export interface ConsolidationSummaryIndex {
 	summaryText: string;
 }
 
+/** One semantic-sync drift issue detected for a curated artifact. */
 export interface ConsolidationVectorSyncIssue {
 	id: string;
 	level: ConsolidationLevel;
@@ -31,6 +38,7 @@ export interface ConsolidationVectorSyncIssue {
 	reason: "missing_vector" | "stale_hash" | "legacy_vector" | "stale_epoch";
 }
 
+/** Aggregate semantic-sync drift status for curated artifacts. */
 export interface ConsolidationVectorSyncStatus {
 	scanned: number;
 	missingCount: number;
@@ -38,6 +46,7 @@ export interface ConsolidationVectorSyncStatus {
 	issues: ConsolidationVectorSyncIssue[];
 }
 
+/** Filters for the curated artifact listing API. */
 export interface CuratedConsolidationArtifactQuery {
 	recentDailyLimit?: number;
 	recentPeriodicPerProject?: number;
@@ -50,6 +59,7 @@ export interface CuratedConsolidationArtifactQuery {
 	ids?: string[];
 }
 
+/** One curated artifact with summary, compression, and provenance metadata attached. */
 export interface CuratedConsolidationArtifact {
 	id: string;
 	level: ConsolidationLevel;
@@ -60,16 +70,23 @@ export interface CuratedConsolidationArtifact {
 	packedSummaryText?: string;
 	compression?: PackedSummaryResult;
 	mdlMetrics: MdlCompactionMetrics;
+	compactionDecision: MdlCompactionDecision;
 	packedDecision: PackedRepresentationDecision | null;
 	contentHash: string;
+	embeddingInputHash: string;
 	provenance: ConsolidationMetadata;
 }
 
+/** Compression planning result for one curated summary artifact. */
 export interface CuratedSummaryCompressionDecision {
+	summaryText: string;
 	packedSummaryText?: string;
 	compression?: PackedSummaryResult;
 	mdlMetrics: MdlCompactionMetrics;
+	compactionDecision: MdlCompactionDecision;
 	packedDecision: PackedRepresentationDecision | null;
+	embeddingInputHash: string;
+	summarySelection: MdlSummarySelection["selection"];
 }
 
 /** Build a stable ID for a consolidation summary embedding. */
@@ -82,6 +99,7 @@ export function buildConsolidationEmbeddingId(
 	return `${level}_summary:${period}${suffix}`;
 }
 
+/** Build a stable source ID for drift tracking and vector-sync repair. */
 export function buildConsolidationSourceId(period: string, project?: string): string {
 	return project ? `${period}-${fnvHash4(project)}` : period;
 }
@@ -92,6 +110,8 @@ export function extractSummaryText(markdown: string, level: ConsolidationLevel):
 	const parts: string[] = [];
 
 	if (level === "daily") {
+		// Daily files are noisy, so I keep only the strongest operator-facing
+		// signals instead of embedding every narrative paragraph verbatim.
 		for (const line of lines) {
 			const trimmed = line.trim();
 			const stripped = trimmed.replace(/^-\s*/, "");
@@ -157,9 +177,22 @@ export function extractSummaryText(markdown: string, level: ConsolidationLevel):
 	return parts.join(" ").slice(0, 2000);
 }
 
+/** Hash the human-readable summary text used for content drift detection. */
 export function buildArtifactContentHash(summaryText: string): string {
 	const hash = createHash("sha1");
 	hash.update(summaryText);
+	return hash.digest("hex");
+}
+
+/**
+ * Fingerprint the exact text used as embedding input.
+ *
+ * Summary text can remain stable while the packed representation changes. The
+ * vector freshness check needs to treat that as semantic drift.
+ */
+export function buildArtifactEmbeddingInputHash(embeddingInputText: string): string {
+	const hash = createHash("sha1");
+	hash.update(embeddingInputText);
 	return hash.digest("hex");
 }
 
@@ -171,9 +204,10 @@ async function buildCuratedArtifact(params: {
 	markdown: string;
 	provenance: ConsolidationMetadata;
 }): Promise<CuratedConsolidationArtifact | null> {
-	const summaryText = extractSummaryText(params.markdown, params.level);
+	const extractedSummaryText = extractSummaryText(params.markdown, params.level);
+	const compressionDecision = await prepareCuratedSummaryCompression(params.markdown, extractedSummaryText);
+	const summaryText = compressionDecision.summaryText;
 	if (summaryText.length < 10) return null;
-	const compressionDecision = await prepareCuratedSummaryCompression(params.markdown, summaryText);
 	return {
 		id: params.id,
 		level: params.level,
@@ -184,43 +218,68 @@ async function buildCuratedArtifact(params: {
 		packedSummaryText: compressionDecision.packedSummaryText,
 		compression: compressionDecision.compression,
 		mdlMetrics: compressionDecision.mdlMetrics,
+		compactionDecision: compressionDecision.compactionDecision,
 		packedDecision: compressionDecision.packedDecision,
 		contentHash: buildArtifactContentHash(summaryText),
+		embeddingInputHash: compressionDecision.embeddingInputHash,
 		provenance: params.provenance,
 	};
 }
 
+/** Plan summary compression and decide whether packed text should become the embedding input. */
 export async function prepareCuratedSummaryCompression(
 	originalText: string,
 	summaryText: string,
 ): Promise<CuratedSummaryCompressionDecision> {
-	const compression = await packCuratedSummaryText(summaryText);
+	const sourceText = stripConsolidationMetadata(originalText).trim();
+	const selectedSummary = selectMdlSummaryText({
+		originalText: sourceText,
+		preferredSummaryText: summaryText,
+	});
+	const effectiveSummaryText = selectedSummary.summaryText;
+	const compression = await packCuratedSummaryText(effectiveSummaryText);
 	const packedSummaryText = compression?.packedText;
 	const candidateMetrics = computeMdlCompactionMetrics({
-		originalText,
-		summaryText,
+		originalText: sourceText,
+		summaryText: effectiveSummaryText,
 		packedText: packedSummaryText,
 	});
+	const compactionDecision = decideMdlCompaction(candidateMetrics);
 	const packedDecision = packedSummaryText ? decidePackedRepresentation(candidateMetrics) : null;
+	const embeddingInputHash = buildArtifactEmbeddingInputHash(
+		// Packed text only becomes the semantic source when the MDL gate says it
+		// preserved enough signal. Otherwise I keep the richer curated summary.
+		packedSummaryText && packedDecision?.accepted ? packedSummaryText : effectiveSummaryText,
+	);
 	if (!packedSummaryText || !packedDecision || packedDecision.accepted) {
 		return {
+			summaryText: effectiveSummaryText,
 			packedSummaryText: packedSummaryText ?? undefined,
 			compression: compression ?? undefined,
 			mdlMetrics: candidateMetrics,
+			compactionDecision,
 			packedDecision,
+			embeddingInputHash,
+			summarySelection: selectedSummary.selection,
 		};
 	}
+	const summaryOnlyMetrics = computeMdlCompactionMetrics({
+		originalText: sourceText,
+		summaryText: effectiveSummaryText,
+	});
 	return {
+		summaryText: effectiveSummaryText,
 		packedSummaryText: undefined,
 		compression: undefined,
-		mdlMetrics: computeMdlCompactionMetrics({
-			originalText,
-			summaryText,
-		}),
+		mdlMetrics: summaryOnlyMetrics,
+		compactionDecision: decideMdlCompaction(summaryOnlyMetrics),
 		packedDecision,
+		embeddingInputHash: buildArtifactEmbeddingInputHash(effectiveSummaryText),
+		summarySelection: selectedSummary.selection,
 	};
 }
 
+/** List curated artifacts from daily and periodic consolidation outputs. */
 export async function listCuratedConsolidationArtifacts(
 	options: CuratedConsolidationArtifactQuery = {},
 ): Promise<CuratedConsolidationArtifact[]> {

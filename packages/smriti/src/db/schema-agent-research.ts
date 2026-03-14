@@ -190,6 +190,13 @@ export function applyAgentResearchMigrations(db: AgentDbLike, currentVersion: nu
 		}
 	}
 
+	if (currentVersion < 27) {
+		const names = tableColumns(db, "remote_semantic_sync");
+		if (names.size > 0 && !names.has("quality_hash")) {
+			db.exec("ALTER TABLE remote_semantic_sync ADD COLUMN quality_hash TEXT;");
+		}
+	}
+
 	if (currentVersion < 22) {
 		const names = tableColumns(db, "research_experiments");
 		if (names.size > 0) {
@@ -288,6 +295,107 @@ export function applyAgentResearchMigrations(db: AgentDbLike, currentVersion: nu
 				value_json TEXT NOT NULL,
 				updated_at INTEGER NOT NULL
 			);
+		`);
+	}
+
+	if (currentVersion < 25) {
+		db.exec(`
+			CREATE TABLE IF NOT EXISTS research_loop_checkpoints (
+				id                  TEXT PRIMARY KEY,
+				project             TEXT NOT NULL,
+				loop_key            TEXT NOT NULL,
+				session_id          TEXT,
+				parent_session_id   TEXT,
+				session_lineage_key TEXT,
+				sabha_id            TEXT,
+				topic               TEXT,
+				hypothesis          TEXT,
+				status              TEXT NOT NULL,
+				phase               TEXT NOT NULL,
+				current_round       INTEGER,
+				next_round_number   INTEGER,
+				total_rounds        INTEGER,
+				checkpoint_json     TEXT NOT NULL,
+				created_at          INTEGER NOT NULL,
+				updated_at          INTEGER NOT NULL
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_research_loop_checkpoints_project
+				ON research_loop_checkpoints(project, updated_at DESC);
+			CREATE INDEX IF NOT EXISTS idx_research_loop_checkpoints_loop
+				ON research_loop_checkpoints(loop_key, updated_at DESC);
+			CREATE INDEX IF NOT EXISTS idx_research_loop_checkpoints_session
+				ON research_loop_checkpoints(session_id, updated_at DESC);
+		`);
+	}
+
+	if (currentVersion < 26) {
+		db.exec(`
+			CREATE TABLE IF NOT EXISTS agent_task_checkpoints (
+				id                  TEXT PRIMARY KEY,
+				project             TEXT NOT NULL,
+				task_key            TEXT NOT NULL,
+				task_type           TEXT,
+				agent_id            TEXT,
+				session_id          TEXT,
+				parent_task_key     TEXT,
+				session_lineage_key TEXT,
+				status              TEXT NOT NULL,
+				phase               TEXT NOT NULL,
+				checkpoint_json     TEXT NOT NULL,
+				created_at          INTEGER NOT NULL,
+				updated_at          INTEGER NOT NULL
+			);
+
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_task_checkpoints_project_task
+				ON agent_task_checkpoints(project, task_key);
+			CREATE INDEX IF NOT EXISTS idx_agent_task_checkpoints_status
+				ON agent_task_checkpoints(status, updated_at DESC);
+			CREATE INDEX IF NOT EXISTS idx_agent_task_checkpoints_session
+				ON agent_task_checkpoints(session_id, updated_at DESC);
+		`);
+	}
+
+	if (currentVersion < 28) {
+		const checkpointNames = tableColumns(db, "research_loop_checkpoints");
+		if (checkpointNames.size > 0) {
+			if (!checkpointNames.has("cancel_requested_at")) {
+				db.exec("ALTER TABLE research_loop_checkpoints ADD COLUMN cancel_requested_at INTEGER;");
+			}
+			if (!checkpointNames.has("cancel_reason")) {
+				db.exec("ALTER TABLE research_loop_checkpoints ADD COLUMN cancel_reason TEXT;");
+			}
+		}
+
+		db.exec(`
+			CREATE TABLE IF NOT EXISTS semantic_runtime_locks (
+				name        TEXT PRIMARY KEY,
+				owner_token TEXT NOT NULL,
+				acquired_at INTEGER NOT NULL,
+				expires_at  INTEGER NOT NULL
+			);
+		`);
+	}
+
+	if (currentVersion < 29) {
+		db.exec(`
+			CREATE TABLE IF NOT EXISTS research_refinement_queue (
+				id              TEXT PRIMARY KEY,
+				scope_key       TEXT NOT NULL UNIQUE,
+				label           TEXT NOT NULL,
+				project         TEXT NOT NULL,
+				scope_json      TEXT NOT NULL,
+				attempt_count   INTEGER NOT NULL DEFAULT 0,
+				next_attempt_at INTEGER NOT NULL,
+				last_error      TEXT,
+				created_at      INTEGER NOT NULL,
+				updated_at      INTEGER NOT NULL
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_research_refinement_queue_next_attempt
+				ON research_refinement_queue(next_attempt_at, updated_at);
+			CREATE INDEX IF NOT EXISTS idx_research_refinement_queue_project
+				ON research_refinement_queue(project, updated_at DESC);
 		`);
 	}
 }

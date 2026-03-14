@@ -1,16 +1,4 @@
-/**
- * @chitragupta/anina — Chitragupta Daemon
- *
- * Background daemon that orchestrates consolidation. Wraps NidraDaemon
- * with calendar-aware scheduling:
- *   - On idle: consolidate today's sessions (incremental)
- *   - On schedule (default 2am): full day consolidation for yesterday
- *   - On startup: backfill missed days since last run
- *   - On shutdown: quick consolidation of today
- *
- * Periodic operations (monthly/yearly consolidation, backfill, archive)
- * are in daemon-periodic.ts.
- */
+/** Background daemon that orchestrates Nidra-driven daily, periodic, and semantic consolidation. */
 
 import { EventEmitter } from "node:events";
 import { NidraDaemon } from "./nidra-daemon.js";
@@ -31,15 +19,20 @@ import {
 } from "./chitragupta-daemon-support.js";
 import { runDailyDaemonPostprocess } from "./chitragupta-daemon-postprocess.js";
 import {
-	resolveSessionProjects,
+	emitDailyPostprocessEvents,
+} from "./chitragupta-daemon-reporting.js";
+import {
 	runSwapnaForProjects,
-	type SwapnaProjectScope,
 } from "./chitragupta-daemon-swapna.js";
-import { refreshGlobalSemanticEpochDrift } from "./chitragupta-daemon-semantic.js";
+import {
+	refreshGlobalSemanticEpochDrift,
+} from "./chitragupta-daemon-semantic.js";
+import { drainQueuedResearchRefinementScopes } from "./chitragupta-daemon-semantic-queue.js";
+import { consolidateDeepSleepSessions } from "./chitragupta-daemon-deep-sleep.js";
+import { dispatchNextQueuedResearchLoop } from "./chitragupta-daemon-research-scheduler.js";
 
 export { formatDate } from "./daemon-periodic.js";
 export type { ChitraguptaDaemonConfig, ConsolidationEvent, DaemonState } from "./chitragupta-daemon-support.js";
-
 // ─── Daemon ─────────────────────────────────────────────────────────────────
 
 /**
@@ -59,7 +52,9 @@ export class ChitraguptaDaemon extends EventEmitter {
 	private monthlyTimer: ReturnType<typeof setTimeout> | null = null;
 	private yearlyTimer: ReturnType<typeof setTimeout> | null = null;
 	private semanticEpochTimer: ReturnType<typeof setInterval> | null = null;
+	private researchDispatchTimer: ReturnType<typeof setInterval> | null = null;
 	private semanticRefreshPromise: Promise<void> | null = null;
+	private researchDispatchPromise: Promise<void> | null = null;
 	private running = false;
 	private startTime = 0;
 	private consolidating = false;
@@ -94,6 +89,7 @@ export class ChitraguptaDaemon extends EventEmitter {
 		this.scheduleMonthlyConsolidation();
 		this.scheduleYearlyConsolidation();
 		this.scheduleSemanticEpochRefresh();
+		this.scheduleResearchDispatch();
 
 		if (this.config.backfillOnStartup) {
 			this.backfillMissedDays()
@@ -101,6 +97,7 @@ export class ChitraguptaDaemon extends EventEmitter {
 				.catch((err) => { this.emit("error", err); });
 		}
 		void this.runSemanticEpochRefresh();
+		void this.runResearchDispatchTick();
 		this.emit("started");
 	}
 
@@ -113,13 +110,17 @@ export class ChitraguptaDaemon extends EventEmitter {
 		if (this.monthlyTimer) { clearTimeout(this.monthlyTimer); this.monthlyTimer = null; }
 		if (this.yearlyTimer) { clearTimeout(this.yearlyTimer); this.yearlyTimer = null; }
 		if (this.semanticEpochTimer) { clearInterval(this.semanticEpochTimer); this.semanticEpochTimer = null; }
+		if (this.researchDispatchTimer) { clearInterval(this.researchDispatchTimer); this.researchDispatchTimer = null; }
+		if (this.researchDispatchPromise) {
+			try { await this.researchDispatchPromise; } catch { /* best-effort */ }
+		}
 
 		try { await this.consolidateToday(); } catch { /* best-effort */ }
 		if (this.nidra) { await this.nidra.stop(); this.nidra = null; }
 		this.emit("stopped");
 	}
 
-	/** Signal user activity (resets idle timer). */
+	/** Signal user activity (resets Nidra idle timing). */
 	touch(): void { this.nidra?.touch(); }
 
 	/** Register a logical session with Nidra for sleep-cycle accounting. */
@@ -128,19 +129,16 @@ export class ChitraguptaDaemon extends EventEmitter {
 	/** Wake Nidra out of dreaming/deep-sleep state. */
 	wake(): void { this.nidra?.wake(); }
 
-	/** Get current daemon state. */
+	/** Get the current daemon state snapshot. */
 	getState(): DaemonState {
 		return {
-			running: this.running,
-			nidraState: this.nidra?.snapshot().state ?? "LISTENING",
-			lastConsolidation: this.lastConsolidationDate,
-			lastBackfill: this.lastBackfillDate,
-			consolidatedDates: [...this.consolidatedDates],
-			uptime: this.running ? Date.now() - this.startTime : 0,
+			running: this.running, nidraState: this.nidra?.snapshot().state ?? "LISTENING",
+			lastConsolidation: this.lastConsolidationDate, lastBackfill: this.lastBackfillDate,
+			consolidatedDates: [...this.consolidatedDates], uptime: this.running ? Date.now() - this.startTime : 0,
 		};
 	}
 
-	/** Get a detailed Nidra snapshot (state, phase, progress, heartbeat). */
+	/** Get the current Nidra snapshot (state, phase, progress, heartbeat). */
 	getNidraSnapshot(): NidraSnapshot | null {
 		return this.nidra?.snapshot() ?? null;
 	}
@@ -172,18 +170,36 @@ export class ChitraguptaDaemon extends EventEmitter {
 		this.emit("consolidation", { type: "start", date } as ConsolidationEvent);
 
 		try {
-			const { consolidateDay } = await import("@chitragupta/smriti/day-consolidation");
+			const { consolidateDay } = await import("@chitragupta/smriti");
 			const result = await consolidateDay(date, { force: true });
+				const runResearchPostprocessSwapna = async (projectPaths: readonly string[]) => {
+					if (projectPaths.length === 0) return;
+					await runSwapnaForProjects(
+						projectPaths.map((projectPath) => ({ project: projectPath })),
+						date,
+						"swapna:research-postprocess",
+						this.emit.bind(this),
+					);
+				};
 
-			this.emit("consolidation", {
-				type: "progress", date, phase: "day-file",
-				detail: `${result.sessionsProcessed} sessions → ${result.filePath}`,
-			});
+				this.emit("consolidation", {
+					type: "progress", date, phase: "day-file",
+					detail: `${result.sessionsProcessed} sessions → ${result.filePath}`,
+				});
 
-			if (result.sessionsProcessed === 0) {
-				this.emit("consolidation", { type: "complete", date, detail: "no sessions" });
-				return;
-			}
+					if (result.sessionsProcessed === 0) {
+						try {
+							const postprocess = await runDailyDaemonPostprocess(date);
+							emitDailyPostprocessEvents(this.emit.bind(this, "consolidation"), date, postprocess);
+							await runResearchPostprocessSwapna(postprocess.research.projectPaths);
+						} catch {
+							/* best-effort */
+						}
+					this.consolidatedDates.add(date);
+					this.lastConsolidationDate = date;
+					this.emit("consolidation", { type: "complete", date, detail: "no sessions" });
+					return;
+				}
 
 			// Run Swapna consolidation per project.
 			const { listSessionsByDate } = await import("@chitragupta/smriti/session-store");
@@ -209,38 +225,13 @@ export class ChitraguptaDaemon extends EventEmitter {
 						} catch { /* best-effort */ }
 					}
 
-			try {
-				const postprocess = await runDailyDaemonPostprocess(date);
-				if (postprocess.research.processed > 0) {
-					this.emit("consolidation", { type: "progress", date, phase: "research-loops", detail: `${postprocess.research.processed} overnight loop summaries across ${postprocess.research.projects} projects` });
+				try {
+					const postprocess = await runDailyDaemonPostprocess(date);
+					emitDailyPostprocessEvents(this.emit.bind(this, "consolidation"), date, postprocess);
+					await runResearchPostprocessSwapna(postprocess.research.projectPaths);
+				} catch {
+					/* best-effort */
 				}
-				if (postprocess.research.refinements.processed > 0) {
-					this.emit("consolidation", {
-						type: "progress",
-						date,
-						phase: "research-refinement",
-						detail: `${postprocess.research.refinements.processed} research refinement digests across ${postprocess.research.refinements.projects} projects`,
-					});
-				}
-				if (postprocess.semantic.reembedded > 0) {
-					this.emit("consolidation", {
-						type: "progress",
-						date,
-						phase: "semantic-reembed",
-						detail: `re-embedded ${postprocess.semantic.reembedded} of ${postprocess.semantic.candidates} stale daily artifacts`,
-					});
-				}
-				if (postprocess.remote.enabled) {
-					this.emit("consolidation", {
-						type: "progress",
-						date,
-						phase: "remote-sync",
-						detail: `remote semantic mirror synced ${postprocess.remote.synced} daily artifacts`,
-					});
-				}
-			} catch {
-				/* best-effort */
-			}
 
 				this.consolidatedDates.add(date);
 			this.lastConsolidationDate = date;
@@ -260,79 +251,16 @@ export class ChitraguptaDaemon extends EventEmitter {
 	}
 
 	private async consolidateProjectsForSessions(sessionIds: readonly string[]): Promise<string[]> {
-		if (sessionIds.length === 0) return [];
-
-		const label = "deep-sleep";
-		this.emit("consolidation", {
-			type: "progress",
-			date: label,
-			phase: "deep-sleep:resolve",
-			detail: `${sessionIds.length} pending sessions`,
-		});
-
-		const sessions = await resolveSessionProjects(sessionIds);
-		const resolvedIds = new Set(sessions.map((session) => session.id));
-		const missingCount = sessionIds.reduce(
-			(count, id) => count + (resolvedIds.has(id) ? 0 : 1),
-			0,
+		return consolidateDeepSleepSessions(
+			sessionIds,
+			(event) => this.emit("consolidation", event),
 		);
-		const projects = new Map<string, string[]>();
-
-		for (const session of sessions) {
-			const existing = projects.get(session.project);
-			if (existing) existing.push(session.id);
-			else projects.set(session.project, [session.id]);
-		}
-
-		if (missingCount > 0) {
-			this.emit("consolidation", {
-				type: "progress",
-				date: label,
-				phase: "deep-sleep:resolve",
-				detail: `${missingCount} sessions missing from Smriti`,
-			});
-		}
-
-		if (projects.size === 0) {
-			this.emit("consolidation", {
-				type: "progress",
-				date: label,
-				phase: "deep-sleep:resolve",
-				detail: "no matching projects for pending sessions",
-			});
-			return [];
-		}
-
-		const processedSessionIds = await runSwapnaForProjects(
-			[...projects.entries()].map(([project, scopedSessionIds]) => ({
-				project,
-				sessionIds: scopedSessionIds,
-			})),
-			label,
-			"deep-sleep:swapna",
-			this.emit.bind(this),
-		);
-
-		if (processedSessionIds.length !== sessionIds.length) {
-			const processed = new Set(processedSessionIds);
-			const deferred = sessionIds.filter((id) => !processed.has(id));
-			if (deferred.length > 0) {
-				this.emit("consolidation", {
-					type: "progress",
-					date: label,
-					phase: "deep-sleep:swapna",
-					detail: `${deferred.length} pending sessions deferred for retry`,
-				});
-			}
-		}
-
-		return processedSessionIds;
 	}
 
 	/** Backfill any days that have sessions but no day file. */
 	async backfillMissedDays(): Promise<string[]> {
 		try {
-			const { getUnconsolidatedDates } = await import("@chitragupta/smriti/day-consolidation");
+			const { getUnconsolidatedDates } = await import("@chitragupta/smriti");
 			const missed = await getUnconsolidatedDates(this.config.maxBackfillDays);
 			for (const date of missed) {
 				if (!this.running) break;
@@ -380,6 +308,46 @@ export class ChitraguptaDaemon extends EventEmitter {
 		if (this.semanticEpochTimer.unref) this.semanticEpochTimer.unref();
 	}
 
+	/**
+	 * Poll the durable research queue on a short cadence so the daemon can pick
+	 * up overnight work without an external trigger.
+	 */
+	private scheduleResearchDispatch(): void {
+		if (!this.running || this.config.researchDispatchMinutes <= 0) return;
+		const intervalMs = this.config.researchDispatchMinutes * 60 * 1000;
+		this.researchDispatchTimer = setInterval(() => {
+			if (!this.running) return;
+			void this.runResearchDispatchTick();
+		}, intervalMs);
+		if (this.researchDispatchTimer.unref) this.researchDispatchTimer.unref();
+	}
+
+	/**
+	 * Dispatch at most one queued overnight workflow when the daemon is otherwise
+	 * idle enough to supervise it.
+	 */
+	private async runResearchDispatchTick(): Promise<void> {
+		if (this.researchDispatchPromise || this.consolidating || this.semanticRefreshing) return;
+		const dispatchPromise = (async () => {
+			try {
+				await dispatchNextQueuedResearchLoop(this.emit.bind(this));
+			} catch (err) {
+				this.emit("consolidation", {
+					type: "error",
+					date: formatDate(new Date()),
+					phase: "research-dispatch",
+					detail: err instanceof Error ? err.message : String(err),
+				});
+			}
+		})();
+		this.researchDispatchPromise = dispatchPromise;
+		try {
+			await dispatchPromise;
+		} finally {
+			this.researchDispatchPromise = null;
+		}
+	}
+
 	private async runSemanticEpochRefresh(): Promise<void> {
 		if (this.semanticRefreshing || this.consolidating) return;
 		this.semanticRefreshing = true;
@@ -387,12 +355,21 @@ export class ChitraguptaDaemon extends EventEmitter {
 		const refreshPromise = (async () => {
 			try {
 				const refreshed = await refreshGlobalSemanticEpochDrift(false);
+				const queuedResearch = await drainQueuedResearchRefinementScopes({ label });
 				if (refreshed.refreshed || refreshed.repair.reembedded > 0 || refreshed.repair.remoteSynced > 0) {
 					this.emit("consolidation", {
 						type: "progress",
 						date: label,
 						phase: "semantic-epoch-refresh",
 						detail: `${refreshed.reason}: reembedded ${refreshed.repair.reembedded}, remote ${refreshed.repair.remoteSynced}${refreshed.completed ? "" : " (partial)"}`,
+					});
+				}
+				if (queuedResearch.drained > 0) {
+					this.emit("consolidation", {
+						type: "progress",
+						date: label,
+						phase: "semantic-epoch-refresh",
+						detail: `queued research refinement drained ${queuedResearch.drained}, repaired ${queuedResearch.repaired}, deferred ${queuedResearch.deferred}`,
 					});
 				}
 			} catch (err) {

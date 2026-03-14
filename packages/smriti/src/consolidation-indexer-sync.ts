@@ -51,6 +51,9 @@ export async function inspectArtifactVectorSync(
 		}
 		const metadata = parseEmbeddingMetadata(row);
 		const storedHash = typeof metadata.contentHash === "string" ? metadata.contentHash : "";
+		const storedEmbeddingInputHash = typeof metadata.embeddingInputHash === "string"
+			? metadata.embeddingInputHash
+			: storedHash;
 		const curated = metadata.curated === true;
 		const storedEpoch = parseEmbeddingEpoch(metadata.embeddingEpoch);
 		if (!curated) {
@@ -64,7 +67,10 @@ export async function inspectArtifactVectorSync(
 			});
 			continue;
 		}
-		if (storedHash !== artifact.contentHash) {
+		if (
+			storedHash !== artifact.contentHash
+			|| storedEmbeddingInputHash !== artifact.embeddingInputHash
+		) {
 			driftCount++;
 			issues.push({
 				id: artifact.id,

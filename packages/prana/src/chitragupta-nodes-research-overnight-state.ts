@@ -1,12 +1,16 @@
 import type {
+	ResearchCouncilSummary,
 	ResearchFinalizeResult,
 	ResearchRunData,
 	ResearchScope,
 } from "./chitragupta-nodes-research-shared.js";
 import type {
+	OvernightResearchSummary,
 	OvernightResearchRound,
 	ResearchEvaluationRecord,
 } from "./chitragupta-nodes-research-overnight-types.js";
+import { buildSummary } from "./chitragupta-nodes-research-overnight-types.js";
+import type { RoundProgressState } from "./chitragupta-nodes-research-overnight-rounds.js";
 
 /**
  * Build the canonical round shape before recording/packing enriches it with
@@ -31,6 +35,11 @@ export function buildRoundBase(
 		selectedModelId: typeof runData.selectedModelId === "string" ? runData.selectedModelId : null,
 		selectedProviderId: typeof runData.selectedProviderId === "string" ? runData.selectedProviderId : null,
 		executionRouteClass: typeof runData.executionRouteClass === "string" ? runData.executionRouteClass : null,
+		objectiveScores: evaluation.objectiveScores ?? [],
+		stopConditionHits: evaluation.stopConditionHits ?? [],
+		optimizerScore: typeof evaluation.optimizerScore === "number" ? evaluation.optimizerScore : null,
+		paretoRank: null,
+		paretoDominated: false,
 	};
 }
 
@@ -108,4 +117,65 @@ export function applyProgressState(
 	} else {
 		state.noImprovementStreak += 1;
 	}
+}
+
+/**
+ * Build a loop summary from the mutable overnight-loop state without forcing
+ * callers to duplicate the same long summary construction block.
+ */
+export function buildLoopSummaryFromState(
+	scope: ResearchScope,
+	council: ResearchCouncilSummary,
+	rounds: OvernightResearchRound[],
+	stopReason: OvernightResearchSummary["stopReason"],
+	progress: {
+		bestMetric: number | null;
+		bestRoundNumber: number | null;
+		noImprovementStreak: number;
+		totalDurationMs: number;
+	},
+	roundCounts: { keptRounds: number; revertedRounds: number },
+	loopKey: string,
+): OvernightResearchSummary {
+	return buildSummary(
+		scope,
+		council,
+		rounds,
+		stopReason,
+		progress.bestMetric,
+		progress.bestRoundNumber,
+		progress.noImprovementStreak,
+		progress.totalDurationMs,
+		roundCounts.keptRounds,
+		roundCounts.revertedRounds,
+		loopKey,
+	);
+}
+
+/** Narrow a generic object into the record shape used by checkpoint payloads. */
+export function asRoundRecord(value: object): Record<string, unknown> {
+	return value as unknown as Record<string, unknown>;
+}
+
+/** A failed run only needs cleanup when it mutated bounded scope state. */
+export function failedRunNeedsCleanup(run: Record<string, unknown>): boolean {
+	return Boolean(run.scopeSnapshot)
+		|| (Array.isArray(run.targetFilesChanged) && run.targetFilesChanged.length > 0);
+}
+
+/** Snapshot the mutable progress counters into the round-closure helper shape. */
+export function buildRoundProgressState(
+	bestMetric: number | null,
+	bestRoundNumber: number | null,
+	noImprovementStreak: number,
+	totalDurationMs: number,
+	loopKey: string,
+): RoundProgressState {
+	return {
+		bestMetric,
+		bestRoundNumber,
+		noImprovementStreak,
+		totalDurationMs,
+		loopKey,
+	};
 }

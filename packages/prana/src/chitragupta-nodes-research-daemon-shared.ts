@@ -10,7 +10,11 @@ import {
 } from "./chitragupta-nodes-research-shared.js";
 
 type DaemonClientLike = {
-	call(method: string, params?: Record<string, unknown>): Promise<unknown>;
+	call(
+		method: string,
+		params?: Record<string, unknown>,
+		options?: { signal?: AbortSignal },
+	): Promise<unknown>;
 	disconnect(): void;
 };
 

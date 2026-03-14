@@ -236,7 +236,7 @@ export async function archiveOldDayFiles(
 	if (config.dayFileRetentionMonths <= 0) return 0;
 
 	try {
-		const { listDayFiles, getDayFilePath } = await import("@chitragupta/smriti/day-consolidation");
+		const { listDayFiles, getDayFilePath } = await import("@chitragupta/smriti");
 		const { getChitraguptaHome } = await import("@chitragupta/core");
 		const cutoff = new Date();
 		cutoff.setMonth(cutoff.getMonth() - config.dayFileRetentionMonths);

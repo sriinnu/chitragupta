@@ -7,10 +7,26 @@ import {
 	type CuratedConsolidationArtifactQuery,
 } from "./consolidation-indexer.js";
 import {
+	MIN_SUMMARY_MDL_SCORE,
+} from "./mdl-compaction.js";
+import {
 	inspectRemoteSemanticSync,
 	syncRemoteSemanticMirror,
 	type RemoteSemanticSyncIssue,
 } from "./remote-semantic-sync.js";
+import { getRemoteSemanticPromotionDecision } from "./remote-semantic-sync-quality.js";
+import {
+	buildIssueMap,
+	deriveArtifactQualityReasons,
+	hasCompactionRepairDisposition,
+	hasCompactionWatchDisposition,
+	hasFreshnessRepairReason,
+	hasQualityRebuildReason,
+	hasQualityRepairReason,
+	normalizeReasonFilter,
+	requiresQualityRefresh,
+	scoreCandidate,
+} from "./selective-reembedding-helpers.js";
 
 /**
  * Candidate artifact for selective semantic refresh.
@@ -33,21 +49,42 @@ export interface SelectiveReembeddingCandidate {
 	contentHash: string;
 }
 
+/**
+ * Local reasons originate from the canonical Chitragupta semantic mirrors.
+ *
+ * These are the only reasons that can trigger local rebuild/reindex work
+ * without consulting the remote mirror.
+ */
 export type LocalSelectiveReembeddingReason =
 	| ConsolidationVectorSyncIssue["reason"]
 	| "low_mdl"
-	| "rejected_packed";
+	| "rejected_packed"
+	| "low_retention"
+	| "low_reduction";
 
+/**
+ * Full selective-reembedding reason set.
+ *
+ * This widens local reasons with remote mirror drift so the daemon can repair
+ * either local truth or remote lag from the same ranked candidate frontier.
+ */
 export type SelectiveReembeddingReason =
 	| LocalSelectiveReembeddingReason
 	| RemoteSemanticSyncIssue["reason"];
 
+/** Ranked repair plan for the highest-value stale semantic artifacts. */
 export interface SelectiveReembeddingPlan {
 	scanned: number;
 	candidateCount: number;
 	candidates: SelectiveReembeddingCandidate[];
 }
 
+/**
+ * Result of one selective semantic repair pass.
+ *
+ * `reembedded` counts local semantic refreshes, while `remoteSynced` only
+ * counts the second-phase remote mirror repair after local truth is healthy.
+ */
 export interface SelectiveReembeddingRepairResult {
 	plan: SelectiveReembeddingPlan;
 	reembedded: number;
@@ -55,17 +92,19 @@ export interface SelectiveReembeddingRepairResult {
 	qualityDeferred: number;
 }
 
+/**
+ * Planner options for selective semantic repair.
+ *
+ * These gates intentionally bias toward high-value artifacts instead of
+ * rewriting the entire mirror whenever one provider/model epoch changes.
+ */
 export interface SelectiveReembeddingOptions extends CuratedConsolidationArtifactQuery {
 	candidateLimit?: number;
-	reasons?: SelectiveReembeddingReason[];
+	reasons?: readonly SelectiveReembeddingReason[];
 	resyncRemote?: boolean;
 	minMdlScore?: number;
 	minSourceSessionCount?: number;
 	minPriorityScore?: number;
-}
-
-function requiresQualityRefresh(candidate: Pick<SelectiveReembeddingCandidate, "localReasons">): boolean {
-	return candidate.localReasons.includes("low_mdl") || candidate.localReasons.includes("rejected_packed");
 }
 
 /**
@@ -99,82 +138,42 @@ async function rebuildCuratedArtifact(
 	}
 }
 
-function roundScore(value: number): number {
-	return Math.round(value * 1000) / 1000;
+/**
+ * Reload one curated artifact after a local rebuild/reindex step.
+ *
+ * I use this to ensure any downstream promotion decision sees the latest
+ * hash/epoch/quality metadata instead of whatever snapshot was loaded before
+ * the repair ran.
+ */
+async function reloadCuratedArtifact(
+	options: SelectiveReembeddingOptions,
+	artifactId: string,
+	fallback: CuratedConsolidationArtifact,
+): Promise<CuratedConsolidationArtifact> {
+	const refreshed = await listCuratedConsolidationArtifacts({ ...options, ids: [artifactId] });
+	return refreshed[0] ?? fallback;
 }
 
-function levelWeight(level: CuratedConsolidationArtifact["level"]): number {
-	switch (level) {
-		case "yearly":
-			return 1.35;
-		case "monthly":
-			return 1.2;
-		default:
-			return 1;
-	}
+/**
+ * Re-read the local vector drift reasons for one artifact after a rebuild step.
+ *
+ * I use this to tell apart "the rebuild already refreshed the vector row"
+ * from "the canonical rebuild improved quality, but I still owe a local
+ * reindex before the artifact is semantically healthy again".
+ */
+async function reloadLocalRepairReasons(
+	options: SelectiveReembeddingOptions,
+	artifactId: string,
+): Promise<Array<ConsolidationVectorSyncIssue["reason"]>> {
+	const status = await inspectConsolidationVectorSync({ ...options, ids: [artifactId] });
+	return status.issues
+		.filter((issue) => issue.id === artifactId)
+		.map((issue) => issue.reason);
 }
 
-function scoreCandidate(
-	artifact: CuratedConsolidationArtifact,
-	localReasons: Array<LocalSelectiveReembeddingReason>,
-	remoteReasons: Array<RemoteSemanticSyncIssue["reason"]>,
-): number {
-	const sourceSessionCount = artifact.provenance.sourceSessionIds.length;
-	const sourcePeriodCount =
-		"sourcePeriods" in artifact.provenance && Array.isArray(artifact.provenance.sourcePeriods)
-			? artifact.provenance.sourcePeriods.length
-			: 0;
-	const localEpochDrift = localReasons.includes("stale_epoch");
-	const remoteEpochDrift = remoteReasons.includes("stale_remote_epoch");
-	const bothSidesDrift = localEpochDrift && remoteEpochDrift;
-	const lowMdl = localReasons.includes("low_mdl");
-	const rejectedPacked = localReasons.includes("rejected_packed");
-	const priorityBase =
-		levelWeight(artifact.level)
-		+ Math.min(sourceSessionCount, 24) * 0.08
-		+ Math.min(sourcePeriodCount, 12) * 0.05
-		+ artifact.mdlMetrics.mdlScore
-		+ (bothSidesDrift ? 0.5 : localEpochDrift || remoteEpochDrift ? 0.25 : 0)
-		+ (lowMdl ? 0.3 : 0)
-		+ (rejectedPacked ? 0.2 : 0);
-	return roundScore(priorityBase);
-}
-
-const DEFAULT_LOW_MDL_REPAIR_THRESHOLD = 0.6;
-
-function deriveArtifactQualityReasons(
-	artifact: CuratedConsolidationArtifact,
-): Array<LocalSelectiveReembeddingReason> {
-	const reasons: Array<LocalSelectiveReembeddingReason> = [];
-	if (artifact.mdlMetrics.mdlScore < DEFAULT_LOW_MDL_REPAIR_THRESHOLD) {
-		reasons.push("low_mdl");
-	}
-	if (artifact.packedDecision && !artifact.packedDecision.accepted) {
-		reasons.push("rejected_packed");
-	}
-	return reasons;
-}
-
-function buildIssueMap<T extends { id: string }>(
-	issues: readonly T[],
-): Map<string, T[]> {
-	const map = new Map<string, T[]>();
-	for (const issue of issues) {
-		const bucket = map.get(issue.id) ?? [];
-		bucket.push(issue);
-		map.set(issue.id, bucket);
-	}
-	return map;
-}
-
-function normalizeReasonFilter(
-	reasons: readonly SelectiveReembeddingReason[] | undefined,
-): Set<SelectiveReembeddingReason> | null {
-	if (!reasons || reasons.length === 0) return null;
-	const filtered = reasons.filter((reason): reason is SelectiveReembeddingReason => typeof reason === "string");
-	return filtered.length > 0 ? new Set(filtered) : null;
-}
-
+/**
+ * Plan a bounded selective semantic repair pass without mutating artifacts.
+ */
 export async function planSelectiveReembedding(
 	options: SelectiveReembeddingOptions = {},
 ): Promise<SelectiveReembeddingPlan> {
@@ -197,43 +196,62 @@ export async function planSelectiveReembedding(
 	const minSourceSessionCount = Math.max(0, Math.trunc(options.minSourceSessionCount ?? 0));
 	const minPriorityScore = Number.isFinite(options.minPriorityScore) ? Math.max(0, options.minPriorityScore ?? 0) : 0;
 	const candidates = artifacts
-			.reduce<SelectiveReembeddingCandidate[]>((acc, artifact) => {
-				const localSyncReasons = (localIssuesById.get(artifact.id) ?? []).map((issue) => issue.reason);
-				const remoteReasons = (remoteIssuesById.get(artifact.id) ?? []).map((issue) => issue.reason);
-				const qualityReasons = deriveArtifactQualityReasons(artifact);
-				// Quality reasons are first-class repair triggers, not just tie-breakers.
-				const localReasons = [...new Set([...localSyncReasons, ...qualityReasons])];
-				const effectiveReasons = [...new Set([...localReasons, ...remoteReasons])];
-				const epochRelevant =
-					localReasons.includes("stale_epoch")
-					|| remoteReasons.includes("stale_remote_epoch");
-				const remoteRelevant =
-					remoteReasons.includes("missing_remote")
-					|| remoteReasons.includes("stale_remote")
-					|| remoteReasons.includes("remote_error");
-				const qualityRelevant =
-					localReasons.includes("low_mdl")
-					|| localReasons.includes("rejected_packed");
-				const matchedReasons = reasonFilter
-					? effectiveReasons.filter((reason) => reasonFilter.has(reason))
-					: effectiveReasons.filter((reason) => epochRelevant || remoteRelevant || qualityRelevant);
-				const reasonMatch = reasonFilter
-					? matchedReasons.length > 0
-					: epochRelevant || remoteRelevant || qualityRelevant;
-				if (!reasonMatch) {
-					return acc;
-				}
+		.reduce<SelectiveReembeddingCandidate[]>((acc, artifact) => {
+			const localSyncReasons = (localIssuesById.get(artifact.id) ?? []).map((issue) => issue.reason);
+			const remoteReasons = (remoteIssuesById.get(artifact.id) ?? []).map((issue) => issue.reason);
+			const qualityReasons = deriveArtifactQualityReasons(artifact);
+			const compactionRepairDisposition = hasCompactionRepairDisposition(artifact);
+			const compactionWatchDisposition = hasCompactionWatchDisposition(artifact);
+			// Quality reasons are first-class repair triggers, not just tie-breakers.
+			const localReasons = [...new Set([...localSyncReasons, ...qualityReasons])];
+			const effectiveReasons = [...new Set([...localReasons, ...remoteReasons])];
+			const epochRelevant =
+				localReasons.includes("stale_epoch")
+				|| remoteReasons.includes("stale_remote_epoch");
+			const remoteRelevant =
+				remoteReasons.includes("missing_remote")
+				|| remoteReasons.includes("stale_remote")
+				|| remoteReasons.includes("stale_remote_quality")
+				|| remoteReasons.includes("remote_error");
+			const qualityRelevant =
+				localReasons.includes("low_mdl")
+				|| localReasons.includes("rejected_packed")
+				|| localReasons.includes("low_retention")
+				|| localReasons.includes("low_reduction")
+				// I surface MDL disposition directly here so "repair" is a
+				// first-class frontier signal, not only an indirect score bump.
+				|| compactionRepairDisposition
+				|| (
+					compactionWatchDisposition
+					&& artifact.mdlMetrics.mdlScore < Math.max(minMdlScore, MIN_SUMMARY_MDL_SCORE)
+				);
+			const matchedReasons = reasonFilter
+				? effectiveReasons.filter((reason) => reasonFilter.has(reason))
+				: effectiveReasons.filter((reason) => epochRelevant || remoteRelevant || qualityRelevant);
+			const reasonMatch = reasonFilter
+				? matchedReasons.length > 0
+					|| (compactionRepairDisposition && reasonFilter.has("low_mdl"))
+				: epochRelevant || remoteRelevant || qualityRelevant;
+			if (!reasonMatch) {
+				return acc;
+			}
 			const sourcePeriodCount =
 				"sourcePeriods" in artifact.provenance && Array.isArray(artifact.provenance.sourcePeriods)
 					? artifact.provenance.sourcePeriods.length
 					: 0;
 			const score = scoreCandidate(artifact, localReasons, remoteReasons);
-				if (!hasExplicitIds) {
-					const bypassMdlGate = matchedReasons.some((reason) => reason === "low_mdl" || reason === "rejected_packed");
-					const meetsMdlGate = bypassMdlGate || artifact.mdlMetrics.mdlScore >= minMdlScore;
-					const meetsSourceGate = artifact.provenance.sourceSessionIds.length >= minSourceSessionCount;
-					const meetsPriorityGate = score >= minPriorityScore;
-					if (!meetsMdlGate || !meetsSourceGate || !meetsPriorityGate) {
+			if (!hasExplicitIds) {
+				// High-signal drift reasons and explicit repair disposition are
+				// allowed to bypass the generic frontier gates so I do not ignore
+				// obviously bad artifacts just because they are small or sparse.
+				const bypassRepairGates =
+					hasQualityRepairReason(matchedReasons)
+					|| hasFreshnessRepairReason(matchedReasons)
+					|| compactionRepairDisposition;
+				const meetsMdlGate = bypassRepairGates || artifact.mdlMetrics.mdlScore >= minMdlScore;
+				const meetsSourceGate = bypassRepairGates || artifact.provenance.sourceSessionIds.length >= minSourceSessionCount;
+				const meetsPriorityGate = bypassRepairGates || score >= minPriorityScore;
+				if (!meetsMdlGate || !meetsSourceGate || !meetsPriorityGate) {
 					return acc;
 				}
 			}
@@ -264,8 +282,9 @@ export async function planSelectiveReembedding(
 /**
  * Repair the highest-value stale semantic artifacts in place.
  *
- * Local vector freshness is restored first. Remote sync is a second phase
- * because local semantic truth remains authoritative.
+ * Quality repairs rebuild the artifact first, then refresh local vectors, and
+ * only then attempt remote mirror repair if the local representation is healthy
+ * enough to promote.
  */
 export async function repairSelectiveReembedding(
 	options: SelectiveReembeddingOptions = {},
@@ -283,50 +302,81 @@ export async function repairSelectiveReembedding(
 	for (const candidate of plan.candidates) {
 		let artifact = artifactsById.get(candidate.id);
 		if (!artifact) continue;
-		let requiresVectorRepair =
+		const requiresQualityRepair = requiresQualityRefresh(candidate);
+		const requiresLocalVectorRepair =
 			candidate.localReasons.includes("missing_vector")
 			|| candidate.localReasons.includes("stale_hash")
 			|| candidate.localReasons.includes("legacy_vector")
-			|| candidate.localReasons.includes("stale_epoch")
-			|| candidate.remoteReasons.includes("missing_remote")
+			|| candidate.localReasons.includes("stale_epoch");
+		const requiresRemoteMirrorRepair =
+			candidate.remoteReasons.includes("missing_remote")
 			|| candidate.remoteReasons.includes("stale_remote")
 			|| candidate.remoteReasons.includes("stale_remote_epoch")
+			|| candidate.remoteReasons.includes("stale_remote_quality")
 			|| candidate.remoteReasons.includes("remote_error");
-		const qualityRefresh = !requiresVectorRepair && requiresQualityRefresh(candidate);
+		let requiresLocalReindex = requiresLocalVectorRepair;
 		let qualityStillDeferred = false;
-		if (!requiresVectorRepair && !qualityRefresh) {
-			qualityDeferred += 1;
+		if (!requiresLocalVectorRepair && !requiresRemoteMirrorRepair && !requiresQualityRepair) {
 			continue;
 		}
-		if (qualityRefresh) {
+		if (requiresQualityRepair) {
 			const rebuilt = await rebuildCuratedArtifact(artifact);
 			if (!rebuilt) {
+				qualityStillDeferred = true;
 				qualityDeferred += 1;
 				continue;
 			}
-			const refreshed = await listCuratedConsolidationArtifacts({ ...options, ids: [candidate.id] });
-			artifact = refreshed[0] ?? artifact;
+			artifact = await reloadCuratedArtifact(options, candidate.id, artifact);
 			artifactsById.set(candidate.id, artifact);
 			const remainingQualityReasons = deriveArtifactQualityReasons(artifact);
-			qualityStillDeferred = remainingQualityReasons.length > 0;
-			requiresVectorRepair = true;
-		}
-		const reindex = await indexConsolidationSummary(
-			artifact.level,
-			artifact.period,
-			artifact.markdown,
-			artifact.project,
-		);
-		if (reindex.indexed) {
-			if (qualityStillDeferred) {
-				qualityDeferred += 1;
-				continue;
+			qualityStillDeferred = hasQualityRebuildReason(remainingQualityReasons);
+			const refreshedLocalReasons = await reloadLocalRepairReasons(options, candidate.id);
+			if (requiresLocalVectorRepair && !hasFreshnessRepairReason(refreshedLocalReasons)) {
+				// Canonical rebuilds can already refresh the vector row through the
+				// consolidation path. When that happens I count the local semantic
+				// repair immediately and skip a redundant reindex call.
+				requiresLocalReindex = false;
+				reembedded += 1;
+			} else {
+				// Rebuilds can change both the summary body and its MDL/packed
+				// metadata, so I still force a local reindex before any remote sync
+				// when the canonical rebuild has not already repaired freshness.
+				requiresLocalReindex = true;
 			}
-			reembedded += 1;
-			remoteEligibleIds.push(candidate.id);
-		} else if (qualityStillDeferred) {
+		}
+		let localIndexed = false;
+		if (requiresLocalReindex) {
+			const reindex = await indexConsolidationSummary(
+				artifact.level,
+				artifact.period,
+				artifact.markdown,
+				artifact.project,
+			);
+			localIndexed = reindex.indexed;
+			if (localIndexed) {
+				reembedded += 1;
+				artifact = await reloadCuratedArtifact(options, candidate.id, artifact);
+				artifactsById.set(candidate.id, artifact);
+			} else if (requiresQualityRepair) {
+				// Canonical rebuilds can already refresh the local vector through the
+				// consolidation path. If the follow-up index call becomes a no-op, I
+				// still count the local vector refresh instead of under-reporting a
+				// successful rebuild. Any remaining quality debt is tracked
+				// separately through `qualityStillDeferred`.
+				localIndexed = true;
+				reembedded += 1;
+			}
+		}
+		if (qualityStillDeferred) {
 			qualityDeferred += 1;
 		}
+			const remotePromotion = getRemoteSemanticPromotionDecision(artifact);
+			// I only promote remotely once local quality debt is no longer deferred
+			// and either the local index actually refreshed or the remote mirror
+			// itself still needs an explicit repair pass.
+			if (!qualityStillDeferred && remotePromotion.eligible && (localIndexed || requiresRemoteMirrorRepair)) {
+				remoteEligibleIds.push(candidate.id);
+			}
 	}
 	if (options.resyncRemote === false) {
 		return {

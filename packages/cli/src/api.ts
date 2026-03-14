@@ -44,6 +44,7 @@ import { createDaemonBuddhiProxy } from "./runtime-daemon-proxies.js";
 import { enrichFromTranscendence } from "./nervous-system-wiring.js";
 import { wireBuddhiRecorder, wireSkillGapRecorder } from "./nervous-system-wiring.js";
 import { buildSystemPrompt } from "./personality.js";
+import { createDaemonBackedTaskCheckpointStore } from "./runtime-daemon-task-checkpoints.js";
 
 import {
 	loadCustomProfiles,
@@ -248,6 +249,14 @@ export async function createChitragupta(
 		embeddingProvider: wiring.embeddingProvider,
 		enableMemory: !options.noMemory, project: projectPath,
 		memoryBridge: wiring.memoryBridge,
+		taskCheckpointStore: createDaemonBackedTaskCheckpointStore(),
+		taskKey: `api:${session.meta.id}:root`,
+		taskType: "api.root",
+		taskSessionIdResolver: () => session.meta.id,
+		sessionLineageKey:
+			typeof session.meta.metadata?.sessionLineageKey === "string"
+				? session.meta.metadata.sessionLineageKey
+				: null,
 		commHub: wiring.commHub, samiti: wiring.samiti,
 		lokapala: wiring.lokapala, kaala: wiring.kaala,
 		onEvent: buddhiRecorder,

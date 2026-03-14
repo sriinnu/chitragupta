@@ -28,12 +28,34 @@ import {
 	type ResearchExecutionRoute,
 	type ResearchRoundContext,
 } from "./chitragupta-nodes-research-runner-routes.js";
+import {
+	reusableScopeSnapshot,
+	verifyKeptHashOnlyScope,
+	verifyRestoredScope,
+} from "./chitragupta-nodes-research-runner-verify.js";
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Cleanup can safely no-op when the failed round left no scoped target-file
+ * delta behind. Any other skipped cleanup result is treated as unsafe.
+ */
+export function cleanupResultRequiresFailure(result: ResearchFinalizeResult): boolean {
+	if (result.action === "reverted") return false;
+	if (
+		result.action === "skipped"
+		&& result.revertedFiles.length === 0
+		&& typeof result.reason === "string"
+		&& result.reason.startsWith("Failed run produced no target-file changes to restore.")
+	) {
+		return false;
+	}
+	return true;
+}
+
 async function runBoundedCommand(scope: ExecutableResearchScope): Promise<ResearchRunData> {
 	validateScope(scope);
-	const before = await captureScopeSnapshot(scope);
+	const before = await captureScopeSnapshot(scope, scope.interruptSignal);
 	assertScopeSnapshot(scope, before, "before");
 	assertWorkspaceReadyForResearch(scope, before);
 	const startedAt = Date.now();
@@ -45,7 +67,7 @@ async function runBoundedCommand(scope: ExecutableResearchScope): Promise<Resear
 			signal: scope.interruptSignal,
 			maxBuffer: 10 * 1024 * 1024,
 		});
-		const after = await captureScopeSnapshot(scope);
+		const after = await captureScopeSnapshot(scope, scope.interruptSignal);
 		assertScopeSnapshot(scope, after, "after");
 		const compared = compareScopeSnapshots(scope, before, after);
 		const combined = `${stdout}\n${stderr}`;
@@ -69,7 +91,7 @@ async function runBoundedCommand(scope: ExecutableResearchScope): Promise<Resear
 			scopeSnapshot: serializeScopeSnapshot(scope, before),
 		};
 	} catch (error) {
-		const after = await captureScopeSnapshot(scope);
+		const after = await captureScopeSnapshot(scope, scope.interruptSignal);
 		assertScopeSnapshot(scope, after, "after");
 		let compared: { targetFilesChanged: string[] } = { targetFilesChanged: [] };
 		let scopeError: Error | null = null;
@@ -171,9 +193,14 @@ export async function executeResearchRun(
 	};
 }
 
+/**
+ * Evaluate a round against the current baseline and convert raw metric output
+ * into a keep/discard recommendation that later governance steps can enforce.
+ */
 export async function evaluateResearchResult(
 	baseline: Record<string, unknown>,
 	run: Record<string, unknown>,
+	policy: Pick<ResearchScope, "minimumImprovementDelta" | "requireTargetFileChangesForKeep"> | null = null,
 ): Promise<{
 	metricName: string;
 	objective: "minimize" | "maximize";
@@ -186,12 +213,20 @@ export async function evaluateResearchResult(
 	const objective = (baseline.objective === "maximize" || run.objective === "maximize") ? "maximize" : "minimize";
 	const baselineMetric = typeof baseline.baselineMetric === "number" ? baseline.baselineMetric : null;
 	const observedMetric = typeof run.metric === "number" ? run.metric : null;
+	const minimumImprovementDelta =
+		typeof policy?.minimumImprovementDelta === "number" ? policy.minimumImprovementDelta : 0;
+	const requireTargetFileChangesForKeep = policy?.requireTargetFileChangesForKeep !== false;
+	const targetFilesChanged = Array.isArray(run.targetFilesChanged)
+		? run.targetFilesChanged.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+		: [];
 	const delta = baselineMetric !== null && observedMetric !== null
 		? objective === "minimize"
 			? baselineMetric - observedMetric
 			: observedMetric - baselineMetric
 		: null;
-	const improved = delta !== null && delta > 0;
+	const improvedMetric = delta !== null && delta > minimumImprovementDelta;
+	const hasRequiredChanges = !requireTargetFileChangesForKeep || targetFilesChanged.length > 0;
+	const improved = improvedMetric && hasRequiredChanges;
 	return {
 		metricName: typeof baseline.metricName === "string" ? baseline.metricName : String(run.metricName ?? "val_bpb"),
 		objective,
@@ -203,15 +238,62 @@ export async function evaluateResearchResult(
 	};
 }
 
-/** Finalize a completed round by deciding whether to keep or revert the bounded file set. */
+/**
+ * Finalize a completed round by deciding whether to keep or revert the bounded
+ * file set touched by the experiment.
+ *
+ * Restore scope is intentionally limited to the scoped target files or snapshot
+ * envelope gathered before the run. This is not a full-worktree rollback API.
+ */
 export async function finalizeResearchResult(
 	scope: ResearchScope,
 	run: Record<string, unknown>,
 	evaluation: Record<string, unknown>,
+	signal?: AbortSignal,
 ): Promise<ResearchFinalizeResult> {
-	const decision = evaluation.decision === "keep" ? "keep" : "discard";
+	const requestedKeep = evaluation.decision === "keep";
+	const targetFilesChanged = Array.isArray(run.targetFilesChanged)
+		? run.targetFilesChanged.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+		: [];
 	const scopeGuard = run.scopeGuard === "hash-only" ? "hash-only" : "git";
+	const keepBlockedByHashOnlyPolicy =
+		requestedKeep
+		&& scopeGuard === "hash-only"
+		&& scope.allowHashOnlyKeep !== true;
+	const decision = requestedKeep && scope.requireTargetFileChangesForKeep !== false && targetFilesChanged.length === 0
+		? "discard"
+		: keepBlockedByHashOnlyPolicy
+			? "discard"
+			: requestedKeep
+			? "keep"
+			: "discard";
 	if (decision === "keep") {
+		if (scopeGuard === "hash-only") {
+			const snapshot = reusableScopeSnapshot(run);
+			if (!snapshot) {
+				return {
+					decision: "discard",
+					action: "skipped",
+					revertedFiles: [],
+					reason: "Hash-only keep requires a reusable pre-run scope snapshot.",
+					scopeGuard,
+				};
+			}
+			const verifiedKeep = await verifyKeptHashOnlyScope(scope, snapshot, run, signal);
+			if (!verifiedKeep.ok) {
+				// I actively revert on failed hash-only verification instead of
+				// silently downgrading to a skipped keep. The whole point of the
+				// hash-only guard is to avoid preserving unprovable mutations.
+				const revertedFiles = await restoreScopeFromSnapshot(scope, snapshot, signal);
+				return {
+					decision: "discard",
+					action: revertedFiles.length > 0 ? "reverted" : "skipped",
+					revertedFiles,
+					reason: verifiedKeep.reason,
+					scopeGuard,
+				};
+			}
+		}
 		return {
 			decision,
 			action: "kept",
@@ -220,39 +302,63 @@ export async function finalizeResearchResult(
 			scopeGuard,
 		};
 	}
-	const snapshot = run.scopeSnapshot;
-	if (!snapshot || typeof snapshot !== "object" || !("fileContents" in snapshot) || typeof (snapshot as { fileContents?: unknown }).fileContents !== "object") {
+	const snapshot = reusableScopeSnapshot(run);
+	if (!snapshot) {
 		return {
 			decision,
 			action: "skipped",
 			revertedFiles: [],
-			reason: "No reusable scope snapshot was available for discard cleanup.",
+			reason:
+				keepBlockedByHashOnlyPolicy
+					? "Discarded because hash-only overnight runs require explicit allowHashOnlyKeep to persist changes."
+				: requestedKeep && targetFilesChanged.length === 0
+					? "Discarded because the run produced no target-file changes to keep."
+					: "No reusable scope snapshot was available for discard cleanup.",
 			scopeGuard,
 		};
 	}
-	const revertedFiles = await restoreScopeFromSnapshot(scope, snapshot as ResearchScopeSnapshot);
+	const revertedFiles = await restoreScopeFromSnapshot(scope, snapshot, signal);
+	const verification = await verifyRestoredScope(scope, snapshot, run, signal);
+	if (!verification.ok) {
+		return {
+			decision,
+			action: "skipped",
+			revertedFiles,
+			reason: verification.reason ?? "Discard cleanup could not be verified against the pre-run scope snapshot.",
+			scopeGuard,
+		};
+	}
 	return {
 		decision,
-		action: "reverted",
+		action: revertedFiles.length > 0 ? "reverted" : "skipped",
 		revertedFiles,
-		reason: revertedFiles.length > 0 ? null : "Discarded run produced no target-file changes to restore.",
+		reason:
+			keepBlockedByHashOnlyPolicy
+				? "Discarded because hash-only overnight runs require explicit allowHashOnlyKeep to persist changes."
+			: requestedKeep && targetFilesChanged.length === 0
+				? "Discarded because the run produced no target-file changes to keep."
+				: revertedFiles.length > 0
+					? null
+					: "Discarded run produced no target-file changes to restore.",
 		scopeGuard,
 	};
 }
 
-/** Best-effort recovery path for failed or cancelled rounds before the loop continues or exits. */
+/**
+ * Best-effort recovery path for failed or cancelled rounds before the loop
+ * continues or exits.
+ *
+ * This is a scoped cleanup path, not a guarantee that arbitrary side effects
+ * outside the tracked file envelope were undone.
+ */
 export async function recoverResearchFailure(
 	scope: ResearchScope,
 	run: Record<string, unknown>,
+	signal?: AbortSignal,
 ): Promise<ResearchFinalizeResult> {
 	const scopeGuard = run.scopeGuard === "hash-only" ? "hash-only" : "git";
-	const snapshot = run.scopeSnapshot;
-	if (
-		!snapshot ||
-		typeof snapshot !== "object" ||
-		!("fileContents" in snapshot) ||
-		typeof (snapshot as { fileContents?: unknown }).fileContents !== "object"
-	) {
+	const snapshot = reusableScopeSnapshot(run);
+	if (!snapshot) {
 		return {
 			decision: "discard",
 			action: "skipped",
@@ -261,7 +367,17 @@ export async function recoverResearchFailure(
 			scopeGuard,
 		};
 	}
-	const revertedFiles = await restoreScopeFromSnapshot(scope, snapshot as ResearchScopeSnapshot);
+	const revertedFiles = await restoreScopeFromSnapshot(scope, snapshot, signal);
+	const verification = await verifyRestoredScope(scope, snapshot, run, signal);
+	if (!verification.ok) {
+		return {
+			decision: "discard",
+			action: "skipped",
+			revertedFiles,
+			reason: verification.reason ?? "Failure cleanup could not be verified against the pre-run scope snapshot.",
+			scopeGuard,
+		};
+	}
 	return {
 		decision: "discard",
 		action: revertedFiles.length > 0 ? "reverted" : "skipped",

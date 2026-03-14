@@ -17,6 +17,7 @@ import { SessionError } from "@chitragupta/core";
 import type { SessionMeta, SessionTurn } from "./types.js";
 import {
 	getAgentDb,
+	hasAgentTable,
 	rowToSessionMeta,
 } from "./session-db.js";
 export { listSessionsFromFilesystem } from "./session-queries-filesystem.js";
@@ -195,6 +196,12 @@ export function listSessionDates(project?: string): string[] {
  */
 export function listSessionProjects(): Array<{ project: string; sessionCount: number; lastActive: string }> {
 	try {
+		if (!hasAgentTable("sessions")) {
+			// Some semantic-only tests and bootstrap paths intentionally run before
+			// session tables exist. I treat that as an empty project set instead of
+			// noisy stderr because there is nothing actionable to recover yet.
+			return [];
+		}
 		const db = getAgentDb();
 		const rows = db.prepare(
 			`SELECT project, COUNT(*) as count, MAX(updated_at) as last_active

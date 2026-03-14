@@ -7,7 +7,7 @@
  * weights), full pipeline, and edge cases.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -24,6 +24,8 @@ import {
 	type CompressResult,
 	type SwapnaResult,
 } from "../src/swapna-consolidation.js";
+import * as swapnaCompressionPolicy from "../src/swapna-compression-policy.js";
+import { computeMdlCompactionMetrics } from "../src/mdl-compaction.js";
 
 // ─── Test Helpers ───────────────────────────────────────────────────────────
 
@@ -982,6 +984,37 @@ describe("SwapnaConsolidation — Phase 5: COMPRESS", () => {
 			expect(result.mdlMetrics?.mdlScore).toBeTypeOf("number");
 			expect(stored?.content).toBe(original);
 		});
+
+	it("uses the MDL-steered summary text returned by the compression policy", async () => {
+		insertSession("s1");
+		for (let i = 0; i < 10; i++) {
+			insertTurn("s1", i, i % 2 === 0 ? "user" : "assistant", `Turn ${i}: ${"A".repeat(100)}`, [
+				...(i % 2 === 1 ? [tc("read", `{\"p\":\"f${i}\"}`, "content ".repeat(20))] : []),
+			]);
+		}
+
+		const summaryText = "MDL steered summary";
+		const mdlMetrics = computeMdlCompactionMetrics({
+			originalText: "Turn evidence",
+			summaryText,
+		});
+		const prepareSpy = vi.spyOn(swapnaCompressionPolicy, "prepareSwapnaCompressionDecision").mockResolvedValue({
+			summaryText,
+			packedSummaryText: undefined,
+			compression: undefined,
+			mdlMetrics,
+			packedDecision: null,
+			summarySelection: "representative_fallback",
+		});
+
+		try {
+			const swapna = new SwapnaConsolidation({ project: PROJECT }, dbm);
+			const result = await swapna.compress();
+			expect(result.summaryText).toBe(summaryText);
+		} finally {
+			prepareSpy.mockRestore();
+		}
+	});
 
 	it("should apply Pramana-based preservation weights", async () => {
 		insertSession("s1");

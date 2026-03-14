@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Agent } from "../src/agent.js";
 import { MAX_SUB_AGENTS, MAX_AGENT_DEPTH } from "../src/types.js";
 import type { AgentConfig, SpawnConfig, ToolHandler } from "../src/types.js";
+import type { AgentTaskCheckpointStore } from "../src/agent-task-checkpoint-types.js";
 import type { AgentProfile } from "@chitragupta/core";
 
 // ─── Mock @chitragupta/smriti to avoid real file I/O ─────────────────────────
@@ -189,7 +190,153 @@ describe("Agent", () => {
       expect(events).toContain("stream:done");
       expect(events).toContain("turn:done");
     });
-  });
+
+		it("persists a durable task checkpoint for a successful prompt", async () => {
+			const save = vi.fn(async (input) => ({
+				id: "cp-1",
+				projectPath: input.projectPath,
+				taskKey: input.taskKey,
+				taskType: input.taskType ?? null,
+				agentId: input.agentId ?? null,
+				sessionId: input.sessionId ?? null,
+				parentTaskKey: input.parentTaskKey ?? null,
+				sessionLineageKey: input.sessionLineageKey ?? null,
+				status: input.status,
+				phase: input.phase,
+				checkpoint: input.checkpoint,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}));
+			const checkpointStore: AgentTaskCheckpointStore = {
+				get: vi.fn(async () => null),
+				save,
+				clear: vi.fn(async () => true),
+			};
+			const agent = new Agent(makeConfig({
+				project: "/tmp/project",
+				taskCheckpointStore: checkpointStore,
+				taskKey: "cli:test:root",
+				taskType: "cli.root",
+				taskSessionIdResolver: () => "session-123",
+			}));
+			agent.setProvider(simpleTextProvider("checkpointed") as any);
+			await agent.prompt("persist me");
+			expect(save).toHaveBeenCalled();
+			const statuses = save.mock.calls.map(([input]) => input.status);
+			expect(statuses).toContain("active");
+			expect(statuses).toContain("completed");
+		});
+
+		it("assigns a durable child task key when delegated work runs", async () => {
+			const save = vi.fn(async (input) => ({
+				id: "cp-1",
+				projectPath: input.projectPath,
+				taskKey: input.taskKey,
+				taskType: input.taskType ?? null,
+				agentId: input.agentId ?? null,
+				sessionId: input.sessionId ?? null,
+				parentTaskKey: input.parentTaskKey ?? null,
+				sessionLineageKey: input.sessionLineageKey ?? null,
+				status: input.status,
+				phase: input.phase,
+				checkpoint: input.checkpoint,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}));
+			const checkpointStore: AgentTaskCheckpointStore = {
+				get: vi.fn(async () => null),
+				save,
+				clear: vi.fn(async () => true),
+			};
+			const agent = new Agent(makeConfig({
+				project: "/tmp/project",
+				taskCheckpointStore: checkpointStore,
+				taskKey: "cli:test:root",
+				taskType: "cli.root",
+				taskSessionIdResolver: () => "session-123",
+			}));
+			agent.setProvider(simpleTextProvider("delegated") as any);
+			const result = await agent.delegate({ purpose: "reviewer" }, "please review");
+			const childTaskKey = save.mock.calls.map(([input]) => input.taskKey)
+				.find((value) => typeof value === "string" && value.startsWith("cli:test:root/agent:reviewer:prompt:"));
+			expect(childTaskKey).toBeDefined();
+			expect(childTaskKey).not.toContain(result.agentId);
+		});
+
+		it("injects durable resume context into the system prompt on the next prompt run", async () => {
+			const checkpointStore: AgentTaskCheckpointStore = {
+				get: vi.fn(async () => ({
+					id: "cp-prev",
+					projectPath: "/tmp/project",
+					taskKey: "cli:test:resume",
+					taskType: "cli.root",
+					agentId: "agent-old",
+					sessionId: "session-prev",
+					parentTaskKey: null,
+					sessionLineageKey: "lineage-1",
+					status: "active",
+					phase: "tool:start",
+					checkpoint: {
+						version: 1,
+						taskKey: "cli:test:resume",
+						taskType: "cli.root",
+						agentId: "agent-old",
+						purpose: "root",
+						depth: 0,
+						sessionId: "session-prev",
+						memorySessionId: "mem-prev",
+						parentTaskKey: null,
+						sessionLineageKey: "lineage-1",
+						promptRunId: "run-prev",
+						promptSequence: 2,
+						phase: "tool:start",
+						latestEvent: "tool:start",
+						promptPreview: "continue the repair",
+						latestToolName: "bash",
+						latestSubagentId: null,
+						latestSubagentPurpose: null,
+						latestError: null,
+						recentEvents: [
+							{ event: "tool:start", phase: "tool:start", at: Date.now() - 500, toolName: "bash", summary: "run repair" },
+						],
+						messagesCount: 3,
+						updatedAt: Date.now() - 500,
+					},
+					createdAt: Date.now() - 1000,
+					updatedAt: Date.now() - 500,
+				})),
+				save: vi.fn(async (input) => ({
+					id: "cp-next",
+					projectPath: input.projectPath,
+					taskKey: input.taskKey,
+					taskType: input.taskType ?? null,
+					agentId: input.agentId ?? null,
+					sessionId: input.sessionId ?? null,
+					parentTaskKey: input.parentTaskKey ?? null,
+					sessionLineageKey: input.sessionLineageKey ?? null,
+					status: input.status,
+					phase: input.phase,
+					checkpoint: input.checkpoint,
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+				})),
+				clear: vi.fn(async () => true),
+			};
+			const agent = new Agent(makeConfig({
+				project: "/tmp/project",
+				taskCheckpointStore: checkpointStore,
+				taskKey: "cli:test:resume",
+				taskType: "cli.root",
+				taskSessionIdResolver: () => "session-123",
+			}));
+			agent.setProvider(simpleTextProvider("resume complete") as any);
+			await agent.prompt("continue from checkpoint");
+			expect(agent.getState().systemPrompt).toContain("Durable resume context:");
+			expect(agent.getState().systemPrompt).toContain("tool=bash");
+			expect(agent.getState().systemPrompt).toContain("Recent durable events:");
+			expect(agent.getState().systemPrompt).toContain("tool:start | tool=bash | summary=run repair");
+		});
+	});
 
   // ─── abort() ──────────────────────────────────────────────────────────
 

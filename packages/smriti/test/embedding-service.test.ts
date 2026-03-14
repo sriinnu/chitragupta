@@ -5,6 +5,7 @@ import {
 } from "../src/embedding-service.js";
 import {
 	buildEmbeddingEpoch,
+	FALLBACK_EMBEDDING_PROVIDER_ID,
 	parseEmbeddingEpoch,
 	UNKNOWN_EMBEDDING_MODEL_ID,
 	UNKNOWN_EMBEDDING_PROVIDER_ID,
@@ -68,6 +69,39 @@ describe("EmbeddingService", () => {
 		const refreshed = await service.getEmbeddingEpoch();
 		expect(refreshed.modelId).toBe("catalog-model-b");
 		expect(refreshed.dimensions).toBe(6);
+	});
+
+	it("does not poison the resolved provider epoch after a transient embed failure", async () => {
+		let failNextEmbed = false;
+		const provider: EmbeddingProvider = {
+			id: "mock-provider",
+			models: [
+				{ id: "catalog-model", name: "Catalog Model", dimensions: 4, maxTokens: 8192 },
+			],
+			embed: async () => {
+				if (failNextEmbed) {
+					failNextEmbed = false;
+					throw new Error("transient upstream failure");
+				}
+				return {
+					embedding: [0.1, 0.2, 0.3, 0.4],
+					model: "runtime-model",
+					tokens: 4,
+				};
+			},
+			embedBatch: async () => [],
+			isConfigured: async () => true,
+		};
+		const service = new EmbeddingService(provider);
+
+		const initialEpoch = await service.getEmbeddingEpoch();
+		failNextEmbed = true;
+		const fallbackRecord = await service.getEmbeddingRecord("needs-fallback");
+		const recoveredEpoch = await service.getEmbeddingEpoch();
+
+		expect(initialEpoch.modelId).toBe("runtime-model");
+		expect(fallbackRecord.providerId).toBe(FALLBACK_EMBEDDING_PROVIDER_ID);
+		expect(recoveredEpoch).toEqual(initialEpoch);
 	});
 });
 

@@ -1,3 +1,5 @@
+import { MDL_COMPACTION_POLICY_VERSION } from "./mdl-compaction.js";
+
 /**
  * Version stamp for a semantic embedding regime.
  *
@@ -9,13 +11,20 @@ export interface EmbeddingEpoch {
 	modelId: string;
 	dimensions: number;
 	strategy: "provider" | "fallback";
+	policyVersion: string;
 	epoch: string;
 }
 
+/** Canonical provider id used when semantic vectors fall back to hash-based embeddings. */
 export const FALLBACK_EMBEDDING_PROVIDER_ID = "fallback-embeddings";
+/** Canonical model id used when semantic vectors fall back to hash-based embeddings. */
 export const FALLBACK_EMBEDDING_MODEL_ID = "hash-fallback-v1";
+/** Stable sentinel for persisted rows whose provider identity was missing. */
 export const UNKNOWN_EMBEDDING_PROVIDER_ID = "unknown-provider";
+/** Stable sentinel for persisted rows whose model identity was missing. */
 export const UNKNOWN_EMBEDDING_MODEL_ID = "unknown-model";
+/** Active semantic embedding policy version for epoch drift and self-heal checks. */
+export const SEMANTIC_EMBEDDING_POLICY_VERSION = `semantic-v2-${MDL_COMPACTION_POLICY_VERSION}`;
 
 /**
  * Build a normalized embedding epoch identifier.
@@ -29,16 +38,19 @@ export function buildEmbeddingEpoch(parts: {
 	modelId: string;
 	dimensions: number;
 	strategy: "provider" | "fallback";
+	policyVersion?: string;
 }): EmbeddingEpoch {
 	const providerId = parts.providerId.trim() || UNKNOWN_EMBEDDING_PROVIDER_ID;
 	const modelId = parts.modelId.trim() || UNKNOWN_EMBEDDING_MODEL_ID;
 	const dimensions = Math.max(1, Math.trunc(parts.dimensions));
+	const policyVersion = parts.policyVersion?.trim() || SEMANTIC_EMBEDDING_POLICY_VERSION;
 	return {
 		providerId,
 		modelId,
 		dimensions,
 		strategy: parts.strategy,
-		epoch: `${providerId}:${modelId}:${dimensions}:${parts.strategy}`,
+		policyVersion,
+		epoch: `${providerId}:${modelId}:${dimensions}:${parts.strategy}:${policyVersion}`,
 	};
 }
 
@@ -69,9 +81,16 @@ export function parseEmbeddingEpoch(value: unknown): EmbeddingEpoch | null {
 	const strategy = candidate.strategy === "provider" || candidate.strategy === "fallback"
 		? candidate.strategy
 		: null;
+	const policyVersion = typeof candidate.policyVersion === "string" ? candidate.policyVersion.trim() : "";
 	const epoch = typeof candidate.epoch === "string" ? candidate.epoch.trim() : "";
 	if (!providerId || !modelId || !strategy || !Number.isFinite(dimensions) || dimensions <= 0) return null;
-	const rebuilt = buildEmbeddingEpoch({ providerId, modelId, dimensions, strategy });
+	const rebuilt = buildEmbeddingEpoch({
+		providerId,
+		modelId,
+		dimensions,
+		strategy,
+		policyVersion: policyVersion || undefined,
+	});
 	if (epoch && epoch !== rebuilt.epoch) return null;
 	return rebuilt;
 }

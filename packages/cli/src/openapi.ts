@@ -10,6 +10,7 @@
 import type { OpenAPISpec } from "./openapi-helpers.js";
 import { buildCorePaths } from "./openapi-paths-core.js";
 import { buildAgentPaths } from "./openapi-paths-agents.js";
+import { buildTaskCheckpointPaths } from "./openapi-paths-task-checkpoints.js";
 import { buildServicePaths } from "./openapi-paths-services.js";
 import { buildEvolutionPaths } from "./openapi-paths-evolution.js";
 import { buildCollaborationPaths } from "./openapi-paths-collaboration.js";
@@ -59,6 +60,7 @@ export function generateOpenAPISpec(
 		paths: {
 			...buildCorePaths(),
 			...buildAgentPaths(),
+			...buildTaskCheckpointPaths(),
 			...buildServicePaths(),
 			...buildEvolutionPaths(),
 			...buildCollaborationPaths(),

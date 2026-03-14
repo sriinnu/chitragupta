@@ -56,3 +56,24 @@ export interface SabhaEventRecord {
 	createdAt: number;
 	payload: Record<string, unknown>;
 }
+
+export type SabhaResumeAction =
+	| "resume-mesh-dispatches"
+	| "await-perspectives"
+	| "deliberate"
+	| "inspect-failed-dispatches"
+	| "complete"
+	| "none";
+
+/** Machine-usable timeout-pickup summary for a Sabha consultation. */
+export interface SabhaResumePlan {
+	sabhaId: string;
+	revision: number;
+	status: string;
+	nextAction: SabhaResumeAction;
+	pendingParticipantIds: string[];
+	pendingDispatchParticipantIds: string[];
+	failedDispatchParticipantIds: string[];
+	needsHumanReview: boolean;
+	detail: string | null;
+}

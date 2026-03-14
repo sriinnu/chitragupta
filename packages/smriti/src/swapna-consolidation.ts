@@ -243,14 +243,14 @@ export class SwapnaConsolidation {
 				compactionSummaryText,
 			)
 			: null;
-		return {
-			tokensCompressed: totalOriginalTokens,
-			compressionRatio,
-			durationMs: performance.now() - start,
-			summaryText: compactionSummaryText || undefined,
-			packedSummaryText: compressionDecision?.packedSummaryText,
-			compression: compressionDecision?.compression,
-			mdlMetrics: compressionDecision?.mdlMetrics,
+			return {
+				tokensCompressed: totalOriginalTokens,
+				compressionRatio,
+				durationMs: performance.now() - start,
+					summaryText: compressionDecision?.summaryText ?? (compactionSummaryText || undefined),
+				packedSummaryText: compressionDecision?.packedSummaryText,
+				compression: compressionDecision?.compression,
+				mdlMetrics: compressionDecision?.mdlMetrics,
 			packedDecision: compressionDecision?.packedDecision,
 		};
 	}

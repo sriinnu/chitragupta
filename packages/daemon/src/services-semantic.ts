@@ -18,6 +18,7 @@ function parseStringList(value: unknown): string[] | undefined {
 
 function parseArtifactQuery(params: Record<string, unknown>) {
 	return {
+		scanAll: params.scanAll === true,
 		recentDailyLimit: parseLimit(params.recentDailyLimit, 30, 90),
 		recentPeriodicPerProject: parseLimit(params.recentPeriodicPerProject, 6, 24),
 		ids: parseStringList(params.ids),
@@ -34,11 +35,31 @@ function parseReembeddingReasons(params: Record<string, unknown>) {
 }
 
 export function registerSemanticMethods(router: RpcRouter): void {
+	router.register("semantic.epoch_status", async () => {
+		const { getSemanticEpochRefreshStatus } = await import("@chitragupta/smriti") as typeof import("@chitragupta/smriti") & {
+			getSemanticEpochRefreshStatus: () => Promise<unknown>;
+		};
+		return await getSemanticEpochRefreshStatus();
+	}, "Report the current semantic embedding epoch, persisted repair state, and whether a refresh is in flight");
+
+	router.register("semantic.epoch_refresh", async (rawParams) => {
+		const params = normalizeParams(rawParams);
+		const { refreshGlobalSemanticEpochDrift } = await import("@chitragupta/smriti");
+		return await refreshGlobalSemanticEpochDrift({
+			force: params.force === true,
+		});
+	}, "Force or inspect the daemon-owned semantic epoch self-heal for curated artifacts");
+
 	router.register("semantic.sync_status", async (rawParams) => {
 		const params = normalizeParams(rawParams);
 		const options = parseArtifactQuery(params);
-		const { inspectConsolidationVectorSync } = await import("@chitragupta/smriti/consolidation-indexer");
-		const { inspectRemoteSemanticSync } = await import("@chitragupta/smriti");
+		const {
+			inspectConsolidationVectorSync,
+			inspectRemoteSemanticSync,
+		} = await import("@chitragupta/smriti") as typeof import("@chitragupta/smriti") & {
+			inspectConsolidationVectorSync: typeof import("@chitragupta/smriti/consolidation-indexer").inspectConsolidationVectorSync;
+			inspectRemoteSemanticSync: typeof import("@chitragupta/smriti").inspectRemoteSemanticSync;
+		};
 		const [local, remote] = await Promise.all([
 			inspectConsolidationVectorSync(options),
 			inspectRemoteSemanticSync(options),
@@ -49,11 +70,28 @@ export function registerSemanticMethods(router: RpcRouter): void {
 	router.register("semantic.sync_curated", async (rawParams) => {
 		const params = normalizeParams(rawParams);
 		const options = parseArtifactQuery(params);
-		const { repairConsolidationVectorSync } = await import("@chitragupta/smriti/consolidation-indexer");
-		const { syncRemoteSemanticMirror } = await import("@chitragupta/smriti");
-		const local = await repairConsolidationVectorSync(options);
-		const remote = await syncRemoteSemanticMirror(options);
-		return { local, remote };
+		const {
+			inspectConsolidationVectorSync,
+			inspectRemoteSemanticSync,
+			persistSemanticEpochRepairState,
+			repairSelectiveReembedding,
+		} = await import("@chitragupta/smriti") as typeof import("@chitragupta/smriti") & {
+			inspectConsolidationVectorSync: typeof import("@chitragupta/smriti/consolidation-indexer").inspectConsolidationVectorSync;
+			inspectRemoteSemanticSync: typeof import("@chitragupta/smriti").inspectRemoteSemanticSync;
+			persistSemanticEpochRepairState: typeof import("@chitragupta/smriti").persistSemanticEpochRepairState;
+			repairSelectiveReembedding: typeof import("@chitragupta/smriti").repairSelectiveReembedding;
+		};
+		const repair = await repairSelectiveReembedding({
+			...options,
+			scanAll: options.scanAll,
+			resyncRemote: true,
+		});
+		await persistSemanticEpochRepairState(repair);
+		const [local, remote] = await Promise.all([
+			inspectConsolidationVectorSync(options),
+			inspectRemoteSemanticSync(options),
+		]);
+		return { repair, local, remote };
 	}, "Repair local curated semantic sync and mirror curated artifacts to the remote semantic store");
 
 	router.register("semantic.reembed_plan", async (rawParams) => {
@@ -65,17 +103,22 @@ export function registerSemanticMethods(router: RpcRouter): void {
 			reasons: parseReembeddingReasons(params),
 		} as Parameters<typeof planSelectiveReembedding>[0];
 		return await planSelectiveReembedding(request);
-	}, "Plan selective re-embedding for high-value curated artifacts with stale embedding epochs");
+	}, "Plan selective re-embedding for curated artifacts whose drift or MDL-quality reasons match the requested repair policy");
 
 	router.register("semantic.reembed_curated", async (rawParams) => {
 		const params = normalizeParams(rawParams);
-		const { repairSelectiveReembedding } = await import("@chitragupta/smriti");
+		const {
+			persistSemanticEpochRepairState,
+			repairSelectiveReembedding,
+		} = await import("@chitragupta/smriti");
 		const request = {
 			...parseArtifactQuery(params),
 			candidateLimit: parseLimit(params.candidateLimit ?? params.limit, 20, 200),
 			reasons: parseReembeddingReasons(params),
 			resyncRemote: params.resyncRemote !== false,
 		} as Parameters<typeof repairSelectiveReembedding>[0];
-		return await repairSelectiveReembedding(request);
-	}, "Re-embed only the highest-value curated artifacts whose selected stale reasons match the requested repair policy");
+		const repair = await repairSelectiveReembedding(request);
+		await persistSemanticEpochRepairState(repair);
+		return repair;
+	}, "Repair only the highest-value curated artifacts whose selected drift or quality reasons match the requested repair policy");
 }

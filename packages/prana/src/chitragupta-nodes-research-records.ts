@@ -2,8 +2,16 @@ import type {
 	ResearchFinalizeResult,
 	ResearchObjective,
 	ResearchScope,
+	ResearchUpdateBudgets,
 } from "./chitragupta-nodes-research-shared.js";
+import { buildDefaultResearchUpdateBudgets } from "./chitragupta-nodes-research-shared-defaults.js";
 
+/**
+ * Minimal execution-binding envelope that I persist into research artifacts.
+ *
+ * I keep this deliberately narrow so the durable ledger captures the routing
+ * decision that mattered without serializing the whole daemon capability graph.
+ */
 export interface ResearchExecutionBindingSummary {
 	source?: string;
 	kind?: string;
@@ -21,6 +29,12 @@ export interface ResearchExecutionBindingSummary {
 	allowCrossProvider?: boolean;
 }
 
+/**
+ * Canonical route summary persisted with each research artifact.
+ *
+ * I store both the resolved lane and the execution-binding hints so the
+ * overnight loop can be audited later without replaying the full route engine.
+ */
 export interface ResearchResolvedRouteSummary {
 	routeClass: string | null;
 	capability: string | null;
@@ -32,6 +46,10 @@ export interface ResearchResolvedRouteSummary {
 	policyTrace: string[];
 }
 
+/**
+ * Canonical per-attempt experiment payload persisted into the daemon-owned
+ * research ledger.
+ */
 export interface ResearchExperimentRecord {
 	experimentKey: string;
 	attemptKey: string | null;
@@ -69,6 +87,7 @@ export interface ResearchExperimentRecord {
 		exitCode: number | null;
 		timedOut: boolean;
 		durationMs: number | null;
+		roundWallClockDurationMs: number | null;
 		targetFilesChanged: string[];
 		selectedCapabilityId: string | null;
 		selectedModelId: string | null;
@@ -86,8 +105,10 @@ export interface ResearchExperimentRecord {
 		sourceLength: number | null;
 		reason: string | null;
 	};
+	updateBudgets: ResearchUpdateBudgets;
 }
 
+/** Build the canonical experiment record persisted by the daemon research ledger. */
 export function buildResearchExperimentRecord(
 	scope: ResearchScope,
 	council: Record<string, unknown>,
@@ -96,6 +117,9 @@ export function buildResearchExperimentRecord(
 	finalize: Record<string, unknown> | null,
 	packed: Record<string, unknown>,
 ): ResearchExperimentRecord {
+	const updateBudgets =
+		scope.updateBudgets
+		?? buildDefaultResearchUpdateBudgets();
 	const route = council.route && typeof council.route === "object"
 		? council.route as ResearchResolvedRouteSummary
 		: null;
@@ -105,6 +129,8 @@ export function buildResearchExperimentRecord(
 	const executionRoute = council.executionRoute && typeof council.executionRoute === "object"
 		? council.executionRoute as ResearchResolvedRouteSummary
 		: null;
+	// I anchor the experiment key to the logical scope and lane selection so the
+	// ledger can dedupe/reconcile retries without losing route provenance.
 	const experimentKey = JSON.stringify({
 		projectPath: scope.projectPath,
 		topic: scope.topic,
@@ -142,6 +168,12 @@ export function buildResearchExperimentRecord(
 			: typeof run.errorMessage === "string" && run.errorMessage.trim()
 				? run.errorMessage.trim()
 				: null;
+	const durationMs =
+		typeof run.durationMs === "number" ? run.durationMs : null;
+	const roundWallClockDurationMs =
+		typeof run.roundWallClockDurationMs === "number"
+			? run.roundWallClockDurationMs
+			: durationMs;
 	return {
 		experimentKey,
 		attemptKey,
@@ -188,22 +220,38 @@ export function buildResearchExperimentRecord(
 				scopeGuard: finalize.scopeGuard === "hash-only" ? "hash-only" : "git",
 			}
 			: null,
-			run: {
-				exitCode: typeof run.exitCode === "number" ? run.exitCode : null,
-				timedOut: run.timedOut === true,
-				durationMs: typeof run.durationMs === "number" ? run.durationMs : null,
+		run: {
+			exitCode: typeof run.exitCode === "number" ? run.exitCode : null,
+			timedOut: run.timedOut === true,
+			durationMs,
+			roundWallClockDurationMs,
 			targetFilesChanged: Array.isArray(run.targetFilesChanged)
-				? run.targetFilesChanged.filter((value): value is string => typeof value === "string")
+				? run.targetFilesChanged.filter(
+					(value): value is string => typeof value === "string",
+				)
 				: [],
-			selectedCapabilityId: typeof run.selectedCapabilityId === "string" ? run.selectedCapabilityId : null,
-				selectedModelId: typeof run.selectedModelId === "string" ? run.selectedModelId : null,
-				selectedProviderId: typeof run.selectedProviderId === "string" ? run.selectedProviderId : null,
-				executionRouteClass: typeof run.executionRouteClass === "string" ? run.executionRouteClass : null,
-				gitBranch: typeof run.gitBranch === "string" ? run.gitBranch : null,
-				gitHeadCommit: typeof run.gitHeadCommit === "string" ? run.gitHeadCommit : null,
-				gitDirtyBefore: typeof run.gitDirtyBefore === "boolean" ? run.gitDirtyBefore : null,
-				gitDirtyAfter: typeof run.gitDirtyAfter === "boolean" ? run.gitDirtyAfter : null,
-			},
+			selectedCapabilityId:
+				typeof run.selectedCapabilityId === "string"
+					? run.selectedCapabilityId
+					: null,
+			selectedModelId:
+				typeof run.selectedModelId === "string" ? run.selectedModelId : null,
+			selectedProviderId:
+				typeof run.selectedProviderId === "string"
+					? run.selectedProviderId
+					: null,
+			executionRouteClass:
+				typeof run.executionRouteClass === "string"
+					? run.executionRouteClass
+					: null,
+			gitBranch: typeof run.gitBranch === "string" ? run.gitBranch : null,
+			gitHeadCommit:
+				typeof run.gitHeadCommit === "string" ? run.gitHeadCommit : null,
+			gitDirtyBefore:
+				typeof run.gitDirtyBefore === "boolean" ? run.gitDirtyBefore : null,
+			gitDirtyAfter:
+				typeof run.gitDirtyAfter === "boolean" ? run.gitDirtyAfter : null,
+		},
 		packing: {
 			runtime: typeof packed.runtime === "string" ? packed.runtime : null,
 			source: typeof packed.source === "string" ? packed.source : null,
@@ -211,9 +259,17 @@ export function buildResearchExperimentRecord(
 			sourceLength: typeof packed.sourceLength === "number" ? packed.sourceLength : null,
 			reason: typeof packed.reason === "string" ? packed.reason : null,
 		},
+		updateBudgets,
 	};
 }
 
+/**
+ * Render one operator-facing markdown record from the canonical experiment
+ * payload.
+ *
+ * I keep the markdown layer derived from the canonical record so the operator
+ * view and the daemon ledger cannot drift independently.
+ */
 export function buildResearchRecord(
 	scope: ResearchScope,
 	council: Record<string, unknown>,
@@ -231,6 +287,19 @@ export function buildResearchRecord(
 	const packRuntime = experiment.packing.runtime ?? "none";
 	const packSavings = typeof experiment.packing.savings === "number" ? `${experiment.packing.savings}%` : "n/a";
 	const packSource = experiment.packing.source ?? "unknown";
+	const packingBudgetSummary = [
+		`stdout<=${experiment.updateBudgets.packing.maxStdoutChars}`,
+		`stderr<=${experiment.updateBudgets.packing.maxStderrChars}`,
+		`carry<=${experiment.updateBudgets.packing.maxCarryContextChars}`,
+	].join(", ");
+	const retrievalBudgetSummary = [
+		`reuse<=${experiment.updateBudgets.retrieval.maxReuseChars}`,
+		`frontier<=${experiment.updateBudgets.retrieval.maxFrontierEntries}`,
+	].join(", ");
+	const nidraBudgetSummary = [
+		`projects<=${experiment.updateBudgets.nidra.maxResearchProjectsPerCycle}`,
+		`semanticPressure<=${experiment.updateBudgets.nidra.maxSemanticPressure}`,
+	].join(", ");
 	const finalizeSummary = experiment.finalize
 		? [
 			`- finalize action: ${experiment.finalize.action}`,
@@ -267,6 +336,9 @@ export function buildResearchRecord(
 		`- route selected capability: ${typeof route?.selectedCapabilityId === "string" ? route.selectedCapabilityId : "none"}`,
 		`- route reason: ${typeof route?.reason === "string" ? route.reason : "n/a"}`,
 		`- route preferred providers: ${Array.isArray((route as { executionBinding?: { preferredProviderIds?: unknown } } | null)?.executionBinding?.preferredProviderIds) ? ((route as { executionBinding: { preferredProviderIds: string[] } }).executionBinding.preferredProviderIds.join(", ") || "none") : "none"}`,
+		`- packing budget: ${packingBudgetSummary}`,
+		`- retrieval budget: ${retrievalBudgetSummary}`,
+		`- nidra budget: ${nidraBudgetSummary}`,
 		`- route preferred models: ${Array.isArray((route as { executionBinding?: { preferredModelIds?: unknown } } | null)?.executionBinding?.preferredModelIds) ? ((route as { executionBinding: { preferredModelIds: string[] } }).executionBinding.preferredModelIds.join(", ") || "none") : "none"}`,
 		`- planner route class: ${typeof experiment.plannerRoute?.routeClass === "string" ? experiment.plannerRoute.routeClass : "none"}`,
 		`- planner capability: ${typeof experiment.plannerRoute?.capability === "string" ? experiment.plannerRoute.capability : "none"}`,
@@ -293,5 +365,6 @@ export function buildResearchRecord(
 		`- packed runtime: ${packRuntime}`,
 		`- packed source: ${packSource}`,
 		`- packed savings: ${packSavings}`,
+		`- packing budgets: ${packingBudgetSummary}`,
 	].join("\n") + packSummary;
 }

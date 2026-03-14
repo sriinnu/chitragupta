@@ -13,6 +13,7 @@ import type {
 	SabhaPerspective,
 	SabhaPerspectiveEvidence,
 	SabhaPerspectivePosition,
+	SabhaResumePlan,
 } from "./services-collaboration-types.js";
 import {
 	getSabhaClientBindingMap,
@@ -24,6 +25,7 @@ import {
 	listSabhaPerspectives,
 	latestSabhaDispatchRecord,
 } from "./services-collaboration-state.js";
+import { buildSabhaResumePlan } from "./services-collaboration-resume.js";
 
 const MESH_RETRY_BACKOFF_MS = 2_000;
 
@@ -263,6 +265,70 @@ export function buildPersistedSabhaState(sabha: Sabha) {
 	};
 }
 
+/**
+ * Build a bounded, human-readable resume summary for timed-out or restarted
+ * Sabha work so callers can continue from the last durable coordination point
+ * instead of re-reading the entire event and dispatch history.
+ */
+export function buildSabhaResumeContext(sabha: Sabha): string {
+	const dispatchLog = [...getSabhaDispatchLog(sabha.id)];
+	const recentEvents = [...getSabhaEventLog(sabha.id)].slice(-8);
+	const perspectives = listSabhaPerspectives(sabha.id);
+	const responded = new Set(perspectives.map((perspective) => perspective.participantId));
+	const pendingParticipants = sabha.participants
+		.map((participant) => participant.id)
+		.filter((participantId) => !responded.has(participantId));
+	const pendingDispatches = dispatchLog
+		.filter((dispatch) => dispatch.status === "pending" || dispatch.status === "failed")
+		.slice(-6);
+
+	if (
+		pendingParticipants.length === 0
+		&& pendingDispatches.length === 0
+		&& recentEvents.length === 0
+	) {
+		return "";
+	}
+
+	const lines = [
+		"Durable Sabha resume context:",
+		`- revision: ${getSabhaRevision(sabha.id)}`,
+		`- status: ${sabha.status}`,
+		pendingParticipants.length > 0
+			? `- pending participants: ${pendingParticipants.join(", ")}`
+			: "- pending participants: none",
+	];
+
+	if (pendingDispatches.length > 0) {
+		lines.push("- recent mesh dispatches:");
+		for (const dispatch of pendingDispatches) {
+			const detail = [
+				dispatch.participantId,
+				`target=${dispatch.resolvedTarget ?? dispatch.target}`,
+				`status=${dispatch.status}`,
+			];
+			if (dispatch.error) detail.push(`error=${dispatch.error}`);
+			lines.push(`  - ${detail.join(" | ")}`);
+		}
+	}
+
+	if (recentEvents.length > 0) {
+		lines.push("- recent Sabha events:");
+		for (const event of recentEvents) {
+			const summary =
+				typeof event.payload.summary === "string" && event.payload.summary.trim()
+					? event.payload.summary.trim()
+					: typeof event.payload.participantId === "string"
+						? `participant=${event.payload.participantId}`
+						: "";
+			lines.push(`  - ${event.eventType}${summary ? ` | ${summary}` : ""}`);
+		}
+	}
+
+	lines.push("Resume from the last durable revision instead of restarting the full consultation.");
+	return lines.join("\n");
+}
+
 export function gatherSabhaState(sabha: Sabha): Record<string, unknown> {
 	const project = typeof (sabha as unknown as { project?: unknown }).project === "string"
 		? (sabha as unknown as { project?: string }).project
@@ -292,6 +358,8 @@ export function gatherSabhaState(sabha: Sabha): Record<string, unknown> {
 	const pendingDispatchParticipantIds = meshBindings
 		.map((binding) => binding.participantId)
 		.filter((participantId) => pendingParticipantIds.includes(participantId));
+	const resumeContext = buildSabhaResumeContext(sabha);
+	const resumePlan = buildSabhaResumePlan(sabha) as SabhaResumePlan | null;
 	return {
 		id: sabha.id,
 		topic: sabha.topic,
@@ -314,6 +382,8 @@ export function gatherSabhaState(sabha: Sabha): Record<string, unknown> {
 		respondedParticipantIds,
 		pendingParticipantIds,
 		pendingDispatchParticipantIds,
+		resumeContext,
+		resumePlan,
 		consultationSummary: {
 			perspectiveCount: perspectives.length,
 			respondedCount: respondedParticipantIds.length,

@@ -18,9 +18,11 @@ import type { ServePhaseModules } from "./main-serve-helpers.js";
 import type { MeshBootstrapResult } from "./mesh-bootstrap.js";
 import { buildMeshApiHandlers } from "./mesh-bootstrap.js";
 import { createDaemonBackedMemoryBridge } from "./runtime-daemon-memory-bridge.js";
+import { createDaemonBackedTaskCheckpointStore } from "./runtime-daemon-task-checkpoints.js";
 import { allowLocalRuntimeFallback } from "./runtime-daemon-proxies.js";
 
 export type ServePromptOptions = {
+	requestId?: string;
 	sessionId?: string;
 	title?: string;
 	clientKey?: string;
@@ -59,7 +61,12 @@ function replayServeSessionIntoAgent(agent: Agent, session: Session): void {
 	}
 }
 
-async function createServeRequestAgent(baseAgent: Agent, projectPath: string): Promise<Agent> {
+async function createServeRequestAgent(
+	baseAgent: Agent,
+	projectPath: string,
+	session: Session,
+	requestId: string,
+): Promise<Agent> {
 	const baseConfig = typeof baseAgent.getConfig === "function"
 		? baseAgent.getConfig()
 		: null;
@@ -86,6 +93,14 @@ async function createServeRequestAgent(baseAgent: Agent, projectPath: string): P
 		kaala: undefined,
 		commHub: undefined,
 		memoryBridge: undefined,
+		taskCheckpointStore: createDaemonBackedTaskCheckpointStore(),
+		taskKey: `serve:${session.meta.id}:request:${requestId}`,
+		taskType: "serve.request",
+		taskSessionIdResolver: () => session.meta.id,
+		sessionLineageKey:
+			typeof session.meta.metadata?.sessionLineageKey === "string"
+				? session.meta.metadata.sessionLineageKey
+				: null,
 	};
 	const requestAgent = new Agent(requestConfig);
 	const provider = baseAgent.getProvider();
@@ -209,7 +224,8 @@ export function buildServerHandlers(opts: {
 					if (!serveAgent) throw new Error("Serve agent not initialized");
 					const opened = await openServeSession(options);
 					const promptSession = opened.session;
-					requestAgent = await createServeRequestAgent(serveAgent, projectPath);
+					const requestId = options?.requestId ?? crypto.randomUUID();
+					requestAgent = await createServeRequestAgent(serveAgent, projectPath, promptSession, requestId);
 					if (options?.onEvent) {
 						const previousOnEvent = requestAgent.getConfig().onEvent;
 						requestAgent.setOnEvent((event, data) => {

@@ -1,0 +1,12 @@
+{
+	"files": [],
+	"references": [
+		{ "path": "../core" },
+		{ "path": "../dharma" },
+		{ "path": "../smriti" },
+		{ "path": "../anina" },
+		{ "path": "../sutra" },
+		{ "path": "../tantra" },
+		{ "path": "./" }
+	]
+}

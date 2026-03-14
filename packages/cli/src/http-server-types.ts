@@ -136,6 +136,7 @@ export interface SessionOpenOptions {
 }
 
 export interface PromptRequestOptions extends SessionOpenOptions {
+	requestId?: string;
 	onEvent?: (type: string, data: unknown) => void;
 	signal?: AbortSignal;
 }

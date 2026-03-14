@@ -19,6 +19,8 @@ import { registerCompressionMethods } from "./services-compression.js";
 import { registerDiscoveryMethods } from "./services-discovery.js";
 import { registerSemanticMethods } from "./services-semantic.js";
 import { registerResearchMethods } from "./services-research.js";
+import { registerAgentTaskMethods } from "./services-agent-tasks.js";
+import { registerResearchCheckpointMethods } from "./services-research-checkpoints.js";
 import {
 	registerReadMethods,
 	knownProjectsFromStore,
@@ -64,6 +66,8 @@ export async function registerServices(router: RpcRouter): Promise<void> {
 	registerDiscoveryMethods(router);
 	registerSemanticMethods(router);
 	registerResearchMethods(router);
+	registerAgentTaskMethods(router);
+	registerResearchCheckpointMethods(router);
 	registerDaemonMethods(router, sessionDb);
 	registerTelemetryMethods(router);
 	registerBindingMethods(router);

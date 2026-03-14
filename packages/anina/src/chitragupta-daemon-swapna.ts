@@ -10,21 +10,31 @@ type ConsolidationEmitter = (eventName: "consolidation", event: ConsolidationEve
 /** Resolve project ownership for a set of pending session ids. */
 export async function resolveSessionProjects(
 	sessionIds: readonly string[],
-): Promise<Array<{ id: string; project: string }>> {
+): Promise<Array<{ id: string; project: string; sessionLineageKey: string | null }>> {
 	try {
 		const { DatabaseManager } = await import("@chitragupta/smriti");
 		const db = DatabaseManager.instance().get("agent");
 		const placeholders = sessionIds.map(() => "?").join(",");
 		if (!placeholders) return [];
 		return db.prepare(
-			`SELECT id, project FROM sessions WHERE id IN (${placeholders}) ORDER BY updated_at DESC`,
-		).all(...sessionIds) as Array<{ id: string; project: string }>;
+			`SELECT id, project, json_extract(metadata, '$.sessionLineageKey') AS sessionLineageKey
+			 FROM sessions
+			 WHERE id IN (${placeholders})
+			 ORDER BY updated_at DESC`,
+		).all(...sessionIds) as Array<{ id: string; project: string; sessionLineageKey: string | null }>;
 	} catch {
 		const { listSessions } = await import("@chitragupta/smriti/session-store");
 		const wanted = new Set(sessionIds);
 		return listSessions()
 			.filter((session) => wanted.has(session.id))
-			.map((session) => ({ id: session.id, project: session.project }));
+			.map((session) => ({
+				id: session.id,
+				project: session.project,
+				sessionLineageKey:
+					typeof session.metadata?.sessionLineageKey === "string"
+						? session.metadata.sessionLineageKey
+						: null,
+			}));
 	}
 }
 

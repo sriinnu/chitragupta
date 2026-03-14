@@ -42,6 +42,7 @@ const scope = {
 	maxRounds: 4,
 	agentCount: 2,
 	stopAfterNoImprovementRounds: 2,
+	leaseOwner: null,
 	loopKey: "loop-control-test",
 	roundNumber: null,
 	totalRounds: null,
@@ -88,12 +89,14 @@ describe("research interrupt control", () => {
 			call.mockResolvedValueOnce({
 				state: { loopKey: active.loopKey, stopReason: "cancelled" },
 			});
-			await mod.completeResearchLoopInterrupt({
-				loopKey: active.loopKey,
-				signal: new AbortController().signal,
-				getCancelReason: () => "test-cleanup",
-				isCancelled: () => true,
-			}, "cancelled");
+				await mod.completeResearchLoopInterrupt({
+					loopKey: active.loopKey,
+					signal: new AbortController().signal,
+					getLeaseOwner: () => null,
+					getCancelReason: () => "test-cleanup",
+					getCancelRequestedAt: () => Date.now(),
+					isCancelled: () => true,
+				}, "cancelled");
 		}
 	});
 
@@ -107,10 +110,10 @@ describe("research interrupt control", () => {
 		expect(mod.listActiveResearchLoops()).toEqual([]);
 	});
 
-	it("keeps local loop state until daemon completion succeeds", async () => {
-		call.mockResolvedValueOnce({ state: { loopKey: "loop-complete-retry", status: "running" } });
-		const mod = await import("../src/chitragupta-nodes-research-interrupt.js");
-		const handle = await mod.startResearchLoopInterrupt(scope, council, "loop-complete-retry");
+		it("keeps local loop state until daemon completion succeeds", async () => {
+			call.mockResolvedValueOnce({ state: { loopKey: "loop-complete-retry", status: "running" } });
+			const mod = await import("../src/chitragupta-nodes-research-interrupt.js");
+			const handle = await mod.startResearchLoopInterrupt(scope, council, "loop-complete-retry");
 
 		expect(mod.listActiveResearchLoops()).toEqual([
 			expect.objectContaining({ loopKey: "loop-complete-retry", cancelReason: null }),
@@ -127,9 +130,101 @@ describe("research interrupt control", () => {
 			state: { loopKey: "loop-complete-retry", status: "completed", stopReason: "max-rounds" },
 		});
 		const completed = await mod.completeResearchLoopInterrupt(handle, "max-rounds");
-		expect(completed).toEqual(
-			expect.objectContaining({ loopKey: "loop-complete-retry", stopReason: "max-rounds" }),
+			expect(completed).toEqual(
+				expect.objectContaining({ loopKey: "loop-complete-retry", stopReason: "max-rounds" }),
+			);
+			expect(mod.listActiveResearchLoops()).toEqual([]);
+		});
+
+	it("fails closed when daemon heartbeat control state disappears", async () => {
+			call.mockResolvedValueOnce({ state: { loopKey: "loop-heartbeat-missing", status: "running" } });
+			const mod = await import("../src/chitragupta-nodes-research-interrupt.js");
+			const handle = await mod.startResearchLoopInterrupt(scope, council, "loop-heartbeat-missing");
+
+			call.mockResolvedValueOnce(null);
+			const result = await mod.heartbeatResearchLoopInterrupt(handle, scope, council, {
+				currentRound: 2,
+				totalRounds: 4,
+				attemptNumber: 1,
+				phase: "run",
+			});
+
+			expect(result).toEqual({ cancelled: true, reason: "control-plane-lost" });
+			expect(handle.isCancelled()).toBe(true);
+			expect(handle.getCancelReason()).toBe("control-plane-lost");
+		expect(mod.listActiveResearchLoops()).toEqual([
+			expect.objectContaining({
+				loopKey: "loop-heartbeat-missing",
+				cancelReason: "control-plane-lost",
+			}),
+		]);
+	});
+
+	it("forwards an explicit durable lease owner through start, heartbeat, and complete control calls", async () => {
+		call.mockResolvedValueOnce({ state: { loopKey: "loop-lease-owner", status: "running" } });
+		call.mockResolvedValueOnce({ state: { loopKey: "loop-lease-owner", status: "running" } });
+		call.mockResolvedValueOnce({ state: { loopKey: "loop-lease-owner", status: "completed", stopReason: "max-rounds" } });
+		const mod = await import("../src/chitragupta-nodes-research-interrupt.js");
+		const scoped = {
+			...scope,
+			leaseOwner: "daemon:research-worker:test-daemon",
+		};
+
+		const handle = await mod.startResearchLoopInterrupt(scoped, council, "loop-lease-owner");
+		await mod.heartbeatResearchLoopInterrupt(handle, scoped, council, {
+			currentRound: 1,
+			totalRounds: 4,
+			attemptNumber: 1,
+			phase: "run",
+		});
+		await mod.completeResearchLoopInterrupt(handle, "max-rounds");
+
+		expect(call).toHaveBeenNthCalledWith(1, "research.loops.start", expect.objectContaining({
+			loopKey: "loop-lease-owner",
+			leaseOwner: "daemon:research-worker:test-daemon",
+		}));
+		expect(call).toHaveBeenNthCalledWith(2, "research.loops.heartbeat", expect.objectContaining({
+			loopKey: "loop-lease-owner",
+			leaseOwner: "daemon:research-worker:test-daemon",
+		}));
+		expect(call).toHaveBeenNthCalledWith(3, "research.loops.complete", expect.objectContaining({
+			loopKey: "loop-lease-owner",
+			leaseOwner: "daemon:research-worker:test-daemon",
+		}));
+	});
+
+		it("waits for aborted closure work to settle before returning", async () => {
+			const { withinRemainingLoopBudget } = await import("../src/chitragupta-nodes-research-overnight-context.js");
+			const parent = new AbortController();
+			const events: string[] = [];
+
+		const resultPromise = withinRemainingLoopBudget(
+			{ ...scope, totalBudgetMs: 60_000 },
+			0,
+			Date.now(),
+			"closure test",
+			parent.signal,
+			(signal) => new Promise<string>((resolve, reject) => {
+				signal.addEventListener("abort", () => {
+					events.push("aborted");
+					setTimeout(() => {
+						events.push("settled");
+						reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+					}, 25);
+				}, { once: true });
+			}),
 		);
-		expect(mod.listActiveResearchLoops()).toEqual([]);
+
+		setTimeout(() => {
+			events.push("cancel-requested");
+			parent.abort(new Error("operator-stop"));
+		}, 0);
+
+		await expect(resultPromise).rejects.toThrow("operator-stop");
+		expect(events).toEqual([
+			"cancel-requested",
+			"aborted",
+			"settled",
+		]);
 	});
 });

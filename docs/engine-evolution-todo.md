@@ -45,10 +45,24 @@ This file tracks core-engine closure work that should not disappear into ad hoc 
   2. Deeper `PAKT` / `unPAKT` across live read-side reuse, decompression-aware recall, and repair/readback flows.
   3. Full overnight research loop with hard budgets, keep/discard/revert, experiment ledger, and Nidra consolidation.
   4. External `vaayu` integration on top of the stabilized Chitragupta engine contract.
+- [ ] Generalize timeout pickup beyond the overnight loop:
+  - keep the current daemon-owned research checkpoint/resume path
+  - extend the same “know where it left off and continue” contract from overnight research into timed-out Sabha consultations and the remaining long-running agent-task paths
+  - distinguish:
+    - restart-safe consultation resume (`sabha.resume`, lease-backed pending dispatches)
+    - exact task pickup from the last durable checkpoint instead of restarting the whole task
+  - [x] preserve the current daemon-owned generic task checkpoints that already carry forward durable phase/status metadata plus a bounded recent-event trail into the next prompt run, and inject that resume context into the next prompt
+  - [x] expose a bounded operator-facing `resumeContext` for `agent.tasks.checkpoint.get/list` so timed-out generic agent work is inspectable like Sabha instead of requiring raw checkpoint spelunking
+  - deepen those generic checkpoints into richer semantic resume where needed
+  - make this a first-class engine durability boundary, not a best-effort convention
 - [ ] Push Sabha past restart-safe mesh consultation into fuller distributed merge / oplog semantics across multiple active nodes.
-- [ ] Turn the current bounded `autoresearch` / ACP research workflows into a full overnight loop with hard run budgets, baseline capture, keep/discard or revert decisions, branch hygiene, and automatic result consolidation after long unattended runs.
-- [ ] Generalize that overnight research loop beyond Karpathy-style training into engine-owned dream projects of any kind: code experiments, architecture probes, memory/retrieval tuning, and system-improvement loops that can run while Nidra later consolidates what mattered.
-- [ ] Make overnight research outcomes feed back into Smriti, Akasha, Nidra, and PAKT as first-class learned artifacts: compacted logs, reusable experiment summaries, retained hypotheses, and next-step seeds for future dream projects.
+- [x] Turn the current bounded `autoresearch` / ACP research workflows into a full overnight loop with hard run budgets, baseline capture, keep/discard or revert decisions, branch hygiene, and automatic result consolidation after long unattended runs.
+- [x] Generalize that overnight research loop beyond Karpathy-style training into engine-owned dream projects of any kind: code experiments, architecture probes, memory/retrieval tuning, and system-improvement loops that can run while Nidra later consolidates what mattered.
+- [x] Make overnight research outcomes feed back into Smriti, Akasha, Nidra, and PAKT as first-class learned artifacts: compacted logs, reusable experiment summaries, retained hypotheses, and next-step seeds for future dream projects.
+- [x] Teach Nidra to consume overnight research outcomes as refinement input, not only as a reporting artifact:
+  - replay bounded research outcomes into refinement digests
+  - seed next-step research suggestions
+  - trigger selective semantic repair for high-value stale artifacts
 - [x] Add side-effect-free `sabha.repl.pull` and revisioned `sabha.repl.apply` so replicated Sabha state can move between nodes without resuming pending mesh work as a read-side effect.
 - [x] Add first-class local runtime support for both `llama.cpp` and `Ollama` in the engine control plane.
 - [x] Make `llama.cpp` the default performance-first local inference backend once the control plane lands.
@@ -82,6 +96,7 @@ This file tracks core-engine closure work that should not disappear into ad hoc 
 - [x] Add a best-effort post-run Takumi contract audit that fails closed when the bridge explicitly observes provider/model declarations outside an enforced engine-selected lane.
 - [x] Persist git provenance in bounded research records and fail closed when git refs change during the run so the experiment ledger cannot silently drift across branches or commits.
 - [ ] Tighten unattended overnight governance further with stricter hash-only policy and the remaining keep/discard/revert closure work.
+- [ ] Harden end-to-end cancellation so every closure-stage side effect honors interrupt signals natively, not only through bounded wrapper coordination.
 - [ ] Tighten Vaayu and Takumi consumer contracts around canonical sessions, bridge scopes, and provenance-aware recall.
 - [x] Make explicit Takumi engine-route requests fail closed when daemon route resolution fails or when the engine selected Takumi but the Takumi bridge is unavailable.
 - [x] Move the interactive agent and MCP `coding_agent` surfaces onto the same session-aware engine route-class path so route resolution governs execution beyond the original Takumi bridge entrypoint.

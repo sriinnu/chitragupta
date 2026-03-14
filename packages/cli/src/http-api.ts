@@ -9,6 +9,7 @@ import { mountCoreRoutes } from "./http-routes-core.js";
 import { mountJobRoutes } from "./http-routes-jobs.js";
 import { mountMemoryRoutes } from "./http-routes-memory.js";
 import { mountAgentRoutes } from "./http-routes-agents.js";
+import { mountAgentTaskCheckpointRoutes } from "./http-routes-agent-tasks.js";
 import { mountDynamicRoutes, wireWebSocket } from "./http-routes-ws.js";
 import { mountPairingRoutes } from "./routes/pairing.js";
 import type { PairingEngine } from "./pairing-engine.js";
@@ -63,6 +64,7 @@ export function createChitraguptaAPI(deps: ApiDeps, config?: ServerConfig): Chit
 	const jobRunner = mountJobRoutes(server, deps, config);
 	mountMemoryRoutes(server);
 	mountAgentRoutes(server, deps);
+	mountAgentTaskCheckpointRoutes(server, deps);
 
 	// Budget, settings, and model routes
 	if (deps.getBudgetTracker) {

@@ -1,6 +1,6 @@
 {
 	"name": "@chitragupta/daemon",
-	"version": "0.1.5",
+	"version": "0.1.6",
 	"description": "Centralized daemon — one process per user, Unix domain socket, JSON-RPC 2.0, single-writer SQLite, health monitoring, and auto-recovery",
 	"type": "module",
 	"license": "MIT",
@@ -43,6 +43,7 @@
 	],
 	"scripts": {
 		"build": "tsc",
+		"typecheck": "tsc -b tsconfig.check.json",
 		"test": "sh -lc 'cd ../.. && pnpm exec vitest run --config vitest.config.ts packages/daemon/test/*.test.ts'"
 	},
 	"dependencies": {

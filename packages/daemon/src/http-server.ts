@@ -11,6 +11,7 @@
  * @module
  */
 
+import { execSync } from "node:child_process";
 import http from "node:http";
 import { createLogger } from "@chitragupta/core";
 import type { RpcRouter } from "./rpc-router.js";
@@ -85,6 +86,7 @@ export async function startHttpServer(config: DaemonHttpConfig): Promise<DaemonH
 
 			if (req.method === "GET" && (pathname === "/status" || pathname === "/status/ui")) {
 				const payload = await buildStatusPayload(router);
+				res.setHeader("Cache-Control", "max-age=2, stale-while-revalidate=5");
 				const wantsHtml =
 					format === "html" ||
 					pathname === "/status/ui" ||
@@ -145,6 +147,44 @@ export async function startHttpServer(config: DaemonHttpConfig): Promise<DaemonH
 
 // ─── Status Handler ─────────────────────────────────────────────────────────
 
+/** Provider name cache — keyed by PID, avoids repeated `ps` calls. */
+const providerCache = new Map<number, { provider: string; ts: number }>();
+const PROVIDER_CACHE_TTL_MS = 60_000;
+
+/**
+ * Resolve "unknown" provider by inspecting the process tree.
+ *
+ * When the heartbeat reports "unknown" (MCP server started before the
+ * detection fix, or client doesn't set env vars), fall back to checking
+ * the parent process command name via `ps`. Results are cached for 60s
+ * to avoid repeated shell-outs on every /status poll.
+ */
+function resolveProvider(reported: string, pid: number | null): string {
+	if (reported !== "unknown" || pid === null) return reported;
+
+	const now = Date.now();
+	const cached = providerCache.get(pid);
+	if (cached && now - cached.ts < PROVIDER_CACHE_TTL_MS) return cached.provider;
+
+	let resolved = "unknown";
+	try {
+		const ppidStr = execSync(`ps -p ${pid} -o ppid=`, { timeout: 500 }).toString().trim();
+		const ppid = parseInt(ppidStr, 10);
+		if (!isNaN(ppid) && ppid > 1) {
+			const parentCmd = execSync(`ps -p ${ppid} -o command=`, { timeout: 500 }).toString().trim().toLowerCase();
+			if (parentCmd.includes("claude")) resolved = "claude";
+			else if (parentCmd.includes("codex")) resolved = "codex";
+			else if (parentCmd.includes("gemini")) resolved = "gemini";
+			else if (parentCmd.includes("copilot")) resolved = "copilot";
+		}
+	} catch {
+		// Process may have exited — return "unknown"
+	}
+
+	providerCache.set(pid, { provider: resolved, ts: now });
+	return resolved;
+}
+
 /**
  * Aggregate status from multiple RPC methods.
  *
@@ -161,8 +201,8 @@ async function buildStatusPayload(router: RpcRouter): Promise<Record<string, unk
 	const rawInstances = telemetry.instances;
 	const fingerprint = computeTelemetryFingerprint(rawInstances);
 	const now = Date.now();
-	const activeWindowMs = 2 * 60 * 1000;
-	const busyStaleMs = 5 * 60 * 1000;
+	const activeWindowMs = Number(process.env.CHITRAGUPTA_ACTIVE_WINDOW_MS) || 2 * 60 * 1000;
+	const busyStaleMs = Number(process.env.CHITRAGUPTA_BUSY_THRESHOLD_MS) || 5 * 60 * 1000;
 
 	const instances = rawInstances.map((raw) => {
 		const instance = {
@@ -179,7 +219,10 @@ async function buildStatusPayload(router: RpcRouter): Promise<Record<string, unk
 			toolCallCount: typeof raw.toolCallCount === "number" ? raw.toolCallCount : 0,
 			turnCount: typeof raw.turnCount === "number" ? raw.turnCount : 0,
 			lastToolCallAt: typeof raw.lastToolCallAt === "number" ? raw.lastToolCallAt : null,
-			provider: typeof raw.provider === "string" ? raw.provider : "unknown",
+			provider: resolveProvider(
+			typeof raw.provider === "string" ? raw.provider : "unknown",
+			typeof raw.pid === "number" ? raw.pid : null,
+		),
 			providerSessionId: typeof raw.providerSessionId === "string" ? raw.providerSessionId : null,
 			clientKey: typeof raw.clientKey === "string" ? raw.clientKey : null,
 			agentNickname: typeof raw.agentNickname === "string" ? raw.agentNickname : null,
@@ -258,7 +301,7 @@ async function buildStatusPayload(router: RpcRouter): Promise<Record<string, unk
 			methods: health?.methods ?? null,
 			serverPush: (health?.daemon as Record<string, unknown> | undefined)?.serverPush ?? null,
 		},
-		runtime: health?.clients ?? null,
+		runtime: enrichRuntimeWithTelemetry(health?.clients, instances),
 		integrity: health?.live ?? null,
 		nidra,
 		db: db ? (db as Record<string, unknown>).counts ?? db : null,
@@ -294,6 +337,86 @@ async function buildStatusPayload(router: RpcRouter): Promise<Record<string, unk
 			},
 			timestamp: Date.now(),
 		};
+}
+
+/**
+ * Enrich runtime socket items with workspace/provider from heartbeat telemetry.
+ *
+ * Socket tracking (RpcClientSnapshot) doesn't carry workspace/provider — those
+ * come from heartbeat files written by MCP clients. This function performs a
+ * strict PID-based cross-reference only — no guessing. If a socket's preferences
+ * contain a `pid` that matches a heartbeat instance, it inherits that instance's
+ * workspace and provider. Unmatched sockets are left unenriched.
+ *
+ * No single-instance fallback: when multiple providers (Claude, Codex, Gemini)
+ * share the daemon, blindly assigning all sockets to one instance is wrong.
+ */
+function enrichRuntimeWithTelemetry(
+	clients: unknown,
+	telemetryInstances: Array<Record<string, unknown>>,
+): unknown {
+	if (!clients || typeof clients !== "object") return clients;
+	const c = clients as Record<string, unknown>;
+	const items = c.items;
+	if (!Array.isArray(items) || items.length === 0) return clients;
+
+	// Build PID → { workspace, provider } lookup from heartbeat instances
+	const pidMap = new Map<number, { workspace: string | null; provider: string | null }>();
+	for (const inst of telemetryInstances) {
+		if (typeof inst.pid === "number") {
+			pidMap.set(inst.pid, {
+				workspace: typeof inst.workspace === "string" ? inst.workspace : null,
+				provider: resolveProvider(
+					typeof inst.provider === "string" ? inst.provider : "unknown",
+					typeof inst.pid === "number" ? inst.pid : null,
+				),
+			});
+		}
+	}
+
+	// Build unique-provider set to detect multi-provider scenarios
+	const uniqueProviders = new Set(
+		Array.from(pidMap.values()).map((v) => v.provider).filter((p) => p && p !== "unknown"),
+	);
+
+	const enrichedItems = items.map((item: unknown) => {
+		if (!item || typeof item !== "object") return item;
+		const it = item as Record<string, unknown>;
+
+		// 1. Try matching via preferences.pid (client called client.identify)
+		const prefs = it.preferences as Record<string, unknown> | undefined;
+		const prefPid = typeof prefs?.pid === "number" ? prefs.pid : null;
+		if (prefPid !== null) {
+			const match = pidMap.get(prefPid);
+			if (match) {
+				return { ...it, workspace: match.workspace, provider: match.provider };
+			}
+		}
+
+		// 2. If preferences have provider/workspace (from client.identify), use them directly
+		if (typeof prefs?.provider === "string" && prefs.provider !== "unknown") {
+			return {
+				...it,
+				workspace: typeof prefs.workspace === "string" ? prefs.workspace : null,
+				provider: prefs.provider as string,
+			};
+		}
+
+		// 3. Single-provider fallback: if ALL heartbeat instances report the same
+		//    provider (not "unknown"), it's safe to attribute all sockets to it.
+		//    In multi-provider setups this fallback is skipped — unmatched sockets
+		//    stay unenriched rather than being mislabeled.
+		if (uniqueProviders.size === 1) {
+			const soleEntry = Array.from(pidMap.values())[0];
+			if (soleEntry) {
+				return { ...it, workspace: soleEntry.workspace, provider: soleEntry.provider };
+			}
+		}
+
+		return it;
+	});
+
+	return { ...c, items: enrichedItems };
 }
 
 // ─── Telemetry Handlers ─────────────────────────────────────────────────────

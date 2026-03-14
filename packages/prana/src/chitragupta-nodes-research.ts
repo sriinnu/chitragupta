@@ -132,6 +132,8 @@ export async function autoresearchRun(ctx: NodeContext): Promise<NodeResult> {
 				stdout: error.stdout ?? "",
 				stderr: error.stderr ?? "",
 				metric: error.metric ?? null,
+				durationMs:
+					typeof error.durationMs === "number" ? error.durationMs : null,
 				exitCode: typeof error.exitCode === "number" ? error.exitCode : null,
 				timedOut: error.timedOut === true,
 				scopeGuard: error.scopeGuard === "hash-only" ? "hash-only" : "git",
@@ -184,6 +186,8 @@ export async function autoresearchOvernight(ctx: NodeContext): Promise<NodeResul
 						? `Overnight research stopped after ${result.roundsCompleted} rounds without improvement`
 						: result.stopReason === "budget-exhausted"
 							? `Overnight research stopped after ${result.roundsCompleted} rounds because the total budget was exhausted`
+							: result.stopReason === "control-plane-lost"
+								? `Overnight research stopped after ${result.roundsCompleted} rounds because daemon loop control was lost and the run failed closed`
 							: result.stopReason === "unsafe-discard"
 								? `Overnight research stopped after ${result.roundsCompleted} rounds because a discarded round could not be safely reverted`
 								: result.stopReason === "closure-failed"
@@ -205,6 +209,7 @@ export async function autoresearchEvaluate(ctx: NodeContext): Promise<NodeResult
 			evaluateResearchResult(
 				resultData(ctx.stepOutputs["autoresearch-baseline"]),
 				resultData(ctx.stepOutputs["autoresearch-run"]),
+				scopeFromContext(ctx),
 			),
 		);
 		return {

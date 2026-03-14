@@ -271,6 +271,7 @@ const html = htm.bind(h);
 const statusData = signal(window.__STATUS__);
 const autoRefresh = signal(localStorage.getItem("cg.autoRefresh") !== "off");
 const connError = signal(null);
+const errorState = signal(null);
 const sortCol = signal("toolCallCount");
 const sortAsc = signal(false);
 
@@ -328,8 +329,13 @@ function nidraTone(state) {
 
 // ── Data Fetching ─────────────────────────────────────────────────────
 async function fetchFresh() {
-	const res = await fetch("/status?format=json", { cache: "no-store" });
-	statusData.value = await res.json();
+	try {
+		const res = await fetch("/status?format=json", { cache: "no-store" });
+		statusData.value = await res.json();
+		errorState.value = null;
+	} catch (err) {
+		errorState.value = "Failed to fetch status: " + (err.message || String(err));
+	}
 }
 
 async function watchLoop() {
@@ -340,10 +346,12 @@ async function watchLoop() {
 			const res = await fetch("/telemetry/watch?fingerprint=" + encodeURIComponent(fp) + "&timeout=25000", { cache: "no-store" });
 			const data = await res.json();
 			connError.value = null;
+			errorState.value = null;
 			if (data.changed) await fetchFresh();
 			await sleep(50);
 		} catch (err) {
 			connError.value = err.message;
+			errorState.value = "Watch loop error: " + (err.message || String(err));
 			await sleep(2500);
 		}
 	}
@@ -909,6 +917,20 @@ function Footer() {
 // ── App ───────────────────────────────────────────────────────────────
 function App() {
 	useEffect(() => { watchLoop(); }, []);
+
+	if (errorState.value) {
+		return html\`
+			<div class="container">
+				<\${Header} />
+				<div class="notice error" style="margin-top: 24px; background: rgba(120, 20, 30, 0.85); border-color: #c0354a; color: #ffd0d6; padding: 20px; border-radius: 14px;">
+					<div style="font-size: 1rem; font-weight: 700; margin-bottom: 8px;">Dashboard Error</div>
+					<div style="font-size: 0.88rem; margin-bottom: 14px;">\${errorState.value}</div>
+					<button style="border-color: #c0354a;" onClick=\${() => { errorState.value = null; fetchFresh(); }}>Retry</button>
+				</div>
+			</div>
+		\`;
+	}
+
 	return html\`
 		<div class="container">
 			<\${Header} />

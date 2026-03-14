@@ -267,7 +267,7 @@ export function mountCoreRoutes(
 					sessionId = opened.id;
 					createdSession = opened.created;
 				}
-				const response = await deps.prompt(message.trim(), { sessionId });
+				const response = await deps.prompt(message.trim(), { sessionId, requestId: req.requestId });
 				return {
 					status: 200,
 					body: { response, sessionId, createdSession, requestId: req.requestId },
