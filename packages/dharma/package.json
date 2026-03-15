@@ -3,7 +3,7 @@
 	"version": "0.1.1",
 	"description": "Policy engine with permission guards, rate limiting, and safety constraints",
 	"type": "module",
-	"license": "MIT",
+	"license": "AGPL-3.0-only",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/sriinnu/chitragupta.git",

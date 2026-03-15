@@ -3,7 +3,7 @@
 	"version": "0.1.1",
 	"description": "Terminal UI framework with Nakshatram theme, status bar, and streaming output",
 	"type": "module",
-	"license": "MIT",
+	"license": "AGPL-3.0-only",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/sriinnu/chitragupta.git",

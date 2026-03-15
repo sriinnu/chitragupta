@@ -3,7 +3,7 @@
 	"version": "0.1.3",
 	"description": "Inter-process communication hub with event routing and agent message delivery",
 	"type": "module",
-	"license": "MIT",
+	"license": "AGPL-3.0-only",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/sriinnu/chitragupta.git",

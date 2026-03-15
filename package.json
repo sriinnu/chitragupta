@@ -3,7 +3,7 @@
 	"private": true,
 	"type": "module",
   "version": "0.1.38",
-	"license": "MIT",
+	"license": "AGPL-3.0-only",
 	"description": "The Autonomous AI Agent Platform — 17-package TypeScript monorepo with zero-LLM cognitive layer, GraphRAG memory, bi-temporal knowledge graph, centralized daemon, and self-evolving skills",
 	"keywords": [
 		"ai",

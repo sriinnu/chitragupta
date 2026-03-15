@@ -3,7 +3,7 @@
 	"version": "0.1.6",
 	"description": "Centralized daemon — one process per user, Unix domain socket, JSON-RPC 2.0, single-writer SQLite, health monitoring, and auto-recovery",
 	"type": "module",
-	"license": "MIT",
+	"license": "AGPL-3.0-only",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/sriinnu/chitragupta.git",
