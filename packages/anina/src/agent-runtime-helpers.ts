@@ -339,7 +339,7 @@ export function buildFailedSubAgentResult(args: {
 export function disposeActorBindings(actorSystem: MeshActorSystem | null, actorRef: MeshActorRef | null): void {
 	if (!actorSystem || !actorRef) return;
 	try {
-		actorSystem.stop(`agent:${actorRef.actorId}`);
+		actorSystem.stop(actorRef.actorId);
 	} catch {
 		// Best-effort during teardown.
 	}

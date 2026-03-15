@@ -44,6 +44,9 @@ export interface ResearchLoopScheduleState {
 	objectives: Array<Record<string, unknown>>;
 	stopConditions: Array<Record<string, unknown>>;
 	updateBudgets: Record<string, unknown> | null;
+	policyFingerprint: string | null;
+	primaryObjectiveId: string | null;
+	primaryStopConditionId: string | null;
 	workflowContext: Record<string, unknown> | null;
 	parseError?: string | null;
 }
@@ -67,6 +70,9 @@ export interface ResearchLoopScheduleUpsertInput {
 	objectives?: unknown;
 	stopConditions?: unknown;
 	updateBudgets?: unknown;
+	policyFingerprint?: string | null;
+	primaryObjectiveId?: string | null;
+	primaryStopConditionId?: string | null;
 	workflowContext?: unknown;
 }
 
@@ -171,12 +177,15 @@ function parseStoredSchedule(valueJson: string): ResearchLoopScheduleState | nul
 			requestedBy: normalizeNullableString(parsed.requestedBy),
 			stopReason: normalizeNullableString(parsed.stopReason),
 			finishedAt: normalizeNullableNumber(parsed.finishedAt),
-			objectives: normalizeArrayOfRecords(parsed.objectives),
-			stopConditions: normalizeArrayOfRecords(parsed.stopConditions),
-			updateBudgets: normalizeRecord(parsed.updateBudgets),
-			workflowContext: normalizeRecord(parsed.workflowContext),
-			parseError: null,
-		};
+				objectives: normalizeArrayOfRecords(parsed.objectives),
+				stopConditions: normalizeArrayOfRecords(parsed.stopConditions),
+				updateBudgets: normalizeRecord(parsed.updateBudgets),
+				policyFingerprint: normalizeNullableString(parsed.policyFingerprint),
+				primaryObjectiveId: normalizeNullableString(parsed.primaryObjectiveId),
+				primaryStopConditionId: normalizeNullableString(parsed.primaryStopConditionId),
+				workflowContext: normalizeRecord(parsed.workflowContext),
+				parseError: null,
+			};
 	} catch (error) {
 		return {
 			projectPath: "",
@@ -204,12 +213,15 @@ function parseStoredSchedule(valueJson: string): ResearchLoopScheduleState | nul
 			requestedBy: null,
 			stopReason: null,
 			finishedAt: null,
-				objectives: [],
-				stopConditions: [],
-				updateBudgets: null,
-				workflowContext: null,
-				parseError: error instanceof Error ? error.message : "invalid research loop schedule",
-			};
+					objectives: [],
+					stopConditions: [],
+					updateBudgets: null,
+					policyFingerprint: null,
+					primaryObjectiveId: null,
+					primaryStopConditionId: null,
+					workflowContext: null,
+					parseError: error instanceof Error ? error.message : "invalid research loop schedule",
+				};
 	}
 }
 
@@ -287,6 +299,9 @@ export function upsertResearchLoopSchedule(input: ResearchLoopScheduleUpsertInpu
 				? normalizeArrayOfRecords(input.stopConditions)
 				: existing?.stopConditions ?? [],
 			updateBudgets: normalizeRecord(input.updateBudgets) ?? existing?.updateBudgets ?? null,
+			policyFingerprint: normalizeNullableString(input.policyFingerprint) ?? existing?.policyFingerprint ?? null,
+			primaryObjectiveId: normalizeNullableString(input.primaryObjectiveId) ?? existing?.primaryObjectiveId ?? null,
+			primaryStopConditionId: normalizeNullableString(input.primaryStopConditionId) ?? existing?.primaryStopConditionId ?? null,
 			workflowContext: normalizeRecord(input.workflowContext) ?? existing?.workflowContext ?? null,
 			parseError: null,
 		});
@@ -317,8 +332,9 @@ export function listResearchLoopSchedules(
 		.filter((entry) => !projectPath || entry.projectPath === projectPath)
 		.filter((entry) => !allowedStatuses || allowedStatuses.has(entry.status))
 		.filter((entry) => !options.runnableOnly || (
-			(entry.status === "queued" || entry.status === "leased")
+			(entry.status === "queued" || entry.status === "leased" || entry.status === "cancelling")
 			&& !isTerminalScheduleStatus(entry.status)
+			&& entry.availableAt <= now
 			&& (entry.status === "queued" || !isLeaseActive(entry, now))
 		))
 		.sort((left, right) => left.availableAt - right.availableAt || right.updatedAt - left.updatedAt)
@@ -335,6 +351,9 @@ export function claimResearchLoopSchedule(
 		return { claimed: false, schedule: existing };
 	}
 	const now = typeof input.now === "number" ? input.now : Date.now();
+	if ((existing.status === "queued" || existing.status === "cancelling") && existing.availableAt > now) {
+		return { claimed: false, schedule: existing };
+	}
 	if (isLeaseActive(existing, now, input.leaseOwner)) {
 		const updated = writeScheduleState({
 			...existing,
@@ -402,10 +421,15 @@ export function completeResearchLoopSchedule(args: {
 	loopKey: string;
 	stopReason: string | null;
 	now?: number;
+	leaseOwner?: string | null;
 }): ResearchLoopScheduleState | null {
 	const existing = getResearchLoopSchedule(args.projectPath, args.loopKey);
 	if (!existing) return null;
 	const now = typeof args.now === "number" ? args.now : Date.now();
+	const leaseOwner = normalizeNullableString(args.leaseOwner);
+	if (leaseOwner && isLeaseActive(existing, now) && existing.leaseOwner !== leaseOwner) {
+		return null;
+	}
 	const stopReason = normalizeNullableString(args.stopReason);
 	const status: ResearchLoopScheduleStatus = stopReason === "cancelled"
 		? "cancelled"

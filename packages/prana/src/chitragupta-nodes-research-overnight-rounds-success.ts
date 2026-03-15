@@ -25,6 +25,7 @@ import {
 import {
 	packResearchContext,
 	recordResearchOutcome,
+	syncResearchExperimentRecord,
 } from "./chitragupta-nodes-research-recording.js";
 import {
 	assertLoopNotCancelled,
@@ -249,7 +250,7 @@ export async function processSuccessfulRoundClosure(args: {
 		// Normalization is the final read-side polish step. The loop can still
 		// stop safely after a committed round even if this phase degrades, because
 		// the durable round/ledger state was already written above.
-		const nextCarryContext = await withinRemainingLoopBudget(
+			const nextCarryContext = await withinRemainingLoopBudget(
 			scope,
 			state.totalDurationMs,
 			roundStartedAt,
@@ -261,25 +262,62 @@ export async function processSuccessfulRoundClosure(args: {
 					"daemon-only",
 				),
 			);
-		assertLoopNotCancelled(interrupt);
+			assertLoopNotCancelled(interrupt);
 
-			const { round, rounds: annotatedRounds } = buildCommittedOptimizedRound({
-			scope,
-			roundScope,
-			rounds: args.rounds,
+			const roundWallClockDurationMs = Date.now() - roundStartedAt;
+			runDataForRecord = {
+				...runDataForRecord,
+				roundWallClockDurationMs,
+			};
+			const projectedTotalDurationMs = state.totalDurationMs + roundWallClockDurationMs;
+				const { round, rounds: annotatedRounds } = buildCommittedOptimizedRound({
+				scope,
+				roundScope,
+				rounds: args.rounds,
 			roundBase,
 			runData,
 			evaluation,
 			finalize,
 			packed,
 			recorded,
-			roundNumber,
-			state,
-		});
+				roundNumber,
+					state,
+					projectedTotalDurationMs,
+				});
+				await heartbeatResearchLoopInterrupt(interrupt, scope, council, {
+					currentRound: roundNumber,
+					totalRounds: scope.maxRounds,
+					attemptNumber: 1,
+					phase: "closure-record-sync",
+				});
+				await withinRemainingLoopBudget(
+					scope,
+					state.totalDurationMs,
+					roundStartedAt,
+					"overnight experiment sync",
+					interrupt.signal,
+					(signal) => syncResearchExperimentRecord(
+						roundScope,
+						asRecord(council),
+						runDataForRecord,
+						{
+							...asRecord(evaluation),
+							objectiveScores: round.objectiveScores ?? [],
+							stopConditionHits: round.stopConditionHits ?? [],
+							optimizerScore: round.optimizerScore ?? null,
+							paretoRank: round.paretoRank ?? null,
+							paretoDominated: round.paretoDominated ?? null,
+						},
+						asRecord(finalize),
+						packed ?? {},
+						signal,
+						{ fallbackPolicy: "daemon-only" },
+					),
+				);
 			applyCommittedRoundCounts(round, counts);
 			state = {
 				...state,
-				totalDurationMs: state.totalDurationMs + (Date.now() - roundStartedAt),
+				totalDurationMs: projectedTotalDurationMs,
 			};
 			if (args.forcedStopReason) {
 				// I stop only after the successful closure committed the round. That
@@ -295,11 +333,11 @@ export async function processSuccessfulRoundClosure(args: {
 			}
 
 			const postClosureLoopState = await heartbeatResearchLoopInterrupt(interrupt, scope, council, {
-			currentRound: roundNumber,
-			totalRounds: scope.maxRounds,
-			attemptNumber: 1,
-			phase: "after-closure",
-		});
+				currentRound: roundNumber,
+				totalRounds: scope.maxRounds,
+				attemptNumber: 1,
+				phase: "after-closure",
+			});
 		if (postClosureLoopState.cancelled) {
 			return {
 				kind: "stop",

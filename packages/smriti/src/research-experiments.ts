@@ -58,6 +58,7 @@ export interface ListResearchExperimentsOptions {
 	updatedAfter?: number;
 	updatedBefore?: number;
 	limit?: number;
+	offset?: number;
 }
 
 function normalizeOptionalString(value: unknown): string | null {
@@ -379,9 +380,12 @@ export function listResearchExperiments(
 	const limit = typeof options.limit === "number" && Number.isFinite(options.limit) && options.limit > 0
 		? Math.max(1, Math.trunc(options.limit))
 		: 20;
+	const offset = typeof options.offset === "number" && Number.isFinite(options.offset) && options.offset > 0
+		? Math.trunc(options.offset)
+		: 0;
 	const rows = db.prepare(
-		`SELECT * FROM research_experiments ${where} ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
-	).all(...values, limit) as Array<Record<string, unknown>>;
+		`SELECT * FROM research_experiments ${where} ORDER BY updated_at DESC, created_at DESC LIMIT ? OFFSET ?`,
+	).all(...values, limit, offset) as Array<Record<string, unknown>>;
 
 	return rows.map(parseStoredRow);
 }

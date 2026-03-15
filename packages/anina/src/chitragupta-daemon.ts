@@ -30,6 +30,7 @@ import {
 import { drainQueuedResearchRefinementScopes } from "./chitragupta-daemon-semantic-queue.js";
 import { consolidateDeepSleepSessions } from "./chitragupta-daemon-deep-sleep.js";
 import { dispatchNextQueuedResearchLoop } from "./chitragupta-daemon-research-scheduler.js";
+import { buildDailyRefinementGovernorPlan } from "./chitragupta-daemon-refinement-governor.js";
 
 export { formatDate } from "./daemon-periodic.js";
 export type { ChitraguptaDaemonConfig, ConsolidationEvent, DaemonState } from "./chitragupta-daemon-support.js";
@@ -55,6 +56,7 @@ export class ChitraguptaDaemon extends EventEmitter {
 	private researchDispatchTimer: ReturnType<typeof setInterval> | null = null;
 	private semanticRefreshPromise: Promise<void> | null = null;
 	private researchDispatchPromise: Promise<void> | null = null;
+	private backfilling = false;
 	private running = false;
 	private startTime = 0;
 	private consolidating = false;
@@ -92,9 +94,13 @@ export class ChitraguptaDaemon extends EventEmitter {
 		this.scheduleResearchDispatch();
 
 		if (this.config.backfillOnStartup) {
+			this.backfilling = true;
 			this.backfillMissedDays()
 				.then(() => this.backfillPeriodicReports())
-				.catch((err) => { this.emit("error", err); });
+				.catch((err) => { this.emit("error", err); })
+				.finally(() => {
+					this.backfilling = false;
+				});
 		}
 		void this.runSemanticEpochRefresh();
 		void this.runResearchDispatchTick();
@@ -327,7 +333,17 @@ export class ChitraguptaDaemon extends EventEmitter {
 	 * idle enough to supervise it.
 	 */
 	private async runResearchDispatchTick(): Promise<void> {
-		if (this.researchDispatchPromise || this.consolidating || this.semanticRefreshing) return;
+		const nidraState = this.nidra?.snapshot().state ?? "LISTENING";
+		// Resident research work must stay behind startup maintenance and Nidra's
+		// own deep-sleep refinement path so the daemon does not overlap queued
+		// overnight execution with another daemon-owned healing cycle.
+		if (
+			this.researchDispatchPromise
+			|| this.consolidating
+			|| this.semanticRefreshing
+			|| this.backfilling
+			|| nidraState === "DEEP_SLEEP"
+		) return;
 		const dispatchPromise = (async () => {
 			try {
 				await dispatchNextQueuedResearchLoop(this.emit.bind(this));
@@ -354,8 +370,32 @@ export class ChitraguptaDaemon extends EventEmitter {
 		const label = formatDate(new Date());
 		const refreshPromise = (async () => {
 			try {
+				const {
+					countQueuedResearchRefinementScopes,
+					readActiveResearchRefinementBudget,
+				} = await import("@chitragupta/smriti");
 				const refreshed = await refreshGlobalSemanticEpochDrift(false);
-				const queuedResearch = await drainQueuedResearchRefinementScopes({ label });
+				const queuedDueScopes = countQueuedResearchRefinementScopes();
+				const governor = buildDailyRefinementGovernorPlan({
+					loopProjects: 0,
+					experimentProjects: 0,
+					refinementScopes: [],
+					activeBudget: readActiveResearchRefinementBudget(),
+					queuedDueScopes,
+				});
+				const queuedResearch = queuedDueScopes > 0 && governor.effectiveBudget
+					? await drainQueuedResearchRefinementScopes({
+						label,
+						limit: governor.queuedDrainLimit ?? undefined,
+					})
+					: {
+						drained: 0,
+						repaired: 0,
+						deferred: 0,
+						remainingDue: queuedDueScopes,
+						remoteSynced: 0,
+						qualityDeferred: 0,
+					};
 				if (refreshed.refreshed || refreshed.repair.reembedded > 0 || refreshed.repair.remoteSynced > 0) {
 					this.emit("consolidation", {
 						type: "progress",
@@ -370,6 +410,13 @@ export class ChitraguptaDaemon extends EventEmitter {
 						date: label,
 						phase: "semantic-epoch-refresh",
 						detail: `queued research refinement drained ${queuedResearch.drained}, repaired ${queuedResearch.repaired}, deferred ${queuedResearch.deferred}`,
+					});
+				} else if (queuedResearch.remainingDue > 0 && !governor.effectiveBudget) {
+					this.emit("consolidation", {
+						type: "progress",
+						date: label,
+						phase: "semantic-epoch-refresh",
+						detail: `queued research refinement waiting for shared governor (${queuedResearch.remainingDue} due)`,
 					});
 				}
 			} catch (err) {

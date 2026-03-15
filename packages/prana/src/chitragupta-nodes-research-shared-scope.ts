@@ -120,6 +120,12 @@ function booleanValue(value: unknown, fallback: boolean): boolean {
 	return typeof value === "boolean" ? value : fallback;
 }
 
+function recordValue(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? value as Record<string, unknown>
+		: null;
+}
+
 function resolveResearchProjectPath(projectPath: string): string {
 	return path.resolve(projectPath || process.cwd());
 }
@@ -158,18 +164,18 @@ function parseObjectiveSpecs(
 				? record.metric
 				: null;
 			if (!metric) return null;
-			return {
-				id: stringValue(record.id, `objective-${index + 1}`),
-				label: stringValue(record.label, metric),
-				metric,
-				weight: clampWeight(numberValue(record.weight, 1), 1),
-				threshold: clampThreshold(
-					typeof record.threshold === "number" ? record.threshold : undefined,
-				),
-				enabled: booleanValue(record.enabled, true),
-			};
-		})
-		.filter((entry): entry is ResearchObjectiveSpec => entry !== null && entry.enabled);
+				return {
+					id: stringValue(record.id, `objective-${index + 1}`),
+					label: stringValue(record.label, metric),
+					metric,
+					weight: clampWeight(numberValue(record.weight, 1), 1),
+					threshold: clampThreshold(
+						typeof record.threshold === "number" ? record.threshold : undefined,
+					),
+					enabled: booleanValue(record.enabled, true),
+				};
+			})
+			.filter((entry): entry is ResearchObjectiveSpec => entry !== null);
 	return parsed.length > 0 ? parsed : fallback;
 }
 
@@ -194,17 +200,17 @@ function parseStopConditionSpecs(
 			const patience = typeof record.patience === "number"
 				? Math.max(1, Math.floor(record.patience))
 				: undefined;
-			return {
-				id: stringValue(record.id, `stop-${index + 1}`),
-				kind,
-				patience,
-				threshold: clampThreshold(
-					typeof record.threshold === "number" ? record.threshold : undefined,
-				),
-				enabled: booleanValue(record.enabled, true),
-			};
-		})
-		.filter((entry): entry is ResearchStopConditionSpec => entry !== null && entry.enabled);
+				return {
+					id: stringValue(record.id, `stop-${index + 1}`),
+					kind,
+					patience,
+					threshold: clampThreshold(
+						typeof record.threshold === "number" ? record.threshold : undefined,
+					),
+					enabled: booleanValue(record.enabled, true),
+				};
+			})
+			.filter((entry): entry is ResearchStopConditionSpec => entry !== null);
 	return parsed.length > 0 ? parsed : fallback;
 }
 
@@ -216,72 +222,77 @@ function parseStopConditionSpecs(
  */
 export function parseResearchUpdateBudgets(extra: Record<string, unknown>): ResearchUpdateBudgets {
 	const defaults = buildDefaultResearchUpdateBudgets();
+	const envelope = recordValue(extra.researchUpdateBudgets);
+	const packingEnvelope = recordValue(envelope?.packing);
+	const retrievalEnvelope = recordValue(envelope?.retrieval);
+	const refinementEnvelope = recordValue(envelope?.refinement);
+	const nidraEnvelope = recordValue(envelope?.nidra);
 	return {
 		packing: {
 			maxStdoutChars: clampTextBudget(
-				extra.researchPackingMaxStdoutChars,
+				extra.researchPackingMaxStdoutChars ?? packingEnvelope?.maxStdoutChars,
 				defaults.packing.maxStdoutChars,
 			),
 			maxStderrChars: clampTextBudget(
-				extra.researchPackingMaxStderrChars,
+				extra.researchPackingMaxStderrChars ?? packingEnvelope?.maxStderrChars,
 				defaults.packing.maxStderrChars,
 			),
 			maxCarryContextChars: clampTextBudget(
-				extra.researchPackingMaxCarryContextChars,
+				extra.researchPackingMaxCarryContextChars ?? packingEnvelope?.maxCarryContextChars,
 				defaults.packing.maxCarryContextChars,
 			),
 		},
 		retrieval: {
 			maxReuseChars: clampReuseChars(
-				extra.researchRetrievalMaxReuseChars,
+				extra.researchRetrievalMaxReuseChars ?? retrievalEnvelope?.maxReuseChars,
 				defaults.retrieval.maxReuseChars,
 			),
 			maxFrontierEntries: clampFrontierEntries(
-				extra.researchRetrievalMaxFrontierEntries,
+				extra.researchRetrievalMaxFrontierEntries ?? retrievalEnvelope?.maxFrontierEntries,
 				defaults.retrieval.maxFrontierEntries,
 			),
 		},
 		refinement: {
 			dailyCandidateLimit: clampCandidateLimit(
-				extra.researchRefinementDailyCandidateLimit,
+				extra.researchRefinementDailyCandidateLimit ?? refinementEnvelope?.dailyCandidateLimit,
 				defaults.refinement.dailyCandidateLimit,
 			),
 			projectCandidateLimit: clampCandidateLimit(
-				extra.researchRefinementProjectCandidateLimit,
+				extra.researchRefinementProjectCandidateLimit ?? refinementEnvelope?.projectCandidateLimit,
 				defaults.refinement.projectCandidateLimit,
 			),
 			dailyMinMdlScore: clampScoreThreshold(
-				extra.researchRefinementDailyMinMdlScore,
+				extra.researchRefinementDailyMinMdlScore ?? refinementEnvelope?.dailyMinMdlScore,
 				defaults.refinement.dailyMinMdlScore,
 			),
 			projectMinMdlScore: clampScoreThreshold(
-				extra.researchRefinementProjectMinMdlScore,
+				extra.researchRefinementProjectMinMdlScore ?? refinementEnvelope?.projectMinMdlScore,
 				defaults.refinement.projectMinMdlScore,
 			),
 			dailyMinPriorityScore: clampScoreThreshold(
-				extra.researchRefinementDailyMinPriorityScore,
+				extra.researchRefinementDailyMinPriorityScore ?? refinementEnvelope?.dailyMinPriorityScore,
 				defaults.refinement.dailyMinPriorityScore,
 			),
 			projectMinPriorityScore: clampScoreThreshold(
-				extra.researchRefinementProjectMinPriorityScore,
+				extra.researchRefinementProjectMinPriorityScore ?? refinementEnvelope?.projectMinPriorityScore,
 				defaults.refinement.projectMinPriorityScore,
 			),
 			dailyMinSourceSessionCount: clampSourceSessionCount(
-				extra.researchRefinementDailyMinSourceSessionCount,
+				extra.researchRefinementDailyMinSourceSessionCount ?? refinementEnvelope?.dailyMinSourceSessionCount,
 				defaults.refinement.dailyMinSourceSessionCount,
 			),
 			projectMinSourceSessionCount: clampSourceSessionCount(
-				extra.researchRefinementProjectMinSourceSessionCount,
+				extra.researchRefinementProjectMinSourceSessionCount ?? refinementEnvelope?.projectMinSourceSessionCount,
 				defaults.refinement.projectMinSourceSessionCount,
 			),
 		},
 		nidra: {
 			maxResearchProjectsPerCycle: clampProjectCycleLimit(
-				extra.researchNidraMaxProjectsPerCycle,
+				extra.researchNidraMaxProjectsPerCycle ?? nidraEnvelope?.maxResearchProjectsPerCycle,
 				defaults.nidra.maxResearchProjectsPerCycle,
 			),
 			maxSemanticPressure: clampSemanticPressure(
-				extra.researchNidraMaxSemanticPressure,
+				extra.researchNidraMaxSemanticPressure ?? nidraEnvelope?.maxSemanticPressure,
 				defaults.nidra.maxSemanticPressure,
 			),
 		},
@@ -413,8 +424,14 @@ export function validateScope(scope: ResearchScope): void {
 	if (scope.objectives.length === 0) {
 		throw new Error("At least one research objective is required");
 	}
+	if (!scope.objectives.some((objective) => objective.enabled)) {
+		throw new Error("At least one enabled research objective is required");
+	}
 	if (scope.stopConditions.length === 0) {
 		throw new Error("At least one research stop condition is required");
+	}
+	if (!scope.stopConditions.some((condition) => condition.enabled)) {
+		throw new Error("At least one enabled research stop condition is required");
 	}
 	const duplicateObjectiveIds = scope.objectives.filter(
 		(objective, index, all) => all.findIndex((candidate) => candidate.id === objective.id) !== index,

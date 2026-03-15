@@ -27,8 +27,9 @@ describe("resident research scheduler helper", () => {
 	});
 
 	afterEach(async () => {
-		const { _setResearchDispatchRuntimeLoaderForTests } = await import("../src/chitragupta-daemon-research-scheduler.js");
+		const { _setResearchDispatchRuntimeLoaderForTests, setResearchDispatchControlPlane } = await import("../src/chitragupta-daemon-research-scheduler.js");
 		_setResearchDispatchRuntimeLoaderForTests(null);
+		setResearchDispatchControlPlane(null);
 		vi.clearAllMocks();
 	});
 
@@ -59,7 +60,11 @@ describe("resident research scheduler helper", () => {
 
 		const dispatched = await dispatchNextQueuedResearchLoop(emit);
 
-		expect(dispatched).toBe(true);
+			expect(dispatched).toBe(true);
+			expect(listResearchLoopSchedules).toHaveBeenCalledWith({
+				runnableOnly: true,
+				limit: 25,
+			});
 		expect(getChitraguptaWorkflow).toHaveBeenCalledWith("autoresearch-overnight");
 		expect(claimResearchLoopSchedule).toHaveBeenCalledWith(expect.objectContaining({
 			projectPath: "/repo/project",
@@ -106,6 +111,11 @@ describe("resident research scheduler helper", () => {
 			loopKey: "loop-2",
 			finishedAt: null,
 		});
+		completeResearchLoopSchedule.mockReturnValueOnce({
+			projectPath: "/repo/project",
+			loopKey: "loop-2",
+			finishedAt: Date.now(),
+		});
 		const emit = vi.fn();
 		const { dispatchNextQueuedResearchLoop, _setResearchDispatchRuntimeLoaderForTests } = await import("../src/chitragupta-daemon-research-scheduler.js");
 		_setResearchDispatchRuntimeLoaderForTests(async () => ({
@@ -118,10 +128,15 @@ describe("resident research scheduler helper", () => {
 		const dispatched = await dispatchNextQueuedResearchLoop(emit);
 
 		expect(dispatched).toBe(true);
-		expect(claimResearchLoopSchedule).not.toHaveBeenCalled();
+		expect(claimResearchLoopSchedule).toHaveBeenCalledWith(expect.objectContaining({
+			projectPath: "/repo/project",
+			loopKey: "loop-2",
+			phase: "resident-dispatch",
+		}));
 		expect(completeResearchLoopSchedule).toHaveBeenCalledWith({
 			projectPath: "/repo/project",
 			loopKey: "loop-2",
+			leaseOwner: expect.stringContaining("daemon:research-worker:"),
 			stopReason: "dispatch-failed",
 		});
 		expect(emit).toHaveBeenCalledWith("consolidation", expect.objectContaining({
@@ -129,6 +144,139 @@ describe("resident research scheduler helper", () => {
 			phase: "research-dispatch",
 			detail: expect.stringContaining("missing workflowContext"),
 		}));
+		_setResearchDispatchRuntimeLoaderForTests(null);
+	});
+
+	it("reclaims an expired leased schedule before dispatching resident work", async () => {
+		listResearchLoopSchedules.mockReturnValueOnce([
+			{
+				projectPath: "/repo/project",
+				loopKey: "loop-expired-lease",
+				topic: "optimizer sweep",
+				hypothesis: "adamw wins",
+				status: "leased",
+				leaseOwner: "daemon:research-worker:old",
+				leaseExpiresAt: Date.now() - 1_000,
+				workflowId: "autoresearch-overnight",
+				workflowContext: { researchTopic: "optimizer sweep" },
+				parentSessionId: null,
+				sessionLineageKey: null,
+			},
+		]);
+		const emit = vi.fn();
+		const { dispatchNextQueuedResearchLoop, _setResearchDispatchRuntimeLoaderForTests } = await import("../src/chitragupta-daemon-research-scheduler.js");
+		_setResearchDispatchRuntimeLoaderForTests(async () => ({
+			WorkflowExecutor: class {
+				execute = executeWorkflow;
+			},
+			getChitraguptaWorkflow,
+		}));
+
+		const dispatched = await dispatchNextQueuedResearchLoop(emit);
+
+		expect(dispatched).toBe(true);
+		expect(claimResearchLoopSchedule).toHaveBeenCalledWith(expect.objectContaining({
+			projectPath: "/repo/project",
+			loopKey: "loop-expired-lease",
+			phase: "resident-dispatch",
+		}));
+		_setResearchDispatchRuntimeLoaderForTests(null);
+	});
+
+	it("short-circuits cancelling queued rows before resident execution starts", async () => {
+		listResearchLoopSchedules.mockReturnValueOnce([
+			{
+				projectPath: "/repo/project",
+				loopKey: "loop-cancelling",
+				topic: "optimizer sweep",
+				hypothesis: "adamw wins",
+				status: "cancelling",
+				cancelRequestedAt: Date.now() - 2_000,
+				workflowId: "autoresearch-overnight",
+				workflowContext: { researchTopic: "optimizer sweep" },
+				parentSessionId: null,
+				sessionLineageKey: null,
+			},
+		]);
+		claimResearchLoopSchedule.mockReturnValueOnce({
+			claimed: true,
+			schedule: {
+				projectPath: "/repo/project",
+				loopKey: "loop-cancelling",
+				status: "cancelling",
+				cancelRequestedAt: Date.now() - 2_000,
+				leaseOwner: "daemon:research-worker:test",
+				finishedAt: null,
+			},
+		});
+		getResearchLoopSchedule.mockReturnValueOnce({
+			projectPath: "/repo/project",
+			loopKey: "loop-cancelling",
+			finishedAt: null,
+		});
+		const emit = vi.fn();
+		const { dispatchNextQueuedResearchLoop, _setResearchDispatchRuntimeLoaderForTests } = await import("../src/chitragupta-daemon-research-scheduler.js");
+		_setResearchDispatchRuntimeLoaderForTests(async () => ({
+			WorkflowExecutor: class {
+				execute = executeWorkflow;
+			},
+			getChitraguptaWorkflow,
+		}));
+
+		const dispatched = await dispatchNextQueuedResearchLoop(emit);
+
+		expect(dispatched).toBe(true);
+		expect(executeWorkflow).not.toHaveBeenCalled();
+		expect(completeResearchLoopSchedule).toHaveBeenCalledWith({
+			projectPath: "/repo/project",
+			loopKey: "loop-cancelling",
+			leaseOwner: "daemon:research-worker:test",
+			stopReason: "cancelled",
+		});
+		expect(emit).toHaveBeenCalledWith("consolidation", expect.objectContaining({
+			phase: "research-dispatch",
+			detail: expect.stringContaining("skipped loop-cancelling"),
+		}));
+		_setResearchDispatchRuntimeLoaderForTests(null);
+	});
+
+	it("keeps boolean terminal reconciliation semantics when daemon control-plane failDispatch cannot complete", async () => {
+		const emit = vi.fn();
+		const { dispatchNextQueuedResearchLoop, setResearchDispatchControlPlane, _setResearchDispatchRuntimeLoaderForTests } = await import("../src/chitragupta-daemon-research-scheduler.js");
+		setResearchDispatchControlPlane({
+			claimNextDispatch: vi.fn().mockResolvedValue({
+				projectPath: "/repo/project",
+				loopKey: "loop-cancelling-control-plane",
+				topic: "optimizer sweep",
+				hypothesis: "adamw wins",
+				status: "cancelling",
+				cancelRequestedAt: Date.now() - 1_000,
+				workflowId: "autoresearch-overnight",
+				workflowContext: { researchTopic: "optimizer sweep" },
+				parentSessionId: null,
+				sessionLineageKey: null,
+				leaseOwner: "daemon:research-worker:test",
+			}),
+			requeueDispatch: vi.fn().mockResolvedValue(undefined),
+			failDispatch: vi.fn().mockResolvedValue(false),
+		});
+		_setResearchDispatchRuntimeLoaderForTests(async () => ({
+			WorkflowExecutor: class {
+				execute = executeWorkflow;
+			},
+			getChitraguptaWorkflow,
+		}));
+
+		const dispatched = await dispatchNextQueuedResearchLoop(emit);
+
+		expect(dispatched).toBe(true);
+		expect(executeWorkflow).not.toHaveBeenCalled();
+		expect(emit).toHaveBeenCalledWith("consolidation", expect.objectContaining({
+			type: "error",
+			phase: "research-dispatch",
+			detail: expect.stringContaining("durable terminal reconciliation lost the lease"),
+		}));
+		setResearchDispatchControlPlane(null);
 		_setResearchDispatchRuntimeLoaderForTests(null);
 	});
 
@@ -151,6 +299,11 @@ describe("resident research scheduler helper", () => {
 			loopKey: "loop-3",
 			finishedAt: null,
 		});
+		completeResearchLoopSchedule.mockReturnValueOnce({
+			projectPath: "/repo/project",
+			loopKey: "loop-3",
+			finishedAt: Date.now(),
+		});
 		executeWorkflow.mockResolvedValueOnce({ status: "failed" });
 		const emit = vi.fn();
 		const { dispatchNextQueuedResearchLoop, _setResearchDispatchRuntimeLoaderForTests } = await import("../src/chitragupta-daemon-research-scheduler.js");
@@ -167,12 +320,62 @@ describe("resident research scheduler helper", () => {
 		expect(completeResearchLoopSchedule).toHaveBeenCalledWith({
 			projectPath: "/repo/project",
 			loopKey: "loop-3",
+			leaseOwner: expect.stringContaining("daemon:research-worker:"),
 			stopReason: "dispatch-failed",
 		});
 		expect(emit).toHaveBeenCalledWith("consolidation", expect.objectContaining({
 			type: "error",
 			phase: "research-dispatch",
 			detail: expect.stringContaining("non-success status failed"),
+		}));
+		_setResearchDispatchRuntimeLoaderForTests(null);
+	});
+
+	it("reports when durable terminal reconciliation loses the resident lease", async () => {
+		listResearchLoopSchedules.mockReturnValueOnce([
+			{
+				projectPath: "/repo/project",
+				loopKey: "loop-failed-lease-moved",
+				topic: "optimizer sweep",
+				hypothesis: "adamw wins",
+				workflowId: "autoresearch-overnight",
+				workflowContext: { researchTopic: "optimizer sweep" },
+				parentSessionId: null,
+				sessionLineageKey: null,
+				attemptNumber: 1,
+			},
+		]);
+		claimResearchLoopSchedule.mockReturnValueOnce({
+			claimed: true,
+			schedule: {
+				projectPath: "/repo/project",
+				loopKey: "loop-failed-lease-moved",
+				leaseOwner: "daemon:research-worker:test",
+				finishedAt: null,
+			},
+		});
+		getResearchLoopSchedule.mockReturnValueOnce({
+			projectPath: "/repo/project",
+			loopKey: "loop-failed-lease-moved",
+			finishedAt: null,
+		});
+		completeResearchLoopSchedule.mockReturnValueOnce(null);
+		executeWorkflow.mockResolvedValueOnce({ status: "failed" });
+		const emit = vi.fn();
+		const { dispatchNextQueuedResearchLoop, _setResearchDispatchRuntimeLoaderForTests } = await import("../src/chitragupta-daemon-research-scheduler.js");
+		_setResearchDispatchRuntimeLoaderForTests(async () => ({
+			WorkflowExecutor: class {
+				execute = executeWorkflow;
+			},
+			getChitraguptaWorkflow,
+		}));
+
+		const dispatched = await dispatchNextQueuedResearchLoop(emit);
+
+		expect(dispatched).toBe(true);
+		expect(emit).toHaveBeenCalledWith("consolidation", expect.objectContaining({
+			phase: "research-dispatch",
+			detail: expect.stringContaining("durable lease had already moved"),
 		}));
 		_setResearchDispatchRuntimeLoaderForTests(null);
 	});
@@ -191,6 +394,25 @@ describe("resident research scheduler helper", () => {
 				attemptNumber: 2,
 			},
 		]);
+		claimResearchLoopSchedule.mockReturnValueOnce({
+			claimed: true,
+			schedule: {
+				projectPath: "/repo/project",
+				loopKey: "loop-4",
+				leaseOwner: "daemon:research-worker:test",
+				finishedAt: null,
+				attemptNumber: 2,
+			},
+		});
+			getResearchLoopSchedule.mockReturnValueOnce({
+				projectPath: "/repo/project",
+				loopKey: "loop-4",
+				status: "leased",
+				phase: "resident-dispatch",
+				finishedAt: null,
+				leaseOwner: "daemon:research-worker:test",
+				leaseExpiresAt: Date.now() + 30_000,
+			});
 		executeWorkflow.mockRejectedValueOnce(new Error("worker bootstrap failed"));
 		const emit = vi.fn();
 		const { dispatchNextQueuedResearchLoop, _setResearchDispatchRuntimeLoaderForTests } = await import("../src/chitragupta-daemon-research-scheduler.js");
@@ -216,7 +438,307 @@ describe("resident research scheduler helper", () => {
 		_setResearchDispatchRuntimeLoaderForTests(null);
 	});
 
-	it("does not execute a queued loop when another daemon already claimed the durable lease", async () => {
+	it("reconciles cancellation instead of requeueing when cancel wins before dispatch retry", async () => {
+		listResearchLoopSchedules.mockReturnValueOnce([
+			{
+				projectPath: "/repo/project",
+				loopKey: "loop-requeue-cancelled",
+				topic: "optimizer sweep",
+				hypothesis: "adamw wins",
+				workflowId: "autoresearch-overnight",
+				workflowContext: { researchTopic: "optimizer sweep" },
+				parentSessionId: null,
+				sessionLineageKey: null,
+				attemptNumber: 2,
+			},
+		]);
+		claimResearchLoopSchedule.mockReturnValueOnce({
+			claimed: true,
+			schedule: {
+				projectPath: "/repo/project",
+				loopKey: "loop-requeue-cancelled",
+				leaseOwner: "daemon:research-worker:test",
+				finishedAt: null,
+				attemptNumber: 2,
+			},
+		});
+		const cancellingSchedule = {
+			projectPath: "/repo/project",
+			loopKey: "loop-requeue-cancelled",
+			status: "cancelling",
+			phase: "resident-dispatch",
+			finishedAt: null,
+			cancelRequestedAt: Date.now() - 1_000,
+			leaseOwner: "daemon:research-worker:test",
+			leaseExpiresAt: Date.now() + 30_000,
+		};
+		getResearchLoopSchedule.mockReturnValueOnce(cancellingSchedule);
+		getResearchLoopSchedule.mockReturnValueOnce(cancellingSchedule);
+		completeResearchLoopSchedule.mockReturnValueOnce({
+			projectPath: "/repo/project",
+			loopKey: "loop-requeue-cancelled",
+			status: "cancelled",
+			finishedAt: Date.now(),
+		});
+		executeWorkflow.mockRejectedValueOnce(new Error("worker bootstrap failed"));
+		const emit = vi.fn();
+		const { dispatchNextQueuedResearchLoop, _setResearchDispatchRuntimeLoaderForTests } = await import("../src/chitragupta-daemon-research-scheduler.js");
+		_setResearchDispatchRuntimeLoaderForTests(async () => ({
+			WorkflowExecutor: class {
+				execute = executeWorkflow;
+			},
+			getChitraguptaWorkflow,
+		}));
+
+		const dispatched = await dispatchNextQueuedResearchLoop(emit);
+
+		expect(dispatched).toBe(true);
+		expect(upsertResearchLoopSchedule).not.toHaveBeenCalled();
+		expect(completeResearchLoopSchedule).toHaveBeenCalledWith(expect.objectContaining({
+			projectPath: "/repo/project",
+			loopKey: "loop-requeue-cancelled",
+			leaseOwner: "daemon:research-worker:test",
+			stopReason: "cancelled",
+		}));
+		expect(emit).toHaveBeenCalledWith("consolidation", expect.objectContaining({
+			type: "progress",
+			phase: "research-dispatch",
+			detail: expect.stringContaining("cancellation was reconciled before dispatch retry"),
+		}));
+		_setResearchDispatchRuntimeLoaderForTests(null);
+	});
+
+		it("refuses to requeue a transient dispatch failure when another worker now owns the lease", async () => {
+		listResearchLoopSchedules.mockReturnValueOnce([
+			{
+				projectPath: "/repo/project",
+				loopKey: "loop-requeue-lease-moved",
+				topic: "optimizer sweep",
+				hypothesis: "adamw wins",
+				workflowId: "autoresearch-overnight",
+				workflowContext: { researchTopic: "optimizer sweep" },
+				parentSessionId: null,
+				sessionLineageKey: null,
+				attemptNumber: 2,
+			},
+		]);
+		claimResearchLoopSchedule.mockReturnValueOnce({
+			claimed: true,
+			schedule: {
+				projectPath: "/repo/project",
+				loopKey: "loop-requeue-lease-moved",
+				leaseOwner: "daemon:research-worker:test",
+				finishedAt: null,
+				attemptNumber: 2,
+			},
+		});
+		getResearchLoopSchedule.mockReturnValueOnce({
+			projectPath: "/repo/project",
+			loopKey: "loop-requeue-lease-moved",
+			finishedAt: null,
+			leaseOwner: "daemon:research-worker:other",
+			leaseExpiresAt: Date.now() + 30_000,
+		});
+		executeWorkflow.mockRejectedValueOnce(new Error("worker bootstrap failed"));
+		const emit = vi.fn();
+		const { dispatchNextQueuedResearchLoop, _setResearchDispatchRuntimeLoaderForTests } = await import("../src/chitragupta-daemon-research-scheduler.js");
+		_setResearchDispatchRuntimeLoaderForTests(async () => ({
+			WorkflowExecutor: class {
+				execute = executeWorkflow;
+			},
+			getChitraguptaWorkflow,
+		}));
+
+		const dispatched = await dispatchNextQueuedResearchLoop(emit);
+
+		expect(dispatched).toBe(true);
+		expect(upsertResearchLoopSchedule).not.toHaveBeenCalled();
+			expect(emit).toHaveBeenCalledWith("consolidation", expect.objectContaining({
+				type: "error",
+				phase: "research-dispatch",
+				detail: expect.stringContaining("lost its durable lease before dispatch retry could be recorded"),
+			}));
+			_setResearchDispatchRuntimeLoaderForTests(null);
+		});
+
+		it("refuses to rewind a transient dispatch failure after the loop already advanced under the same lease", async () => {
+			listResearchLoopSchedules.mockReturnValueOnce([
+				{
+					projectPath: "/repo/project",
+					loopKey: "loop-requeue-phase-advanced",
+					topic: "optimizer sweep",
+					hypothesis: "adamw wins",
+					workflowId: "autoresearch-overnight",
+					workflowContext: { researchTopic: "optimizer sweep" },
+					parentSessionId: null,
+					sessionLineageKey: null,
+					attemptNumber: 2,
+				},
+			]);
+			claimResearchLoopSchedule.mockReturnValueOnce({
+				claimed: true,
+				schedule: {
+					projectPath: "/repo/project",
+					loopKey: "loop-requeue-phase-advanced",
+					leaseOwner: "daemon:research-worker:test",
+					finishedAt: null,
+					attemptNumber: 2,
+					phase: "resident-dispatch",
+				},
+			});
+			getResearchLoopSchedule.mockReturnValueOnce({
+				projectPath: "/repo/project",
+				loopKey: "loop-requeue-phase-advanced",
+				status: "running",
+				phase: "round-2",
+				finishedAt: null,
+				leaseOwner: "daemon:research-worker:test",
+				leaseExpiresAt: Date.now() + 30_000,
+			});
+			executeWorkflow.mockRejectedValueOnce(new Error("worker bootstrap failed"));
+			const emit = vi.fn();
+			const { dispatchNextQueuedResearchLoop, _setResearchDispatchRuntimeLoaderForTests } = await import("../src/chitragupta-daemon-research-scheduler.js");
+			_setResearchDispatchRuntimeLoaderForTests(async () => ({
+				WorkflowExecutor: class {
+					execute = executeWorkflow;
+				},
+				getChitraguptaWorkflow,
+			}));
+
+			const dispatched = await dispatchNextQueuedResearchLoop(emit);
+
+			expect(dispatched).toBe(true);
+			expect(upsertResearchLoopSchedule).not.toHaveBeenCalled();
+			expect(emit).toHaveBeenCalledWith("consolidation", expect.objectContaining({
+				type: "error",
+				phase: "research-dispatch",
+				detail: expect.stringContaining("advanced to phase round-2 before dispatch retry could be recorded"),
+			}));
+			_setResearchDispatchRuntimeLoaderForTests(null);
+		});
+
+		it("replays the queued optimizer registry and update budgets from the durable schedule row", async () => {
+		listResearchLoopSchedules.mockReturnValueOnce([
+			{
+				projectPath: "/repo/project",
+				loopKey: "loop-6",
+				topic: "optimizer sweep",
+				hypothesis: "adamw wins",
+					workflowId: "autoresearch-overnight",
+					objectives: [{ id: "metric-improvement", weight: 2 }],
+					stopConditions: [{ id: "pareto-halt", kind: "pareto-stagnation", patience: 2 }],
+					updateBudgets: {
+						refinement: { dailyCandidateLimit: 7 },
+						nidra: { maxResearchProjectsPerCycle: 3 },
+					},
+					policyFingerprint: "policy-loop-6",
+					primaryObjectiveId: "metric-improvement",
+					primaryStopConditionId: "pareto-halt",
+					workflowContext: {
+						researchTopic: "stale topic",
+						researchObjectives: [{ id: "stale-objective", weight: 1 }],
+					},
+				parentSessionId: null,
+				sessionLineageKey: null,
+			},
+		]);
+		const emit = vi.fn();
+		const { dispatchNextQueuedResearchLoop, _setResearchDispatchRuntimeLoaderForTests } = await import("../src/chitragupta-daemon-research-scheduler.js");
+		_setResearchDispatchRuntimeLoaderForTests(async () => ({
+			WorkflowExecutor: class {
+				execute = executeWorkflow;
+			},
+			getChitraguptaWorkflow,
+		}));
+
+		const dispatched = await dispatchNextQueuedResearchLoop(emit);
+
+		expect(dispatched).toBe(true);
+			expect(executeWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+				context: expect.objectContaining({
+					projectPath: "/repo/project",
+				researchObjectives: [{ id: "metric-improvement", weight: 2 }],
+				researchStopConditions: [{ id: "pareto-halt", kind: "pareto-stagnation", patience: 2 }],
+				researchUpdateBudgets: {
+					refinement: { dailyCandidateLimit: 7 },
+					nidra: { maxResearchProjectsPerCycle: 3 },
+				},
+				researchPolicyFingerprint: "policy-loop-6",
+				researchPrimaryObjectiveId: "metric-improvement",
+				researchPrimaryStopConditionId: "pareto-halt",
+				}),
+			}));
+			_setResearchDispatchRuntimeLoaderForTests(null);
+		});
+
+		it("skips a contended runnable row and dispatches the next durable lease winner", async () => {
+			listResearchLoopSchedules.mockReturnValueOnce([
+				{
+					projectPath: "/repo/project",
+					loopKey: "loop-contended",
+					topic: "optimizer sweep",
+					hypothesis: null,
+					workflowId: "autoresearch-overnight",
+					workflowContext: { researchTopic: "optimizer sweep" },
+					parentSessionId: null,
+					sessionLineageKey: null,
+				},
+				{
+					projectPath: "/repo/project",
+					loopKey: "loop-dispatchable",
+					topic: "optimizer sweep",
+					hypothesis: "adamw wins",
+					workflowId: "autoresearch-overnight",
+					workflowContext: { researchTopic: "optimizer sweep" },
+					parentSessionId: null,
+					sessionLineageKey: null,
+				},
+			]);
+			claimResearchLoopSchedule
+				.mockReturnValueOnce({ claimed: false, schedule: null })
+				.mockReturnValueOnce({
+					claimed: true,
+					schedule: {
+						projectPath: "/repo/project",
+						loopKey: "loop-dispatchable",
+						leaseOwner: "daemon:research-worker:test",
+						finishedAt: null,
+						phase: "resident-dispatch",
+					},
+				});
+			const emit = vi.fn();
+			const { dispatchNextQueuedResearchLoop, _setResearchDispatchRuntimeLoaderForTests } = await import("../src/chitragupta-daemon-research-scheduler.js");
+			_setResearchDispatchRuntimeLoaderForTests(async () => ({
+				WorkflowExecutor: class {
+					execute = executeWorkflow;
+				},
+				getChitraguptaWorkflow,
+			}));
+
+			const dispatched = await dispatchNextQueuedResearchLoop(emit);
+
+			expect(dispatched).toBe(true);
+			expect(listResearchLoopSchedules).toHaveBeenCalledWith({
+				runnableOnly: true,
+				limit: 25,
+			});
+			expect(claimResearchLoopSchedule).toHaveBeenNthCalledWith(1, expect.objectContaining({
+				projectPath: "/repo/project",
+				loopKey: "loop-contended",
+			}));
+			expect(claimResearchLoopSchedule).toHaveBeenNthCalledWith(2, expect.objectContaining({
+				projectPath: "/repo/project",
+				loopKey: "loop-dispatchable",
+			}));
+			expect(executeWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+				context: expect.objectContaining({
+					researchLoopKey: "loop-dispatchable",
+				}),
+			}));
+			_setResearchDispatchRuntimeLoaderForTests(null);
+		});
+
+		it("does not execute a queued loop when another daemon already claimed the durable lease", async () => {
 		listResearchLoopSchedules.mockReturnValueOnce([
 			{
 				projectPath: "/repo/project",
@@ -252,10 +774,6 @@ describe("resident research scheduler helper", () => {
 
 		expect(dispatched).toBe(false);
 		expect(executeWorkflow).not.toHaveBeenCalled();
-		expect(emit).toHaveBeenCalledWith("consolidation", expect.objectContaining({
-			phase: "research-dispatch",
-			detail: expect.stringContaining("another worker already holds the durable lease"),
-		}));
 		_setResearchDispatchRuntimeLoaderForTests(null);
 	});
 });

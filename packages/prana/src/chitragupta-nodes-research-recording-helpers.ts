@@ -1,6 +1,12 @@
 import { dynamicImport } from "./chitragupta-nodes.js";
 import type { ResearchScope } from "./chitragupta-nodes-research-shared.js";
 
+/**
+ * Normalize a persisted string list from daemon or fallback record payloads.
+ *
+ * I keep empty or malformed arrays as `undefined` so trace metadata does not
+ * pretend one explicit empty list was stored when no trustworthy list existed.
+ */
 export function normalizeStringList(value: unknown): string[] | undefined {
 	if (!Array.isArray(value)) return undefined;
 	const normalized = value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
@@ -106,6 +112,61 @@ export function buildResearchOutcomePayload(args: {
 		agentId: "prana:autoresearch",
 		traceContent,
 		traceMetadata,
+		sessionId: experimentRecord.sessionId,
+		parentSessionId: experimentRecord.parentSessionId,
+		sessionLineageKey: experimentRecord.sessionLineageKey,
+		loopKey: experimentRecord.loopKey,
+		roundNumber: experimentRecord.roundNumber,
+		totalRounds: experimentRecord.totalRounds,
+		experimentKey: experimentRecord.experimentKey,
+		attemptKey: experimentRecord.attemptKey,
+		attemptNumber: experimentRecord.attemptNumber,
+		budgetMs: experimentRecord.budgetMs,
+		sabhaId: experimentRecord.sabhaId,
+		councilVerdict: experimentRecord.councilVerdict,
+		routeClass: experimentRecord.route?.routeClass ?? null,
+		plannerRouteClass: experimentRecord.plannerRoute?.routeClass ?? null,
+		plannerSelectedCapabilityId: experimentRecord.plannerRoute?.selectedCapabilityId ?? null,
+		plannerSelectedModelId: experimentRecord.plannerRoute?.executionBinding?.selectedModelId ?? null,
+		plannerSelectedProviderId: experimentRecord.plannerRoute?.executionBinding?.selectedProviderId ?? null,
+		executionRouteClass: experimentRecord.executionRoute?.routeClass ?? null,
+		selectedCapabilityId: experimentRecord.executionRoute?.selectedCapabilityId ?? experimentRecord.route?.selectedCapabilityId ?? null,
+		selectedModelId: experimentRecord.executionRoute?.executionBinding?.selectedModelId ?? null,
+		selectedProviderId: experimentRecord.executionRoute?.executionBinding?.selectedProviderId ?? null,
+		gitBranch: experimentRecord.run.gitBranch,
+		gitHeadCommit: experimentRecord.run.gitHeadCommit,
+		gitDirtyBefore: experimentRecord.run.gitDirtyBefore,
+		gitDirtyAfter: experimentRecord.run.gitDirtyAfter,
+		baselineMetric: experimentRecord.baselineMetric,
+		observedMetric: experimentRecord.observedMetric,
+		delta: experimentRecord.delta,
+		status: experimentRecord.status,
+		errorMessage: experimentRecord.errorMessage,
+		packedContext: typeof packed.packedText === "string" ? packed.packedText : null,
+		packedRuntime: experimentRecord.packing.runtime,
+		packedSource: experimentRecord.packing.source,
+		record: experimentRecord as Record<string, unknown>,
+	};
+}
+
+/**
+ * Build the daemon RPC payload for an experiment-only ledger upsert.
+ *
+ * I use this when later closure steps compute richer optimizer metadata than the
+ * initial outcome record had available.
+ */
+export function buildResearchExperimentUpsertPayload(args: {
+	scope: ResearchScope;
+	experimentRecord: Record<string, any>;
+	packed: Record<string, unknown>;
+}): Record<string, unknown> {
+	const { scope, experimentRecord, packed } = args;
+	return {
+		projectPath: scope.projectPath,
+		topic: experimentRecord.topic,
+		metricName: experimentRecord.metricName,
+		objective: experimentRecord.objective,
+		decision: experimentRecord.decision,
 		sessionId: experimentRecord.sessionId,
 		parentSessionId: experimentRecord.parentSessionId,
 		sessionLineageKey: experimentRecord.sessionLineageKey,

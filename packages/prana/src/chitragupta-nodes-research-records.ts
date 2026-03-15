@@ -1,10 +1,16 @@
 import type {
 	ResearchFinalizeResult,
 	ResearchObjective,
+	ResearchObjectiveScore,
 	ResearchScope,
+	ResearchStopConditionHit,
 	ResearchUpdateBudgets,
 } from "./chitragupta-nodes-research-shared.js";
 import { buildDefaultResearchUpdateBudgets } from "./chitragupta-nodes-research-shared-defaults.js";
+import {
+	buildResearchPolicySnapshot,
+	selectPrimaryResearchStopConditionHit,
+} from "./chitragupta-nodes-research-overnight-types.js";
 
 /**
  * Minimal execution-binding envelope that I persist into research artifacts.
@@ -106,6 +112,19 @@ export interface ResearchExperimentRecord {
 		reason: string | null;
 	};
 	updateBudgets: ResearchUpdateBudgets;
+	objectiveScores: ResearchObjectiveScore[];
+	stopConditionHits: ResearchStopConditionHit[];
+	optimizerScore: number | null;
+	paretoRank: number | null;
+	paretoDominated: boolean | null;
+	policyFingerprint: string;
+	primaryObjectiveId: string | null;
+	primaryStopConditionId: string | null;
+	primaryStopConditionKind: string | null;
+}
+
+function normalizeScopeFiles(files: readonly string[]): string[] {
+	return [...new Set(files.map((value) => value.trim()).filter((value) => value.length > 0))].sort();
 }
 
 /** Build the canonical experiment record persisted by the daemon research ledger. */
@@ -120,6 +139,7 @@ export function buildResearchExperimentRecord(
 	const updateBudgets =
 		scope.updateBudgets
 		?? buildDefaultResearchUpdateBudgets();
+	const policy = buildResearchPolicySnapshot(scope);
 	const route = council.route && typeof council.route === "object"
 		? council.route as ResearchResolvedRouteSummary
 		: null;
@@ -129,6 +149,8 @@ export function buildResearchExperimentRecord(
 	const executionRoute = council.executionRoute && typeof council.executionRoute === "object"
 		? council.executionRoute as ResearchResolvedRouteSummary
 		: null;
+	const targetFiles = normalizeScopeFiles(scope.targetFiles);
+	const immutableFiles = normalizeScopeFiles(scope.immutableFiles);
 	// I anchor the experiment key to the logical scope and lane selection so the
 	// ledger can dedupe/reconcile retries without losing route provenance.
 	const experimentKey = JSON.stringify({
@@ -138,8 +160,8 @@ export function buildResearchExperimentRecord(
 		command: scope.command,
 		commandArgs: [...scope.commandArgs],
 		cwd: scope.cwd,
-		targetFiles: [...scope.targetFiles],
-		immutableFiles: [...scope.immutableFiles],
+		targetFiles,
+		immutableFiles,
 		metricName: scope.metricName,
 		objective: scope.objective,
 		executionRouteClass: scope.executionRouteClass,
@@ -174,6 +196,27 @@ export function buildResearchExperimentRecord(
 		typeof run.roundWallClockDurationMs === "number"
 			? run.roundWallClockDurationMs
 			: durationMs;
+	const objectiveScores = Array.isArray(evaluation.objectiveScores)
+		? evaluation.objectiveScores.filter(
+			(score): score is ResearchObjectiveScore =>
+				Boolean(score)
+				&& typeof score === "object"
+				&& typeof (score as ResearchObjectiveScore).id === "string"
+				&& typeof (score as ResearchObjectiveScore).metric === "string"
+				&& typeof (score as ResearchObjectiveScore).score === "number",
+		)
+		: [];
+	const stopConditionHits = Array.isArray(evaluation.stopConditionHits)
+		? evaluation.stopConditionHits.filter(
+			(hit): hit is ResearchStopConditionHit =>
+				Boolean(hit)
+				&& typeof hit === "object"
+				&& typeof (hit as ResearchStopConditionHit).id === "string"
+				&& typeof (hit as ResearchStopConditionHit).kind === "string"
+				&& typeof (hit as ResearchStopConditionHit).triggered === "boolean",
+		)
+		: [];
+	const primaryStopCondition = selectPrimaryResearchStopConditionHit(stopConditionHits);
 	return {
 		experimentKey,
 		attemptKey,
@@ -190,8 +233,8 @@ export function buildResearchExperimentRecord(
 		budgetMs: scope.budgetMs,
 		parentSessionId: scope.parentSessionId,
 		sessionLineageKey: scope.sessionLineageKey,
-		targetFiles: [...scope.targetFiles],
-		immutableFiles: [...scope.immutableFiles],
+		targetFiles,
+		immutableFiles,
 		metricName: scope.metricName,
 		objective: scope.objective,
 		sessionId: typeof council.sessionId === "string" ? council.sessionId : null,
@@ -259,7 +302,16 @@ export function buildResearchExperimentRecord(
 			sourceLength: typeof packed.sourceLength === "number" ? packed.sourceLength : null,
 			reason: typeof packed.reason === "string" ? packed.reason : null,
 		},
-		updateBudgets,
+			updateBudgets,
+			objectiveScores,
+			stopConditionHits,
+			optimizerScore: typeof evaluation.optimizerScore === "number" ? evaluation.optimizerScore : null,
+			paretoRank: typeof evaluation.paretoRank === "number" ? evaluation.paretoRank : null,
+			paretoDominated: typeof evaluation.paretoDominated === "boolean" ? evaluation.paretoDominated : null,
+			policyFingerprint: policy.fingerprint,
+			primaryObjectiveId: policy.primaryObjectiveId,
+			primaryStopConditionId: primaryStopCondition?.id ?? null,
+			primaryStopConditionKind: primaryStopCondition?.kind ?? null,
 	};
 }
 

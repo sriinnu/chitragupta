@@ -3,7 +3,10 @@ import {
 	consolidateResearchRefinementDigestsForDate,
 	consolidateResearchLoopSummariesForDate,
 } from "./chitragupta-daemon-research.js";
-import type { ResearchRefinementProjectScope } from "./chitragupta-daemon-research-scope.js";
+import {
+	mergeResearchRefinementScopes,
+	type ResearchRefinementProjectScope,
+} from "./chitragupta-daemon-research-scope.js";
 import {
 	refreshGlobalSemanticEpochDrift,
 	repairSelectiveReembeddingForDate,
@@ -142,9 +145,15 @@ async function persistResearchSemanticDebtNotes(args: {
 	date: string;
 	researchScoped: DailyDaemonPostprocessResult["semantic"]["researchScoped"];
 	epochRefresh: DailyDaemonPostprocessResult["semantic"]["epochRefresh"];
+	queuedResearch: DailyDaemonPostprocessResult["semantic"]["queuedResearch"];
 }): Promise<void> {
 	const debtScopes = args.researchScoped.scopes.filter((scope) => scope.qualityDeferred > 0);
-	if (debtScopes.length === 0 && args.epochRefresh.qualityDebtCount <= 0) return;
+	const hasQueuedDebt =
+		args.queuedResearch.deferred > 0
+		|| args.queuedResearch.remainingDue > 0
+		|| args.queuedResearch.carriedForward > 0
+		|| args.queuedResearch.qualityDeferred > 0;
+	if (debtScopes.length === 0 && args.epochRefresh.qualityDebtCount <= 0 && !hasQueuedDebt) return;
 
 	const { appendMemory } = await import("@chitragupta/smriti");
 
@@ -173,6 +182,19 @@ async function persistResearchSemanticDebtNotes(args: {
 			`- globalEpochDebt: ${args.epochRefresh.qualityDebtCount}`,
 			"- nextStep: complete epoch-driven semantic repair before widening unattended refinement.",
 		];
+			await appendMemory({ type: "global" }, lines.join("\n"), { dedupe: true });
+		}
+
+	if (hasQueuedDebt) {
+		const lines = [
+			`## Semantic Repair Debt [${args.date}]`,
+			"- scope: research-queue",
+			`- queuedDeferred: ${args.queuedResearch.deferred}`,
+			`- queuedRemainingDue: ${args.queuedResearch.remainingDue}`,
+			`- queuedCarriedForward: ${args.queuedResearch.carriedForward}`,
+			`- queuedQualityDebt: ${args.queuedResearch.qualityDeferred}`,
+			"- nextStep: replay queued research-scoped semantic repair before publishing remote semantic truth.",
+		];
 		await appendMemory({ type: "global" }, lines.join("\n"), { dedupe: true });
 	}
 }
@@ -192,16 +214,19 @@ export async function runDailyDaemonPostprocess(date: string): Promise<DailyDaem
 	]);
 	const {
 		clearResearchRefinementBudget,
+		countQueuedResearchRefinementScopes,
 		readActiveResearchRefinementBudget,
 		syncRemoteSemanticMirror,
 		upsertResearchRefinementQueue,
 		upsertResearchRefinementBudget,
 	} = await import("@chitragupta/smriti");
+	const queuedDueScopes = countQueuedResearchRefinementScopes();
 	const governor = buildDailyRefinementGovernorPlan({
 		loopProjects: loopResearch.projects,
 		experimentProjects: experimentResearch.projects,
 		refinementScopes: refinementResearch.scopes,
 		activeBudget: readActiveResearchRefinementBudget(),
+		queuedDueScopes,
 	});
 	const effectiveBudget = governor.effectiveBudget;
 	if (effectiveBudget) {
@@ -217,12 +242,19 @@ export async function runDailyDaemonPostprocess(date: string): Promise<DailyDaem
 	const deferredRefinementScopes = governor.deferredScopes;
 	const carriedForwardRefinementScopes = deferredRefinementScopes.length > 0
 		? upsertResearchRefinementQueue(
-			deferredRefinementScopes.map((scope) => ({
-				label: date,
-				projectPath: scope.projectPath,
-				sessionIds: scope.sessionIds,
-				sessionLineageKeys: scope.sessionLineageKeys,
-			})),
+				deferredRefinementScopes.map((scope) => ({
+					label: date,
+					projectPath: scope.projectPath,
+					sessionIds: scope.sessionIds,
+					sessionLineageKeys: scope.sessionLineageKeys,
+					policyFingerprints: scope.policyFingerprints,
+					primaryObjectiveIds: scope.primaryObjectiveIds,
+					primaryStopConditionIds: scope.primaryStopConditionIds,
+					primaryStopConditionKinds: scope.primaryStopConditionKinds,
+					frontierBestScore: scope.frontierBestScore,
+					refinementBudget: scope.refinementBudget ?? null,
+					nidraBudget: scope.nidraBudget ?? null,
+				})),
 			{
 				notBefore: Date.now(),
 				lastError: "deferred:nidra-project-budget",
@@ -242,6 +274,33 @@ export async function runDailyDaemonPostprocess(date: string): Promise<DailyDaem
 			qualityDeferred: 0,
 			scopes: [],
 		};
+	const qualityDeferredRefinementScopes = mergeResearchRefinementScopes(
+		researchScoped.scopes
+			.filter((scope) => scope.qualityDeferred > 0)
+			.map((scope) => budgetedRefinementScopes.find((candidate) => candidate.projectPath === scope.projectPath))
+			.filter((scope): scope is (typeof budgetedRefinementScopes)[number] => Boolean(scope)),
+	);
+	const carriedForwardQualityDebtScopes = qualityDeferredRefinementScopes.length > 0
+		? upsertResearchRefinementQueue(
+				qualityDeferredRefinementScopes.map((scope) => ({
+					label: date,
+					projectPath: scope.projectPath,
+					sessionIds: scope.sessionIds,
+					sessionLineageKeys: scope.sessionLineageKeys,
+					policyFingerprints: scope.policyFingerprints,
+					primaryObjectiveIds: scope.primaryObjectiveIds,
+					primaryStopConditionIds: scope.primaryStopConditionIds,
+					primaryStopConditionKinds: scope.primaryStopConditionKinds,
+					frontierBestScore: scope.frontierBestScore,
+					refinementBudget: scope.refinementBudget ?? null,
+					nidraBudget: scope.nidraBudget ?? null,
+				})),
+				{
+					notBefore: Date.now(),
+					lastError: `quality-deferred:nidra-postprocess:${researchScoped.qualityDeferred}`,
+				},
+			)
+		: 0;
 	// I drain queued research scopes before global epoch refresh so project-level
 	// debt is resolved or deferred explicitly before I widen into a broader
 	// semantic self-heal pass.
@@ -250,13 +309,15 @@ export async function runDailyDaemonPostprocess(date: string): Promise<DailyDaem
 		excludeScopes: budgetedRefinementScopes,
 		limit: governor.queuedDrainLimit ?? undefined,
 	});
+	const queuedRemainingDue = countQueuedResearchRefinementScopes();
 	const queuedResearch = {
 		...drainedQueuedResearch,
-		carriedForward: carriedForwardRefinementScopes,
+		remainingDue: Math.max(drainedQueuedResearch.remainingDue, queuedRemainingDue),
+		carriedForward: carriedForwardRefinementScopes + carriedForwardQualityDebtScopes,
 	};
 	const epochRefresh = await refreshGlobalSemanticEpochDrift(false);
 
-	await persistResearchSemanticDebtNotes({ date, researchScoped, epochRefresh });
+	await persistResearchSemanticDebtNotes({ date, researchScoped, epochRefresh, queuedResearch });
 	const remoteHoldReasons = collectDailyRefinementHoldReasons({
 		semanticQualityDeferred: semantic.qualityDeferred,
 		researchQualityDeferred: researchScoped.qualityDeferred,
@@ -289,11 +350,21 @@ export async function runDailyDaemonPostprocess(date: string): Promise<DailyDaem
 			syncRemoteSemanticMirror({ levels: ["yearly"], periods: [year] }),
 		]);
 
+	// I rebuild refinement project paths from the actual selected/deferred scopes
+	// so the postprocess result stays truthful even when a digest summary omitted
+	// a queued carry-forward project from its coarse projectPaths list.
+	const refinementProjectPaths = [
+		...new Set([
+			...refinementResearch.projectPaths,
+			...budgetedRefinementScopes.map((scope) => scope.projectPath),
+			...deferredRefinementScopes.map((scope) => scope.projectPath),
+		]),
+	];
 	const projectPaths = [
 		...new Set([
 			...loopResearch.projectPaths,
 			...experimentResearch.projectPaths,
-			...refinementResearch.projectPaths,
+			...refinementProjectPaths,
 		]),
 	];
 
@@ -310,6 +381,7 @@ export async function runDailyDaemonPostprocess(date: string): Promise<DailyDaem
 			experiments: experimentResearch,
 				refinements: {
 					...refinementResearch,
+					projectPaths: refinementProjectPaths,
 					scopes: budgetedRefinementScopes,
 					deferredScopes: deferredRefinementScopes,
 				},

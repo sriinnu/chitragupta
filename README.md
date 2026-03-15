@@ -10,7 +10,7 @@
   <a href="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml"><img src="https://github.com/sriinnu/chitragupta/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <img src="https://img.shields.io/badge/tests-11%2C502-brightgreen" alt="Tests" />
   <img src="https://img.shields.io/badge/node-%3E%3D22-blue" alt="Node" />
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-green" alt="License" /></a>
   <img src="https://img.shields.io/badge/packages-17-orange" alt="Packages" />
   <a href="https://deepwiki.com/sriinnu/chitragupta"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" /></a>
 </p>
@@ -968,7 +968,7 @@ See [SECURITY.md](SECURITY.md) for vulnerability reporting and security features
 
 ## License
 
-MIT © 2025-2026 Srinivas Pendela
+AGPL-3.0-only © 2025-2026 Srinivas Pendela
 
 ---
 

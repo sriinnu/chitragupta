@@ -5,6 +5,9 @@ As of 2026-03-07, this is the runtime truth for Chitragupta.
 This document exists because internal planning notes moved faster than the public docs.
 It states what is live, what is partial, and what is still open.
 
+See also:
+- [compaction-and-refinement.md](./compaction-and-refinement.md)
+
 ## What Is Live
 
 - The daemon is the primary single-writer authority for persistent state.
@@ -149,6 +152,7 @@ It states what is live, what is partial, and what is still open.
   - `research.loops.complete`
   - `research.loops.active`
   - `loopKey` is an immutable run id once terminal
+  - live daemon loop identity is canonical `projectPath + loopKey`, so two repos can reuse the same `loopKey` without colliding in active control state
   - daemon registration is fail-closed; local-only loop control is not accepted as a substitute
   - terminal loop state cannot be revived by late heartbeats
   - local loop state is only cleared after daemon completion succeeds
@@ -157,6 +161,8 @@ It states what is live, what is partial, and what is still open.
   - durable phase checkpoints mean a timed-out overnight loop can resume from the last safe phase boundary instead of rerunning completed rounds
   - if the active checkpoint is gone, fallback resume now rebuilds governance from the persisted loop summary plus the latest durable round slice rather than treating the recent experiment tail as the whole loop
   - `research.loops.get`, `research.loops.active`, `research.loops.checkpoint.get`, and `research.loops.checkpoint.list` now return a bounded `resumeContext` plus a machine-usable `resumePlan`, so operators and future automation can inspect where a loop stopped without reading raw checkpoint JSON
+  - project-less loop inspection now fails closed when the same `loopKey` is live in more than one repo, instead of guessing which active run the caller meant
+  - durable-only completion now also requires `projectPath` when live state is gone, so terminal in-memory control records cannot fall back to `<unknown-project>::loopKey`
   - generic long-running agent tasks now also persist daemon-owned task checkpoints and carry forward the last durable phase/status metadata into the next prompt run
   - those generic checkpoints now include a bounded recent-event trail for tool/subagent/error breadcrumbs, and that resume context is injected into the next system prompt so timeout pickup does not start blind
   - operators can inspect generic timeout pickup state through `agent.tasks.checkpoint.list` or `agent.tasks.checkpoint.get`; both now return a bounded `resumeContext` plus a machine-usable `resumePlan` alongside the raw checkpoint row so pickup does not depend on live in-memory runtime state
@@ -178,19 +184,43 @@ It states what is live, what is partial, and what is still open.
   - what the next bounded run should try
 - Research-originated semantic repair now has a durable deferred path:
   - immediate repair still runs inline for the touched day/project horizon
+  - that inline pass now reports `degraded` when quality debt survives, instead of claiming success while still queueing follow-up repair
   - remaining quality debt is persisted as `queuedResearch`
   - degraded inline repair now persists the exact deferred repair intent instead of only the coarse project/session scope, so the daemon can replay the same narrowed daily/project repair plan later
   - idempotent outcome retries now finish missing semantic repair work instead of treating an existing trace id as proof that repair already completed
-  - daily daemon postprocess reconstructs one bounded refinement budget from overnight loop summaries, experiment outcomes, and queued repair pressure before draining deferred repair
+  - daily daemon postprocess reconstructs one bounded refinement budget from overnight loop summaries and experiment outcomes before draining deferred repair
   - scopes that overflow the current project cap are carried forward durably instead of being dropped
+  - queue-only backlog still uses a bounded queued-drain cap, but it no longer widens the earlier date/project repair phases by itself
+  - queue drains now clear already-covered coarse rows even when the replay budget is `0`, and they keep metadata-only queued rows when the active scope does not cover their optimizer signal
   - clean remote semantic sync is held until the outstanding repair backlog and epoch-refresh completion are both clear
+- Deep-sleep / Nidra now feeds semantic repair with the digest-enriched research scopes rebuilt from loop summaries and experiment outcomes, not only the raw pre-digest project/session scope
+- Research refinement digests and Akasha traces now both reuse the normalized loop metadata path, so policy fingerprints, primary stop-condition kinds, and frontier scores stay aligned between memory and trace output
+- Legacy resume hardening is stricter but narrower:
+  - experiment-only loops without any compatible policy identity fail closed to a fresh logical loop
+  - summary-backed loops still resume and recompute Pareto truth from the merged round set when every restored round retains a full objective vector
+- Summary replay now also repairs stale persisted policy truth before the live loop continues:
+  - canonical primary stop-condition identity is rebuilt from explicit triggered hits when they exist
+  - missing or out-of-range stored update budgets are defaulted and clamped before resume reuses them
 - Overnight research now also has a durable queue/lease surface in the daemon:
   - queued loops persist objective registries, stop conditions, and update budgets
   - dispatchable work can be listed without guessing from active loop state alone
-  - the resident daemon now polls that queue itself on a short cadence, dispatches one loop at a time, and stays behind semantic refresh plus daily consolidation so overnight work does not start in the middle of repair
+  - `research.loops.dispatch.next` now performs the durable claim step so resident daemons do not read the same runnable row and race into duplicate loop execution
+  - the resident daemon now polls that queue itself on a short cadence, dispatches one loop at a time, and stays behind startup backfill, deep-sleep refinement, semantic refresh, and daily consolidation so overnight work does not start in the middle of repair
   - resident dispatch now forwards a process-unique durable lease owner into the loop control plane, so queued overnight workers no longer reuse one shared default lease identity
   - incomplete or stale queued workflow envelopes fail closed as `dispatch-failed` instead of letting the daemon guess missing loop context
+  - transient resident-dispatch retries now preserve the previously queued workflow envelope and optimizer metadata instead of rewriting the row with retry fields only
+  - if cancellation lands before a transient retry rewrite, the daemon now reconciles that row as `cancelled` instead of letting it drift back into the queue
   - the daemon’s daily refinement result now exposes the exact governor plan and remote-hold reasons it used for that cycle
+- Queued research repair can also drain during the periodic semantic epoch-refresh pass when a shared governor envelope already exists, so deferred repair does not wait exclusively for the next daily postprocess cycle
+- Deep-sleep / Nidra no longer carries overnight repair pressure as passive metadata only:
+  - deep-sleep rebuilds research scopes from normalized loop and experiment digests
+  - that rebuild is durable and restart-safe, and it now pages through project-scoped research history before filtering back to the relevant session/lineage scope instead of depending on a bounded first-page heuristic
+  - those scopes widen the shared daemon refinement governor envelope
+  - the widened envelope is persisted with source `nidra.deep-sleep` before project-scoped semantic repair runs
+  - project scopes that do not fit the current deep-sleep budget are now pushed back into the durable refinement queue instead of being dropped from the overnight tail
+  - project scopes that still come back with semantic quality debt are also re-queued durably for the next daemon-owned retry
+  - if that research-refinement tail fails, the daemon now emits an error and queues the unfinished digest-enriched refinement tail for retry instead of replaying already completed Swapna sessions
+- Daily postprocess now persists queued research-refinement backlog into memory whenever deferred queue work is what blocked remote semantic publish, so backlog truth survives beyond the live daemon event stream
 - The daemon now exposes live Sabha contract methods:
   - `sabha.ask`
   - `sabha.get`
@@ -278,8 +308,11 @@ It states what is live, what is partial, and what is still open.
 - Takumi prompt synthesis now normalizes previously packed context before reusing it, so PAKT-authored repo or hint blocks are expanded for reuse instead of being blindly nested into another packed section
 - Takumi prompt synthesis now applies that same daemon-first packing policy to bulky repo-map and file-context sections, and preserves packed Lucy hints instead of clipping them to generic hint length
 - Takumi bridge execution can now honor explicit engine-owned route classes and refuses to override a non-Takumi engine-selected coding lane
-- explicit Takumi engine-route requests now fail closed if daemon route resolution fails or if the engine selected Takumi but the Takumi bridge is unavailable
+- explicit Takumi engine-route requests now fail closed if daemon route resolution fails, if multi-lane envelope expansion fails, or if the engine selected Takumi but the Takumi bridge is unavailable
 - Takumi now also performs a best-effort post-run contract audit: if the child process explicitly declares a provider or model outside an enforced engine-selected lane envelope, the bridge fails the run instead of silently accepting the contradiction
+- the Takumi bridge now preserves caller-supplied `taskId` / `laneId` when the engine already owns execution identity, and otherwise emits a compatibility execution object plus task/lane identity on both the request/result path and the streaming event path, with a typed final report and bridge-synthesized artifacts on every bridge result; the public router now also exposes structured progress events with canonical execution/task/lane identity while keeping the older text-only stream callback for compatibility, and both the router and Lucy surfaces treat `execution`, `taskId`, `laneId`, `finalReport`, and `artifacts` as required compatibility output instead of optional hints
+- enforced Takumi lanes now fail closed when Takumi stays silent about provider/model choice, instead of silently backfilling the assigned lane as if it had been observed
+- Lucy and MCP coding metadata now carry the bridge task/lane/report/artifact fields forward instead of dropping them at the bridge boundary, Lucy now keeps one stable task/lane identity across its auto-fix retries instead of minting a fresh compatibility id per attempt, Lucy lifecycle events now keep that same identity on `context`, initial `execute`, `autofix`, `record`, and `done` phases instead of only on streamed bridge progress, Lucy's episodic-memory and Akasha recording path now keeps that same execution identity instead of collapsing durable history back to prose-only traces, the public `coding_agent` MCP surface now accepts upstream `taskId` / `laneId` while preserving the same typed identity/report metadata in executed modes or when routed execution throws before returning a normal result, and `plan-only` now preserves typed execution identity plus artifact metadata without pretending a final execution report exists
 - a canonical coding session now defaults the coding path onto inferred engine route classes even when the caller did not pass one explicitly
 - if that inferred engine route resolves to the local `tool.coding_agent` lane, the Takumi bridge now respects the decision and falls back to the generic local coding CLI path instead of failing
   - Smriti session integrity is materially stronger than earlier note snapshots

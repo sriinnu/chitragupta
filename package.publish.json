@@ -1,10 +1,10 @@
 {
 	"name": "@yugenlab/chitragupta",
-	"version": "0.1.37",
+	"version": "0.1.39",
 	"description": "AI agent memory and observability platform — sessions, GraphRAG, hybrid search, temporal trending, predictive pre-fetching, dream-cycle consolidation, 60+ MCP tools",
 	"type": "module",
 	"author": "Srinivas Pendela",
-	"license": "MIT",
+	"license": "AGPL-3.0-only",
 	"engines": {
 		"node": ">=22"
 	},

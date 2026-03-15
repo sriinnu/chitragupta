@@ -34,13 +34,38 @@ describe("ChitraguptaDaemon", () => {
 						researchConsolidationCalls: [] as string[],
 						researchDailyConsolidationCalls: [] as string[],
 						dailyResearchProjectPaths: [] as string[],
-						researchDispatchCalls: 0,
-						researchDispatchResults: [] as boolean[],
+						researchSemanticScopes: [] as Array<Array<{ projectPath: string; sessionIds?: string[]; priorityScore?: number }>>,
+						researchDigestScopesOverride: null as null | Array<Record<string, unknown>>,
+							researchDispatchCalls: 0,
+							researchDispatchResults: [] as boolean[],
+							queueDrainCalls: [] as Array<Record<string, unknown>>,
+							queueUpserts: [] as Array<{ scopes: Array<Record<string, unknown>>; options: Record<string, unknown> }>,
+							queueDrainResult: {
+								drained: 0,
+								repaired: 0,
+								deferred: 0,
+							remainingDue: 0,
+							remoteSynced: 0,
+							qualityDeferred: 0,
+						},
+						queuedDueScopes: 0,
+						activeResearchBudget: null as null | {
+							refinement: Record<string, unknown>;
+							nidra?: Record<string, unknown>;
+							source: string;
+							expiresAt: number;
+							updatedAt: number;
+							parseError: null;
+						},
+						budgetUpserts: [] as Array<Record<string, unknown>>,
 						memoryAppends: [] as Array<{ scope: unknown; entry: string; dedupe?: boolean }>,
 						remoteSyncCalls: [] as Array<Record<string, unknown>>,
 						semanticEpochRefreshCalls: [] as boolean[],
 						semanticEpochRefreshPending: false,
 						releaseSemanticEpochRefresh: null as (() => void) | null,
+						backfillPending: false,
+						releaseBackfill: null as (() => void) | null,
+						nidraState: "LISTENING" as const,
 						dayResult: {
 							sessionsProcessed: 1,
 							filePath: "/tmp/day.md",
@@ -49,7 +74,7 @@ describe("ChitraguptaDaemon", () => {
 							durationMs: 12,
 						},
 						lastNidraInstance: null as {
-							triggerDeepSleepConsolidation(sessionIds: readonly string[]): Promise<void>;
+							triggerDeepSleepConsolidation(sessionIds: readonly string[]): Promise<readonly string[] | void>;
 						} | null,
 					};
 
@@ -77,11 +102,11 @@ describe("ChitraguptaDaemon", () => {
 				wake(): void {}
 
 				snapshot() {
-					return { state: "LISTENING" as const };
+					return { state: state.nidraState };
 				}
 
-				async triggerDeepSleepConsolidation(sessionIds: readonly string[]): Promise<void> {
-					await this.deepSleepHandler?.(sessionIds);
+				async triggerDeepSleepConsolidation(sessionIds: readonly string[]): Promise<readonly string[] | void> {
+					return await this.deepSleepHandler?.(sessionIds);
 				}
 			}
 
@@ -128,12 +153,22 @@ describe("ChitraguptaDaemon", () => {
 							qualityDeferred: 0,
 							scopes: [],
 						})),
-						repairSelectiveReembeddingForResearchScopes: vi.fn(async () => ({
-							label: "2026-03-10",
-							candidates: 0,
-							reembedded: 0,
-							scopes: [],
-						})),
+								repairSelectiveReembeddingForResearchScopes: vi.fn(async (_label: string, scopes: Array<{ projectPath: string; sessionIds?: string[]; priorityScore?: number }>) => {
+									state.researchSemanticScopes.push(scopes);
+									return {
+									label: "2026-03-10",
+									candidates: 0,
+									reembedded: 0,
+									scopes: [],
+								};
+								}),
+					}));
+
+					vi.doMock("../src/chitragupta-daemon-semantic-queue.js", () => ({
+						drainQueuedResearchRefinementScopes: vi.fn(async (options: Record<string, unknown>) => {
+							state.queueDrainCalls.push(options);
+							return state.queueDrainResult;
+						}),
 					}));
 
 					vi.doMock("../src/chitragupta-daemon-postprocess.js", () => ({
@@ -237,14 +272,21 @@ describe("ChitraguptaDaemon", () => {
 					});
 
 						vi.doMock("../src/chitragupta-daemon-research.js", () => ({
-						consolidateResearchRefinementDigestsForProjects: vi.fn(async (label: string, scopes: Array<{ projectPath: string; sessionIds?: string[] }>) => {
-							state.researchConsolidationCalls.push(`${label}:${scopes.map((scope) => `${scope.projectPath}:${scope.sessionIds?.join(",") ?? ""}`).join("|")}`);
-							return {
-								processed: scopes.length,
-								projects: scopes.length,
-								projectPaths: scopes.map((scope) => scope.projectPath),
-							};
-						}),
+							consolidateResearchRefinementDigestsForProjects: vi.fn(async (label: string, scopes: Array<{ projectPath: string; sessionIds?: string[] }>) => {
+								state.researchConsolidationCalls.push(`${label}:${scopes.map((scope) => `${scope.projectPath}:${scope.sessionIds?.join(",") ?? ""}`).join("|")}`);
+								const digestScopes = state.researchDigestScopesOverride
+									? state.researchDigestScopesOverride as Array<{ projectPath: string; sessionIds?: string[]; sessionLineageKeys?: string[]; priorityScore?: number }>
+									: scopes.map((scope, index) => ({
+										...scope,
+										priorityScore: index + 1,
+									}));
+								return {
+									processed: scopes.length,
+									projects: scopes.length,
+									projectPaths: scopes.map((scope) => scope.projectPath),
+									scopes: digestScopes,
+								};
+							}),
 							consolidateResearchLoopSummariesForDate: vi.fn(async (date: string) => {
 								state.researchDailyConsolidationCalls.push(`loops:${date}`);
 								return { processed: 0, projects: 0, projectPaths: state.dailyResearchProjectPaths };
@@ -285,8 +327,25 @@ describe("ChitraguptaDaemon", () => {
 						}),
 					}),
 				},
-				appendMemory: vi.fn(async (scope: unknown, entry: string, options?: { dedupe?: boolean }) => {
-					state.memoryAppends.push({ scope, entry, dedupe: options?.dedupe });
+					appendMemory: vi.fn(async (scope: unknown, entry: string, options?: { dedupe?: boolean }) => {
+						state.memoryAppends.push({ scope, entry, dedupe: options?.dedupe });
+					}),
+					countQueuedResearchRefinementScopes: vi.fn(() => state.queuedDueScopes),
+					upsertResearchRefinementQueue: vi.fn((scopes: Array<Record<string, unknown>>, options: Record<string, unknown>) => {
+						state.queueUpserts.push({ scopes, options });
+						return scopes.length;
+					}),
+					readActiveResearchRefinementBudget: vi.fn(() => state.activeResearchBudget),
+					upsertResearchRefinementBudget: vi.fn((budget: Record<string, unknown>) => {
+						state.budgetUpserts.push(budget);
+						state.activeResearchBudget = {
+						refinement: (budget.refinement as Record<string, unknown>) ?? {},
+						nidra: budget.nidra as Record<string, unknown> | undefined,
+						source: typeof budget.source === "string" ? budget.source : "test",
+						expiresAt: Date.now() + 60_000,
+						updatedAt: Date.now(),
+						parseError: null,
+					};
 				}),
 				listResearchLoopSummaries: vi.fn(() => state.researchSummaries),
 				syncRemoteSemanticMirror: vi.fn(async (options: Record<string, unknown>) => {
@@ -294,7 +353,14 @@ describe("ChitraguptaDaemon", () => {
 					return { status: { enabled: true }, synced: 1 };
 				}),
 				consolidateDay: vi.fn(async () => state.dayResult),
-				getUnconsolidatedDates: vi.fn(async () => []),
+				getUnconsolidatedDates: vi.fn(async () => {
+					if (state.backfillPending) {
+						await new Promise<void>((resolve) => {
+							state.releaseBackfill = resolve;
+						});
+					}
+					return [];
+				}),
 				listDayFiles: vi.fn(async () => []),
 				getDayFilePath: vi.fn((date: string) => `/tmp/${date}.md`),
 				SwapnaConsolidation: class {
@@ -350,18 +416,377 @@ describe("ChitraguptaDaemon", () => {
 					{ project: "/proj-a", sessionIds: ["s1", "s2"] },
 					{ project: "/proj-b", sessionIds: ["s3"] },
 				]);
-				expect(state.researchConsolidationCalls).toEqual([
-					"deep-sleep:/proj-a:s1,s2|/proj-b:s3",
-				]);
-				expect(events.some((event) => event.phase === "deep-sleep:resolve")).toBe(true);
-				expect(events.some((event) => event.phase === "deep-sleep:swapna:REPLAY")).toBe(true);
-				expect(events.some((event) => event.phase === "deep-sleep:swapna:COMPRESS")).toBe(true);
-				expect(events.some((event) => event.phase === "deep-sleep:research-refinement")).toBe(true);
-			});
+					expect(state.researchConsolidationCalls).toEqual([
+						"deep-sleep:/proj-a:s1,s2|/proj-b:s3",
+					]);
+					expect(state.researchSemanticScopes).toEqual([
+						[
+							{ projectPath: "/proj-b", sessionIds: ["s3"], sessionLineageKeys: [], priorityScore: 2 },
+							{ projectPath: "/proj-a", sessionIds: ["s1", "s2"], sessionLineageKeys: [], priorityScore: 1 },
+						],
+					]);
+					expect(events.some((event) => event.phase === "deep-sleep:resolve")).toBe(true);
+		expect(events.some((event) => event.phase === "deep-sleep:swapna:REPLAY")).toBe(true);
+		expect(events.some((event) => event.phase === "deep-sleep:swapna:COMPRESS")).toBe(true);
+		expect(events.some((event) => event.phase === "deep-sleep:research-refinement")).toBe(true);
+	});
 
-		it("reports unresolved pending sessions without running Swapna", async () => {
-			const { ChitraguptaDaemon, state } = await loadSubject();
-			state.resolvedSessions = [];
+	it("carries deep-sleep research budgets into the shared daemon refinement envelope", async () => {
+		const { ChitraguptaDaemon, state } = await loadSubject();
+		state.resolvedSessions = [
+			{ id: "s1", project: "/proj-a" },
+			{ id: "s2", project: "/proj-b" },
+		];
+		state.activeResearchBudget = {
+			refinement: {
+				dailyCandidateLimit: 2,
+				projectCandidateLimit: 2,
+				dailyMinMdlScore: 0.55,
+				projectMinMdlScore: 0.6,
+				dailyMinPriorityScore: 1.5,
+				projectMinPriorityScore: 1.8,
+				dailyMinSourceSessionCount: 2,
+				projectMinSourceSessionCount: 2,
+			},
+			nidra: {
+				maxResearchProjectsPerCycle: 1,
+				maxSemanticPressure: 2,
+			},
+			source: "existing",
+			expiresAt: Date.now() + 60_000,
+			updatedAt: Date.now(),
+			parseError: null,
+		};
+		state.researchDigestScopesOverride = [
+			{
+				projectPath: "/proj-a",
+				sessionIds: ["s1"],
+				sessionLineageKeys: [],
+				priorityScore: 4.6,
+				refinementBudget: {
+					dailyCandidateLimit: 7,
+					projectCandidateLimit: 5,
+					dailyMinMdlScore: 0.42,
+					projectMinMdlScore: 0.5,
+				},
+				nidraBudget: {
+					maxSemanticPressure: 5,
+				},
+			},
+			{
+				projectPath: "/proj-b",
+				sessionIds: ["s2"],
+				sessionLineageKeys: [],
+				priorityScore: 1.2,
+			},
+		];
+
+		daemon = new ChitraguptaDaemon({
+			consolidateOnIdle: false,
+			backfillOnStartup: false,
+		});
+
+		await daemon.start();
+		await state.lastNidraInstance?.triggerDeepSleepConsolidation(["s1", "s2"]);
+
+		expect(state.budgetUpserts).toEqual([
+			expect.objectContaining({
+				source: "nidra.deep-sleep",
+				refinement: expect.objectContaining({
+					dailyCandidateLimit: expect.any(Number),
+					projectCandidateLimit: expect.any(Number),
+					dailyMinMdlScore: 0.42,
+					projectMinMdlScore: 0.5,
+				}),
+				nidra: expect.objectContaining({
+					maxResearchProjectsPerCycle: 2,
+					maxSemanticPressure: expect.any(Number),
+				}),
+			}),
+		]);
+		expect(state.budgetUpserts[0]?.refinement?.dailyCandidateLimit).toBeGreaterThanOrEqual(7);
+		expect(state.budgetUpserts[0]?.refinement?.projectCandidateLimit).toBeGreaterThanOrEqual(5);
+		expect(state.budgetUpserts[0]?.nidra?.maxSemanticPressure).toBeGreaterThanOrEqual(5);
+		expect(state.researchSemanticScopes).toEqual([
+			[
+				expect.objectContaining({ projectPath: "/proj-a", priorityScore: 4.6 }),
+				expect.objectContaining({ projectPath: "/proj-b", priorityScore: 1.2 }),
+			],
+		]);
+		expect(state.queueUpserts).toEqual([]);
+	});
+
+	it("does not relabel the shared refinement budget when deep-sleep produced no research digests", async () => {
+		const { ChitraguptaDaemon, state } = await loadSubject();
+		state.activeResearchBudget = {
+			refinement: {
+				dailyCandidateLimit: 5,
+				projectCandidateLimit: 4,
+			},
+			nidra: {
+				maxResearchProjectsPerCycle: 1,
+				maxSemanticPressure: 2,
+			},
+			source: "existing",
+			expiresAt: Date.now() + 60_000,
+			updatedAt: Date.now(),
+			parseError: null,
+		};
+		state.resolvedSessions = [
+			{ id: "s1", project: "/proj-a", sessionLineageKey: "lineage-a" },
+		];
+		state.researchDigestScopesOverride = [];
+
+		daemon = new ChitraguptaDaemon({
+			consolidateOnIdle: false,
+			backfillOnStartup: false,
+		});
+
+		await daemon.start();
+		await state.lastNidraInstance?.triggerDeepSleepConsolidation(["s1"]);
+
+		expect(state.budgetUpserts).toEqual([]);
+		expect(state.researchSemanticScopes).toEqual([]);
+	});
+
+	it("keeps consumed deep-sleep sessions closed while queueing the failed refinement tail", async () => {
+		const { ChitraguptaDaemon, state } = await loadSubject();
+		state.resolvedSessions = [
+			{ id: "s1", project: "/proj-a", sessionLineageKey: "lineage-a" },
+		];
+		state.researchDigestScopesOverride = [
+			{
+				projectPath: "/proj-a",
+				sessionIds: ["s1"],
+				sessionLineageKeys: ["lineage-a"],
+				policyFingerprints: ["policy-a"],
+				primaryObjectiveIds: ["metric-improvement"],
+				primaryStopConditionIds: ["budget-exhausted"],
+				primaryStopConditionKinds: ["budget-exhausted"],
+				frontierBestScore: 0.91,
+				refinementBudget: { dailyCandidateLimit: 5 },
+				nidraBudget: { maxResearchProjectsPerCycle: 2 },
+				priorityScore: 4.2,
+			},
+		];
+		state.activeResearchBudget = {
+			refinement: {},
+			nidra: {
+				maxResearchProjectsPerCycle: 1,
+				maxSemanticPressure: 2,
+			},
+			source: "existing",
+			expiresAt: Date.now() + 60_000,
+			updatedAt: Date.now(),
+			parseError: null,
+		};
+
+		const events: Array<{ phase?: string; detail?: string }> = [];
+		daemon = new ChitraguptaDaemon({
+			consolidateOnIdle: false,
+			backfillOnStartup: false,
+		});
+		daemon.on("consolidation", (event) => {
+			events.push({ phase: event.phase, detail: event.detail });
+		});
+
+		const semanticModule = await import("../src/chitragupta-daemon-semantic.js");
+		vi.mocked(semanticModule.repairSelectiveReembeddingForResearchScopes).mockRejectedValueOnce(
+			new Error("semantic deep-sleep repair failed"),
+		);
+
+		await daemon.start();
+		const consumed = await state.lastNidraInstance?.triggerDeepSleepConsolidation(["s1"]);
+
+		expect(consumed).toEqual(["s1"]);
+		expect(state.queueUpserts).toContainEqual(expect.objectContaining({
+			scopes: [
+				expect.objectContaining({
+					label: "deep-sleep",
+					projectPath: "/proj-a",
+					sessionIds: ["s1"],
+					sessionLineageKeys: ["lineage-a"],
+					policyFingerprints: ["policy-a"],
+					primaryObjectiveIds: ["metric-improvement"],
+					primaryStopConditionIds: ["budget-exhausted"],
+					primaryStopConditionKinds: ["budget-exhausted"],
+					frontierBestScore: 0.91,
+					refinementBudget: { dailyCandidateLimit: 5 },
+					nidraBudget: { maxResearchProjectsPerCycle: 2 },
+				}),
+			],
+			options: expect.objectContaining({
+				lastError: "error:nidra-deep-sleep:semantic deep-sleep repair failed",
+			}),
+		}));
+		expect(state.memoryAppends).toContainEqual(expect.objectContaining({
+			scope: { type: "global" },
+			entry: expect.stringContaining("queuedCarriedForward: 1"),
+		}));
+		expect(events).toContainEqual(expect.objectContaining({
+			phase: "deep-sleep:research-refinement",
+			detail: "semantic deep-sleep repair failed",
+		}));
+	});
+
+	it("queues deep-sleep scopes that exceeded the Nidra project budget for later retry", async () => {
+		const { ChitraguptaDaemon, state } = await loadSubject();
+		state.resolvedSessions = Array.from({ length: 9 }, (_, index) => ({
+			id: `s${index + 1}`,
+			project: `/proj-${index + 1}`,
+			sessionLineageKey: `lineage-${index + 1}`,
+		}));
+		state.researchDigestScopesOverride = Array.from({ length: 9 }, (_, index) => ({
+			projectPath: `/proj-${index + 1}`,
+			sessionIds: [`s${index + 1}`],
+			sessionLineageKeys: [`lineage-${index + 1}`],
+			priorityScore: 10 - index,
+		}));
+
+		daemon = new ChitraguptaDaemon({
+			consolidateOnIdle: false,
+			backfillOnStartup: false,
+		});
+
+		await daemon.start();
+		await state.lastNidraInstance?.triggerDeepSleepConsolidation(
+			Array.from({ length: 9 }, (_, index) => `s${index + 1}`),
+		);
+
+		expect(state.researchSemanticScopes).toHaveLength(1);
+		expect(state.researchSemanticScopes[0]).toHaveLength(8);
+		expect(state.researchSemanticScopes[0]?.some((scope) => scope.projectPath === "/proj-9")).toBe(false);
+		expect(state.queueUpserts).toContainEqual({
+			scopes: [
+				expect.objectContaining({
+					label: "deep-sleep",
+					projectPath: "/proj-9",
+					sessionIds: ["s9"],
+					sessionLineageKeys: ["lineage-9"],
+				}),
+			],
+			options: expect.objectContaining({
+				lastError: "deferred:nidra-project-budget",
+			}),
+		});
+		expect(state.memoryAppends).toContainEqual(expect.objectContaining({
+			scope: { type: "global" },
+			entry: expect.stringContaining("## Deep-Sleep Research Backlog [deep-sleep]"),
+		}));
+		expect(state.memoryAppends).toContainEqual(expect.objectContaining({
+			scope: { type: "global" },
+			entry: expect.stringContaining("- deferredProjects: /proj-9"),
+		}));
+	});
+
+	it("queues deep-sleep scopes that still report semantic quality debt", async () => {
+		const { ChitraguptaDaemon, state } = await loadSubject();
+		state.resolvedSessions = [
+			{ id: "s1", project: "/proj-a", sessionLineageKey: "lineage-a" },
+		];
+		state.researchDigestScopesOverride = [
+			{
+				projectPath: "/proj-a",
+				sessionIds: ["s1"],
+				sessionLineageKeys: ["lineage-a"],
+				priorityScore: 4.2,
+				refinementBudget: { dailyCandidateLimit: 7 },
+			},
+		];
+		const events: Array<{ phase?: string; detail?: string }> = [];
+		daemon = new ChitraguptaDaemon({
+			consolidateOnIdle: false,
+			backfillOnStartup: false,
+		});
+		daemon.on("consolidation", (event) => {
+			events.push({ phase: event.phase, detail: event.detail });
+		});
+
+		const semanticModule = await import("../src/chitragupta-daemon-semantic.js");
+		vi.mocked(semanticModule.repairSelectiveReembeddingForResearchScopes).mockResolvedValueOnce({
+			label: "deep-sleep",
+			candidates: 2,
+			reembedded: 1,
+			remoteSynced: 0,
+			qualityDeferred: 2,
+			scopes: [
+				{
+					projectPath: "/proj-a",
+					dailyDates: ["2026-03-14"],
+					candidates: 2,
+					reembedded: 1,
+					remoteSynced: 0,
+					qualityDeferred: 2,
+				},
+			],
+		});
+
+		await daemon.start();
+		await state.lastNidraInstance?.triggerDeepSleepConsolidation(["s1"]);
+
+		expect(state.queueUpserts).toContainEqual({
+			scopes: [
+				expect.objectContaining({
+					label: "deep-sleep",
+					projectPath: "/proj-a",
+					sessionIds: ["s1"],
+					sessionLineageKeys: ["lineage-a"],
+					refinementBudget: { dailyCandidateLimit: 7 },
+				}),
+			],
+			options: expect.objectContaining({
+				lastError: "quality-deferred:nidra-deep-sleep:2",
+			}),
+		});
+		expect(events).toContainEqual(expect.objectContaining({
+			phase: "deep-sleep:research-refinement",
+			detail: "queued 0 deferred scopes and 1 quality-debt scopes for retry",
+		}));
+		expect(state.memoryAppends).toContainEqual(expect.objectContaining({
+			scope: { type: "global" },
+			entry: expect.stringContaining("- qualityDebtProjects: /proj-a"),
+		}));
+	});
+
+	it("counts mixed resolved and missing deep-sleep sessions without double-counting processed work", async () => {
+		const { ChitraguptaDaemon, state } = await loadSubject();
+		state.resolvedSessions = [
+			{ id: "s1", project: "/proj-a", sessionLineageKey: "lineage-a" },
+		];
+
+		const events: Array<{ phase?: string; detail?: string }> = [];
+		daemon = new ChitraguptaDaemon({
+			consolidateOnIdle: false,
+			backfillOnStartup: false,
+		});
+		daemon.on("consolidation", (event) => {
+			events.push({ phase: event.phase, detail: event.detail });
+		});
+
+		await daemon.start();
+		const consumed = await state.lastNidraInstance?.triggerDeepSleepConsolidation(["s1", "missing-session"]);
+
+		expect(consumed).toEqual(["s1"]);
+		expect(state.swapnaRuns).toEqual([
+			{ project: "/proj-a", sessionIds: ["s1"] },
+		]);
+		expect(events).toContainEqual(expect.objectContaining({
+			phase: "deep-sleep:resolve",
+			detail: "1 sessions missing from Smriti",
+		}));
+		expect(events).toContainEqual(expect.objectContaining({
+			phase: "deep-sleep:swapna",
+			detail: "1 pending sessions deferred for retry",
+		}));
+		expect(events).not.toContainEqual(expect.objectContaining({
+			phase: "deep-sleep:swapna",
+			detail: "2 pending sessions deferred for retry",
+		}));
+	});
+
+	it("reports unresolved pending sessions without running Swapna", async () => {
+		const { ChitraguptaDaemon, state } = await loadSubject();
+		state.resolvedSessions = [];
 
 		const events: Array<{ phase?: string; detail?: string }> = [];
 		daemon = new ChitraguptaDaemon({
@@ -377,6 +802,7 @@ describe("ChitraguptaDaemon", () => {
 
 			expect(state.swapnaRuns).toEqual([]);
 			expect(events.some((event) => event.detail === "1 sessions missing from Smriti")).toBe(true);
+			expect(events.some((event) => event.detail === "1 pending sessions deferred for retry")).toBe(true);
 			expect(events.some((event) => event.detail === "no matching projects for pending sessions")).toBe(true);
 		});
 
@@ -388,8 +814,59 @@ describe("ChitraguptaDaemon", () => {
 			});
 
 			await daemon.start();
+			await vi.waitFor(() => {
+				expect(state.semanticEpochRefreshCalls).toEqual([false]);
+			});
+				});
 
-					expect(state.semanticEpochRefreshCalls).toEqual([false]);
+				it("does not drain queued research refinement during periodic semantic refresh without a shared budget", async () => {
+					const { ChitraguptaDaemon, state } = await loadSubject();
+					const events: Array<{ phase?: string; detail?: string }> = [];
+					state.queuedDueScopes = 3;
+					daemon = new ChitraguptaDaemon({
+						consolidateOnIdle: false,
+						backfillOnStartup: false,
+					});
+					daemon.on("consolidation", (event) => {
+						events.push({ phase: event.phase, detail: event.detail });
+					});
+
+					await daemon.start();
+					await vi.waitFor(() => {
+						expect(state.semanticEpochRefreshCalls).toEqual([false]);
+					});
+					expect(state.queueDrainCalls).toEqual([]);
+					expect(events.some((event) => event.detail === "queued research refinement waiting for shared governor (3 due)")).toBe(true);
+				});
+
+				it("reuses the shared refinement governor before draining queued research during semantic refresh", async () => {
+					const { ChitraguptaDaemon, state } = await loadSubject();
+					state.queuedDueScopes = 3;
+					state.activeResearchBudget = {
+						refinement: {},
+						nidra: {
+							maxResearchProjectsPerCycle: 2,
+							maxSemanticPressure: 8,
+						},
+						source: "test",
+						expiresAt: Date.now() + 60_000,
+						updatedAt: Date.now(),
+						parseError: null,
+					};
+					daemon = new ChitraguptaDaemon({
+						consolidateOnIdle: false,
+						backfillOnStartup: false,
+					});
+
+					await daemon.start();
+					await vi.waitFor(() => {
+						expect(state.queueDrainCalls).toEqual([
+							{
+								label: expect.any(String),
+								limit: 2,
+							},
+						]);
+					});
 				});
 
 				it("polls the resident research queue on the configured cadence and stops polling after shutdown", async () => {
@@ -418,6 +895,59 @@ describe("ChitraguptaDaemon", () => {
 					vi.useRealTimers();
 				});
 
+				it("does not dispatch resident research while Nidra is in deep sleep", async () => {
+					vi.useFakeTimers();
+					const { ChitraguptaDaemon, state } = await loadSubject();
+					state.nidraState = "DEEP_SLEEP";
+					state.researchDispatchResults = [true];
+					daemon = new ChitraguptaDaemon({
+						consolidateOnIdle: false,
+						backfillOnStartup: false,
+						semanticEpochRefreshMinutes: 0,
+						researchDispatchMinutes: 0.001,
+					});
+
+					await daemon.start();
+					await vi.advanceTimersByTimeAsync(80);
+					expect(state.researchDispatchCalls).toBe(0);
+
+					state.nidraState = "LISTENING";
+					await vi.advanceTimersByTimeAsync(80);
+					expect(state.researchDispatchCalls).toBeGreaterThanOrEqual(1);
+
+					await daemon.stop();
+					vi.useRealTimers();
+				});
+
+				it("does not dispatch resident research while startup backfill is still active", async () => {
+					vi.useFakeTimers();
+					const { ChitraguptaDaemon, state } = await loadSubject();
+					state.backfillPending = true;
+					state.researchDispatchResults = [true];
+					daemon = new ChitraguptaDaemon({
+						consolidateOnIdle: false,
+						backfillOnStartup: true,
+						semanticEpochRefreshMinutes: 0,
+						researchDispatchMinutes: 0.001,
+					});
+
+					await daemon.start();
+					await vi.advanceTimersByTimeAsync(80);
+					expect(state.researchDispatchCalls).toBe(0);
+
+					state.backfillPending = false;
+					state.releaseBackfill?.();
+					await Promise.resolve();
+					await Promise.resolve();
+					await vi.advanceTimersByTimeAsync(200);
+					await vi.waitFor(() => {
+						expect(state.researchDispatchCalls).toBeGreaterThanOrEqual(1);
+					});
+
+					await daemon.stop();
+					vi.useRealTimers();
+				});
+
 			it("waits for semantic epoch refresh completion before date consolidation starts", async () => {
 				const { ChitraguptaDaemon, state } = await loadSubject();
 				state.semanticEpochRefreshPending = true;
@@ -428,10 +958,10 @@ describe("ChitraguptaDaemon", () => {
 
 			await daemon.start();
 			const consolidation = daemon.consolidateDate("2026-03-11");
-			await Promise.resolve();
-			await Promise.resolve();
-
-			expect(state.semanticEpochRefreshCalls).toEqual([false]);
+			await vi.waitFor(() => {
+				expect(state.semanticEpochRefreshCalls).toEqual([false]);
+				expect(typeof state.releaseSemanticEpochRefresh).toBe("function");
+			});
 			expect(state.swapnaRuns).toEqual([]);
 
 				state.releaseSemanticEpochRefresh?.();

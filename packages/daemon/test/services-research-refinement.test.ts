@@ -111,6 +111,22 @@ describe("services-research-refinement", () => {
 		}));
 	});
 
+	it("treats control-plane loss as elevated immediate repair pressure", async () => {
+		const { triggerImmediateResearchRefinement } = await import("../src/services-research-refinement.js");
+		await triggerImmediateResearchRefinement("/repo/project", {
+			date: "2026-03-13",
+			decision: "record",
+			status: "control-plane-lost",
+		});
+
+		expect(buildImmediateResearchRefinementRequests).toHaveBeenCalledWith({
+			projectPath: "/repo/project",
+			date: "2026-03-13",
+			elevatedSignal: true,
+			override: null,
+		});
+	});
+
 	it("persists explicit refinement budgets for the next daemon sweep", async () => {
 		const { triggerImmediateResearchRefinement } = await import("../src/services-research-refinement.js");
 		await triggerImmediateResearchRefinement("/repo/project/", {
@@ -149,4 +165,59 @@ describe("services-research-refinement", () => {
 			source: "research.outcome.immediate",
 		});
 	});
-});
+
+		it("persists nidra-only budgets for the next daemon sweep", async () => {
+			const { triggerImmediateResearchRefinement } = await import("../src/services-research-refinement.js");
+			await triggerImmediateResearchRefinement("/repo/project/", {
+			date: "2026-03-13",
+			decision: "keep",
+			updateBudgets: {
+				nidra: {
+					maxResearchProjectsPerCycle: 4,
+					maxSemanticPressure: 6,
+				},
+			},
+		});
+
+		expect(buildImmediateResearchRefinementRequests).toHaveBeenCalledWith({
+			projectPath: "/repo/project",
+			date: "2026-03-13",
+			elevatedSignal: true,
+			override: null,
+		});
+			expect(upsertResearchRefinementBudget).toHaveBeenCalledWith({
+				refinement: null,
+				nidra: {
+					maxResearchProjectsPerCycle: 4,
+					maxSemanticPressure: 6,
+				},
+				source: "research.outcome.immediate",
+			});
+		});
+
+		it("reports degraded status when immediate repair still carries quality debt", async () => {
+			repairSelectiveReembedding
+				.mockResolvedValueOnce({
+					plan: { candidateCount: 2 },
+					reembedded: 1,
+					remoteSynced: 0,
+					qualityDeferred: 1,
+				})
+				.mockResolvedValueOnce({
+					plan: { candidateCount: 1 },
+					reembedded: 1,
+					remoteSynced: 1,
+					qualityDeferred: 0,
+				});
+
+			const { triggerImmediateResearchRefinement } = await import("../src/services-research-refinement.js");
+			const result = await triggerImmediateResearchRefinement("/repo/project/", {
+				date: "2026-03-13",
+				decision: "keep",
+			});
+
+			expect(result.status).toBe("degraded");
+			expect(result.daily.qualityDeferred).toBe(1);
+			expect(result.project.qualityDeferred).toBe(0);
+		});
+	});

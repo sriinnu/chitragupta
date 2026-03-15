@@ -97,6 +97,8 @@ This file tracks core-engine closure work that should not disappear into ad hoc 
 - [x] Persist git provenance in bounded research records and fail closed when git refs change during the run so the experiment ledger cannot silently drift across branches or commits.
 - [ ] Tighten unattended overnight governance further with stricter hash-only policy and the remaining keep/discard/revert closure work.
 - [ ] Harden end-to-end cancellation so every closure-stage side effect honors interrupt signals natively, not only through bounded wrapper coordination.
+- [x] Lock the next recovery slice into explicit docs: hard recovery plan, Takumi executor contract, and pre-Vaayu readiness checklist.
+- [ ] Reflect the Takumi executor contract in runtime-facing task/lane/artifact schemas instead of leaving it as bridge prose only.
 - [ ] Tighten Vaayu and Takumi consumer contracts around canonical sessions, bridge scopes, and provenance-aware recall.
 - [x] Make explicit Takumi engine-route requests fail closed when daemon route resolution fails or when the engine selected Takumi but the Takumi bridge is unavailable.
 - [x] Move the interactive agent and MCP `coding_agent` surfaces onto the same session-aware engine route-class path so route resolution governs execution beyond the original Takumi bridge entrypoint.

@@ -4,6 +4,9 @@ This document explains how daemon-first nervous-system research loops work insid
 
 Current as of March 8, 2026.
 
+See also:
+- [compaction-and-refinement.md](./compaction-and-refinement.md)
+
 ## Why this exists
 
 Chitragupta should not only remember and deliberate. It should also support bounded self-improvement and experiment loops without creating a second authority in Takumi or Vaayu.
@@ -65,7 +68,11 @@ Default overnight controls:
 - `researchPlannerRouteClass: coding.deep-reasoning`
 - `researchExecutionRouteClass: tool.use.flex`
 
-The overnight loop keeps one canonical `loopKey`, records `roundNumber` and `totalRounds`, and uses daemon-first `compression.unpack_context` / `compression.normalize_context` when reusing packed carry context between rounds.
+The overnight loop keeps one canonical `loopKey` per project, records `roundNumber` and `totalRounds`, and uses daemon-first `compression.unpack_context` / `compression.normalize_context` when reusing packed carry context between rounds.
+
+- live daemon control state is keyed by canonical `projectPath + loopKey`, not by bare `loopKey`
+- project-less inspection now fails closed when the same `loopKey` is live in more than one repo, instead of guessing the intended run
+- durable-only completion must also include `projectPath` once live control state is gone, or the daemon will fail closed instead of writing an ambiguous terminal control record
 
 It also persists an exact resumable checkpoint for the active phase through:
 - `research.loops.checkpoint.get`
@@ -180,19 +187,26 @@ Interrupt semantics:
   - immediate repair still runs inline for the touched day/project horizon
   - any leftover semantic quality debt is persisted as `queuedResearch`
   - that queue now stores the exact deferred repair intent when inline repair degrades, so retry drains can replay the narrowed repair plan instead of reconstructing a broader one from scope alone
-  - daily daemon postprocess drains that queue in bounded retry order and carries cap-overflow scopes forward durably instead of dropping them
+  - daily daemon postprocess drains that queue in bounded retry order, clears already-covered coarse rows even when the replay cap for that cycle is `0`, and carries cap-overflow scopes forward durably instead of dropping them
+  - queue-only backlog still respects a bounded queued-repair cap, but it no longer widens the earlier date-repair / research-repair phases by itself
+  - broader project repair in the active cycle only auto-clears a queued row when it fully covers the narrower session/lineage scope and its optimizer metadata
 - daemon-owned overnight scheduling now has its own durable queue/lease layer:
-  - `research.loops.enqueue` persists queued loop intent together with the loop’s objective registry, stop-condition registry, and update budgets
-  - `research.loops.schedule.get` reads the durable queue row for one `loopKey`
+  - `research.loops.enqueue` persists queued loop intent together with the loop’s objective registry, stop-condition registry, update budgets, and optimizer policy identity (`policyFingerprint`, `primaryObjectiveId`, `primaryStopConditionId`)
+  - `research.loops.schedule.get` reads the durable queue row for one `loopKey`; without `projectPath` it only succeeds when that loop key is unique across the durable queue
   - `research.loops.dispatchable` lists queued loops whose lease is free or expired so a resident scheduler can resume from durable state instead of re-deriving work from scratch
-  - the resident daemon now polls that queue on `researchDispatchMinutes`, dispatches one loop at a time, and waits until semantic refresh or daily consolidation are idle before starting new overnight work
+  - `research.loops.dispatch.next` performs the durable claim step and returns at most one runnable row, so overlapping resident daemons do not launch the same loop concurrently
+  - the resident daemon now polls that queue on `researchDispatchMinutes`, dispatches one loop at a time, and waits until startup backfill, deep-sleep refinement, semantic refresh, and daily consolidation are idle before starting new overnight work
   - resident dispatch injects a process-unique `researchLeaseOwner`, and Prana forwards that owner through `research.loops.start` plus `research.loops.heartbeat` so overlapping daemon workers do not collapse onto one shared lease identity
   - queued rows must carry a durable `workflowContext`; when that envelope is missing or references an unknown workflow, resident dispatch fails closed and marks the schedule `dispatch-failed`
+  - transient resident-dispatch retries now preserve the existing queued workflow envelope, objective registry, stop-condition registry, and update budgets instead of requeueing a partial row that drops durable loop truth
+  - resident dispatch retries only rewrite rows that are still in the pre-start dispatch window; if the loop already advanced into a real running phase under the same lease, the daemon reports the error instead of rewinding durable state back to `dispatch-retry`
+  - if operator cancellation lands before that retry rewrite, cancellation wins and is reconciled as `cancelled` instead of silently requeueing the loop
 - daily daemon postprocess now treats research-originated repair as a bounded queue:
   - it first derives one bounded refinement budget from overnight loop summaries, experiment outcomes, and outstanding queue pressure
   - per-project refinement scopes are sorted by `priorityScore`
   - cap-overflow scopes are re-queued before the queue drain so one cycle never silently loses them
-  - `queuedResearch` debt is drained after the primary daily and project repair pass, subject to the same remaining project budget for that cycle
+  - `queuedResearch` debt is drained after the primary daily and project repair pass, subject to the remaining cycle cap for that cycle
+  - when only queued backlog remains, the daemon still uses a bounded queued-drain cap instead of draining unboundedly
   - remote sync remains gated while outstanding repair backlog, queue carry-forward, or epoch refresh incompletion still exists
   - the postprocess result now exposes the exact daemon governor it used:
     - phase order
@@ -200,10 +214,28 @@ Interrupt semantics:
     - `researchSignalCount`
     - `queuedDrainLimit`
     - `remoteHoldReasons`
+- the daemon can also drain queued research repair during the periodic semantic epoch-refresh path when a shared governor envelope is already active:
+  - this keeps epoch self-heal and deferred research repair from diverging into separate budget authorities
+  - the daily postprocess still remains the richer operator-facing governor result
+- deep-sleep / Nidra now feeds that same daemon governor instead of bypassing it:
+  - the deep-sleep digest rebuilds research scopes from the overnight loop and experiment ledger
+  - that rebuild is durable and restart-safe, and it now pages through project-scoped research history before filtering back to the relevant session/lineage scope instead of depending on one bounded first-page heuristic
+  - recovered loop budgets widen the shared daemon envelope instead of staying local to the deep-sleep pass
+  - the widened envelope is persisted as `nidra.deep-sleep` before project-scoped semantic repair runs
+  - scopes that exceed the current deep-sleep project budget are now re-queued durably instead of being dropped from the tail
+  - scopes that still report semantic quality debt after the deep-sleep repair pass are also re-queued durably for the next daemon-owned retry
+  - if that deep-sleep refinement tail fails, the daemon emits an error and queues the unfinished digest-enriched refinement tail for retry while keeping the already processed Swapna sessions closed
+- daily postprocess now also persists queued research-refinement backlog into memory when remote sync is held by deferred or quality-deferred queue work, so later sessions can see the unfinished debt without re-reading only transient daemon events
 - timeout pickup is phase-safe rather than omniscient:
   - durable checkpoints plus `resumePlan` preserve the last safe phase boundary
   - they do not yet replay every closure-side effect semantically
   - the remaining hardening work is abort-plumbed closure IO and richer semantic replay where phase plus breadcrumbs are still not enough
+- legacy overnight resume now fails closed only for experiment-only loops whose stored rows have no compatible policy identity at all
+- when a loop summary exists, resume still prefers that summary as the governance backbone and only overlays fresher per-round execution facts from the recent experiment tail
+- if every restored round still carries a complete objective vector, the loop frontier is recomputed from the merged round set so later Pareto shifts are preserved on resume
+- summary replay also normalizes stale persisted policy truth before continuing:
+  - canonical stop-condition identity is rebuilt from explicit triggered hits when available
+  - missing or out-of-range stored update budgets are defaulted and clamped before they re-enter the live loop policy
 
 ### `acp-research-swarm`
 
@@ -327,6 +359,8 @@ The overnight loop now records failed attempts separately instead of overwriting
 
 PAKT does not become the memory authority.
 Smriti remains canonical.
+
+For the wider runtime split between `mHC`, `MDL`, `PAKT`, `autoresearch`, and `Nidra`, see [compaction-and-refinement.md](./compaction-and-refinement.md).
 
 ## Experiment provenance
 

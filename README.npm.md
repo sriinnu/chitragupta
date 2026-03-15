@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/@yugenlab/chitragupta"><img src="https://img.shields.io/npm/v/@yugenlab/chitragupta" alt="npm" /></a>
   <img src="https://img.shields.io/badge/node-%3E%3D22-blue" alt="Node" />
-  <a href="https://github.com/sriinnu/chitragupta/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
+  <a href="https://github.com/sriinnu/chitragupta/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-green" alt="License" /></a>
 </p>
 
 ---
@@ -158,4 +158,4 @@ See [docs/consumer-contract.md](https://github.com/sriinnu/chitragupta/blob/main
 
 ## License
 
-MIT © 2026 Srinivas Pendela
+AGPL-3.0-only © 2026 Srinivas Pendela

@@ -1,4 +1,6 @@
 import { getAgentDb } from "./session-db.js";
+import type { ResearchRefinementBudgetOverride } from "./semantic-refinement-policy.js";
+import type { ResearchNidraBudgetOverride } from "./research-refinement-budget.js";
 
 /** Exact deferred repair intent captured from the failed immediate repair path. */
 export interface ResearchRefinementRepairIntent {
@@ -20,6 +22,13 @@ export interface ResearchRefinementQueuedScope {
 	projectPath: string;
 	sessionIds: string[];
 	sessionLineageKeys: string[];
+	policyFingerprints?: string[];
+	primaryObjectiveIds?: string[];
+	primaryStopConditionIds?: string[];
+	primaryStopConditionKinds?: string[];
+	frontierBestScore?: number | null;
+	refinementBudget?: ResearchRefinementBudgetOverride | null;
+	nidraBudget?: ResearchNidraBudgetOverride | null;
 	repairIntent?: ResearchRefinementRepairIntent | null;
 	parseError?: string | null;
 	attemptCount: number;
@@ -34,6 +43,62 @@ function normalizeTextList(values: readonly string[] | undefined): string[] {
 		.map((value) => value.trim())
 		.filter((value) => value.length > 0))]
 		.sort();
+}
+
+function normalizeFiniteNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function takeWiderCap(left: number | undefined, right: number | undefined): number | undefined {
+	if (typeof left === "number" && typeof right === "number") return Math.max(left, right);
+	return typeof left === "number" ? left : right;
+}
+
+function takeWiderFloor(left: number | undefined, right: number | undefined): number | undefined {
+	if (typeof left === "number" && typeof right === "number") return Math.min(left, right);
+	return typeof left === "number" ? left : right;
+}
+
+/**
+ * Preserve the widest already-authorized repair envelope when the same queued
+ * scope is upserted repeatedly from immediate and deferred daemon paths.
+ */
+function mergeRefinementBudget(
+	existing: ResearchRefinementBudgetOverride | null | undefined,
+	next: ResearchRefinementBudgetOverride | null | undefined,
+): ResearchRefinementBudgetOverride | null {
+	const merged: ResearchRefinementBudgetOverride = {
+		dailyCandidateLimit: takeWiderCap(existing?.dailyCandidateLimit, next?.dailyCandidateLimit),
+		projectCandidateLimit: takeWiderCap(existing?.projectCandidateLimit, next?.projectCandidateLimit),
+		dailyMinMdlScore: takeWiderFloor(existing?.dailyMinMdlScore, next?.dailyMinMdlScore),
+		projectMinMdlScore: takeWiderFloor(existing?.projectMinMdlScore, next?.projectMinMdlScore),
+		dailyMinPriorityScore: takeWiderFloor(existing?.dailyMinPriorityScore, next?.dailyMinPriorityScore),
+		projectMinPriorityScore: takeWiderFloor(existing?.projectMinPriorityScore, next?.projectMinPriorityScore),
+		dailyMinSourceSessionCount: takeWiderFloor(
+			existing?.dailyMinSourceSessionCount,
+			next?.dailyMinSourceSessionCount,
+		),
+		projectMinSourceSessionCount: takeWiderFloor(
+			existing?.projectMinSourceSessionCount,
+			next?.projectMinSourceSessionCount,
+		),
+	};
+	return Object.values(merged).some((value) => typeof value === "number") ? merged : null;
+}
+
+/** Keep the broadest Nidra breadth cap already granted to one queued scope. */
+function mergeNidraBudget(
+	existing: ResearchNidraBudgetOverride | null | undefined,
+	next: ResearchNidraBudgetOverride | null | undefined,
+): ResearchNidraBudgetOverride | null {
+	const merged: ResearchNidraBudgetOverride = {
+		maxResearchProjectsPerCycle: takeWiderCap(
+			existing?.maxResearchProjectsPerCycle,
+			next?.maxResearchProjectsPerCycle,
+		),
+		maxSemanticPressure: takeWiderCap(existing?.maxSemanticPressure, next?.maxSemanticPressure),
+	};
+	return Object.values(merged).some((value) => typeof value === "number") ? merged : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -93,6 +158,13 @@ function normalizeQueuedScopeInput(args: {
 	projectPath: string;
 	sessionIds?: readonly string[];
 	sessionLineageKeys?: readonly string[];
+	policyFingerprints?: readonly string[];
+	primaryObjectiveIds?: readonly string[];
+	primaryStopConditionIds?: readonly string[];
+	primaryStopConditionKinds?: readonly string[];
+	frontierBestScore?: number | null;
+	refinementBudget?: ResearchRefinementBudgetOverride | null;
+	nidraBudget?: ResearchNidraBudgetOverride | null;
 	repairIntent?: ResearchRefinementRepairIntent | null;
 }) {
 	const projectPath = args.projectPath.trim();
@@ -101,6 +173,19 @@ function normalizeQueuedScopeInput(args: {
 		projectPath,
 		sessionIds: normalizeTextList(args.sessionIds),
 		sessionLineageKeys: normalizeTextList(args.sessionLineageKeys),
+		policyFingerprints: normalizeTextList(args.policyFingerprints),
+		primaryObjectiveIds: normalizeTextList(args.primaryObjectiveIds),
+		primaryStopConditionIds: normalizeTextList(args.primaryStopConditionIds),
+		primaryStopConditionKinds: normalizeTextList(args.primaryStopConditionKinds),
+		frontierBestScore: normalizeFiniteNumber(args.frontierBestScore),
+		refinementBudget:
+			args.refinementBudget && typeof args.refinementBudget === "object" && !Array.isArray(args.refinementBudget)
+				? cloneJsonValue(args.refinementBudget) as ResearchRefinementBudgetOverride
+				: undefined,
+		nidraBudget:
+			args.nidraBudget && typeof args.nidraBudget === "object" && !Array.isArray(args.nidraBudget)
+				? cloneJsonValue(args.nidraBudget) as ResearchNidraBudgetOverride
+				: undefined,
 		repairIntent:
 			args.repairIntent && typeof args.repairIntent === "object"
 				? {
@@ -172,6 +257,13 @@ function parseQueuedScopeRow(row: {
 	let parsed: {
 		sessionIds?: string[];
 		sessionLineageKeys?: string[];
+		policyFingerprints?: string[];
+		primaryObjectiveIds?: string[];
+		primaryStopConditionIds?: string[];
+		primaryStopConditionKinds?: string[];
+		frontierBestScore?: number | null;
+		refinementBudget?: ResearchRefinementBudgetOverride | null;
+		nidraBudget?: ResearchNidraBudgetOverride | null;
 		repairIntent?: ResearchRefinementRepairIntent | null;
 	} = {};
 	let parseError: string | null = null;
@@ -187,6 +279,19 @@ function parseQueuedScopeRow(row: {
 		projectPath: row.project,
 		sessionIds: normalizeTextList(parsed.sessionIds),
 		sessionLineageKeys: normalizeTextList(parsed.sessionLineageKeys),
+		policyFingerprints: normalizeTextList(parsed.policyFingerprints),
+		primaryObjectiveIds: normalizeTextList(parsed.primaryObjectiveIds),
+		primaryStopConditionIds: normalizeTextList(parsed.primaryStopConditionIds),
+		primaryStopConditionKinds: normalizeTextList(parsed.primaryStopConditionKinds),
+		frontierBestScore: normalizeFiniteNumber(parsed.frontierBestScore) ?? null,
+		refinementBudget:
+			parsed.refinementBudget && typeof parsed.refinementBudget === "object" && !Array.isArray(parsed.refinementBudget)
+				? parsed.refinementBudget
+				: null,
+		nidraBudget:
+			parsed.nidraBudget && typeof parsed.nidraBudget === "object" && !Array.isArray(parsed.nidraBudget)
+				? parsed.nidraBudget
+				: null,
 		repairIntent:
 			parsed.repairIntent && typeof parsed.repairIntent === "object"
 				? {
@@ -221,6 +326,13 @@ export function upsertResearchRefinementQueue(
 		projectPath: string;
 		sessionIds?: readonly string[];
 		sessionLineageKeys?: readonly string[];
+		policyFingerprints?: readonly string[];
+		primaryObjectiveIds?: readonly string[];
+		primaryStopConditionIds?: readonly string[];
+		primaryStopConditionKinds?: readonly string[];
+		frontierBestScore?: number | null;
+		refinementBudget?: ResearchRefinementBudgetOverride | null;
+		nidraBudget?: ResearchNidraBudgetOverride | null;
 		repairIntent?: ResearchRefinementRepairIntent | null;
 	}>,
 	options: { notBefore?: number; lastError?: string | null } = {},
@@ -265,11 +377,18 @@ export function upsertResearchRefinementQueue(
 				scopeKey,
 				scope.label,
 				scope.projectPath,
-				JSON.stringify({
-					sessionIds: scope.sessionIds,
-					sessionLineageKeys: scope.sessionLineageKeys,
-					repairIntent: scope.repairIntent ?? null,
-				}),
+					JSON.stringify({
+						sessionIds: scope.sessionIds,
+						sessionLineageKeys: scope.sessionLineageKeys,
+						policyFingerprints: scope.policyFingerprints,
+						primaryObjectiveIds: scope.primaryObjectiveIds,
+						primaryStopConditionIds: scope.primaryStopConditionIds,
+						primaryStopConditionKinds: scope.primaryStopConditionKinds,
+						frontierBestScore: scope.frontierBestScore ?? null,
+						refinementBudget: scope.refinementBudget ?? null,
+						nidraBudget: scope.nidraBudget ?? null,
+						repairIntent: scope.repairIntent ?? null,
+					}),
 				nextAttemptAt,
 				options.lastError ?? null,
 				now,
@@ -282,11 +401,21 @@ export function upsertResearchRefinementQueue(
 		update.run(
 			scope.label || existing.label,
 			scope.projectPath,
-			JSON.stringify({
-				sessionIds: normalizeTextList([...existing.sessionIds, ...scope.sessionIds]),
-				sessionLineageKeys: normalizeTextList([...existing.sessionLineageKeys, ...scope.sessionLineageKeys]),
-				repairIntent: mergeRepairIntent(existing.repairIntent, scope.repairIntent),
-			}),
+				JSON.stringify({
+					sessionIds: normalizeTextList([...existing.sessionIds, ...scope.sessionIds]),
+					sessionLineageKeys: normalizeTextList([...existing.sessionLineageKeys, ...scope.sessionLineageKeys]),
+					policyFingerprints: normalizeTextList([...(existing.policyFingerprints ?? []), ...scope.policyFingerprints]),
+					primaryObjectiveIds: normalizeTextList([...(existing.primaryObjectiveIds ?? []), ...scope.primaryObjectiveIds]),
+					primaryStopConditionIds: normalizeTextList([...(existing.primaryStopConditionIds ?? []), ...scope.primaryStopConditionIds]),
+					primaryStopConditionKinds: normalizeTextList([...(existing.primaryStopConditionKinds ?? []), ...scope.primaryStopConditionKinds]),
+					frontierBestScore:
+						Math.max(existing.frontierBestScore ?? Number.NEGATIVE_INFINITY, scope.frontierBestScore ?? Number.NEGATIVE_INFINITY) > Number.NEGATIVE_INFINITY
+							? Math.max(existing.frontierBestScore ?? Number.NEGATIVE_INFINITY, scope.frontierBestScore ?? Number.NEGATIVE_INFINITY)
+							: null,
+					refinementBudget: mergeRefinementBudget(existing.refinementBudget, scope.refinementBudget),
+					nidraBudget: mergeNidraBudget(existing.nidraBudget, scope.nidraBudget),
+					repairIntent: mergeRepairIntent(existing.repairIntent, scope.repairIntent),
+				}),
 			Math.min(existing.nextAttemptAt, nextAttemptAt),
 			options.lastError ?? existing.lastError,
 			now,
@@ -304,7 +433,7 @@ export function listQueuedResearchRefinementScopes(
 	options: { limit?: number; now?: number } = {},
 ): ResearchRefinementQueuedScope[] {
 	const db = getAgentDb();
-	const limit = Math.max(1, Math.min(options.limit ?? 25, 200));
+	const limit = Math.max(1, Math.floor(options.limit ?? 25));
 	const now = options.now ?? Date.now();
 	const rows = db.prepare(`
 		SELECT id, scope_key, label, project, scope_json, attempt_count, next_attempt_at, last_error, created_at, updated_at

@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RpcRouter } from "../src/rpc-router.js";
 import { registerResearchMethods } from "../src/services-research.js";
 import { registerResearchCheckpointMethods } from "../src/services-research-checkpoints.js";
+import {
+	failDurableResearchLoopDispatch,
+	requeueDurableResearchLoopDispatch,
+} from "../src/services-research-scheduler.js";
 import { clearResearchLoopStates } from "../src/services-research-loop-state.js";
 
 const upsertResearchExperiment = vi.fn((input: Record<string, unknown>) => ({ id: "exp-1", ...input }));
@@ -111,40 +115,60 @@ const AkashaField = vi.fn(function AkashaFieldMock(this: Record<string, unknown>
 	this.persist = persist;
 });
 const DatabaseManager = { instance };
+const isTerminalScheduleStatus = (status: unknown) =>
+	status === "cancelled" || status === "completed" || status === "failed";
+const isActiveScheduleLease = (
+	entry: Record<string, unknown> | undefined,
+	now: number,
+	leaseOwner?: string | null,
+) => Boolean(
+	entry
+	&& typeof entry.leaseOwner === "string"
+	&& entry.leaseOwner
+	&& typeof entry.leaseExpiresAt === "number"
+	&& entry.leaseExpiresAt > now
+	&& (!leaseOwner || entry.leaseOwner !== leaseOwner),
+);
 const upsertResearchLoopSchedule = vi.fn((input: Record<string, unknown>) => {
 	const now = Date.now();
+	const key = scheduleKey(String(input.projectPath), String(input.loopKey));
+	const existing = researchLoopSchedules.get(key);
+	const status = typeof input.status === "string" ? input.status : existing?.status ?? "queued";
 	const record = {
 		projectPath: String(input.projectPath),
 		loopKey: String(input.loopKey),
-		topic: typeof input.topic === "string" ? input.topic : null,
-		hypothesis: typeof input.hypothesis === "string" ? input.hypothesis : null,
-		sessionId: typeof input.sessionId === "string" ? input.sessionId : null,
-		parentSessionId: typeof input.parentSessionId === "string" ? input.parentSessionId : null,
-		sessionLineageKey: typeof input.sessionLineageKey === "string" ? input.sessionLineageKey : null,
-		sabhaId: typeof input.sabhaId === "string" ? input.sabhaId : null,
-		workflowId: typeof input.workflowId === "string" ? input.workflowId : null,
-		status: typeof input.status === "string" ? input.status : "queued",
-		queuedAt: now,
-		availableAt: typeof input.availableAt === "number" ? input.availableAt : now,
+		topic: typeof input.topic === "string" ? input.topic : existing?.topic ?? null,
+		hypothesis: typeof input.hypothesis === "string" ? input.hypothesis : existing?.hypothesis ?? null,
+		sessionId: typeof input.sessionId === "string" ? input.sessionId : existing?.sessionId ?? null,
+		parentSessionId: typeof input.parentSessionId === "string" ? input.parentSessionId : existing?.parentSessionId ?? null,
+		sessionLineageKey: typeof input.sessionLineageKey === "string" ? input.sessionLineageKey : existing?.sessionLineageKey ?? null,
+		sabhaId: typeof input.sabhaId === "string" ? input.sabhaId : existing?.sabhaId ?? null,
+		workflowId: typeof input.workflowId === "string" ? input.workflowId : existing?.workflowId ?? null,
+		status,
+		queuedAt: existing?.queuedAt ?? now,
+		availableAt: typeof input.availableAt === "number" ? input.availableAt : existing?.availableAt ?? now,
 		updatedAt: now,
-		leaseOwner: null,
-		leaseExpiresAt: null,
-		leaseHeartbeatAt: null,
-		currentRound: typeof input.currentRound === "number" ? input.currentRound : null,
-		totalRounds: typeof input.totalRounds === "number" ? input.totalRounds : null,
-		attemptNumber: typeof input.attemptNumber === "number" ? input.attemptNumber : null,
-		phase: typeof input.phase === "string" ? input.phase : null,
-		cancelRequestedAt: null,
-		cancelReason: null,
-		requestedBy: null,
-			stopReason: null,
-			finishedAt: null,
-			objectives: Array.isArray(input.objectives) ? input.objectives : [],
-			stopConditions: Array.isArray(input.stopConditions) ? input.stopConditions : [],
-			updateBudgets: input.updateBudgets && typeof input.updateBudgets === "object" ? input.updateBudgets : null,
-			workflowContext: input.workflowContext && typeof input.workflowContext === "object" ? input.workflowContext : null,
+		leaseOwner: status === "queued" ? null : existing?.leaseOwner ?? null,
+		leaseExpiresAt: status === "queued" ? null : existing?.leaseExpiresAt ?? null,
+		leaseHeartbeatAt: status === "queued" ? null : existing?.leaseHeartbeatAt ?? null,
+		currentRound: typeof input.currentRound === "number" ? input.currentRound : existing?.currentRound ?? null,
+		totalRounds: typeof input.totalRounds === "number" ? input.totalRounds : existing?.totalRounds ?? null,
+		attemptNumber: typeof input.attemptNumber === "number" ? input.attemptNumber : existing?.attemptNumber ?? null,
+		phase: typeof input.phase === "string" ? input.phase : existing?.phase ?? null,
+		cancelRequestedAt: existing?.cancelRequestedAt ?? null,
+		cancelReason: existing?.cancelReason ?? null,
+		requestedBy: existing?.requestedBy ?? null,
+			stopReason: existing?.stopReason ?? null,
+			finishedAt: existing?.finishedAt ?? null,
+			objectives: Array.isArray(input.objectives) ? input.objectives : existing?.objectives ?? [],
+			stopConditions: Array.isArray(input.stopConditions) ? input.stopConditions : existing?.stopConditions ?? [],
+			updateBudgets: input.updateBudgets && typeof input.updateBudgets === "object" ? input.updateBudgets : existing?.updateBudgets ?? null,
+			policyFingerprint: typeof input.policyFingerprint === "string" ? input.policyFingerprint : existing?.policyFingerprint ?? null,
+			primaryObjectiveId: typeof input.primaryObjectiveId === "string" ? input.primaryObjectiveId : existing?.primaryObjectiveId ?? null,
+			primaryStopConditionId: typeof input.primaryStopConditionId === "string" ? input.primaryStopConditionId : existing?.primaryStopConditionId ?? null,
+			workflowContext: input.workflowContext && typeof input.workflowContext === "object" ? input.workflowContext : existing?.workflowContext ?? null,
 		};
-	researchLoopSchedules.set(scheduleKey(record.projectPath, record.loopKey), record);
+	researchLoopSchedules.set(key, record);
 	return record;
 });
 const getResearchLoopSchedule = vi.fn((projectPath: string, loopKey: string) => (
@@ -162,8 +186,10 @@ const listResearchLoopSchedules = vi.fn((options?: {
 	if (options?.runnableOnly) {
 		const now = Date.now();
 		values = values.filter((entry) => (
-			(entry.status === "queued")
-			|| (entry.status === "leased" && (typeof entry.leaseExpiresAt !== "number" || entry.leaseExpiresAt <= now))
+			(entry.status === "queued" || entry.status === "leased" || entry.status === "cancelling")
+			&& !isTerminalScheduleStatus(entry.status)
+			&& (typeof entry.availableAt !== "number" || entry.availableAt <= now)
+			&& (entry.status === "queued" || !isActiveScheduleLease(entry, now))
 		));
 	}
 	return values.slice(0, options?.limit ?? values.length);
@@ -173,11 +199,40 @@ const claimResearchLoopSchedule = vi.fn((input: Record<string, unknown>) => {
 	const existing = researchLoopSchedules.get(key);
 	if (!existing) return { claimed: false, schedule: null };
 	const now = typeof input.now === "number" ? input.now : Date.now();
+	if (isTerminalScheduleStatus(existing.status)) {
+		return { claimed: false, schedule: existing };
+	}
 	if (
-		existing.leaseOwner
-		&& existing.leaseOwner !== input.leaseOwner
+		(existing.status === "queued" || existing.status === "cancelling")
+		&& typeof existing.availableAt === "number"
+		&& existing.availableAt > now
+	) {
+		return { claimed: false, schedule: existing };
+	}
+	if (
+		typeof input.leaseOwner === "string"
+		&& input.leaseOwner
+		&& existing.leaseOwner === input.leaseOwner
 		&& typeof existing.leaseExpiresAt === "number"
 		&& existing.leaseExpiresAt > now
+	) {
+		const claimed = {
+			...existing,
+			status: existing.cancelRequestedAt ? "cancelling" : "leased",
+			leaseHeartbeatAt: now,
+			leaseExpiresAt: now + (typeof input.leaseTtlMs === "number" ? input.leaseTtlMs : 90_000),
+			currentRound: typeof input.currentRound === "number" ? input.currentRound : existing.currentRound,
+			totalRounds: typeof input.totalRounds === "number" ? input.totalRounds : existing.totalRounds,
+			attemptNumber: typeof input.attemptNumber === "number" ? input.attemptNumber : existing.attemptNumber,
+			phase: typeof input.phase === "string" ? input.phase : existing.phase,
+			updatedAt: now,
+		};
+		researchLoopSchedules.set(key, claimed);
+		return { claimed: true, schedule: claimed };
+	}
+	if (
+		!isActiveScheduleLease(existing, now, typeof input.leaseOwner === "string" ? input.leaseOwner : null)
+		&& isActiveScheduleLease(existing, now)
 	) {
 		return { claimed: false, schedule: existing };
 	}
@@ -219,16 +274,35 @@ const completeResearchLoopSchedule = vi.fn((input: Record<string, unknown>) => {
 	const key = scheduleKey(String(input.projectPath), String(input.loopKey));
 	const existing = researchLoopSchedules.get(key);
 	if (!existing) return null;
+	const now = typeof input.now === "number" ? input.now : Date.now();
+	if (
+		isActiveScheduleLease(
+			existing,
+			now,
+			typeof input.leaseOwner === "string" ? input.leaseOwner : null,
+		)
+	) {
+		return null;
+	}
 	const stopReason = typeof input.stopReason === "string" ? input.stopReason : null;
 	const completed = {
 		...existing,
-		status: stopReason === "cancelled" ? "cancelled" : stopReason === "closure-failed" ? "failed" : "completed",
+		status:
+			stopReason === "cancelled"
+				? "cancelled"
+				: stopReason === "closure-failed"
+					|| stopReason === "round-failed"
+					|| stopReason === "unsafe-discard"
+					|| stopReason === "control-plane-lost"
+					|| stopReason === "dispatch-failed"
+					? "failed"
+					: "completed",
 		stopReason,
 		leaseOwner: null,
 		leaseExpiresAt: null,
 		leaseHeartbeatAt: null,
-		finishedAt: Date.now(),
-		updatedAt: Date.now(),
+		finishedAt: now,
+		updatedAt: now,
 	};
 	researchLoopSchedules.set(key, completed);
 	return completed;
@@ -669,18 +743,19 @@ describe("services-research", () => {
 			}),
 			queuedSemanticRefinement: true,
 			});
+		const today = new Date().toISOString().slice(0, 10);
 		expect(upsertResearchRefinementQueue).toHaveBeenCalledWith([
 			expect.objectContaining({
 				projectPath: "/repo/project",
 				repairIntent: expect.objectContaining({
 					daily: expect.objectContaining({
-						dates: ["2026-03-14"],
+						dates: [today],
 						levels: ["daily"],
 					}),
 					project: expect.objectContaining({
 						projects: ["/repo/project"],
 						levels: ["monthly", "yearly"],
-						periods: ["2026-03", "2026"],
+						periods: [today.slice(0, 7), today.slice(0, 4)],
 					}),
 				}),
 			}),
@@ -884,6 +959,9 @@ describe("services-research", () => {
 				objectives: [{ id: "metric-improvement", weight: 1.6 }],
 				stopConditions: [{ id: "budget-exhausted", kind: "budget-exhausted" }],
 				updateBudgets: { nidra: { maxResearchProjectsPerCycle: 3 } },
+				policyFingerprint: "policy-loop-queued-1",
+				primaryObjectiveId: "metric-improvement",
+				primaryStopConditionId: "budget-exhausted",
 				workflowContext: {
 					researchTopic: "optimizer sweep",
 					researchBudgetMs: 300_000,
@@ -897,6 +975,9 @@ describe("services-research", () => {
 					objectives: [{ id: "metric-improvement", weight: 1.6 }],
 					stopConditions: [{ id: "budget-exhausted", kind: "budget-exhausted" }],
 					updateBudgets: { nidra: { maxResearchProjectsPerCycle: 3 } },
+					policyFingerprint: "policy-loop-queued-1",
+					primaryObjectiveId: "metric-improvement",
+					primaryStopConditionId: "budget-exhausted",
 					workflowContext: {
 						researchTopic: "optimizer sweep",
 						researchBudgetMs: 300_000,
@@ -904,15 +985,37 @@ describe("services-research", () => {
 				}));
 			expect(result).toEqual({
 				schedule: expect.objectContaining({
-					loopKey: "loop-queued-1",
-					status: "queued",
-					objectives: [{ id: "metric-improvement", weight: 1.6 }],
-					workflowContext: {
-						researchTopic: "optimizer sweep",
-						researchBudgetMs: 300_000,
-					},
+						loopKey: "loop-queued-1",
+						status: "queued",
+						objectives: [{ id: "metric-improvement", weight: 1.6 }],
+						policyFingerprint: "policy-loop-queued-1",
+						primaryObjectiveId: "metric-improvement",
+						primaryStopConditionId: "budget-exhausted",
+						workflowContext: {
+							researchTopic: "optimizer sweep",
+							researchBudgetMs: 300_000,
+						},
 				}),
 			});
+		});
+
+		it("fails closed on project-less durable schedule lookup when loop keys collide across projects", async () => {
+			await router.handle("research.loops.enqueue", {
+				projectPath: "/repo/project-a",
+				loopKey: "loop-schedule-shared",
+				topic: "optimizer sweep",
+			}, {});
+			await router.handle("research.loops.enqueue", {
+				projectPath: "/repo/project-b",
+				loopKey: "loop-schedule-shared",
+				topic: "optimizer sweep",
+			}, {});
+
+			const result = await router.handle("research.loops.schedule.get", {
+				loopKey: "loop-schedule-shared",
+			}, {});
+
+			expect(result).toEqual({ schedule: null });
 		});
 
 		it("lists queued or expired-lease schedules for daemon dispatch", async () => {
@@ -934,6 +1037,310 @@ describe("services-research", () => {
 			});
 			expect(result).toEqual({
 				schedules: [expect.objectContaining({ loopKey: "loop-dispatch-1", status: "queued" })],
+			});
+		});
+
+		it("claims exactly one runnable schedule for resident daemon dispatch", async () => {
+			await router.handle("research.loops.enqueue", {
+				projectPath: "/repo/project",
+				loopKey: "loop-dispatch-next-1",
+				topic: "optimizer sweep",
+				workflowContext: { researchTopic: "optimizer sweep" },
+			}, {});
+
+			const result = await router.handle("research.loops.dispatch.next", {
+				projectPath: "/repo/project",
+				leaseOwner: "daemon:research-worker:test",
+				leaseTtlMs: 30_000,
+			}, {});
+
+			expect(claimResearchLoopSchedule).toHaveBeenCalledWith(expect.objectContaining({
+				projectPath: "/repo/project",
+				loopKey: "loop-dispatch-next-1",
+				leaseOwner: "daemon:research-worker:test",
+				phase: "resident-dispatch",
+			}));
+			expect(result).toEqual({
+				dispatch: expect.objectContaining({
+					schedule: expect.objectContaining({
+						loopKey: "loop-dispatch-next-1",
+						projectPath: "/repo/project",
+						leaseOwner: "daemon:research-worker:test",
+					}),
+				}),
+			});
+		});
+
+		it("preserves the durable workflow envelope when dispatch retry requeues a leased loop", async () => {
+			await router.handle("research.loops.enqueue", {
+				projectPath: "/repo/project",
+				loopKey: "loop-dispatch-retry-preserve",
+				topic: "optimizer sweep",
+				hypothesis: "adamw beats cosine",
+				sessionId: "sess-1",
+				parentSessionId: "parent-1",
+				sessionLineageKey: "lineage-1",
+				sabhaId: "sabha-1",
+				workflowId: "autoresearch-overnight",
+				currentRound: 2,
+				totalRounds: 6,
+				attemptNumber: 1,
+				objectives: [{ id: "metric-improvement", weight: 1.4 }],
+				stopConditions: [{ id: "budget-exhausted", kind: "budget-exhausted" }],
+				updateBudgets: { nidra: { maxResearchProjectsPerCycle: 3 } },
+				workflowContext: {
+					researchTopic: "optimizer sweep",
+					researchBudgetMs: 300_000,
+				},
+			}, {});
+
+			const key = scheduleKey("/repo/project", "loop-dispatch-retry-preserve");
+			const existing = researchLoopSchedules.get(key);
+			researchLoopSchedules.set(key, {
+				...existing,
+				status: "leased",
+				leaseOwner: "daemon:research-worker:test",
+				leaseExpiresAt: Date.now() + 30_000,
+			});
+
+			await requeueDurableResearchLoopDispatch({
+				projectPath: "/repo/project",
+				loopKey: "loop-dispatch-retry-preserve",
+				leaseOwner: "daemon:research-worker:test",
+				availableAt: 123_456,
+				attemptNumber: 2,
+				phase: "dispatch-retry",
+			});
+
+		expect(researchLoopSchedules.get(key)).toEqual(expect.objectContaining({
+			projectPath: "/repo/project",
+			loopKey: "loop-dispatch-retry-preserve",
+				status: "queued",
+				availableAt: 123_456,
+				attemptNumber: 2,
+				phase: "dispatch-retry",
+				workflowId: "autoresearch-overnight",
+				sessionId: "sess-1",
+				parentSessionId: "parent-1",
+				sessionLineageKey: "lineage-1",
+				sabhaId: "sabha-1",
+				objectives: [{ id: "metric-improvement", weight: 1.4 }],
+				stopConditions: [{ id: "budget-exhausted", kind: "budget-exhausted" }],
+				updateBudgets: { nidra: { maxResearchProjectsPerCycle: 3 } },
+				workflowContext: {
+					researchTopic: "optimizer sweep",
+					researchBudgetMs: 300_000,
+				},
+			}));
+		});
+
+			it("refuses to overwrite a queued row when another worker still owns the durable lease", async () => {
+			await router.handle("research.loops.enqueue", {
+				projectPath: "/repo/project",
+				loopKey: "loop-dispatch-retry-conflict",
+				topic: "optimizer sweep",
+				workflowId: "autoresearch-overnight",
+				workflowContext: { researchTopic: "optimizer sweep" },
+			}, {});
+
+			const key = scheduleKey("/repo/project", "loop-dispatch-retry-conflict");
+			const existing = researchLoopSchedules.get(key);
+			researchLoopSchedules.set(key, {
+				...existing,
+				status: "leased",
+				leaseOwner: "daemon:research-worker:new",
+				leaseExpiresAt: Date.now() + 30_000,
+			});
+
+				const retry = await requeueDurableResearchLoopDispatch({
+					projectPath: "/repo/project",
+					loopKey: "loop-dispatch-retry-conflict",
+					leaseOwner: "daemon:research-worker:old",
+					availableAt: 456_789,
+					attemptNumber: 3,
+					phase: "dispatch-retry",
+				});
+
+				expect(retry.outcome).toBe("lease-lost");
+				expect(researchLoopSchedules.get(key)).toEqual(expect.objectContaining({
+					status: "leased",
+					leaseOwner: "daemon:research-worker:new",
+					leaseExpiresAt: expect.any(Number),
+					availableAt: existing?.availableAt,
+				}));
+			});
+
+			it("refuses to rewind a running row back to dispatch-retry under the same lease", async () => {
+				await router.handle("research.loops.enqueue", {
+					projectPath: "/repo/project",
+					loopKey: "loop-dispatch-retry-phase-advanced",
+					topic: "optimizer sweep",
+					workflowId: "autoresearch-overnight",
+					workflowContext: { researchTopic: "optimizer sweep" },
+				}, {});
+
+				const key = scheduleKey("/repo/project", "loop-dispatch-retry-phase-advanced");
+				const existing = researchLoopSchedules.get(key);
+				researchLoopSchedules.set(key, {
+					...existing,
+					status: "running",
+					phase: "round-2",
+					leaseOwner: "daemon:research-worker:test",
+					leaseExpiresAt: Date.now() + 30_000,
+				});
+
+				const retry = await requeueDurableResearchLoopDispatch({
+					projectPath: "/repo/project",
+					loopKey: "loop-dispatch-retry-phase-advanced",
+					leaseOwner: "daemon:research-worker:test",
+					availableAt: 456_789,
+					attemptNumber: 3,
+					phase: "dispatch-retry",
+				});
+
+				expect(retry.outcome).toBe("phase-advanced");
+				expect(researchLoopSchedules.get(key)).toEqual(expect.objectContaining({
+					status: "running",
+					phase: "round-2",
+					leaseOwner: "daemon:research-worker:test",
+					availableAt: existing?.availableAt,
+				}));
+			});
+
+			it("returns cancelled instead of requeueing when operator cancellation won before dispatch retry", async () => {
+				await router.handle("research.loops.enqueue", {
+					projectPath: "/repo/project",
+					loopKey: "loop-dispatch-retry-cancelled",
+					topic: "optimizer sweep",
+					workflowId: "autoresearch-overnight",
+					workflowContext: { researchTopic: "optimizer sweep" },
+				}, {});
+
+				const key = scheduleKey("/repo/project", "loop-dispatch-retry-cancelled");
+				const existing = researchLoopSchedules.get(key);
+				researchLoopSchedules.set(key, {
+					...existing,
+					status: "cancelling",
+					cancelRequestedAt: Date.now() - 1_000,
+					phase: "resident-dispatch",
+					leaseOwner: "daemon:research-worker:test",
+					leaseExpiresAt: Date.now() + 30_000,
+				});
+
+				const retry = await requeueDurableResearchLoopDispatch({
+					projectPath: "/repo/project",
+					loopKey: "loop-dispatch-retry-cancelled",
+					leaseOwner: "daemon:research-worker:test",
+					availableAt: 456_789,
+					attemptNumber: 3,
+					phase: "dispatch-retry",
+				});
+
+				expect(retry.outcome).toBe("cancelled");
+				expect(researchLoopSchedules.get(key)).toEqual(expect.objectContaining({
+					status: "cancelling",
+					cancelRequestedAt: expect.any(Number),
+					phase: "resident-dispatch",
+					leaseOwner: "daemon:research-worker:test",
+				}));
+			});
+
+			it("reports durable dispatch completion loss when the worker lease already moved", async () => {
+			await router.handle("research.loops.enqueue", {
+				projectPath: "/repo/project",
+				loopKey: "loop-dispatch-fail-conflict",
+				topic: "optimizer sweep",
+				workflowId: "autoresearch-overnight",
+				workflowContext: { researchTopic: "optimizer sweep" },
+			}, {});
+
+			const key = scheduleKey("/repo/project", "loop-dispatch-fail-conflict");
+			const existing = researchLoopSchedules.get(key);
+			researchLoopSchedules.set(key, {
+				...existing,
+				status: "leased",
+				leaseOwner: "daemon:research-worker:new",
+				leaseExpiresAt: Date.now() + 30_000,
+			});
+
+			const completed = await failDurableResearchLoopDispatch({
+				projectPath: "/repo/project",
+				loopKey: "loop-dispatch-fail-conflict",
+				leaseOwner: "daemon:research-worker:old",
+				stopReason: "dispatch-failed",
+			});
+
+			expect(completed).toBe(false);
+			expect(researchLoopSchedules.get(key)).toEqual(expect.objectContaining({
+				status: "leased",
+				leaseOwner: "daemon:research-worker:new",
+				stopReason: null,
+			}));
+		});
+
+			it("reclaims an expired leased schedule for resident daemon dispatch", async () => {
+			await router.handle("research.loops.enqueue", {
+				projectPath: "/repo/project",
+				loopKey: "loop-dispatch-expired-lease",
+				topic: "optimizer sweep",
+				workflowContext: { researchTopic: "optimizer sweep" },
+			}, {});
+			const key = scheduleKey("/repo/project", "loop-dispatch-expired-lease");
+			const existing = researchLoopSchedules.get(key);
+			researchLoopSchedules.set(key, {
+				...existing,
+				status: "leased",
+				leaseOwner: "daemon:research-worker:old",
+				leaseExpiresAt: Date.now() - 1_000,
+			});
+
+			const result = await router.handle("research.loops.dispatch.next", {
+				projectPath: "/repo/project",
+				leaseOwner: "daemon:research-worker:new",
+				leaseTtlMs: 30_000,
+			}, {});
+
+			expect(result).toEqual({
+				dispatch: expect.objectContaining({
+					schedule: expect.objectContaining({
+						loopKey: "loop-dispatch-expired-lease",
+						leaseOwner: "daemon:research-worker:new",
+					}),
+				}),
+			});
+		});
+
+		it("reclaims an expired cancelling schedule for resident daemon dispatch", async () => {
+			await router.handle("research.loops.enqueue", {
+				projectPath: "/repo/project",
+				loopKey: "loop-dispatch-expired-cancel",
+				topic: "optimizer sweep",
+				workflowContext: { researchTopic: "optimizer sweep" },
+			}, {});
+			const key = scheduleKey("/repo/project", "loop-dispatch-expired-cancel");
+			const existing = researchLoopSchedules.get(key);
+			researchLoopSchedules.set(key, {
+				...existing,
+				status: "cancelling",
+				cancelRequestedAt: Date.now() - 2_000,
+				leaseOwner: "daemon:research-worker:old",
+				leaseExpiresAt: Date.now() - 1_000,
+			});
+
+			const result = await router.handle("research.loops.dispatch.next", {
+				projectPath: "/repo/project",
+				leaseOwner: "daemon:research-worker:new",
+				leaseTtlMs: 30_000,
+			}, {});
+
+			expect(result).toEqual({
+				dispatch: expect.objectContaining({
+					schedule: expect.objectContaining({
+						loopKey: "loop-dispatch-expired-cancel",
+						status: "cancelling",
+						leaseOwner: "daemon:research-worker:new",
+					}),
+				}),
 			});
 		});
 
@@ -1031,6 +1438,8 @@ describe("services-research", () => {
 					loopKey: "loop-control-1",
 					status: "cancelled",
 					stopReason: "cancelled",
+					leaseOwner: null,
+					leaseExpiresAt: null,
 					phase: "complete",
 					finishedAt: expect.any(Number),
 				}),
@@ -1051,11 +1460,53 @@ describe("services-research", () => {
 					phase: "complete",
 					currentRound: 2,
 					attemptNumber: 2,
-				}),
+					}),
 				});
 			});
 
-		it("fails closed when a heartbeat arrives for a missing loop", async () => {
+			it("rejects completion after another worker reclaimed the durable lease", async () => {
+				await router.handle("research.loops.start", {
+					loopKey: "loop-lease-mismatch",
+					projectPath: "/repo/project",
+					topic: "optimizer sweep",
+					phase: "run",
+					leaseOwner: "worker-a",
+				}, {});
+
+				claimResearchLoopSchedule({
+					projectPath: "/repo/project",
+					loopKey: "loop-lease-mismatch",
+					leaseOwner: "worker-b",
+					leaseTtlMs: 90_000,
+					now: Date.now() + 120_000,
+					phase: "resident-dispatch",
+				});
+
+				await expect(router.handle("research.loops.complete", {
+					loopKey: "loop-lease-mismatch",
+					projectPath: "/repo/project",
+					leaseOwner: "worker-a",
+					stopReason: "max-rounds",
+				}, {})).rejects.toThrow("lost its durable worker lease before completion");
+			});
+
+			it("rejects ownerless completion when the active durable lease belongs to a different worker", async () => {
+				await router.handle("research.loops.start", {
+					loopKey: "loop-missing-owner",
+					projectPath: "/repo/project",
+					topic: "optimizer sweep",
+					phase: "run",
+					leaseOwner: "worker-a",
+				}, {});
+
+				await expect(router.handle("research.loops.complete", {
+					loopKey: "loop-missing-owner",
+					projectPath: "/repo/project",
+					stopReason: "max-rounds",
+				}, {})).rejects.toThrow("lost its durable worker lease before completion");
+			});
+
+			it("fails closed when a heartbeat arrives for a missing loop", async () => {
 			await expect(router.handle("research.loops.heartbeat", {
 				loopKey: "loop-missing-1",
 				projectPath: "/repo/project",
@@ -1146,6 +1597,170 @@ describe("services-research", () => {
 			}, {})).rejects.toThrow("already active");
 		});
 
+	it("keeps live control state isolated across projects that reuse the same loop key", async () => {
+		await router.handle("research.loops.start", {
+			loopKey: "loop-shared-1",
+			projectPath: "/repo/project-a",
+			phase: "run",
+			currentRound: 1,
+		}, {});
+		await router.handle("research.loops.start", {
+			loopKey: "loop-shared-1",
+			projectPath: "/repo/project-b",
+			phase: "run",
+			currentRound: 4,
+		}, {});
+
+		await router.handle("research.loops.cancel", {
+			loopKey: "loop-shared-1",
+			projectPath: "/repo/project-a",
+			reason: "operator-stop",
+		}, {});
+
+		const gotA = await router.handle("research.loops.get", {
+			loopKey: "loop-shared-1",
+			projectPath: "/repo/project-a",
+		}, {});
+		const gotB = await router.handle("research.loops.get", {
+			loopKey: "loop-shared-1",
+			projectPath: "/repo/project-b",
+		}, {});
+		const active = await router.handle("research.loops.active", {}, {});
+
+		expect(gotA).toEqual(expect.objectContaining({
+			state: expect.objectContaining({
+				loopKey: "loop-shared-1",
+				projectPath: "/repo/project-a",
+				status: "cancelling",
+				currentRound: 1,
+			}),
+		}));
+		expect(gotB).toEqual(expect.objectContaining({
+			state: expect.objectContaining({
+				loopKey: "loop-shared-1",
+				projectPath: "/repo/project-b",
+				status: "running",
+				currentRound: 4,
+			}),
+		}));
+		expect(active).toEqual({
+			states: expect.arrayContaining([
+				expect.objectContaining({
+					loopKey: "loop-shared-1",
+					projectPath: "/repo/project-a",
+					status: "cancelling",
+				}),
+				expect.objectContaining({
+					loopKey: "loop-shared-1",
+					projectPath: "/repo/project-b",
+					status: "running",
+				}),
+			]),
+		});
+	});
+
+	it("fails closed on project-less loop inspection when live loop keys collide across projects", async () => {
+		await router.handle("research.loops.start", {
+			loopKey: "loop-shared-inspect",
+			projectPath: "/repo/project-a",
+			phase: "run",
+		}, {});
+		await router.handle("research.loops.start", {
+			loopKey: "loop-shared-inspect",
+			projectPath: "/repo/project-b",
+			phase: "run",
+		}, {});
+		listResearchLoopCheckpoints.mockImplementation(() => [
+			{
+				id: "checkpoint-shared-inspect",
+				projectPath: "/repo/project-c",
+				loopKey: "loop-shared-inspect",
+				phase: "run",
+				status: "active",
+				createdAt: 1_000,
+				updatedAt: 2_000,
+				checkpoint: { version: 1, phase: "run" },
+			},
+		]);
+
+		await expect(router.handle("research.loops.get", {
+			loopKey: "loop-shared-inspect",
+		}, {})).rejects.toThrow("requires projectPath for safe inspect");
+	});
+
+	it("fails closed on project-less loop resume when live loop keys collide across projects", async () => {
+		await router.handle("research.loops.start", {
+			loopKey: "loop-shared-resume",
+			projectPath: "/repo/project-a",
+			phase: "run",
+		}, {});
+		await router.handle("research.loops.start", {
+			loopKey: "loop-shared-resume",
+			projectPath: "/repo/project-b",
+			phase: "run",
+		}, {});
+		listResearchLoopCheckpoints.mockImplementation(() => [
+			{
+				id: "checkpoint-shared-resume",
+				projectPath: "/repo/project-c",
+				loopKey: "loop-shared-resume",
+				phase: "closure-record",
+				status: "active",
+				createdAt: 1_000,
+				updatedAt: 2_000,
+				checkpoint: { version: 1, phase: "closure-record" },
+			},
+		]);
+
+		await expect(router.handle("research.loops.resume", {
+			loopKey: "loop-shared-resume",
+			phase: "resume",
+		}, {})).rejects.toThrow("requires projectPath for safe resume");
+	});
+
+	it("preserves project identity when completion relies on durable state only", async () => {
+		await router.handle("research.loops.start", {
+			loopKey: "loop-complete-durable-1",
+			projectPath: "/repo/project-a",
+			phase: "run",
+		}, {});
+		clearResearchLoopStates();
+
+		const completed = await router.handle("research.loops.complete", {
+			loopKey: "loop-complete-durable-1",
+			projectPath: "/repo/project-a",
+			stopReason: "max-rounds",
+		}, {});
+
+		expect(completed).toEqual({
+			state: expect.objectContaining({
+				loopKey: "loop-complete-durable-1",
+				projectPath: "/repo/project-a",
+				status: "completed",
+				stopReason: "max-rounds",
+			}),
+		});
+	});
+
+	it("fails closed when durable-only completion omits projectPath for an ambiguous loop key", async () => {
+		await router.handle("research.loops.start", {
+			loopKey: "loop-complete-ambiguous",
+			projectPath: "/repo/project-a",
+			phase: "run",
+		}, {});
+		await router.handle("research.loops.start", {
+			loopKey: "loop-complete-ambiguous",
+			projectPath: "/repo/project-b",
+			phase: "run",
+		}, {});
+		clearResearchLoopStates();
+
+		await expect(router.handle("research.loops.complete", {
+			loopKey: "loop-complete-ambiguous",
+			stopReason: "max-rounds",
+		}, {})).rejects.toThrow("requires projectPath for safe completion");
+	});
+
 	it("rejects resuming a loop whose heartbeat is still fresh", async () => {
 		const now = vi.spyOn(Date, "now");
 		now.mockReturnValueOnce(1_000);
@@ -1163,9 +1778,9 @@ describe("services-research", () => {
 		now.mockRestore();
 	});
 
-	it("allows resuming a loop after its heartbeat is stale", async () => {
-		const now = vi.spyOn(Date, "now");
-		now.mockReturnValueOnce(1_000);
+		it("allows resuming a loop after its heartbeat is stale", async () => {
+			const now = vi.spyOn(Date, "now");
+			now.mockReturnValueOnce(1_000);
 		await router.handle("research.loops.start", {
 			loopKey: "loop-resume-stale-1",
 			projectPath: "/repo/project",
@@ -1183,7 +1798,86 @@ describe("services-research", () => {
 				status: "running",
 				phase: "resume",
 			}),
+			});
+			now.mockRestore();
 		});
+
+		it("surfaces the durable worker lease in live loop control state", async () => {
+			await router.handle("research.loops.start", {
+				loopKey: "loop-lease-surface",
+				projectPath: "/repo/project",
+				phase: "run",
+				leaseOwner: "worker-a",
+				leaseTtlMs: 30_000,
+			}, {});
+
+			const got = await router.handle("research.loops.get", {
+				loopKey: "loop-lease-surface",
+				projectPath: "/repo/project",
+			}, {});
+
+			expect(got).toEqual({
+				state: expect.objectContaining({
+					loopKey: "loop-lease-surface",
+					projectPath: "/repo/project",
+					status: "running",
+					leaseOwner: "worker-a",
+					leaseExpiresAt: expect.any(Number),
+				}),
+				checkpointOnly: false,
+				resumeContext: expect.stringContaining("Durable research resume context:"),
+				resumePlan: expect.objectContaining({
+					loopKey: "loop-lease-surface",
+					status: "running",
+				}),
+			});
+		});
+
+		it("keeps stale live state non-resumable while another durable worker lease is still active", async () => {
+			const now = vi.spyOn(Date, "now");
+			now.mockReturnValueOnce(1_000);
+		await router.handle("research.loops.start", {
+			loopKey: "loop-resume-durable-lease",
+			projectPath: "/repo/project",
+			phase: "run",
+			leaseOwner: "worker-a",
+		}, {});
+		now.mockReturnValueOnce(7_001);
+		const active = await router.handle("research.loops.active", {
+			projectPath: "/repo/project",
+		}, {});
+
+		expect(active).toEqual({
+			states: expect.arrayContaining([
+					expect.objectContaining({
+						loopKey: "loop-resume-durable-lease",
+						projectPath: "/repo/project",
+						status: "running",
+						leaseOwner: "worker-a",
+						leaseExpiresAt: expect.any(Number),
+						resumable: false,
+					}),
+				]),
+		});
+		now.mockRestore();
+	});
+
+	it("rejects resume while another durable worker lease is still active", async () => {
+		const now = vi.spyOn(Date, "now");
+		now.mockReturnValueOnce(1_000);
+		await router.handle("research.loops.start", {
+			loopKey: "loop-resume-active-lease",
+			projectPath: "/repo/project",
+			phase: "run",
+			leaseOwner: "worker-a",
+		}, {});
+		now.mockReturnValueOnce(7_001);
+		await expect(router.handle("research.loops.resume", {
+			loopKey: "loop-resume-active-lease",
+			projectPath: "/repo/project",
+			phase: "resume",
+			leaseOwner: "worker-b",
+		}, {})).rejects.toThrow("still active");
 		now.mockRestore();
 	});
 
@@ -1368,6 +2062,87 @@ describe("services-research", () => {
 			});
 		});
 
+		it("keeps checkpoint-only state visible when another project reuses the same loop key", async () => {
+			await router.handle("research.loops.start", {
+				loopKey: "loop-checkpoint-shared",
+				projectPath: "/repo/project-a",
+				phase: "run",
+			}, {});
+			listResearchLoopCheckpoints.mockImplementation(() => [
+				{
+					id: "checkpoint-shared-1",
+					projectPath: "/repo/project-b",
+					loopKey: "loop-checkpoint-shared",
+					topic: "optimizer sweep",
+					hypothesis: "adamw beats cosine",
+					phase: "run",
+					status: "active",
+					currentRound: 2,
+					nextRoundNumber: 3,
+					totalRounds: 6,
+					createdAt: 1_000,
+					updatedAt: 2_000,
+					checkpoint: {
+						version: 1,
+						phase: "run",
+						progress: {
+							bestMetric: 0.991,
+							bestRoundNumber: 2,
+							noImprovementStreak: 0,
+						},
+					},
+				},
+			]);
+			getResearchLoopCheckpoint.mockImplementation((projectPath: string, loopKey: string) => {
+				if (projectPath === "/repo/project-a" && loopKey === "loop-checkpoint-shared") {
+					return null;
+				}
+				if (projectPath === "/repo/project-b" && loopKey === "loop-checkpoint-shared") {
+					return {
+						id: "checkpoint-shared-1",
+						projectPath,
+						loopKey,
+						phase: "run",
+						status: "active",
+						currentRound: 2,
+						nextRoundNumber: 3,
+						totalRounds: 6,
+						createdAt: 1_000,
+						updatedAt: 2_000,
+						checkpoint: {
+							version: 1,
+							phase: "run",
+							progress: {
+								bestMetric: 0.991,
+								bestRoundNumber: 2,
+								noImprovementStreak: 0,
+							},
+						},
+					};
+				}
+				return null;
+			});
+
+			const active = await router.handle("research.loops.active", {}, {});
+
+			expect(active).toEqual({
+				states: expect.arrayContaining([
+					expect.objectContaining({
+						loopKey: "loop-checkpoint-shared",
+						projectPath: "/repo/project-a",
+						checkpointOnly: false,
+						status: "running",
+					}),
+					expect.objectContaining({
+						loopKey: "loop-checkpoint-shared",
+						projectPath: "/repo/project-b",
+						checkpointOnly: true,
+						status: "failed",
+					}),
+				]),
+			});
+		});
+
 		it("preserves complete-pending checkpoint-only loops as resumable completion work", async () => {
 			listResearchLoopCheckpoints.mockImplementation(() => [
 				{
@@ -1399,9 +2174,9 @@ describe("services-research", () => {
 				loopKey: "loop-complete-pending",
 			}, {});
 
-			expect(got).toEqual({
-				state: expect.objectContaining({
-					loopKey: "loop-complete-pending",
+		expect(got).toEqual({
+			state: expect.objectContaining({
+				loopKey: "loop-complete-pending",
 					projectPath: "/repo/project",
 					status: "running",
 					stopReason: "max-rounds",
@@ -1415,6 +2190,50 @@ describe("services-research", () => {
 					status: "running",
 					phase: "complete-pending",
 					nextAction: "complete-pending",
+				}),
+			});
+		});
+
+		it("allows immediate resume of checkpoint-only complete-pending work", async () => {
+			clearResearchLoopStates();
+			getResearchLoopCheckpoint.mockImplementation(() => ({
+				id: "checkpoint-complete-pending-resume",
+				projectPath: "/repo/project",
+				loopKey: "loop-complete-pending-resume",
+				topic: "optimizer sweep",
+				hypothesis: "adamw beats cosine",
+				phase: "complete-pending",
+				status: "active",
+				currentRound: 4,
+				nextRoundNumber: 5,
+				totalRounds: 6,
+				createdAt: 1_000,
+				updatedAt: 2_000,
+				checkpoint: {
+					version: 1,
+					phase: "complete-pending",
+					terminalSummary: {
+						loopKey: "loop-complete-pending-resume",
+						stopReason: "max-rounds",
+					},
+				},
+			}));
+
+			const resumed = await router.handle("research.loops.resume", {
+				loopKey: "loop-complete-pending-resume",
+				projectPath: "/repo/project",
+				phase: "attach",
+				leaseOwner: "worker-attach",
+			}, {});
+
+			expect(resumed).toEqual({
+				state: expect.objectContaining({
+					loopKey: "loop-complete-pending-resume",
+					projectPath: "/repo/project",
+					status: "running",
+					phase: "attach",
+					stopReason: null,
+					leaseOwner: "worker-attach",
 				}),
 			});
 		});
@@ -1467,6 +2286,45 @@ describe("services-research", () => {
 				stopReason: "cancelled",
 				cancelReason: "operator-stop",
 				cancelRequestedAt: expect.any(Number),
+			}),
+		});
+	});
+
+	it("preserves durable cancellation truth when completion happens after live state is lost", async () => {
+		await router.handle("research.loops.start", {
+			loopKey: "loop-cancel-durable-only",
+			projectPath: "/repo/project",
+			totalRounds: 5,
+			currentRound: 4,
+			attemptNumber: 2,
+			phase: "finalize",
+			leaseOwner: "worker-a",
+		}, {});
+		await router.handle("research.loops.cancel", {
+			loopKey: "loop-cancel-durable-only",
+			reason: "operator-stop",
+			requestedBy: "tester",
+		}, {});
+		clearResearchLoopStates();
+
+		const completed = await router.handle("research.loops.complete", {
+			loopKey: "loop-cancel-durable-only",
+			projectPath: "/repo/project",
+			leaseOwner: "worker-a",
+			stopReason: "max-rounds",
+		}, {});
+
+		expect(completed).toEqual({
+			state: expect.objectContaining({
+				loopKey: "loop-cancel-durable-only",
+				projectPath: "/repo/project",
+				status: "cancelled",
+				stopReason: "cancelled",
+				cancelReason: "operator-stop",
+				requestedBy: "tester",
+				cancelRequestedAt: expect.any(Number),
+				currentRound: 4,
+				attemptNumber: 2,
 			}),
 		});
 	});

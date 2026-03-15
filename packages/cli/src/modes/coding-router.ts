@@ -8,10 +8,18 @@
  * @module
  */
 
+import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { platform } from "node:os";
 import { TakumiBridge } from "./takumi-bridge.js";
-import type { TakumiContext, TakumiResponse } from "./takumi-bridge-types.js";
+import type {
+	TakumiArtifact,
+	TakumiContext,
+	TakumiExecutionObject,
+	TakumiEvent,
+	TakumiFinalReport,
+	TakumiNormalizedResponse,
+} from "./takumi-bridge-types.js";
 import {
 	inferCodingRouteClass,
 	isTakumiCompatibleEngineLane,
@@ -44,6 +52,24 @@ export interface CodingRouteResult {
 	output: string;
 	/** Process exit code (0 = success). */
 	exitCode: number;
+	/**
+	 * Canonical execution object.
+	 *
+	 * I keep this required on the public router surface because every success,
+	 * fallback, and fail-closed path is normalized through one compatibility
+	 * contract before the result escapes this module.
+	 */
+	execution: TakumiExecutionObject;
+	/** Canonical engine-owned task identity. */
+	taskId: string;
+	/** Canonical engine-owned lane identity. */
+	laneId: string;
+	/** Typed final report synthesized or preserved by the router boundary. */
+	finalReport: TakumiFinalReport;
+	/** Bridge-synthesized or executor-native artifacts for the routed result. */
+	artifacts: TakumiArtifact[];
+	/** Full bridge result for compatibility consumers that still need it. */
+	bridgeResult?: TakumiNormalizedResponse;
 }
 
 /** Options for {@link routeCodingTask}. */
@@ -52,10 +78,18 @@ export interface RouteCodingTaskOptions {
 	task: string;
 	/** Working directory for the CLI process. */
 	cwd: string;
+	/** Canonical execution object when the caller already owns one. */
+	execution?: TakumiExecutionObject;
+	/** Canonical engine-owned task identity when the caller already has one. */
+	taskId?: string;
+	/** Canonical engine-owned lane identity when the caller already has one. */
+	laneId?: string;
 	/** Optional abort signal to cancel a running task. */
 	signal?: AbortSignal;
 	/** Streaming callback for stdout/stderr chunks. */
 	onOutput?: (chunk: string) => void;
+	/** Structured streaming callback with stable task/lane identity. */
+	onProgress?: (event: BridgeRouteProgressEvent) => void;
 }
 
 /** Options for bridge-first routing via {@link routeViaBridge}. */
@@ -64,6 +98,12 @@ export interface BridgeRouteOptions {
 	task: string;
 	/** Working directory. */
 	cwd: string;
+	/** Canonical execution object when the caller already owns one. */
+	execution?: TakumiExecutionObject;
+	/** Canonical engine-owned task identity when the caller already has one. */
+	taskId?: string;
+	/** Canonical engine-owned lane identity when the caller already has one. */
+	laneId?: string;
 	/** Optional context to inject into Takumi. */
 	context?: TakumiContext;
 	/** Force fresh inspection instead of predictive/cached context. */
@@ -80,9 +120,29 @@ export interface BridgeRouteOptions {
 	capability?: string;
 	/** Streaming callback for stdout/stderr chunks. */
 	onOutput?: (chunk: string) => void;
+	/**
+	 * Structured streaming callback that preserves canonical execution identity.
+	 *
+	 * I keep `onOutput` for compatibility callers that still want plain text
+	 * chunks, but this is the public seam higher layers should use when they need
+	 * stable task/lane correlation during execution.
+	 */
+	onProgress?: (event: BridgeRouteProgressEvent) => void;
 	/** Optional abort signal. */
 	signal?: AbortSignal;
 }
+
+/** Structured public progress event for bridge-backed coding routes. */
+export interface BridgeRouteProgressEvent extends TakumiEvent {
+	/** Canonical execution identity for the streamed update. */
+	execution: TakumiExecutionObject;
+}
+
+export type CodingExecutionIdentity = {
+	execution: TakumiExecutionObject;
+	taskId: string;
+	laneId: string;
+};
 
 // ─── CLI Definitions (priority order) ────────────────────────────────────
 
@@ -190,36 +250,59 @@ export function resetDetectionCache(): void {
  */
 export async function routeViaBridge(
 	options: BridgeRouteOptions,
-): Promise<CodingRouteResult & { bridgeResult?: TakumiResponse }> {
+): Promise<CodingRouteResult> {
+	const identity = resolveCodingExecutionIdentity(options);
 	const requestedRouteClass = resolveRequestedEngineRouteClass(options);
 	const engineRouteRequested = requiresEngineRoute(options, requestedRouteClass);
 	const resolvedEngineRoute = await resolveEngineRoutes(options);
 	const engineRoute = resolvedEngineRoute.route;
+	if (engineRouteRequested && resolvedEngineRoute.error) {
+		return attachCodingRouteCompatibility(identity, {
+			cli: "engine-route",
+			output: resolvedEngineRoute.error,
+			exitCode: 1,
+		}, {
+			usedRoute: engineRoute ? buildResolvedEngineUsedRoute(engineRoute) : undefined,
+			failureKind: "route-incompatible",
+		});
+	}
 	if (engineRouteRequested && !engineRoute) {
-		return {
+		return attachCodingRouteCompatibility(identity, {
 			cli: "engine-route",
 			output: resolvedEngineRoute.error
 				?? "Engine route resolution was requested but could not be completed.",
 			exitCode: 1,
-		};
+		}, {
+			failureKind: "route-incompatible",
+		});
 	}
 	if (engineRoute && !isTakumiCompatibleEngineLane(engineRoute)) {
-		if (engineRoute.selectedCapabilityId === "tool.coding_agent") {
-			return routeCodingTask({
-				task: options.task,
-				cwd: options.cwd,
-				signal: options.signal,
-				onOutput: options.onOutput,
+			if (engineRoute.selectedCapabilityId === "tool.coding_agent") {
+					const localResult = await routeCodingTask({
+						task: options.task,
+						cwd: options.cwd,
+						taskId: identity.taskId,
+						laneId: identity.laneId,
+						signal: options.signal,
+						onOutput: options.onOutput,
+						onProgress: options.onProgress,
+					});
+				return attachCodingRouteCompatibility(identity, localResult, {
+					usedRoute: buildResolvedEngineUsedRoute(engineRoute),
+					failureKind: localResult.exitCode === 0 ? null : "runtime-failure",
+				});
+			}
+			const routeLabel = engineRoute.routeClass ?? engineRoute.capability ?? "coding";
+			const selected = engineRoute.selectedCapabilityId ?? "none";
+			return attachCodingRouteCompatibility(identity, {
+				cli: "engine-route",
+				output: `Engine route '${routeLabel}' resolved to '${selected}'; the Takumi bridge will not override engine policy.`,
+				exitCode: 1,
+			}, {
+				usedRoute: buildResolvedEngineUsedRoute(engineRoute),
+				failureKind: "route-incompatible",
 			});
 		}
-		const routeLabel = engineRoute.routeClass ?? engineRoute.capability ?? "coding";
-		const selected = engineRoute.selectedCapabilityId ?? "none";
-		return {
-			cli: "engine-route",
-			output: `Engine route '${routeLabel}' resolved to '${selected}'; the Takumi bridge will not override engine policy.`,
-			exitCode: 1,
-		};
-	}
 
 	const bridge = new TakumiBridge({ cwd: options.cwd });
 	const context = buildTakumiContext(
@@ -234,18 +317,27 @@ export async function routeViaBridge(
 		if (status.mode === "unavailable") {
 			if (engineRouteRequested && engineRoute && engineRoute.selectedCapabilityId !== "tool.coding_agent") {
 				const routeLabel = engineRoute.routeClass ?? engineRoute.capability ?? "coding";
-				return {
-					cli: "engine-route",
-					output: `Engine route '${routeLabel}' selected '${engineRoute.selectedCapabilityId ?? "none"}', but the Takumi bridge is unavailable.`,
-					exitCode: 1,
-				};
-			}
+				return attachCodingRouteCompatibility(identity, {
+						cli: "engine-route",
+						output: `Engine route '${routeLabel}' selected '${engineRoute.selectedCapabilityId ?? "none"}', but the Takumi bridge is unavailable.`,
+						exitCode: 1,
+					}, {
+						usedRoute: buildResolvedEngineUsedRoute(engineRoute),
+						failureKind: "executor-unavailable",
+					});
+				}
 			// Fall back to generic CLI routing
-			return routeCodingTask({
-				task: options.task,
-				cwd: options.cwd,
-				signal: options.signal,
-				onOutput: options.onOutput,
+				const localResult = await routeCodingTask({
+					task: options.task,
+					cwd: options.cwd,
+					taskId: identity.taskId,
+					laneId: identity.laneId,
+					signal: options.signal,
+					onOutput: options.onOutput,
+					onProgress: options.onProgress,
+				});
+			return attachCodingRouteCompatibility(identity, localResult, {
+				failureKind: localResult.exitCode === 0 ? null : "runtime-failure",
 			});
 		}
 
@@ -253,22 +345,171 @@ export async function routeViaBridge(
 			bridge.injectContext(context);
 		}
 
-		const result = await bridge.execute(
-			{ type: "task", task: options.task, context },
-			(event) => {
-				if (options.onOutput) options.onOutput(event.data);
-			},
-		);
-
-			return {
+			const result = await bridge.execute(
+			{
+				type: "task",
+				execution: identity.execution,
+				taskId: identity.taskId,
+				laneId: identity.laneId,
+				task: options.task,
+				context,
+				},
+				(event) => {
+					emitBridgeRouteProgress(options, identity, event);
+				},
+			);
+			const compatibilityResult = attachCodingRouteCompatibility(identity, {
 				cli: `takumi (${result.modeUsed ?? status.mode})`,
 				output: result.output,
 				exitCode: result.exitCode,
-				bridgeResult: result,
+			}, {
+				usedRoute: result.finalReport?.usedRoute,
+				failureKind: result.finalReport?.failureKind ?? null,
+			});
+			const normalizedBridgeResult: TakumiNormalizedResponse = {
+				...result,
+				execution:
+					result.execution
+					?? result.finalReport?.execution
+					?? (
+						result.taskId && result.laneId
+							? {
+								task: { id: result.taskId },
+								lane: { id: result.laneId },
+							}
+							: compatibilityResult.execution
+					),
+				taskId: result.taskId ?? compatibilityResult.taskId,
+				laneId: result.laneId ?? compatibilityResult.laneId,
+				finalReport: result.finalReport ?? compatibilityResult.finalReport,
+				artifacts: result.artifacts ?? compatibilityResult.artifacts,
 			};
-	} finally {
+
+			// I keep this merge so older bridge shims and test doubles cannot weaken
+			// the stronger public router contract even if they omit compatibility
+			// identity/report fields internally.
+			return {
+				...compatibilityResult,
+				execution: normalizedBridgeResult.execution,
+				taskId: normalizedBridgeResult.taskId,
+				laneId: normalizedBridgeResult.laneId,
+				finalReport: normalizedBridgeResult.finalReport,
+				artifacts: normalizedBridgeResult.artifacts,
+				bridgeResult: normalizedBridgeResult,
+			};
+		} finally {
 		bridge.dispose();
 	}
+}
+
+/**
+ * Mint one stable compatibility identity for the routed task.
+ *
+ * I do this at the router boundary so fail-closed and local-lane paths keep
+ * the same task/lane correlation instead of letting nested bridge code invent
+ * fresh ids later.
+ */
+function resolveCodingExecutionIdentity(
+	options: Pick<BridgeRouteOptions | RouteCodingTaskOptions, "execution" | "taskId" | "laneId">,
+): CodingExecutionIdentity {
+	const execution = {
+		task: {
+			id: options.execution?.task.id ?? options.taskId ?? `task-${crypto.randomUUID()}`,
+		},
+		lane: {
+			id: options.execution?.lane.id ?? options.laneId ?? `lane-${crypto.randomUUID()}`,
+		},
+	};
+	return {
+		execution,
+		taskId: execution.task.id,
+		laneId: execution.lane.id,
+	};
+}
+
+/**
+ * Attach compatibility execution identity and a typed final report to any routed
+ * coding result, including plain CLI and fail-closed paths.
+ */
+export function attachCodingRouteCompatibility(
+	identity: CodingExecutionIdentity,
+	result: Pick<CodingRouteResult, "cli" | "output" | "exitCode">,
+	options?: {
+		usedRoute?: TakumiFinalReport["usedRoute"];
+		failureKind?: TakumiFinalReport["failureKind"];
+	},
+): CodingRouteResult {
+	const summary = summarizeCodingRouteOutput(result.output, result.exitCode);
+	const execution = {
+		task: { id: identity.taskId },
+		lane: { id: identity.laneId },
+	};
+	const finalReport: TakumiFinalReport = {
+		execution,
+		taskId: identity.taskId,
+		laneId: identity.laneId,
+		status: result.exitCode === 0
+			? "completed"
+			: options?.failureKind === "cancelled"
+				? "cancelled"
+				: "failed",
+		summary,
+		usedRoute: options?.usedRoute,
+		toolCalls: [],
+		validation: undefined,
+		artifacts: [],
+		error: result.exitCode === 0 ? null : summary,
+		failureKind: result.exitCode === 0 ? null : options?.failureKind ?? "runtime-failure",
+	};
+	return {
+		...result,
+		execution: identity.execution,
+		taskId: identity.taskId,
+		laneId: identity.laneId,
+		finalReport,
+		artifacts: [],
+		};
+}
+
+function emitBridgeRouteProgress(
+	options: Pick<BridgeRouteOptions, "onOutput" | "onProgress">,
+	identity: CodingExecutionIdentity,
+	event: TakumiEvent,
+): void {
+	options.onOutput?.(event.data);
+	options.onProgress?.({
+		...event,
+		execution:
+			event.taskId === identity.taskId && event.laneId === identity.laneId
+				? event.execution
+				: {
+					task: { id: event.taskId },
+					lane: { id: event.laneId },
+				},
+	});
+}
+
+function buildResolvedEngineUsedRoute(
+	route: ResolvedEngineBridgeRoute,
+): TakumiFinalReport["usedRoute"] {
+	return {
+		routeClass: route.routeClass,
+		capability: route.capability ?? null,
+		selectedCapabilityId: route.selectedCapabilityId ?? null,
+		selectedProviderId: route.executionBinding?.selectedProviderId ?? null,
+		selectedModelId: route.executionBinding?.selectedModelId ?? null,
+	};
+}
+
+function summarizeCodingRouteOutput(output: string, exitCode: number): string {
+	const summaryLine = output
+		.split("\n")
+		.map((line) => line.trim())
+		.find((line) => line.length > 0);
+	if (summaryLine) return summaryLine;
+	return exitCode === 0
+		? "Coding route completed without textual output."
+		: "Coding route failed without textual output.";
 }
 
 function buildTakumiContext(
@@ -310,7 +551,8 @@ function buildTakumiContext(
 export async function routeCodingTask(
 	options: RouteCodingTaskOptions,
 ): Promise<CodingRouteResult> {
-	const { task, cwd, signal, onOutput } = options;
+	const { task, cwd, signal, onOutput, onProgress } = options;
+	const identity = resolveCodingExecutionIdentity(options);
 
 	const available = await detectCodingClis();
 
@@ -321,13 +563,20 @@ export async function routeCodingTask(
 			"  - claude: https://docs.anthropic.com/en/docs/claude-code\n" +
 			"  - codex: https://github.com/openai/codex\n" +
 			"  - aider: https://aider.chat\n";
-		return { cli: "none", output: msg, exitCode: 1 };
+		return attachCodingRouteCompatibility(identity, {
+			cli: "none",
+			output: msg,
+			exitCode: 1,
+		}, { failureKind: "executor-unavailable" });
 	}
 
 	const cli = available[0];
 	const args = cli.buildArgs(task, cwd);
 
-	return spawnCli(cli.command, args, cwd, signal, onOutput);
+	const result = await spawnCli(cli.command, args, cwd, identity, signal, onOutput, onProgress);
+	return attachCodingRouteCompatibility(identity, result, {
+		failureKind: result.exitCode === 0 ? null : "runtime-failure",
+	});
 }
 
 /**
@@ -340,9 +589,11 @@ function spawnCli(
 	command: string,
 	args: string[],
 	cwd: string,
+	identity: CodingExecutionIdentity,
 	signal?: AbortSignal,
 	onOutput?: (chunk: string) => void,
-): Promise<CodingRouteResult> {
+	onProgress?: (event: BridgeRouteProgressEvent) => void,
+): Promise<Pick<CodingRouteResult, "cli" | "output" | "exitCode">> {
 	return new Promise((resolve) => {
 		const chunks: string[] = [];
 
@@ -355,7 +606,13 @@ function spawnCli(
 		const collect = (chunk: Buffer) => {
 			const text = chunk.toString("utf-8");
 			chunks.push(text);
-			if (onOutput) onOutput(text);
+			emitBridgeRouteProgress({ onOutput, onProgress }, identity, {
+				execution: identity.execution,
+				taskId: identity.taskId,
+				laneId: identity.laneId,
+				type: "progress",
+				data: text,
+			});
 		};
 
 		proc.stdout?.on("data", collect);
@@ -364,6 +621,13 @@ function spawnCli(
 		proc.on("error", (err) => {
 			const msg = `Failed to spawn ${command}: ${err.message}`;
 			chunks.push(msg);
+			emitBridgeRouteProgress({ onOutput, onProgress }, identity, {
+				execution: identity.execution,
+				taskId: identity.taskId,
+				laneId: identity.laneId,
+				type: "error",
+				data: msg,
+			});
 			resolve({ cli: command, output: chunks.join(""), exitCode: 1 });
 		});
 

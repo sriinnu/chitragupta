@@ -131,3 +131,6 @@ See also:
 - [current-status.md](./current-status.md)
 - [consumer-contract.md](./consumer-contract.md)
 - [sabha-protocol.md](./sabha-protocol.md)
+- [takumi-executor-contract.md](./takumi-executor-contract.md)
+- [vaayu-readiness-checklist.md](./vaayu-readiness-checklist.md)
+- [hard-recovery-plan.md](./hard-recovery-plan.md)

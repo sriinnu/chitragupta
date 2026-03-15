@@ -48,12 +48,82 @@ function toProjectScope(scope: {
 	projectPath: string;
 	sessionIds: string[];
 	sessionLineageKeys: string[];
+	policyFingerprints?: readonly string[];
+	primaryObjectiveIds?: readonly string[];
+	primaryStopConditionIds?: readonly string[];
+	primaryStopConditionKinds?: readonly string[];
+	frontierBestScore?: number | null;
+	refinementBudget?: ResearchRefinementProjectScope["refinementBudget"];
+	nidraBudget?: ResearchRefinementProjectScope["nidraBudget"];
 }): ResearchRefinementProjectScope {
 	return {
 		projectPath: scope.projectPath,
 		sessionIds: scope.sessionIds,
 		sessionLineageKeys: scope.sessionLineageKeys,
+		policyFingerprints: scope.policyFingerprints,
+		primaryObjectiveIds: scope.primaryObjectiveIds,
+		primaryStopConditionIds: scope.primaryStopConditionIds,
+		primaryStopConditionKinds: scope.primaryStopConditionKinds,
+		frontierBestScore: typeof scope.frontierBestScore === "number" ? scope.frontierBestScore : undefined,
+		refinementBudget: scope.refinementBudget ?? null,
+		nidraBudget: scope.nidraBudget ?? null,
 	};
+}
+
+function coversSubset(covered: readonly string[] | undefined, candidate: readonly string[] | undefined): boolean {
+	const normalizedCovered = new Set((covered ?? []).map((value) => value.trim()).filter(Boolean));
+	const normalizedCandidate = [...(candidate ?? [])].map((value) => value.trim()).filter(Boolean);
+	if (normalizedCandidate.length === 0) return true;
+	if (normalizedCovered.size === 0) return false;
+	return normalizedCandidate.every((value) => normalizedCovered.has(value));
+}
+
+function findCoveredScope(
+	entry: Pick<ResearchRefinementQueuedScope, "projectPath" | "sessionIds" | "sessionLineageKeys">,
+	excludedScopes: readonly ResearchRefinementProjectScope[],
+): ResearchRefinementProjectScope | null {
+	const exact = excludedScopes.find((scope) => buildScopeKey(scope) === buildScopeKey(toProjectScope(entry)));
+	if (exact) return exact;
+	return excludedScopes.find((scope) =>
+		scope.projectPath === entry.projectPath
+		&& coversSubset(scope.sessionIds, entry.sessionIds)
+		&& coversSubset(scope.sessionLineageKeys, entry.sessionLineageKeys),
+	) ?? null;
+}
+
+function hasMissingMetadataCoverage(
+	entry: Pick<
+		ResearchRefinementQueuedScope,
+		| "policyFingerprints"
+		| "primaryObjectiveIds"
+		| "primaryStopConditionIds"
+		| "primaryStopConditionKinds"
+		| "frontierBestScore"
+		| "refinementBudget"
+		| "nidraBudget"
+	>,
+	covered: ResearchRefinementProjectScope,
+): boolean {
+	const misses = (
+		values: readonly string[] | undefined,
+		coveredValues: readonly string[] | undefined,
+	): boolean => (values ?? []).some((value) => !(coveredValues ?? []).includes(value));
+	const preservesBudget = (value: unknown, coveredValue: unknown): boolean => {
+		if (value == null) return true;
+		return JSON.stringify(value) === JSON.stringify(coveredValue ?? null);
+	};
+	return (
+		misses(entry.policyFingerprints, covered.policyFingerprints)
+		|| misses(entry.primaryObjectiveIds, covered.primaryObjectiveIds)
+		|| misses(entry.primaryStopConditionIds, covered.primaryStopConditionIds)
+		|| misses(entry.primaryStopConditionKinds, covered.primaryStopConditionKinds)
+		|| (
+			typeof entry.frontierBestScore === "number"
+			&& entry.frontierBestScore > (covered.frontierBestScore ?? Number.NEGATIVE_INFINITY)
+		)
+		|| !preservesBudget(entry.refinementBudget, covered.refinementBudget)
+		|| !preservesBudget(entry.nidraBudget, covered.nidraBudget)
+	);
 }
 
 /**
@@ -65,11 +135,26 @@ function toProjectScope(scope: {
  * prove that the narrower failed frontier was replayed successfully.
  */
 function shouldSkipQueuedEntry(
-	entry: Pick<ResearchRefinementQueuedScope, "projectPath" | "sessionIds" | "sessionLineageKeys" | "repairIntent">,
-	excludedScopeKeys: ReadonlySet<string>,
+	entry: Pick<
+		ResearchRefinementQueuedScope,
+		| "projectPath"
+		| "sessionIds"
+		| "sessionLineageKeys"
+		| "repairIntent"
+		| "policyFingerprints"
+		| "primaryObjectiveIds"
+		| "primaryStopConditionIds"
+		| "primaryStopConditionKinds"
+		| "frontierBestScore"
+		| "refinementBudget"
+		| "nidraBudget"
+	>,
+	excludedScopes: readonly ResearchRefinementProjectScope[],
 ): "clear" | "keep" | "process" {
-	if (!excludedScopeKeys.has(buildScopeKey(toProjectScope(entry)))) return "process";
-	return entry.repairIntent ? "keep" : "clear";
+	const covered = findCoveredScope(entry, excludedScopes);
+	if (!covered) return "process";
+	if (entry.repairIntent || hasMissingMetadataCoverage(entry, covered)) return "keep";
+	return "clear";
 }
 
 /**
@@ -122,17 +207,21 @@ export async function drainQueuedResearchRefinementScopes(
 		clearQueuedResearchRefinementScope,
 		deferQueuedResearchRefinementScope,
 	} = await import("@chitragupta/smriti");
-	if (typeof options.limit === "number" && options.limit <= 0) {
+	const excludedScopes = options.excludeScopes ?? [];
+	const replayBudget = typeof options.limit === "number"
+		? Math.max(0, Math.floor(options.limit))
+		: null;
+	if (replayBudget === 0 && excludedScopes.length === 0) {
 		return {
 			...initialDrainResult(),
 			remainingDue: countQueuedResearchRefinementScopes(),
 		};
 	}
-	const queued = listQueuedResearchRefinementScopes({ limit: options.limit });
+	const dueCount = countQueuedResearchRefinementScopes();
+	const queued = listQueuedResearchRefinementScopes({
+		limit: replayBudget === null ? options.limit : Math.max(1, dueCount),
+	});
 	const summary = initialDrainResult();
-	const excludedScopeKeys = new Set(
-		(options.excludeScopes ?? []).map((scope) => buildScopeKey(scope)),
-	);
 	for (const entry of queued) {
 		const parseError =
 			typeof (entry as ResearchRefinementQueuedScope & { parseError?: unknown }).parseError === "string"
@@ -146,7 +235,7 @@ export async function drainQueuedResearchRefinementScopes(
 			});
 			continue;
 		}
-		const exclusionDecision = shouldSkipQueuedEntry(entry, excludedScopeKeys);
+		const exclusionDecision = shouldSkipQueuedEntry(entry, excludedScopes);
 		if (exclusionDecision === "clear") {
 			// I treat an already-repaired queued scope as satisfied instead of
 			// replaying the same project/session set twice in one daemon cycle.
@@ -154,6 +243,12 @@ export async function drainQueuedResearchRefinementScopes(
 			continue;
 		}
 		if (exclusionDecision === "keep") {
+			if (replayBudget === 0) {
+				// I leave exact queued replay intent untouched when the shared budget
+				// is exhausted. Budget exhaustion is not a failed replay attempt, so it
+				// should not advance retry bookkeeping or rewrite the durable intent.
+				continue;
+			}
 			// I keep exact replay intents durable when the current daemon cycle
 			// only proved that a broader project repair ran. The narrower replay
 			// frontier can be retried once the active project scope is no longer
@@ -166,6 +261,18 @@ export async function drainQueuedResearchRefinementScopes(
 			continue;
 		}
 		const projectScope = toProjectScope(entry);
+		if (replayBudget === 0) {
+			// I still inspect and clear already-covered rows when the replay budget is
+			// exhausted, but I leave untouched due work in place instead of pretending
+			// it was processed or rewriting its retry bookkeeping.
+			continue;
+		}
+		if (replayBudget !== null && summary.drained >= replayBudget) {
+			// I keep walking the due queue after the replay budget is spent so parse
+			// errors and already-covered rows still get reconciled in this cycle,
+			// but I leave untouched actionable rows in place for the next pass.
+			continue;
+		}
 		summary.drained += 1;
 		try {
 			// I replay each durable scope independently so one bad project does not

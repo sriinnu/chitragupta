@@ -196,7 +196,10 @@ export function buildTemporalSelectiveReembeddingRequest(args: {
 		candidateLimitOverride
 		?? (
 			policy.candidateLimit
-			+ (qualityPressure ? Math.min(researchSignalCount, level === "daily" ? 6 : 2) : 0)
+			// I let deeper horizons widen a little less than daily repair, but they
+			// still need more than a token bump when overnight research produced a
+			// genuinely strong signal across several optimizer dimensions.
+			+ (qualityPressure ? Math.min(researchSignalCount, level === "daily" ? 6 : 3) : 0)
 		);
 	// Daily repair can widen down to the hard repair threshold. Longer periods
 	// stay slightly more conservative so one noisy loop does not rewrite the

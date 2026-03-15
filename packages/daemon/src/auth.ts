@@ -203,6 +203,7 @@ export function authorizeDaemonMethod(
 			|| method === "research.loops.complete"
 			|| method === "research.loops.checkpoint.save"
 			|| method === "research.loops.checkpoint.clear"
+			|| method === "research.loops.dispatch.next"
 			|| method === "agent.tasks.checkpoint.save"
 			|| method === "agent.tasks.checkpoint.clear"
 		|| method.startsWith("fact.")

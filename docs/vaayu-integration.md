@@ -149,3 +149,10 @@ That keeps the architecture aligned:
 - Chitragupta = engine
 - Vaayu = primary consumer
 - Takumi = specialized consumer + executable capability
+
+See also:
+
+- [consumer-contract.md](./consumer-contract.md)
+- [takumi-executor-contract.md](./takumi-executor-contract.md)
+- [vaayu-readiness-checklist.md](./vaayu-readiness-checklist.md)
+- [hard-recovery-plan.md](./hard-recovery-plan.md)

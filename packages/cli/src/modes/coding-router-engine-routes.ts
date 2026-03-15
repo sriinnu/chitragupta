@@ -339,10 +339,10 @@ export async function resolveEngineRoutes(
 					lanes: [{ key: "primary", ...primaryRoute }],
 				}
 			: undefined;
-		try {
-			const batch = await daemonCall<{ resolutions?: EngineBatchRouteResolution[] }>(
-				"route.resolveBatch",
-				{
+			try {
+				const batch = await daemonCall<{ resolutions?: EngineBatchRouteResolution[] }>(
+					"route.resolveBatch",
+					{
 					consumer: options.consumer ?? "cli:takumi-bridge",
 					sessionId: options.sessionId,
 					routes: buildTakumiRouteEnvelopeRequests(
@@ -351,17 +351,23 @@ export async function resolveEngineRoutes(
 					),
 				},
 			);
-			envelope = normalizeEngineRouteEnvelope(
-				Array.isArray(batch?.resolutions) ? batch.resolutions : [],
-				primaryRoute,
-				requestedRouteClass,
-				options.capability,
-			);
-		} catch {
-			// Keep the primary authoritative route even when envelope expansion fails.
-		}
-		return { route: primaryRoute, envelope };
-	} catch (error) {
+				envelope = normalizeEngineRouteEnvelope(
+					Array.isArray(batch?.resolutions) ? batch.resolutions : [],
+					primaryRoute,
+					requestedRouteClass,
+					options.capability,
+				);
+				} catch (error) {
+					return {
+						route: primaryRoute,
+						envelope,
+						error: `Engine route envelope resolution failed: ${
+							error instanceof Error ? error.message : String(error)
+						}`,
+					};
+				}
+			return { route: primaryRoute, envelope };
+		} catch (error) {
 		return {
 			route: null,
 			error: `Engine route resolution failed: ${

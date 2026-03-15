@@ -61,13 +61,13 @@ function buildTemporalSelectiveReembeddingRequest(args: {
 		: override?.projectMinSourceSessionCount;
 	const request: Record<string, unknown> = {
 		levels: [args.level],
-		candidateLimit: candidateLimitOverride ?? (
-			args.level === "daily"
-				? 12 + (qualityPressure ? Math.min(args.researchSignalCount ?? 0, 6) : 0)
-				: args.level === "monthly"
-					? 6 + (qualityPressure ? Math.min(args.researchSignalCount ?? 0, 2) : 0)
-					: 3 + (qualityPressure ? Math.min(args.researchSignalCount ?? 0, 2) : 0)
-		),
+			candidateLimit: candidateLimitOverride ?? (
+				args.level === "daily"
+					? 12 + (qualityPressure ? Math.min(args.researchSignalCount ?? 0, 6) : 0)
+					: args.level === "monthly"
+						? 6 + (qualityPressure ? Math.min(args.researchSignalCount ?? 0, 3) : 0)
+						: 3 + (qualityPressure ? Math.min(args.researchSignalCount ?? 0, 3) : 0)
+			),
 		reasons:
 			args.level === "daily" || qualityPressure
 				? ["stale_epoch", "stale_remote_epoch", "low_mdl", "rejected_packed", "low_retention", "low_reduction"]
@@ -314,6 +314,117 @@ describe("chitragupta-daemon semantic refinement helper", () => {
 			candidateLimit: 9,
 			minMdlScore: 0.5,
 			minPriorityScore: 1.35,
+		}));
+	});
+
+	it("uses optimizer-derived scope metadata as bounded refinement pressure during deep sleep", async () => {
+		const { repairSelectiveReembeddingForResearchScopes } = await import("../src/chitragupta-daemon-semantic.js");
+
+		await repairSelectiveReembeddingForResearchScopes("2026-03-12", [
+			{
+				projectPath: "/repo/project",
+				primaryStopConditionKinds: ["pareto-stagnation"],
+				frontierBestScore: 0.78,
+			},
+		]);
+
+		expect(repairSelectiveReembedding).toHaveBeenNthCalledWith(1, expect.objectContaining({
+			levels: ["daily"],
+			candidateLimit: 14,
+			minMdlScore: 0.45,
+			minPriorityScore: 1.35,
+			resyncRemote: true,
+		}));
+		expect(repairSelectiveReembedding).toHaveBeenNthCalledWith(2, expect.objectContaining({
+			levels: ["monthly"],
+			candidateLimit: 8,
+			minMdlScore: 0.55,
+			minPriorityScore: 1.6,
+			resyncRemote: true,
+		}));
+		expect(repairSelectiveReembedding).toHaveBeenNthCalledWith(3, expect.objectContaining({
+			levels: ["yearly"],
+			candidateLimit: 5,
+			minMdlScore: 0.6,
+			minPriorityScore: 1.85,
+			resyncRemote: true,
+			}));
+	});
+
+	it("widens deep-sleep repair when optimizer metadata shows budget pressure and policy drift", async () => {
+		const { repairSelectiveReembeddingForResearchScopes } = await import("../src/chitragupta-daemon-semantic.js");
+
+		await repairSelectiveReembeddingForResearchScopes("2026-03-12", [
+			{
+				projectPath: "/repo/project",
+				priorityScore: 3.4,
+				policyFingerprints: ["policy-a", "policy-b"],
+				primaryStopConditionKinds: ["pareto-stagnation", "budget-exhausted"],
+				frontierBestScore: 0.82,
+			},
+		]);
+
+		const dailyCall = repairSelectiveReembedding.mock.calls[0]?.[0] as Record<string, unknown>;
+		const monthlyCall = repairSelectiveReembedding.mock.calls[1]?.[0] as Record<string, unknown>;
+		const yearlyCall = repairSelectiveReembedding.mock.calls[2]?.[0] as Record<string, unknown>;
+
+		expect(dailyCall.levels).toEqual(["daily"]);
+		expect(dailyCall.dates).toEqual(["2026-03-12"]);
+		expect(Number(dailyCall.candidateLimit)).toBeGreaterThan(14);
+		expect(dailyCall.resyncRemote).toBe(true);
+
+		expect(monthlyCall.levels).toEqual(["monthly"]);
+		expect(monthlyCall.periods).toEqual(["2026-03"]);
+		expect(Number(monthlyCall.candidateLimit)).toBeGreaterThan(8);
+
+		expect(yearlyCall.levels).toEqual(["yearly"]);
+		expect(yearlyCall.periods).toEqual(["2026"]);
+		expect(Number(yearlyCall.candidateLimit)).toBeGreaterThan(5);
+	});
+
+	it("widens the scoped research replay horizon beyond a flat 200-row cap", async () => {
+		const { repairSelectiveReembeddingForResearchScopes } = await import("../src/chitragupta-daemon-semantic.js");
+
+		await repairSelectiveReembeddingForResearchScopes("2026-03-12", [
+			{
+				projectPath: "/repo/project",
+				sessionIds: ["session-1"],
+				primaryStopConditionKinds: ["pareto-stagnation"],
+				frontierBestScore: 0.78,
+			},
+		]);
+
+		expect(listResearchLoopSummaries).toHaveBeenCalledWith({
+			projectPath: "/repo/project",
+			limit: 400,
+		});
+		expect(listResearchExperiments).toHaveBeenCalledWith({
+			projectPath: "/repo/project",
+			limit: 400,
+		});
+	});
+
+	it("treats control-plane-lost research loops as scoped refinement pressure", async () => {
+		listResearchLoopSummaries.mockReturnValueOnce([
+			{
+				projectPath: "/repo/project",
+				sessionId: "session-1",
+				parentSessionId: null,
+				stopReason: "control-plane-lost",
+				updatedAt: new Date("2026-03-12T09:00:00.000Z").getTime(),
+			},
+		]);
+		listResearchExperiments.mockReturnValueOnce([]);
+
+		const { repairSelectiveReembeddingForResearchScopes } = await import("../src/chitragupta-daemon-semantic.js");
+		await repairSelectiveReembeddingForResearchScopes("2026-03-12", [
+			{ projectPath: "/repo/project", sessionIds: ["session-1"] },
+		]);
+
+		expect(repairSelectiveReembedding).toHaveBeenNthCalledWith(1, expect.objectContaining({
+			levels: ["daily"],
+			dates: ["2026-03-12"],
+			resyncRemote: true,
 		}));
 	});
 

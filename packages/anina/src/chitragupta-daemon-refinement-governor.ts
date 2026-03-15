@@ -39,6 +39,68 @@ export type DailyRefinementHoldReason =
 	| "epoch-incomplete"
 	| "epoch-freshness-incomplete";
 
+function widerCap(left?: number, right?: number): number | undefined {
+	if (typeof left === "number" && Number.isFinite(left) && typeof right === "number" && Number.isFinite(right)) {
+		return Math.max(left, right);
+	}
+	return typeof left === "number" && Number.isFinite(left)
+		? left
+		: typeof right === "number" && Number.isFinite(right)
+			? right
+			: undefined;
+}
+
+function widerFloor(left?: number, right?: number): number | undefined {
+	if (typeof left === "number" && Number.isFinite(left) && typeof right === "number" && Number.isFinite(right)) {
+		return Math.min(left, right);
+	}
+	return typeof left === "number" && Number.isFinite(left)
+		? left
+		: typeof right === "number" && Number.isFinite(right)
+			? right
+			: undefined;
+}
+
+/**
+ * Merge two daemon refinement envelopes while preserving the already-approved
+ * wider repair surface.
+ */
+function mergeBudgetEnvelopes(
+	left: DailyRefinementBudgetEnvelope | null,
+	right: DailyRefinementBudgetEnvelope | null,
+): DailyRefinementBudgetEnvelope | null {
+	if (!left && !right) return null;
+	const leftRefinement = left?.refinement ?? null;
+	const rightRefinement = right?.refinement ?? null;
+	const leftNidra = left?.nidra ?? null;
+	const rightNidra = right?.nidra ?? null;
+	return {
+		refinement: {
+			dailyCandidateLimit: widerCap(leftRefinement?.dailyCandidateLimit, rightRefinement?.dailyCandidateLimit),
+			projectCandidateLimit: widerCap(leftRefinement?.projectCandidateLimit, rightRefinement?.projectCandidateLimit),
+			dailyMinMdlScore: widerFloor(leftRefinement?.dailyMinMdlScore, rightRefinement?.dailyMinMdlScore),
+			projectMinMdlScore: widerFloor(leftRefinement?.projectMinMdlScore, rightRefinement?.projectMinMdlScore),
+			dailyMinPriorityScore: widerFloor(leftRefinement?.dailyMinPriorityScore, rightRefinement?.dailyMinPriorityScore),
+			projectMinPriorityScore: widerFloor(leftRefinement?.projectMinPriorityScore, rightRefinement?.projectMinPriorityScore),
+			dailyMinSourceSessionCount: widerFloor(
+				leftRefinement?.dailyMinSourceSessionCount,
+				rightRefinement?.dailyMinSourceSessionCount,
+			),
+			projectMinSourceSessionCount: widerFloor(
+				leftRefinement?.projectMinSourceSessionCount,
+				rightRefinement?.projectMinSourceSessionCount,
+			),
+		},
+		nidra: {
+			maxResearchProjectsPerCycle: widerCap(
+				leftNidra?.maxResearchProjectsPerCycle,
+				rightNidra?.maxResearchProjectsPerCycle,
+			),
+			maxSemanticPressure: widerCap(leftNidra?.maxSemanticPressure, rightNidra?.maxSemanticPressure),
+		},
+	};
+}
+
 function scoreResearchSemanticPressure(args: {
 	loopProjects: number;
 	experimentProjects: number;
@@ -57,6 +119,21 @@ function roundBudgetThreshold(value: number): number {
 	return Math.round(value * 100) / 100;
 }
 
+function deriveQueuedDrainLimit(
+	nidraBudget: ResearchNidraBudgetOverride | null | undefined,
+	selectedScopeCount: number,
+	queuedDueScopes: number | undefined,
+): number | null {
+	const remainingSharedCap = typeof nidraBudget?.maxResearchProjectsPerCycle === "number"
+		? Math.max(nidraBudget.maxResearchProjectsPerCycle - selectedScopeCount, 0)
+		: null;
+	if ((queuedDueScopes ?? 0) <= 0) return remainingSharedCap;
+	const boundedQueueCap = Math.min(8, Math.max(1, queuedDueScopes ?? 0));
+	if (remainingSharedCap == null) return boundedQueueCap;
+	if (remainingSharedCap === 0) return 0;
+	return Math.min(remainingSharedCap, boundedQueueCap);
+}
+
 /**
  * Derive one bounded daemon-wide refinement budget from the current daily
  * research digests.
@@ -70,23 +147,27 @@ function derivePostprocessResearchBudget(args: {
 	experimentProjects: number;
 	refinementScopes: readonly ResearchRefinementProjectScope[];
 }): DailyRefinementBudgetEnvelope | null {
-	if (args.loopProjects <= 0 && args.experimentProjects <= 0 && args.refinementScopes.length <= 0) return null;
+	if (
+		args.loopProjects <= 0
+		&& args.experimentProjects <= 0
+		&& args.refinementScopes.length <= 0
+	) return null;
 	const strongestPriority = args.refinementScopes.reduce((best, scope) => {
 		const priority = typeof scope.priorityScore === "number" ? scope.priorityScore : 0;
 		return Math.max(best, priority);
 	}, 0);
 	const pressure = Math.min(
 		8,
-		scoreResearchSemanticPressure({
-			loopProjects: args.loopProjects,
-			experimentProjects: args.experimentProjects,
-			refinementProjects: args.refinementScopes.length,
-			refinementPriority: args.refinementScopes.reduce(
-				(sum, scope) => sum + (typeof scope.priorityScore === "number" ? scope.priorityScore : 0),
-				0,
-			),
-		}),
-	);
+			scoreResearchSemanticPressure({
+				loopProjects: args.loopProjects,
+				experimentProjects: args.experimentProjects,
+				refinementProjects: args.refinementScopes.length,
+				refinementPriority: args.refinementScopes.reduce(
+					(sum, scope) => sum + (typeof scope.priorityScore === "number" ? scope.priorityScore : 0),
+					0,
+				),
+			}),
+		);
 	const widening = Math.max(1, Math.ceil(Math.max(strongestPriority, pressure)));
 	return {
 		refinement: {
@@ -100,10 +181,33 @@ function derivePostprocessResearchBudget(args: {
 			projectMinSourceSessionCount: strongestPriority >= 3 ? 1 : 2,
 		},
 		nidra: {
-			maxResearchProjectsPerCycle: Math.min(8, Math.max(1, Math.ceil(args.refinementScopes.length || 1))),
+			maxResearchProjectsPerCycle: Math.min(
+					8,
+					Math.max(1, Math.ceil(args.refinementScopes.length || 1)),
+				),
 			maxSemanticPressure: Math.max(1, Math.ceil(pressure)),
 		},
 	};
+}
+
+/**
+ * Rebuild the widest explicit loop-derived budget carried on research scopes.
+ *
+ * This lets deep-sleep and postprocess honor budgets recovered from overnight
+ * summaries instead of treating scope metadata as advisory only.
+ */
+function deriveScopeBudgetEnvelope(
+	scopes: readonly ResearchRefinementProjectScope[],
+): DailyRefinementBudgetEnvelope | null {
+	let envelope: DailyRefinementBudgetEnvelope | null = null;
+	for (const scope of scopes) {
+		if (!scope.refinementBudget && !scope.nidraBudget) continue;
+		envelope = mergeBudgetEnvelopes(envelope, {
+			refinement: scope.refinementBudget ?? {},
+			nidra: scope.nidraBudget ?? null,
+		});
+	}
+	return envelope;
 }
 
 /**
@@ -118,62 +222,15 @@ function mergeResearchBudgetState(
 	active: ResearchRefinementBudgetState | null,
 	derived: DailyRefinementBudgetEnvelope | null,
 ): DailyRefinementBudgetEnvelope | null {
-	if (!active && !derived) return null;
-	const activeRefinement = active?.refinement ?? null;
-	const activeNidra = active?.nidra ?? null;
-	const derivedRefinement = derived?.refinement ?? null;
-	const derivedNidra = derived?.nidra ?? null;
-	const takeWiderCap = (left?: number, right?: number): number | undefined => {
-		if (typeof left === "number" && Number.isFinite(left) && typeof right === "number" && Number.isFinite(right)) {
-			return Math.max(left, right);
-		}
-		return typeof left === "number" && Number.isFinite(left)
-			? left
-			: typeof right === "number" && Number.isFinite(right)
-				? right
-				: undefined;
-	};
-	const takeWiderFloor = (left?: number, right?: number): number | undefined => {
-		if (typeof left === "number" && Number.isFinite(left) && typeof right === "number" && Number.isFinite(right)) {
-			return Math.min(left, right);
-		}
-		return typeof left === "number" && Number.isFinite(left)
-			? left
-			: typeof right === "number" && Number.isFinite(right)
-				? right
-				: undefined;
-	};
-	return {
-		refinement: {
-			// Candidate limits are breadth caps, so the larger cap preserves the
-			// most permissive already-authorized repair envelope.
-			dailyCandidateLimit: takeWiderCap(activeRefinement?.dailyCandidateLimit, derivedRefinement?.dailyCandidateLimit),
-			projectCandidateLimit: takeWiderCap(activeRefinement?.projectCandidateLimit, derivedRefinement?.projectCandidateLimit),
-			// Minimum thresholds narrow the candidate set, so the lower floor is the
-			// wider, already-approved repair envelope.
-			dailyMinMdlScore: takeWiderFloor(activeRefinement?.dailyMinMdlScore, derivedRefinement?.dailyMinMdlScore),
-			projectMinMdlScore: takeWiderFloor(activeRefinement?.projectMinMdlScore, derivedRefinement?.projectMinMdlScore),
-			dailyMinPriorityScore: takeWiderFloor(activeRefinement?.dailyMinPriorityScore, derivedRefinement?.dailyMinPriorityScore),
-			projectMinPriorityScore: takeWiderFloor(activeRefinement?.projectMinPriorityScore, derivedRefinement?.projectMinPriorityScore),
-			dailyMinSourceSessionCount: takeWiderFloor(
-				activeRefinement?.dailyMinSourceSessionCount,
-				derivedRefinement?.dailyMinSourceSessionCount,
-			),
-			projectMinSourceSessionCount: takeWiderFloor(
-				activeRefinement?.projectMinSourceSessionCount,
-				derivedRefinement?.projectMinSourceSessionCount,
-			),
-		},
-		nidra: {
-			// Nidra budgets widen how much follow-on refinement this cycle may touch.
-			// I preserve the higher limit once either path widened it.
-			maxResearchProjectsPerCycle: takeWiderCap(
-				activeNidra?.maxResearchProjectsPerCycle,
-				derivedNidra?.maxResearchProjectsPerCycle,
-			),
-			maxSemanticPressure: takeWiderCap(activeNidra?.maxSemanticPressure, derivedNidra?.maxSemanticPressure),
-		},
-	};
+	return mergeBudgetEnvelopes(
+		active
+			? {
+				refinement: active.refinement,
+				nidra: active.nidra ?? null,
+			}
+			: null,
+		derived,
+	);
 }
 
 /**
@@ -215,14 +272,19 @@ export function buildDailyRefinementGovernorPlan(args: {
 	experimentProjects: number;
 	refinementScopes: ResearchRefinementProjectScope[];
 	activeBudget: ResearchRefinementBudgetState | null;
+	queuedDueScopes?: number;
 }): DailyRefinementGovernorPlan {
+	const scopeBudget = deriveScopeBudgetEnvelope(args.refinementScopes);
 	const effectiveBudget = mergeResearchBudgetState(
 		args.activeBudget,
-		derivePostprocessResearchBudget({
-			loopProjects: args.loopProjects,
-			experimentProjects: args.experimentProjects,
-			refinementScopes: args.refinementScopes,
-		}),
+		mergeBudgetEnvelopes(
+			derivePostprocessResearchBudget({
+				loopProjects: args.loopProjects,
+				experimentProjects: args.experimentProjects,
+				refinementScopes: args.refinementScopes,
+			}),
+			scopeBudget,
+		),
 	);
 	const nidraBudget = effectiveBudget?.nidra ?? null;
 	const { selected, deferred } = applyNidraProjectBudget(
@@ -253,10 +315,7 @@ export function buildDailyRefinementGovernorPlan(args: {
 		selectedScopes: selected,
 		deferredScopes: deferred,
 		researchSignalCount,
-		queuedDrainLimit:
-			typeof nidraBudget?.maxResearchProjectsPerCycle === "number"
-				? Math.max(nidraBudget.maxResearchProjectsPerCycle - selected.length, 0)
-				: null,
+		queuedDrainLimit: deriveQueuedDrainLimit(nidraBudget, selected.length, args.queuedDueScopes),
 	};
 }
 

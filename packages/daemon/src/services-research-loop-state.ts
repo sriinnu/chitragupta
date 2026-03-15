@@ -14,6 +14,8 @@ export type ResearchLoopControlState = {
 	sessionId: string | null;
 	sabhaId: string | null;
 	workflowId: string | null;
+	leaseOwner: string | null;
+	leaseExpiresAt: number | null;
 	status: "running" | "cancelling" | "cancelled" | "completed" | "failed";
 	startedAt: number;
 	updatedAt: number;
@@ -29,8 +31,41 @@ export type ResearchLoopControlState = {
 	finishedAt: number | null;
 };
 
+/** Result of one live control-state lookup, including ambiguity truth. */
+export interface ResearchLoopStateLookup {
+	state: ResearchLoopControlState | null;
+	ambiguous: boolean;
+}
+
 const activeResearchLoops = new Map<string, ResearchLoopControlState>();
 const RESEARCH_LOOP_STALE_AFTER_MS = 5_000;
+
+/**
+ * Normalize an optional project path for live research-loop control identity.
+ *
+ * I keep this local helper so every read/write path uses the same project
+ * scoping rules before touching the in-memory control map.
+ */
+function normalizeResearchLoopStateProjectPath(projectPath: unknown): string | null {
+	return typeof projectPath === "string" && projectPath.trim()
+		? normalizeProjectPath(projectPath)
+		: null;
+}
+
+/**
+ * Build the in-memory control-state key for one logical loop.
+ *
+ * I scope this by canonical project path plus loop key so two repos can reuse
+ * the same loop key without colliding in the daemon's active state map.
+ */
+export function buildResearchLoopControlStateKey(
+	projectPath: unknown,
+	loopKey: unknown,
+): string {
+	const normalizedLoopKey = ensureResearchLoopKey(loopKey);
+	const normalizedProjectPath = normalizeResearchLoopStateProjectPath(projectPath);
+	return `${normalizedProjectPath ?? "<unknown-project>"}::${normalizedLoopKey}`;
+}
 
 /** Test/helper reset for daemon-owned research loop control state. */
 export function clearResearchLoopStates(): void {
@@ -84,18 +119,58 @@ export function ensureResearchLoopKey(loopKey: unknown): string {
 
 /**
  * Look up one daemon-owned research loop control record.
+ *
+ * When the caller does not provide a project path, I return a match only if
+ * the loop key is unique across the live in-memory map. Ambiguous lookups fail
+ * closed so cross-project loop keys cannot alias each other accidentally.
  */
-export function getResearchLoopState(loopKey: unknown): ResearchLoopControlState | null {
-	return typeof loopKey === "string" && loopKey.trim()
-		? activeResearchLoops.get(loopKey.trim()) ?? null
-		: null;
+export function getResearchLoopState(
+	loopKey: unknown,
+	projectPath?: unknown,
+): ResearchLoopControlState | null {
+	return inspectResearchLoopState(loopKey, projectPath).state;
+}
+
+/**
+ * Inspect one live control-state lookup without collapsing ambiguity into null.
+ *
+ * I use this when higher layers need to know whether `null` means "missing" or
+ * "projectPath required because multiple repos share this loop key".
+ */
+export function inspectResearchLoopState(
+	loopKey: unknown,
+	projectPath?: unknown,
+): ResearchLoopStateLookup {
+	if (typeof loopKey !== "string" || !loopKey.trim()) {
+		return { state: null, ambiguous: false };
+	}
+	const normalizedLoopKey = loopKey.trim();
+	const normalizedProjectPath = normalizeResearchLoopStateProjectPath(projectPath);
+	if (normalizedProjectPath) {
+		return {
+			state:
+				activeResearchLoops.get(
+					buildResearchLoopControlStateKey(normalizedProjectPath, normalizedLoopKey),
+				) ?? null,
+			ambiguous: false,
+		};
+	}
+	let match: ResearchLoopControlState | null = null;
+	for (const state of activeResearchLoops.values()) {
+		if (state.loopKey !== normalizedLoopKey) continue;
+		if (match) {
+			return { state: null, ambiguous: true };
+		}
+		match = state;
+	}
+	return { state: match, ambiguous: false };
 }
 
 /**
  * Replace the daemon-owned control record for one loop key.
  */
-export function setResearchLoopState(loopKey: string, state: ResearchLoopControlState): void {
-	activeResearchLoops.set(loopKey, state);
+export function setResearchLoopState(state: ResearchLoopControlState): void {
+	activeResearchLoops.set(buildResearchLoopControlStateKey(state.projectPath, state.loopKey), state);
 }
 
 /** Return a recent-first view of active daemon-owned research loop control state. */
@@ -141,6 +216,8 @@ export function buildStartedResearchLoopState(
 		sessionId: typeof params.sessionId === "string" ? params.sessionId : null,
 		sabhaId: typeof params.sabhaId === "string" ? params.sabhaId : null,
 		workflowId: typeof params.workflowId === "string" ? params.workflowId : null,
+		leaseOwner: null,
+		leaseExpiresAt: null,
 		status: "running",
 		startedAt: now,
 		updatedAt: now,

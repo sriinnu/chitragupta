@@ -209,6 +209,7 @@ export type {
 	DaemonState,
 	ConsolidationEvent,
 } from "./chitragupta-daemon.js";
+export { setResearchDispatchControlPlane } from "./chitragupta-daemon-research-scheduler.js";
 
 // Daemon Manager (Prana — self-healing daemon wrapper)
 export { DaemonManager } from "./daemon-manager.js";

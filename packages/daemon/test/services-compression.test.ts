@@ -114,6 +114,7 @@ describe("compression services", () => {
 			text: "pakt:demo",
 			changed: false,
 			packed: true,
+			result: "pakt:demo",
 		});
 	});
 
@@ -127,6 +128,7 @@ describe("compression services", () => {
 			text: "pakt:demo",
 			unpacked: false,
 			packed: true,
+			result: "pakt:demo",
 		});
 	});
 
@@ -163,11 +165,13 @@ describe("compression services", () => {
 			text: "pakt:demo",
 			changed: true,
 			packed: true,
+			result: "pakt:demo",
 		});
 		expect(unpacked).toEqual({
 			text: "expanded plain text",
 			unpacked: true,
 			packed: true,
+			result: "expanded plain text",
 		});
 	});
 

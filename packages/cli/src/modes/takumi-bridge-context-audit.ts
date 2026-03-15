@@ -11,8 +11,8 @@ interface TakumiExecutionObservation {
  */
 export function auditTakumiResponseAgainstContract(
 	context: TakumiContext | undefined,
-	response: TakumiResponse,
-): TakumiResponse {
+	response: Omit<TakumiResponse, "taskId" | "laneId" | "finalReport" | "artifacts">,
+): Omit<TakumiResponse, "taskId" | "laneId" | "finalReport" | "artifacts"> {
 	if (!context) return response;
 	const observation = observeTakumiExecution(response.output);
 	const violations = findTakumiContractViolations(context, observation);
@@ -121,6 +121,16 @@ function findTakumiContractViolations(
 	}
 
 	const violations: string[] = [];
+	if (allowedProviders.size > 0 && observation.providerIds.length === 0) {
+		violations.push(
+			`Takumi did not declare a provider for the enforced engine-selected lane: ${[...allowedProviders].join(", ")}`,
+		);
+	}
+	if (allowedModels.size > 0 && observation.modelIds.length === 0) {
+		violations.push(
+			`Takumi did not declare a model for the enforced engine-selected lane: ${[...allowedModels].join(", ")}`,
+		);
+	}
 	if (!allowCrossProvider && allowedProviders.size > 0) {
 		for (const observedProviderId of observation.providerIds) {
 			if (!allowedProviders.has(observedProviderId)) {

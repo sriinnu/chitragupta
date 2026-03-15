@@ -12,6 +12,7 @@ import {
 } from "./chitragupta-nodes-research-records.js";
 import { councilLucyRecommendation, withDaemonClient } from "./chitragupta-nodes-research-daemon.js";
 import {
+	buildResearchExperimentUpsertPayload,
 	buildResearchOutcomePayload,
 	buildResearchTraceMetadata,
 	persistResearchFallback,
@@ -197,6 +198,56 @@ export async function recordResearchOutcome(
 		decision: typeof evaluation.decision === "string" ? evaluation.decision : "record",
 		finalizeAction: typeof finalize?.action === "string" ? finalize.action : null,
 	});
+}
+
+/**
+ * Sync the canonical experiment row after later closure phases compute richer
+ * optimizer metadata or more accurate round-wall-clock duration.
+ */
+export async function syncResearchExperimentRecord(
+	scope: ResearchScope,
+	council: Record<string, unknown>,
+	run: Record<string, unknown>,
+	evaluation: Record<string, unknown>,
+	finalize: Record<string, unknown> | null,
+	packed: Record<string, unknown>,
+	signal?: AbortSignal,
+	options?: { fallbackPolicy?: ResearchRecordingFallbackPolicy },
+): Promise<Record<string, unknown>> {
+	const fallbackPolicy = options?.fallbackPolicy ?? "allow-local";
+	throwIfResearchAborted(signal);
+	const experimentRecord = buildResearchExperimentRecord(scope, council, run, evaluation, finalize, packed);
+	try {
+		const daemonRecorded = await withDaemonClient(async (client) => {
+			throwIfResearchAborted(signal);
+			const outcome = await client.call(
+				"research.experiments.record",
+				buildResearchExperimentUpsertPayload({ scope, experimentRecord, packed }),
+				{ signal },
+			) as { experiment?: Record<string, unknown> };
+			return {
+				...(typeof outcome === "object" && outcome !== null ? outcome : {}),
+				recorded: true,
+				experimentRecord,
+				source: "daemon",
+			};
+		});
+		throwIfResearchAborted(signal);
+		if (daemonRecorded) return daemonRecorded;
+	} catch (error) {
+		if (!shouldFallbackToLocalResearchRecording(error)) throw error;
+		if (fallbackPolicy === "daemon-only") throw daemonOnlyRecordingError();
+	}
+	const { upsertResearchExperiment } = await dynamicImport("@chitragupta/smriti");
+	const experiment = upsertResearchExperiment(
+		buildResearchExperimentUpsertPayload({ scope, experimentRecord, packed }) as Parameters<typeof upsertResearchExperiment>[0],
+	);
+	return {
+		recorded: true,
+		experiment,
+		experimentRecord,
+		source: "fallback",
+	};
 }
 
 /** Record a failed round without promoting it as a successful experiment. */

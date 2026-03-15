@@ -1,31 +1,11 @@
-/**
- * MCP Tools — Coding Agent (Lucy Bridge + CLI Router).
- *
- * Factory for the `coding_agent` tool that routes coding tasks through
- * the Lucy Bridge (autonomous context injection, auto-fix, episodic
- * recording, Transcendence pre-cache) → Takumi bridge (structured results)
- * → falls back to the best available CLI on PATH.
- *
- * Lucy (2014) at 40% neural capacity: autonomous environmental control,
- * perceiving beyond normal bounds, acting without permission. The bridge
- * injects Chitragupta's memory layers before execution and records
- * outcomes for collective learning.
- *
- * Supports three modes:
- * - "full" (default): Lucy Bridge → Takumi bridge → CLI fallback.
- * - "plan-only": Bridge only, no execution.
- * - "cli": Force CLI routing, skip bridge entirely.
- *
- * @module
- */
+/** MCP coding tool: Lucy bridge first, plain CLI fallback when requested. */
 
+import crypto from "node:crypto";
 import type { McpToolHandler, McpToolResult } from "@chitragupta/tantra";
-import {
-	routeCodingTask,
-	detectCodingClis,
-} from "./coding-router.js";
+import { routeCodingTask, detectCodingClis } from "./coding-router.js";
 import { executeLucy } from "./lucy-bridge.js";
 import type { LucyBridgeConfig, LucyResult } from "./lucy-bridge.js";
+import type { TakumiArtifact, TakumiExecutionObject, TakumiFinalReport } from "./takumi-bridge-types.js";
 import { leaveAkashaTrace } from "../nervous-system-wiring.js";
 import { allowLocalRuntimeFallback } from "../runtime-daemon-proxies.js";
 import { type LucyPlanPreview, collectLucyPlanPreview, buildPlanSteps } from "./mcp-tools-coding-plan.js";
@@ -38,12 +18,7 @@ interface CodingAgentToolOptions {
 	consumer?: string;
 }
 
-/**
- * Create the `coding_agent` tool — route a coding task through Lucy Bridge
- * (context injection + auto-fix + recording) or the best available CLI.
- *
- * @param projectPath - The project root directory to use as cwd.
- */
+/** Create the `coding_agent` tool for one project root. */
 export function createCodingAgentTool(
 	projectPath: string,
 	options: CodingAgentToolOptions = {},
@@ -96,6 +71,38 @@ export function createCodingAgentTool(
 							description:
 								"Optional raw engine capability to enforce before Takumi/CLI execution.",
 						},
+						execution: {
+							type: "object",
+							description:
+								"Preferred engine-owned execution object. Top-level taskId/laneId remain compatibility aliases.",
+							properties: {
+								task: {
+									type: "object",
+									properties: {
+										id: { type: "string", description: "Canonical engine task id." },
+									},
+									required: ["id"],
+								},
+								lane: {
+									type: "object",
+									properties: {
+										id: { type: "string", description: "Canonical engine lane id." },
+									},
+									required: ["id"],
+								},
+							},
+							required: ["task", "lane"],
+						},
+						taskId: {
+							type: "string",
+							description:
+								"Optional canonical task identity when the caller already owns one.",
+						},
+						laneId: {
+							type: "string",
+							description:
+								"Optional canonical lane identity when the caller already owns one.",
+						},
 					},
 					required: ["task"],
 				},
@@ -109,42 +116,66 @@ export function createCodingAgentTool(
 				};
 			}
 
-				const mode = (args.mode as CodingAgentMode) ?? "full";
-				const noCache = Boolean(args.noCache);
-					const sessionId = typeof args.sessionId === "string" && args.sessionId.trim()
-						? args.sessionId.trim()
-						: options.sessionIdResolver?.();
-					const consumer = typeof args.consumer === "string" && args.consumer.trim()
-						? args.consumer.trim()
-						: options.consumer ?? "mcp:coding_agent";
-				const routeClass = typeof args.routeClass === "string" && args.routeClass.trim()
-					? args.routeClass.trim()
-					: undefined;
-				const capability = typeof args.capability === "string" && args.capability.trim()
-					? args.capability.trim()
-					: undefined;
+			const mode = (args.mode as CodingAgentMode) ?? "full";
+			const noCache = Boolean(args.noCache);
+			const sessionId = typeof args.sessionId === "string" && args.sessionId.trim()
+				? args.sessionId.trim()
+				: options.sessionIdResolver?.();
+			const consumer = typeof args.consumer === "string" && args.consumer.trim()
+				? args.consumer.trim()
+				: options.consumer ?? "mcp:coding_agent";
+			const routeClass = typeof args.routeClass === "string" && args.routeClass.trim()
+				? args.routeClass.trim()
+				: undefined;
+			const capability = typeof args.capability === "string" && args.capability.trim()
+				? args.capability.trim()
+				: undefined;
+			const execution = normalizeTakumiExecutionObject(args.execution);
+			const taskId = typeof args.taskId === "string" && args.taskId.trim()
+				? args.taskId.trim()
+				: execution?.task.id;
+			const laneId = typeof args.laneId === "string" && args.laneId.trim()
+				? args.laneId.trim()
+				: execution?.lane.id;
+			const stableExecution = execution ?? buildExecutionObject(taskId, laneId);
+			const stableTaskId = stableExecution.task.id;
+			const stableLaneId = stableExecution.lane.id;
 
-				try {
-					if (mode === "cli") {
-						return executeCliMode(task, projectPath);
-					}
-					if (mode === "plan-only") {
-						return executePlanOnlyMode(task, projectPath, noCache);
-					}
-					return executeLucyMode(task, projectPath, mode, noCache, {
-						sessionId,
-						consumer,
-						routeClass,
-						capability,
+			try {
+				if (mode === "cli") {
+					return await executeCliMode(task, projectPath, {
+						execution: stableExecution,
+						taskId: stableTaskId,
+						laneId: stableLaneId,
 					});
-				} catch (err) {
-					return {
-						content: [{
-						type: "text",
-						text: `coding_agent failed: ${err instanceof Error ? err.message : String(err)}`,
-					}],
-					isError: true,
-				};
+				}
+					if (mode === "plan-only") {
+						return await executePlanOnlyMode(task, projectPath, noCache, {
+							execution: stableExecution,
+							taskId: stableTaskId,
+							laneId: stableLaneId,
+							sessionId,
+							consumer,
+							routeClass,
+							capability,
+						});
+					}
+				return await executeLucyMode(task, projectPath, mode, noCache, {
+					sessionId,
+					consumer,
+					routeClass,
+					capability,
+					execution: stableExecution,
+					taskId: stableTaskId,
+					laneId: stableLaneId,
+				});
+			} catch (err) {
+				return buildCodingAgentErrorResult(
+					err instanceof Error ? err.message : String(err),
+					mode,
+					noCache,
+					stableExecution,
+				);
 			}
 		},
 	};
@@ -154,9 +185,18 @@ async function executePlanOnlyMode(
 	task: string,
 	projectPath: string,
 	noCache: boolean,
+	routing: {
+		execution: TakumiExecutionObject;
+		taskId: string;
+		laneId: string;
+		sessionId?: string;
+		consumer?: string;
+		routeClass?: string;
+		capability?: string;
+	},
 ): Promise<McpToolResult> {
 	const [config, clis] = await Promise.all([
-		buildLucyConfig(projectPath, noCache),
+		buildLucyConfig(projectPath, noCache, routing),
 		detectCodingClis(),
 	]);
 	const context = await collectLucyPlanPreview(task, projectPath, config);
@@ -190,6 +230,10 @@ async function executePlanOnlyMode(
 			mode: "plan-only",
 			executed: false,
 			noCache,
+			execution: routing.execution,
+			taskId: routing.taskId,
+			laneId: routing.laneId,
+			artifacts: [] satisfies TakumiArtifact[],
 			availableClis,
 			contextPreview: {
 				transcendenceHit: context.transcendenceHit?.entity ?? null,
@@ -200,18 +244,7 @@ async function executePlanOnlyMode(
 	};
 }
 
-
-// ─── Lucy Bridge Mode ────────────────────────────────────────────────────
-
-/**
- * Execute via Lucy Bridge — full autonomous pipeline:
- * 1. Transcendence pre-cache lookup (predictively loaded context)
- * 2. Episodic recall (past similar tasks + error solutions)
- * 3. Akasha traces (recent architectural decisions)
- * 4. Execute through Takumi bridge
- * 5. Auto-fix loop if tests fail
- * 6. Record results in episodic memory + Akasha
- */
+/** Execute through Lucy with engine routing and post-run recording. */
 async function executeLucyMode(
 	task: string,
 	projectPath: string,
@@ -222,6 +255,9 @@ async function executeLucyMode(
 		consumer?: string;
 		routeClass?: string;
 		capability?: string;
+		execution?: TakumiExecutionObject;
+		taskId?: string;
+		laneId?: string;
 	},
 ): Promise<McpToolResult> {
 	const config = await buildLucyConfig(projectPath, noCache, routing);
@@ -238,10 +274,16 @@ async function buildLucyConfig(
 		consumer?: string;
 		routeClass?: string;
 		capability?: string;
+		execution?: TakumiExecutionObject;
+		taskId?: string;
+		laneId?: string;
 	} = {},
 ): Promise<LucyBridgeConfig> {
 	const config: LucyBridgeConfig = {
 		projectPath,
+		execution: routing.execution,
+		taskId: routing.taskId,
+		laneId: routing.laneId,
 		noCache,
 		maxAutoFixAttempts: 2,
 		autoFixThreshold: 0.7,
@@ -251,14 +293,13 @@ async function buildLucyConfig(
 		capability: routing.capability,
 	};
 
-	// Wire Transcendence pre-cache (highest priority context source)
-		try {
-			const { getLucyLiveContextViaDaemon } = await import("./daemon-bridge.js");
-			config.queryTranscendence = async (taskStr: string, _project: string) => {
-				const live = await getLucyLiveContextViaDaemon(taskStr, { limit: 1, project: _project });
-				return live.hit;
-			};
-		} catch { /* Daemon-backed Transcendence optional */ }
+	try {
+		const { getLucyLiveContextViaDaemon } = await import("./daemon-bridge.js");
+		config.queryTranscendence = async (taskStr: string, _project: string) => {
+			const live = await getLucyLiveContextViaDaemon(taskStr, { limit: 1, project: _project });
+			return live.hit;
+		};
+	} catch { /* Daemon-backed Transcendence optional */ }
 
 	if (allowLocalRuntimeFallback()) {
 		try {
@@ -268,7 +309,6 @@ async function buildLucyConfig(
 		} catch { /* Transcendence optional */ }
 	}
 
-	// Wire episodic recall callback
 	try {
 		const { EpisodicMemoryStore } = await import("@chitragupta/smriti/episodic-store");
 		config.queryEpisodic = async (taskStr: string, _project: string) => {
@@ -278,20 +318,21 @@ async function buildLucyConfig(
 				ep.solution ? `${ep.description} → ${ep.solution}` : ep.description,
 			);
 		};
-		config.recordEpisode = async (episode) => {
-			const store = new EpisodicMemoryStore();
-			store.record({
-				project: episode.project,
-				description: `${episode.success ? "Completed" : "Failed"}: ${episode.task.slice(0, 200)}`,
-				solution: episode.success
-					? `Files: ${episode.filesModified.join(", ")}. Duration: ${episode.durationMs}ms.`
-					: episode.error?.slice(0, 300),
-				tags: ["lucy-bridge", episode.success ? "success" : "failure"],
-			});
-		};
+			config.recordEpisode = async (episode) => {
+				const store = new EpisodicMemoryStore();
+				store.record({
+					project: episode.project,
+					description:
+						`${episode.success ? "Completed" : "Failed"} [${episode.taskId}/${episode.laneId}]: `
+						+ `${episode.task.slice(0, 200)}`,
+					solution: episode.success
+						? `Files: ${episode.filesModified.join(", ")}. Duration: ${episode.durationMs}ms. Execution: ${episode.execution.task.id}/${episode.execution.lane.id}.`
+						: `${episode.error?.slice(0, 300) ?? "Unknown error"}. Execution: ${episode.execution.task.id}/${episode.execution.lane.id}.`,
+					tags: ["lucy-bridge", episode.success ? "success" : "failure"],
+				});
+			};
 	} catch { /* Episodic optional */ }
 
-	// Wire Akasha trace callbacks
 	try {
 		const { getAkasha, persistAkasha } = await import("./mcp-subsystems.js");
 		config.queryAkasha = async (taskStr: string) => {
@@ -301,15 +342,20 @@ async function buildLucyConfig(
 			}).query(taskStr, { limit: 5 }));
 			return results.map((t: { content: string }) => t.content);
 		};
-		config.depositAkasha = async (trace) => {
-			const akasha = await getAkasha();
-			const wroteTrace = leaveAkashaTrace(akasha, {
-				agentId: "lucy-bridge",
-				type: trace.type,
-				topic: trace.topics[0] ?? "coding",
-				content: trace.content,
-				metadata: { topics: trace.topics },
-			});
+			config.depositAkasha = async (trace) => {
+				const akasha = await getAkasha();
+				const wroteTrace = leaveAkashaTrace(akasha, {
+					agentId: "lucy-bridge",
+					type: trace.type,
+					topic: trace.topics[0] ?? "coding",
+					content: trace.content,
+					metadata: {
+						topics: trace.topics,
+						taskId: trace.taskId,
+						laneId: trace.laneId,
+						execution: trace.execution,
+					},
+				});
 			if (wroteTrace) {
 				await persistAkasha();
 			}
@@ -358,6 +404,11 @@ async function lucyResultToMcpResult(
 			availableClis: availableNames,
 			mode,
 			noCache,
+			execution: result.execution,
+			taskId: result.taskId,
+			laneId: result.laneId,
+			finalReport: result.finalReport,
+			artifacts: result.artifacts,
 			autoFixAttempts: result.autoFixAttempts,
 			durationMs: result.durationMs,
 			filesModified: result.filesModified,
@@ -366,14 +417,24 @@ async function lucyResultToMcpResult(
 	};
 }
 
-// ─── CLI Mode ──────────────────────────────────────────────────────────────
-
-/** Execute via plain CLI routing (mode: "cli"), skipping the bridge. */
+/** Execute via plain CLI routing, preserving engine execution identity. */
 async function executeCliMode(
 	task: string,
 	projectPath: string,
+	identity: {
+		execution?: TakumiExecutionObject;
+		taskId?: string;
+		laneId?: string;
+	} = {},
 ): Promise<McpToolResult> {
-	const result = await routeCodingTask({ task, cwd: projectPath });
+	const execution = identity.execution ?? buildExecutionObject(identity.taskId, identity.laneId);
+	const result = await routeCodingTask({
+		task,
+		cwd: projectPath,
+		execution,
+		taskId: execution.task.id,
+		laneId: execution.lane.id,
+	});
 
 	const clis = await detectCodingClis();
 	const availableNames = clis.map((c) => c.name).join(", ") || "none";
@@ -394,6 +455,72 @@ async function executeCliMode(
 			exitCode: result.exitCode,
 			availableClis: availableNames,
 			mode: "cli",
+			execution,
+			taskId: result.taskId,
+			laneId: result.laneId,
+			finalReport: result.finalReport,
+			artifacts: result.artifacts,
+		},
+	};
+}
+
+/** Parse the preferred engine-owned execution object from MCP args. */
+function normalizeTakumiExecutionObject(value: unknown): TakumiExecutionObject | undefined {
+	const taskId = typeof (value as { task?: { id?: unknown } } | null | undefined)?.task?.id === "string"
+		? (value as { task: { id: string } }).task.id.trim()
+		: "";
+	const laneId = typeof (value as { lane?: { id?: unknown } } | null | undefined)?.lane?.id === "string"
+		? (value as { lane: { id: string } }).lane.id.trim()
+		: "";
+	return taskId && laneId ? { task: { id: taskId }, lane: { id: laneId } } : undefined;
+}
+
+/** Mint a compatibility execution object when the caller only supplied aliases. */
+function buildExecutionObject(taskId?: string, laneId?: string): TakumiExecutionObject {
+	return {
+		task: { id: taskId ?? `task-${crypto.randomUUID()}` },
+		lane: { id: laneId ?? `lane-${crypto.randomUUID()}` },
+	};
+}
+
+/**
+ * Preserve typed execution/report metadata even when the public tool fails
+ * before Lucy or the CLI can return a normal structured result.
+ */
+function buildCodingAgentErrorResult(
+	message: string,
+	mode: CodingAgentMode,
+	noCache: boolean,
+	execution: TakumiExecutionObject,
+): McpToolResult {
+	const finalReport: TakumiFinalReport = {
+		execution,
+		taskId: execution.task.id,
+		laneId: execution.lane.id,
+		status: "failed",
+		summary: message,
+		usedRoute: undefined,
+		toolCalls: [],
+		validation: undefined,
+		artifacts: [],
+		error: message,
+		failureKind: "runtime-failure",
+	};
+	const artifacts: TakumiArtifact[] = [];
+	return {
+		content: [{
+			type: "text",
+			text: `coding_agent failed: ${message}`,
+		}],
+		isError: true,
+		_metadata: {
+			mode,
+			noCache,
+			execution,
+			taskId: execution.task.id,
+			laneId: execution.lane.id,
+			finalReport,
+			artifacts,
 		},
 	};
 }

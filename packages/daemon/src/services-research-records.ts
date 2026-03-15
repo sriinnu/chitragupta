@@ -128,6 +128,8 @@ async function queueDeferredResearchRefinement(args: {
 	date: string;
 	sessionId: string | null;
 	sessionLineageKey: string | null;
+	refinementBudget?: ResearchRefinementBudgetOverride | null;
+	nidraBudget?: ResearchNidraBudgetOverride | null;
 	repairIntent?: {
 		daily?: Record<string, unknown> | null;
 		project?: Record<string, unknown> | null;
@@ -143,6 +145,8 @@ async function queueDeferredResearchRefinement(args: {
 		projectPath: args.projectPath,
 		sessionIds: args.sessionId ? [args.sessionId] : [],
 		sessionLineageKeys: args.sessionLineageKey ? [args.sessionLineageKey] : [],
+		refinementBudget: args.refinementBudget ?? null,
+		nidraBudget: args.nidraBudget ?? null,
 		repairIntent: args.repairIntent ?? null,
 	}], {
 		notBefore: Date.now(),
@@ -324,7 +328,8 @@ export function registerResearchLedgerMethods(router: RpcRouter): void {
 			status: typeof params.status === "string" ? params.status : null,
 			updateBudgets: parseRefinementBudgetOverride(record),
 		});
-		const refinementBudgetOverride = parseRefinementBudgetOverride(record)?.refinement ?? null;
+		const budgetOverride = parseRefinementBudgetOverride(record);
+		const refinementBudgetOverride = budgetOverride?.refinement ?? null;
 		const repairIntent = await (async () => {
 			const { buildImmediateResearchRefinementRequests } = await import("@chitragupta/smriti");
 			return buildImmediateResearchRefinementRequests({
@@ -335,6 +340,7 @@ export function registerResearchLedgerMethods(router: RpcRouter): void {
 					|| (typeof params.status === "string" && (
 						params.status === "round-failed"
 						|| params.status === "closure-failed"
+						|| params.status === "control-plane-lost"
 						|| params.status === "unsafe-discard"
 					)),
 				override: refinementBudgetOverride,
@@ -352,6 +358,8 @@ export function registerResearchLedgerMethods(router: RpcRouter): void {
 					date: new Date(recordedAt).toISOString().slice(0, 10),
 					sessionId: payload.sessionId ?? null,
 					sessionLineageKey: payload.sessionLineageKey ?? null,
+					refinementBudget: budgetOverride?.refinement ?? null,
+					nidraBudget: budgetOverride?.nidra ?? null,
 					repairIntent,
 					lastError: semanticRepair.status === "degraded" ? semanticRepair.error ?? null : null,
 				})

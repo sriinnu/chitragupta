@@ -50,8 +50,10 @@ Daemon consumer bridge methods:
 - `sabha.ask`
 - `research.loops.get`
 - `research.loops.active`
+- `research.loops.enqueue`
 - `research.loops.schedule.get`
 - `research.loops.dispatchable`
+- `research.loops.dispatch.next`
 - `research.loops.checkpoint.get`
 - `research.loops.checkpoint.list`
 - `sabha.resume`
@@ -86,32 +88,53 @@ Notes:
   - `GET /api/agent/tasks/checkpoints/{taskKey}?project=...`
 - use `research.loops.active` or `research.loops.get` to inspect current daemon loop ownership and whether an overnight run is resumable.
 - `research.loops.get`, `research.loops.active`, `research.loops.checkpoint.get`, and `research.loops.checkpoint.list` now return a bounded `resumeContext` plus a machine-usable `resumePlan` so timeout pickup does not depend on raw checkpoint JSON alone.
+- live research-loop control is keyed by canonical `projectPath + loopKey`; callers should pass `projectPath` whenever the same logical `loopKey` can exist in more than one repo.
+- `research.loops.complete` also requires `projectPath` for safe durable-only completion once live daemon control state is gone.
+- `research.loops.schedule.get` also fails closed on project-less lookup when the same `loopKey` exists in more than one project; pass `projectPath` whenever durable queue rows may collide across repos.
 - overnight loop summaries and persisted research records now carry optimizer-facing metadata:
   - per-round objective scores
   - explicit stop-condition hits
   - Pareto frontier annotations
 - daemon-owned loop scheduling now also has a durable queue/lease surface:
-  - `research.loops.enqueue` persists a queued overnight loop with its objective registry, stop conditions, and update budgets
-  - `research.loops.schedule.get` inspects the durable queue/lease row for one `loopKey`
+  - `research.loops.enqueue` persists a queued overnight loop with its objective registry, stop conditions, update budgets, and optimizer policy identity (`policyFingerprint`, `primaryObjectiveId`, `primaryStopConditionId`)
+  - `research.loops.schedule.get` inspects the durable queue/lease row for one `loopKey`; when `projectPath` is omitted it only returns a row if that `loopKey` is unique across the durable queue
   - `research.loops.dispatchable` lists queued loops whose lease is free or expired so a resident scheduler can pick them up deterministically
-  - the resident daemon now polls that dispatchable queue on `researchDispatchMinutes`, dispatches at most one loop at a time, and refuses to guess when the persisted workflow envelope is incomplete
+  - `research.loops.dispatch.next` claims at most one runnable queued row under a durable lease so resident daemons cannot race each other into duplicate execution
+  - the resident daemon now polls that dispatchable queue on `researchDispatchMinutes`, dispatches at most one loop at a time, refuses to guess when the persisted workflow envelope is incomplete, and stays behind startup backfill, daily consolidation, semantic refresh, and deep-sleep refinement
   - resident dispatch also injects a process-unique `researchLeaseOwner`, and the overnight loop now forwards that owner through daemon start plus heartbeat control calls
 - `research.outcome.record` is no longer ledger-only:
   - it can trigger bounded immediate semantic repair for the touched day and project horizon
   - any residual quality debt is persisted as deferred `queuedResearch` repair work
   - degraded inline repair now persists the exact deferred repair intent, not only the coarse scope identifiers
-  - the daemon’s daily postprocess later drains that durable queue under the remaining cycle budget, carries capped-overflow scopes forward durably, and only allows clean remote semantic sync after outstanding repair backlog plus epoch-refresh completion are both clear
+  - the daemon’s daily postprocess later drains that durable queue under the remaining cycle cap, carries capped-overflow scopes forward durably, and only allows clean remote semantic sync after outstanding repair backlog plus epoch-refresh completion are both clear
+  - queue-only backlog still uses a bounded queued-drain cap, but it no longer widens the earlier date-repair / research-repair phases by itself
+  - queue drains clear already-covered coarse rows even when the replay budget is `0`, and they keep metadata-only queued rows when the active scope does not fully cover their optimizer signal
 - daily daemon postprocess now returns an explicit refinement governor summary:
   - fixed phase order: `date-repair`, `research-repair`, `queued-repair`, `epoch-refresh`
   - the merged budget envelope actually used for that cycle
   - the bounded `researchSignalCount` and `queuedDrainLimit`
   - machine-usable `remoteHoldReasons` instead of only a boolean skip flag
+- queued research debt can also drain during the periodic semantic epoch-refresh path when a shared refinement governor envelope is already active:
+  - this is a bounded retry path, not a second ungoverned queue consumer
+  - the daily postprocess result remains the richer operator-facing governor summary
+- deep-sleep / Nidra now widens that same daemon-owned refinement governor before project-scoped semantic repair runs:
+  - deep-sleep research digests are normalized back into research scopes
+  - that rebuild now pages through project-scoped research history before filtering back to the relevant session/lineage scope
+  - their recovered loop budgets are merged with any active daemon budget
+  - the widened envelope is persisted with source `nidra.deep-sleep` so the next daemon sweep reuses the same repair pressure
+  - if the deep-sleep research-refinement tail fails, the daemon emits an error and queues the unfinished digest-enriched refinement tail for the next retry instead of replaying already completed Swapna sessions
 - semantic refresh is epoch-aware:
   - stale embedding generations are tracked separately from content drift
   - curated semantic repair can be triggered by epoch drift, MDL quality debt, or research-originated refinement pressure
   - same-epoch quality debt repair now honors the active research refinement budget before widening repair
   - remote semantic publish is gated on full epoch-refresh completion, not only on deferred-quality counts
   - timeout pickup remains phase-safe rather than fully semantic for every closure-side effect; callers should treat `resumePlan` as the authoritative next action, not as proof that every prior tail action already replayed
+- overnight resume now treats experiment-only rows with no compatible policy identity as unsafe to resume
+- when a persisted loop summary exists, resume still uses it as the governance backbone and overlays only fresher per-round execution facts from the bounded experiment tail
+- if every restored round still has its objective vector, Pareto annotations are recomputed from the merged round set so later frontier shifts survive resume
+- summary replay also repairs stale persisted policy truth before the live loop continues:
+  - canonical primary stop-condition identity is rebuilt from explicit triggered hits when they exist
+  - missing or out-of-range stored update budgets are defaulted and clamped before resume reuses them
 
 ---
 

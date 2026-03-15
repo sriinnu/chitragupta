@@ -93,6 +93,7 @@ vi.mock("../src/chitragupta-daemon-semantic-queue.js", () => ({
 
 const appendMemory = vi.fn(async () => undefined);
 const clearResearchRefinementBudget = vi.fn(() => undefined);
+const countQueuedResearchRefinementScopes = vi.fn(() => 0);
 const readActiveResearchRefinementBudget = vi.fn(() => null);
 const upsertResearchRefinementQueue = vi.fn(() => 0);
 const upsertResearchRefinementBudget = vi.fn(() => undefined);
@@ -100,6 +101,7 @@ vi.mock("@chitragupta/smriti", () => ({
 	syncRemoteSemanticMirror,
 	appendMemory,
 	clearResearchRefinementBudget,
+	countQueuedResearchRefinementScopes,
 	readActiveResearchRefinementBudget,
 	upsertResearchRefinementQueue,
 	upsertResearchRefinementBudget,
@@ -269,6 +271,38 @@ describe("chitragupta-daemon daily postprocess helper", () => {
 		});
 	});
 
+	it("replays deferred queue work without widening the shared repair budget when only queued backlog remains", async () => {
+		consolidateResearchLoopSummariesForDate.mockResolvedValueOnce({
+			processed: 0,
+			projects: 0,
+			projectPaths: [],
+		});
+		consolidateResearchExperimentsForDate.mockResolvedValueOnce({
+			processed: 0,
+			projects: 0,
+			projectPaths: [],
+		});
+		consolidateResearchRefinementDigestsForDate.mockResolvedValueOnce({
+			processed: 0,
+			projects: 0,
+			projectPaths: [],
+			scopes: [],
+		});
+		countQueuedResearchRefinementScopes.mockReturnValueOnce(3);
+
+		const { runDailyDaemonPostprocess } = await import("../src/chitragupta-daemon-postprocess.js");
+		const result = await runDailyDaemonPostprocess("2026-03-10");
+
+		expect(upsertResearchRefinementBudget).not.toHaveBeenCalled();
+		expect(drainQueuedResearchRefinementScopes).toHaveBeenCalledWith({
+			label: "2026-03-10",
+			excludeScopes: [],
+			limit: 3,
+		});
+		expect(result.governor.effectiveBudget).toBeNull();
+		expect(result.governor.queuedDrainLimit).toBe(3);
+	});
+
 	it("skips remote sync when semantic repair still has deferred-quality artifacts", async () => {
 		repairSelectiveReembeddingForDate.mockResolvedValueOnce({
 			candidates: 2,
@@ -301,7 +335,16 @@ describe("chitragupta-daemon daily postprocess helper", () => {
 
 		expect(syncRemoteSemanticMirror).not.toHaveBeenCalled();
 		expect(clearResearchRefinementBudget).not.toHaveBeenCalled();
-		expect(appendMemory).not.toHaveBeenCalled();
+		expect(appendMemory).toHaveBeenCalledWith(
+			{ type: "global" },
+			expect.stringContaining("scope: research-queue"),
+			{ dedupe: true },
+		);
+		expect(appendMemory).toHaveBeenCalledWith(
+			{ type: "global" },
+			expect.stringContaining("queuedQualityDebt: 1"),
+			{ dedupe: true },
+		);
 		expect(result.governor.remoteHoldReasons).toEqual([
 			"daily-quality-debt",
 			"queued-deferred",
@@ -321,6 +364,44 @@ describe("chitragupta-daemon daily postprocess helper", () => {
 		});
 	});
 
+	it("queues research-scoped quality debt for durable replay", async () => {
+		upsertResearchRefinementQueue.mockReturnValueOnce(1);
+		repairSelectiveReembeddingForResearchScopes.mockResolvedValueOnce({
+			label: "2026-03-10",
+			candidates: 2,
+			reembedded: 1,
+			remoteSynced: 0,
+			qualityDeferred: 1,
+			scopes: [
+				{
+					projectPath: "/repo/project",
+					dailyDates: ["2026-03-10"],
+					candidates: 2,
+					reembedded: 1,
+					remoteSynced: 0,
+					qualityDeferred: 1,
+				},
+			],
+		});
+		const { runDailyDaemonPostprocess } = await import("../src/chitragupta-daemon-postprocess.js");
+
+		const result = await runDailyDaemonPostprocess("2026-03-10");
+
+		expect(upsertResearchRefinementQueue).toHaveBeenCalledWith(
+			expect.arrayContaining([
+				expect.objectContaining({
+					label: "2026-03-10",
+					projectPath: "/repo/project",
+					sessionIds: ["sess-1"],
+				}),
+			]),
+			expect.objectContaining({
+				lastError: "quality-deferred:nidra-postprocess:1",
+			}),
+		);
+		expect(result.semantic.queuedResearch.carriedForward).toBe(1);
+	});
+
 	it("holds remote sync when queued due backlog remains even though this cycle could not drain it", async () => {
 		drainQueuedResearchRefinementScopes.mockResolvedValueOnce({
 			drained: 0,
@@ -338,6 +419,58 @@ describe("chitragupta-daemon daily postprocess helper", () => {
 		expect(result.governor.remoteHoldReasons).toEqual(["queued-deferred"]);
 		expect(result.semantic.queuedResearch.remainingDue).toBe(2);
 		expect(result.remote.skippedDueToOutstandingRepair).toBe(true);
+		expect(appendMemory).toHaveBeenCalledWith(
+			{ type: "global" },
+			expect.stringContaining("queuedRemainingDue: 2"),
+			{ dedupe: true },
+		);
+	});
+
+	it("keeps remote sync blocked when the shared queue cap is exhausted before queue drain can inspect due rows", async () => {
+		countQueuedResearchRefinementScopes
+			.mockReturnValueOnce(3)
+			.mockReturnValueOnce(3);
+		readActiveResearchRefinementBudget.mockReturnValueOnce({
+			refinement: {},
+			nidra: {
+				maxResearchProjectsPerCycle: 2,
+				maxSemanticPressure: 8,
+			},
+			source: "test",
+			expiresAt: Date.now() + 60_000,
+			updatedAt: Date.now(),
+			parseError: null,
+		});
+		drainQueuedResearchRefinementScopes.mockResolvedValueOnce({
+			drained: 0,
+			repaired: 0,
+			deferred: 0,
+			remainingDue: 0,
+			remoteSynced: 0,
+			qualityDeferred: 0,
+		});
+
+		const { runDailyDaemonPostprocess } = await import("../src/chitragupta-daemon-postprocess.js");
+		const result = await runDailyDaemonPostprocess("2026-03-10");
+
+		expect(drainQueuedResearchRefinementScopes).toHaveBeenCalledWith({
+			label: "2026-03-10",
+			excludeScopes: [
+				{ projectPath: "/repo/project", sessionIds: ["sess-1"], sessionLineageKeys: [], priorityScore: 3.4 },
+				{ projectPath: "/repo/other", sessionIds: ["sess-2"], sessionLineageKeys: [], priorityScore: 1.1 },
+			],
+			limit: 0,
+		});
+		expect(syncRemoteSemanticMirror).not.toHaveBeenCalled();
+		expect(result.governor.queuedDrainLimit).toBe(0);
+		expect(result.governor.remoteHoldReasons).toEqual(["queued-deferred"]);
+		expect(result.semantic.queuedResearch.remainingDue).toBe(3);
+		expect(result.remote.skippedDueToOutstandingRepair).toBe(true);
+		expect(appendMemory).toHaveBeenCalledWith(
+			{ type: "global" },
+			expect.stringContaining("queuedRemainingDue: 3"),
+			{ dedupe: true },
+		);
 	});
 
 	it("persists a global semantic debt note when only epoch quality debt remains", async () => {
@@ -490,5 +623,40 @@ describe("chitragupta-daemon daily postprocess helper", () => {
 			{ projectPath: "/repo/project", sessionIds: ["sess-1"], sessionLineageKeys: [], priorityScore: 3.4 },
 			{ projectPath: "/repo/other", sessionIds: ["sess-2"], sessionLineageKeys: [], priorityScore: 1.1 },
 		]);
+	});
+
+	it("keeps deferred refinement projects visible even when the digest summary project list is incomplete", async () => {
+		consolidateResearchRefinementDigestsForDate.mockResolvedValueOnce({
+			processed: 2,
+			projects: 1,
+			projectPaths: ["/repo/project"],
+			scopes: [
+				{ projectPath: "/repo/project", sessionIds: ["sess-1"], sessionLineageKeys: [], priorityScore: 3.4 },
+				{ projectPath: "/repo/other", sessionIds: ["sess-2"], sessionLineageKeys: [], priorityScore: 1.1 },
+			],
+		});
+		readActiveResearchRefinementBudget.mockReturnValueOnce({
+			refinement: {},
+			nidra: {
+				maxResearchProjectsPerCycle: 1,
+				maxSemanticPressure: 8,
+			},
+			source: "test",
+			expiresAt: Date.now() + 60_000,
+			updatedAt: Date.now(),
+			parseError: null,
+		});
+		upsertResearchRefinementQueue.mockReturnValueOnce(1);
+		const { runDailyDaemonPostprocess } = await import("../src/chitragupta-daemon-postprocess.js");
+
+		const result = await runDailyDaemonPostprocess("2026-03-10");
+
+		expect(result.research.refinements.projectPaths).toEqual(["/repo/project", "/repo/other"]);
+		expect(result.research.refinements.scopes).toEqual(
+			expect.arrayContaining([
+				{ projectPath: "/repo/project", sessionIds: ["sess-1"], sessionLineageKeys: [], priorityScore: 3.4 },
+			]),
+		);
+		expect(result.research.projectPaths).toEqual(["/repo/project", "/repo/other"]);
 	});
 });

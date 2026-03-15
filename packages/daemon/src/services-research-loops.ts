@@ -6,11 +6,13 @@ import {
 	type ResearchLoopResumeAction,
 } from "./services-research-resume.js";
 import {
+	buildResearchLoopControlStateKey,
 	buildResumedResearchLoopState,
 	buildStartedResearchLoopState,
 	canResumeResearchLoop,
 	ensureResearchLoopKey,
 	getResearchLoopState,
+	inspectResearchLoopState,
 	isFailureResearchLoopStopReason,
 	isTerminalResearchLoopStatus,
 	listResearchLoopStates,
@@ -23,6 +25,8 @@ import {
 	claimResearchLoopLease,
 	completeDurableResearchLoop,
 	heartbeatResearchLoopLease,
+	inspectResearchLoopScheduleClaim,
+	resolveResearchLoopLeaseOwner,
 } from "./services-research-scheduler.js";
 
 /**
@@ -52,6 +56,10 @@ type ResearchLoopCheckpointRecord = {
 	checkpoint?: unknown;
 };
 
+type DurableResearchLoopSchedule = Awaited<
+	ReturnType<typeof inspectResearchLoopScheduleClaim>
+>["schedule"];
+
 /**
  * Load the durable checkpoint record that belongs to one logical research
  * loop.
@@ -75,10 +83,12 @@ async function findResearchLoopCheckpointRecord(
 		}
 		return null;
 	}
-	const checkpointMatch = listResearchLoopCheckpoints({ limit: 200 }).find(
+	const checkpointMatches = listResearchLoopCheckpoints({ limit: 200 }).filter(
 		(entry) => entry.loopKey === loopKey,
 	);
-	return (checkpointMatch as ResearchLoopCheckpointRecord | undefined) ?? null;
+	return checkpointMatches.length === 1
+		? (checkpointMatches[0] as ResearchLoopCheckpointRecord)
+		: null;
 }
 
 /**
@@ -100,6 +110,15 @@ function researchLoopStartReuseError(loopKey: string, action: ResearchLoopResume
 		default:
 			return new Error(`Research loop ${loopKey} already has durable state; use a new loop key`);
 	}
+}
+
+function requireProjectPathForAmbiguousResearchLoop(
+	loopKey: string,
+	action: "inspect" | "resume",
+): never {
+	throw new Error(
+		`Research loop ${loopKey} requires projectPath for safe ${action} because that loop key exists in more than one project`,
+	);
 }
 
 /**
@@ -155,6 +174,8 @@ function checkpointOnlyLoopState(checkpoint: ResearchLoopCheckpointRecord): Rese
 		sessionId: checkpoint.sessionId ?? null,
 		sabhaId: checkpoint.sabhaId ?? null,
 		workflowId: null,
+		leaseOwner: null,
+		leaseExpiresAt: null,
 		status,
 		startedAt: checkpoint.createdAt,
 		updatedAt: checkpoint.updatedAt,
@@ -172,6 +193,39 @@ function checkpointOnlyLoopState(checkpoint: ResearchLoopCheckpointRecord): Rese
 	};
 }
 
+function scheduleShowsCancellation(schedule: DurableResearchLoopSchedule): boolean {
+	return Boolean(schedule && (schedule.cancelRequestedAt != null || schedule.status === "cancelling"));
+}
+
+/**
+ * Merge durable queue cancellation truth back into live/checkpoint control
+ * state so operator-facing inspection does not claim a loop is still running
+ * after the schedule row was cancelled durably.
+ */
+function applyDurableScheduleTruth(
+	state: ResearchLoopControlState | null,
+	schedule: DurableResearchLoopSchedule,
+): ResearchLoopControlState | null {
+	if (!state || !schedule) return state;
+	const durableAwareState: ResearchLoopControlState = {
+		...state,
+		leaseOwner:
+			typeof schedule.leaseOwner === "string" && schedule.leaseOwner.trim()
+				? schedule.leaseOwner
+				: null,
+		leaseExpiresAt:
+			typeof schedule.leaseExpiresAt === "number" ? schedule.leaseExpiresAt : null,
+	};
+	if (!scheduleShowsCancellation(schedule)) return durableAwareState;
+	return {
+		...durableAwareState,
+		status: isTerminalResearchLoopStatus(durableAwareState.status) ? durableAwareState.status : "cancelling",
+		cancelRequestedAt: durableAwareState.cancelRequestedAt ?? schedule.cancelRequestedAt ?? null,
+		cancelReason: durableAwareState.cancelReason ?? schedule.cancelReason ?? null,
+		requestedBy: durableAwareState.requestedBy ?? schedule.requestedBy ?? null,
+	};
+}
+
 /**
  * Register daemon-owned research loop control methods.
  *
@@ -182,17 +236,21 @@ function checkpointOnlyLoopState(checkpoint: ResearchLoopCheckpointRecord): Rese
 export function registerResearchLoopControlMethods(router: RpcRouter): void {
 	router.register("research.loops.start", async (params) => {
 		const loopKey = ensureResearchLoopKey(params.loopKey);
-		const existing = getResearchLoopState(loopKey);
+		const now = Date.now();
+		const projectPath =
+			typeof params.projectPath === "string" && params.projectPath.trim()
+				? normalizeProjectPath(params.projectPath)
+				: null;
+		if (!projectPath) {
+			throw new Error(`Research loop ${loopKey} requires projectPath for durable start coordination`);
+		}
+		const existing = getResearchLoopState(loopKey, projectPath);
 		if (existing) {
 			if (isTerminalResearchLoopStatus(existing.status)) {
 				throw new Error(`Research loop ${loopKey} is already completed; use a new loop key`);
 			}
 			throw new Error(`Research loop ${loopKey} is already active`);
 		}
-		const projectPath =
-			typeof params.projectPath === "string" && params.projectPath.trim()
-				? normalizeProjectPath(params.projectPath)
-				: null;
 		const checkpoint = await findResearchLoopCheckpointRecord(loopKey, projectPath);
 		if (checkpoint) {
 			// A durable checkpoint outranks "start a new loop" because restarting
@@ -201,16 +259,35 @@ export function registerResearchLoopControlMethods(router: RpcRouter): void {
 			const resumePlan = buildResearchLoopResumePlan(checkpointState, checkpoint);
 			throw researchLoopStartReuseError(loopKey, resumePlan?.nextAction ?? null);
 		}
-		const now = Date.now();
-		await claimResearchLoopLease({
-			...(params as Record<string, unknown>),
-			loopKey,
+		const durableInspection = await inspectResearchLoopScheduleClaim({
 			projectPath,
+			loopKey,
+			leaseOwner: resolveResearchLoopLeaseOwner(params.leaseOwner),
 			now,
 		});
-		const state = buildStartedResearchLoopState(loopKey, params as Record<string, unknown>, now);
-		setResearchLoopState(loopKey, state);
-		return { state };
+		if (durableInspection.claimStatus === "terminal") {
+			throw new Error(`Research loop ${loopKey} is already ${durableInspection.schedule?.status ?? "completed"}; use a new loop key`);
+		}
+		if (scheduleShowsCancellation(durableInspection.schedule)) {
+			throw new Error(`Research loop ${loopKey} is cancelling already; inspect or complete that run before starting a new one`);
+		}
+			const claimedSchedule = await claimResearchLoopLease({
+				...(params as Record<string, unknown>),
+				loopKey,
+				projectPath,
+				now,
+			});
+			const state = {
+				...buildStartedResearchLoopState(loopKey, params as Record<string, unknown>, now),
+				leaseOwner:
+					typeof claimedSchedule.leaseOwner === "string" && claimedSchedule.leaseOwner.trim()
+						? claimedSchedule.leaseOwner
+						: null,
+				leaseExpiresAt:
+					typeof claimedSchedule.leaseExpiresAt === "number" ? claimedSchedule.leaseExpiresAt : null,
+			};
+			setResearchLoopState(state);
+			return { state };
 	}, "Register or refresh an active overnight research loop in daemon control state");
 
 	router.register("research.loops.resume", async (params) => {
@@ -220,40 +297,77 @@ export function registerResearchLoopControlMethods(router: RpcRouter): void {
 			typeof params.projectPath === "string" && params.projectPath.trim()
 				? normalizeProjectPath(params.projectPath)
 				: null;
-		const existing = getResearchLoopState(loopKey);
+		const liveLookup = inspectResearchLoopState(loopKey, projectPath);
+		if (!projectPath && liveLookup.ambiguous) {
+			requireProjectPathForAmbiguousResearchLoop(loopKey, "resume");
+		}
+		const existing = liveLookup.state;
 		const checkpoint = await findResearchLoopCheckpointRecord(loopKey, projectPath);
 		const resumeState = existing ?? (checkpoint ? checkpointOnlyLoopState(checkpoint) : null);
 		if (!resumeState) {
 			throw new Error(`Research loop ${loopKey} has no durable state to resume`);
 		}
+		const effectiveProjectPath = projectPath ?? resumeState.projectPath;
+		const durableInspection = effectiveProjectPath
+				? await inspectResearchLoopScheduleClaim({
+					projectPath: effectiveProjectPath,
+					loopKey,
+					leaseOwner: resolveResearchLoopLeaseOwner(params.leaseOwner),
+					now,
+				})
+			: null;
+		const effectiveResumeState = applyDurableScheduleTruth(resumeState, durableInspection?.schedule ?? null);
+		if (!effectiveResumeState) {
+			throw new Error(`Research loop ${loopKey} has no durable state to resume`);
+		}
+		if (durableInspection?.claimStatus === "terminal") {
+			throw new Error(`Research loop ${loopKey} is already ${durableInspection.schedule?.status ?? "completed"} and cannot be resumed`);
+		}
 		if (isTerminalResearchLoopStatus(resumeState.status)) {
 			throw new Error(`Research loop ${loopKey} is already ${resumeState.status} and cannot be resumed`);
 		}
-		if (!canResumeResearchLoop(resumeState, now)) {
+		const checkpointOnlyCompletionResume = !existing && checkpoint?.phase === "complete-pending";
+		if (
+			durableInspection?.claimStatus === "lease-active"
+			|| durableInspection?.claimStatus === "available-later"
+			|| (!checkpointOnlyCompletionResume && !canResumeResearchLoop(effectiveResumeState, now))
+		) {
 			throw new Error(`Research loop ${loopKey} is still active and cannot be resumed yet`);
 		}
-		await claimResearchLoopLease({
-			...(params as Record<string, unknown>),
-			loopKey,
-			projectPath: projectPath ?? resumeState.projectPath,
+			const claimedSchedule = await claimResearchLoopLease({
+				...(params as Record<string, unknown>),
+				loopKey,
+				projectPath: effectiveProjectPath,
 			now,
-			currentRound: resumeState.currentRound,
-			totalRounds: resumeState.totalRounds,
-			attemptNumber: resumeState.attemptNumber,
+			currentRound: effectiveResumeState.currentRound,
+			totalRounds: effectiveResumeState.totalRounds,
+			attemptNumber: effectiveResumeState.attemptNumber,
 		});
-		const state = buildResumedResearchLoopState(
-			loopKey,
-			params as Record<string, unknown>,
-			resumeState,
-			now,
-		);
-		setResearchLoopState(loopKey, state);
-		return { state };
+			const state = {
+				...buildResumedResearchLoopState(
+					loopKey,
+					params as Record<string, unknown>,
+					effectiveResumeState,
+					now,
+				),
+				leaseOwner:
+					typeof claimedSchedule.leaseOwner === "string" && claimedSchedule.leaseOwner.trim()
+						? claimedSchedule.leaseOwner
+						: null,
+				leaseExpiresAt:
+					typeof claimedSchedule.leaseExpiresAt === "number" ? claimedSchedule.leaseExpiresAt : null,
+			};
+			setResearchLoopState(state);
+			return { state };
 	}, "Resume a logical overnight research loop after a local timeout or process restart");
 
 	router.register("research.loops.heartbeat", async (params) => {
 		const loopKey = ensureResearchLoopKey(params.loopKey);
-		const existing = getResearchLoopState(loopKey);
+		const requestedProjectPath =
+			typeof params.projectPath === "string" && params.projectPath.trim()
+				? normalizeProjectPath(params.projectPath)
+				: null;
+		const existing = getResearchLoopState(loopKey, requestedProjectPath);
 		if (!existing) {
 			throw new Error(`Research loop ${loopKey} is not active`);
 		}
@@ -261,10 +375,10 @@ export function registerResearchLoopControlMethods(router: RpcRouter): void {
 			return { state: existing };
 		}
 		const now = Date.now();
-		await heartbeatResearchLoopLease({
-			...(params as Record<string, unknown>),
-			loopKey,
-			projectPath: typeof params.projectPath === "string" ? params.projectPath : existing.projectPath,
+			const heartbeatedSchedule = await heartbeatResearchLoopLease({
+				...(params as Record<string, unknown>),
+				loopKey,
+				projectPath: requestedProjectPath ?? existing.projectPath,
 			now,
 			currentRound: typeof params.currentRound === "number" ? params.currentRound : existing.currentRound,
 			totalRounds: typeof params.totalRounds === "number" ? params.totalRounds : existing.totalRounds,
@@ -277,10 +391,18 @@ export function registerResearchLoopControlMethods(router: RpcRouter): void {
 					? normalizeProjectPath(params.projectPath)
 					: existing.projectPath ?? null,
 			topic: typeof params.topic === "string" ? params.topic.trim() : existing.topic ?? null,
-			sessionId: typeof params.sessionId === "string" ? params.sessionId : existing.sessionId ?? null,
-			sabhaId: typeof params.sabhaId === "string" ? params.sabhaId : existing.sabhaId ?? null,
-			workflowId: typeof params.workflowId === "string" ? params.workflowId : existing.workflowId ?? null,
-			status: existing.cancelRequestedAt ? "cancelling" : "running",
+				sessionId: typeof params.sessionId === "string" ? params.sessionId : existing.sessionId ?? null,
+				sabhaId: typeof params.sabhaId === "string" ? params.sabhaId : existing.sabhaId ?? null,
+				workflowId: typeof params.workflowId === "string" ? params.workflowId : existing.workflowId ?? null,
+				leaseOwner:
+					typeof heartbeatedSchedule.leaseOwner === "string" && heartbeatedSchedule.leaseOwner.trim()
+						? heartbeatedSchedule.leaseOwner
+						: existing.leaseOwner ?? null,
+				leaseExpiresAt:
+					typeof heartbeatedSchedule.leaseExpiresAt === "number"
+						? heartbeatedSchedule.leaseExpiresAt
+						: existing.leaseExpiresAt ?? null,
+				status: existing.cancelRequestedAt ? "cancelling" : "running",
 			startedAt: existing.startedAt ?? now,
 			updatedAt: now,
 			heartbeatAt: now,
@@ -294,45 +416,72 @@ export function registerResearchLoopControlMethods(router: RpcRouter): void {
 			stopReason: existing.stopReason ?? null,
 			finishedAt: existing.finishedAt ?? null,
 		};
-		setResearchLoopState(loopKey, state);
+		setResearchLoopState(state);
 		return { state };
 	}, "Heartbeat an active overnight research loop and surface cancel intent");
 
 	router.register("research.loops.get", async (params) => {
-		const state = getResearchLoopState(params.loopKey);
-		let checkpoint: { checkpoint?: unknown } | null = null;
-		const projectPath =
-			state?.projectPath
-			?? (
+			const projectPath =
 				typeof params.projectPath === "string" && params.projectPath.trim()
 					? normalizeProjectPath(params.projectPath)
-					: null
+					: null;
+			const liveLookup = inspectResearchLoopState(params.loopKey, projectPath);
+			const loopKey = String(params.loopKey ?? "").trim();
+			if (!projectPath && liveLookup.ambiguous) {
+				requireProjectPathForAmbiguousResearchLoop(loopKey, "inspect");
+			}
+			const state = liveLookup.state;
+			let checkpoint: { checkpoint?: unknown } | null = null;
+			const effectiveProjectPath = state?.projectPath ?? projectPath;
+			checkpoint = await findResearchLoopCheckpointRecord(loopKey, effectiveProjectPath);
+			const durableInspection = effectiveProjectPath
+				? await inspectResearchLoopScheduleClaim({
+					projectPath: effectiveProjectPath,
+					loopKey,
+				})
+				: null;
+			const effectiveState = applyDurableScheduleTruth(
+				state ?? (checkpoint ? checkpointOnlyLoopState(checkpoint as ResearchLoopCheckpointRecord) : null),
+				durableInspection?.schedule ?? null,
 			);
-		checkpoint = await findResearchLoopCheckpointRecord(String(params.loopKey ?? "").trim(), projectPath);
-		const effectiveState = state ?? (checkpoint ? checkpointOnlyLoopState(checkpoint as ResearchLoopCheckpointRecord) : null);
-		return {
-			state: effectiveState,
-			checkpointOnly: !state && Boolean(checkpoint),
-			resumeContext: buildResearchLoopResumeContext(effectiveState, checkpoint),
+			return {
+				state: effectiveState,
+				checkpointOnly: !state && Boolean(checkpoint),
+				resumeContext: buildResearchLoopResumeContext(effectiveState, checkpoint),
 			resumePlan: buildResearchLoopResumePlan(effectiveState, checkpoint),
 		};
 	}, "Get active daemon control state for an overnight research loop");
 
-	router.register("research.loops.active", async (params) => {
-		const now = Date.now();
-		const projectPath =
-			typeof params.projectPath === "string"
-				? normalizeProjectPath(params.projectPath)
-				: null;
-		const baseStates = listResearchLoopStates()
-			.filter((state) => !projectPath || state.projectPath === projectPath)
-			.map((state) => ({
-				...state,
-				resumable: canResumeResearchLoop(state, now),
-			}));
-		const { getResearchLoopCheckpoint, listResearchLoopCheckpoints } = await import("@chitragupta/smriti");
-		const checkpointEntries = listResearchLoopCheckpoints({ projectPath, limit: 200 });
-		const states = baseStates.map((state) => {
+		router.register("research.loops.active", async (params) => {
+			const now = Date.now();
+			const projectPath =
+				typeof params.projectPath === "string"
+					? normalizeProjectPath(params.projectPath)
+					: null;
+			const baseStates = await Promise.all(
+				listResearchLoopStates()
+					.filter((state) => !projectPath || state.projectPath === projectPath)
+					.map(async (state) => {
+						const durableInspection = state.projectPath
+							? await inspectResearchLoopScheduleClaim({
+								projectPath: state.projectPath,
+								loopKey: state.loopKey,
+							})
+							: null;
+						const durableAwareState = applyDurableScheduleTruth(state, durableInspection?.schedule ?? null) ?? state;
+						return {
+							...durableAwareState,
+							resumable:
+								canResumeResearchLoop(durableAwareState, now)
+								&& durableInspection?.claimStatus !== "lease-active"
+								&& durableInspection?.claimStatus !== "available-later"
+								&& durableInspection?.claimStatus !== "terminal",
+						};
+					}),
+			);
+			const { getResearchLoopCheckpoint, listResearchLoopCheckpoints } = await import("@chitragupta/smriti");
+			const checkpointEntries = listResearchLoopCheckpoints({ projectPath, limit: 200 });
+			const states = baseStates.map((state) => {
 			const checkpoint = state.projectPath ? getResearchLoopCheckpoint(state.projectPath, state.loopKey) : null;
 			return {
 				...state,
@@ -341,25 +490,41 @@ export function registerResearchLoopControlMethods(router: RpcRouter): void {
 				resumePlan: buildResearchLoopResumePlan(state, checkpoint),
 			};
 		});
-		const knownLoopKeys = new Set(states.map((state) => state.loopKey));
-		for (const checkpoint of checkpointEntries) {
-			if (knownLoopKeys.has(checkpoint.loopKey)) continue;
-			const state = checkpointOnlyLoopState(checkpoint);
-			states.push({
-				...state,
-				checkpointOnly: true,
-				resumable: true,
-				resumeContext: buildResearchLoopResumeContext(state, checkpoint),
-				resumePlan: buildResearchLoopResumePlan(state, checkpoint),
-			});
-		}
+		const knownLoopKeys = new Set(
+			states.map((state) => buildResearchLoopControlStateKey(state.projectPath, state.loopKey)),
+			);
+			for (const checkpoint of checkpointEntries) {
+				if (knownLoopKeys.has(buildResearchLoopControlStateKey(checkpoint.projectPath, checkpoint.loopKey))) continue;
+				const durableInspection = await inspectResearchLoopScheduleClaim({
+					projectPath: checkpoint.projectPath,
+					loopKey: checkpoint.loopKey,
+				});
+				const state = applyDurableScheduleTruth(
+					checkpointOnlyLoopState(checkpoint),
+					durableInspection.schedule,
+				) ?? checkpointOnlyLoopState(checkpoint);
+				states.push({
+					...state,
+					checkpointOnly: true,
+					resumable:
+						durableInspection.claimStatus !== "lease-active"
+						&& durableInspection.claimStatus !== "available-later"
+						&& durableInspection.claimStatus !== "terminal",
+					resumeContext: buildResearchLoopResumeContext(state, checkpoint),
+					resumePlan: buildResearchLoopResumePlan(state, checkpoint),
+				});
+			}
 		states.sort((left, right) => right.updatedAt - left.updatedAt);
 		return { states };
 	}, "List active or recent daemon-owned research loop control states for timeout inspection");
 
 	router.register("research.loops.cancel", async (params) => {
 		const loopKey = ensureResearchLoopKey(params.loopKey);
-		const existing = getResearchLoopState(loopKey);
+		const requestedProjectPath =
+			typeof params.projectPath === "string" && params.projectPath.trim()
+				? normalizeProjectPath(params.projectPath)
+				: null;
+		const existing = getResearchLoopState(loopKey, requestedProjectPath);
 		const now = Date.now();
 		if (!existing) {
 			return { cancelled: false, state: null };
@@ -385,52 +550,86 @@ export function registerResearchLoopControlMethods(router: RpcRouter): void {
 				? params.requestedBy.trim()
 				: existing.requestedBy ?? null,
 		};
-		setResearchLoopState(loopKey, state);
+		setResearchLoopState(state);
 		return { cancelled: true, state };
 	}, "Request cancellation of an active overnight research loop");
 
-	router.register("research.loops.complete", async (params) => {
-		const loopKey = ensureResearchLoopKey(params.loopKey);
-		const existing = getResearchLoopState(loopKey);
-		const now = Date.now();
-		const requestedStopReason =
-			typeof params.stopReason === "string" ? params.stopReason : existing?.stopReason ?? null;
-		const stopReason = isFailureResearchLoopStopReason(requestedStopReason)
-			? requestedStopReason
-			: existing?.cancelRequestedAt
-				? "cancelled"
-				: requestedStopReason;
-		const state: ResearchLoopControlState = {
-			loopKey,
-			projectPath: existing?.projectPath ?? null,
-			topic: existing?.topic ?? null,
-			sessionId: existing?.sessionId ?? null,
-			sabhaId: existing?.sabhaId ?? null,
-			workflowId: existing?.workflowId ?? null,
-			status: terminalResearchLoopStatus(stopReason),
-			startedAt: existing?.startedAt ?? now,
-			updatedAt: now,
-			heartbeatAt: existing?.heartbeatAt ?? null,
-			cancelRequestedAt: existing?.cancelRequestedAt ?? null,
-			cancelReason: existing?.cancelReason ?? null,
-			requestedBy: existing?.requestedBy ?? null,
-			currentRound: existing?.currentRound ?? null,
-			totalRounds: existing?.totalRounds ?? null,
-			attemptNumber: existing?.attemptNumber ?? null,
-			phase: "complete",
-			stopReason,
-			finishedAt: now,
-		};
-		if (existing?.projectPath ?? (typeof params.projectPath === "string" ? params.projectPath : null)) {
-			await completeDurableResearchLoop({
-				...(params as Record<string, unknown>),
+		router.register("research.loops.complete", async (params) => {
+			const loopKey = ensureResearchLoopKey(params.loopKey);
+			const requestedProjectPath =
+			typeof params.projectPath === "string" && params.projectPath.trim()
+				? normalizeProjectPath(params.projectPath)
+				: null;
+			const existing = getResearchLoopState(loopKey, requestedProjectPath);
+			const now = Date.now();
+			const projectPath = existing?.projectPath ?? requestedProjectPath;
+			const durableInspection = projectPath
+				? await inspectResearchLoopScheduleClaim({
+					projectPath,
+					loopKey,
+					leaseOwner: resolveResearchLoopLeaseOwner(params.leaseOwner),
+					now,
+				})
+				: null;
+			const durableSchedule = durableInspection?.schedule ?? null;
+			const requestedStopReason =
+				typeof params.stopReason === "string" ? params.stopReason : existing?.stopReason ?? null;
+			const cancellationRequested =
+				existing?.cancelRequestedAt != null || scheduleShowsCancellation(durableSchedule);
+			const stopReason = isFailureResearchLoopStopReason(requestedStopReason)
+				? requestedStopReason
+				: cancellationRequested
+					? "cancelled"
+					: requestedStopReason;
+			if (!existing && !projectPath) {
+				throw new Error(
+					`Research loop ${loopKey} requires projectPath for safe completion once live control state is gone`,
+				);
+			}
+			let completedSchedule = durableSchedule;
+			if (projectPath) {
+				completedSchedule = await completeDurableResearchLoop({
+					...(params as Record<string, unknown>),
+					loopKey,
+					projectPath,
+					stopReason,
+					now,
+				});
+				// Completion must reconcile against the durable lease row too. If that
+				// row rejects the mutation, I fail closed instead of letting in-memory
+				// loop state claim success after the durable scheduler already moved on.
+				if (!completedSchedule) {
+					throw new Error(`Research loop ${loopKey} lost its durable worker lease before completion`);
+				}
+			}
+			const state: ResearchLoopControlState = {
 				loopKey,
-				projectPath: existing?.projectPath ?? params.projectPath,
+				projectPath: projectPath ?? null,
+				topic: existing?.topic ?? durableSchedule?.topic ?? null,
+				sessionId: existing?.sessionId ?? durableSchedule?.sessionId ?? null,
+				sabhaId: existing?.sabhaId ?? durableSchedule?.sabhaId ?? null,
+				workflowId: existing?.workflowId ?? durableSchedule?.workflowId ?? null,
+				leaseOwner:
+					typeof completedSchedule?.leaseOwner === "string" && completedSchedule.leaseOwner.trim()
+						? completedSchedule.leaseOwner
+						: null,
+				leaseExpiresAt:
+					typeof completedSchedule?.leaseExpiresAt === "number" ? completedSchedule.leaseExpiresAt : null,
+				status: terminalResearchLoopStatus(stopReason),
+				startedAt: existing?.startedAt ?? now,
+				updatedAt: now,
+				heartbeatAt: existing?.heartbeatAt ?? null,
+				cancelRequestedAt: existing?.cancelRequestedAt ?? durableSchedule?.cancelRequestedAt ?? null,
+				cancelReason: existing?.cancelReason ?? durableSchedule?.cancelReason ?? null,
+				requestedBy: existing?.requestedBy ?? durableSchedule?.requestedBy ?? null,
+				currentRound: existing?.currentRound ?? durableSchedule?.currentRound ?? null,
+				totalRounds: existing?.totalRounds ?? durableSchedule?.totalRounds ?? null,
+				attemptNumber: existing?.attemptNumber ?? durableSchedule?.attemptNumber ?? null,
+				phase: "complete",
 				stopReason,
-				now,
-			});
-		}
-		setResearchLoopState(loopKey, state);
+				finishedAt: now,
+			};
+		setResearchLoopState(state);
 		return { state };
 	}, "Mark an overnight research loop as completed or cancelled in daemon control state");
 }

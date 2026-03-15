@@ -86,6 +86,7 @@ export function buildCommittedOptimizedRound(args: {
 	recorded: Record<string, unknown> | null;
 	roundNumber: number;
 	state: RoundProgressState;
+	projectedTotalDurationMs?: number;
 }): { round: OvernightResearchRound; rounds: OvernightResearchRound[] } {
 	const optimizedRound = withRoundOptimization(
 		buildRecordedRound(
@@ -111,7 +112,7 @@ export function buildCommittedOptimizedRound(args: {
 		rounds: annotatedRounds,
 		currentRound: args.roundNumber,
 		noImprovementStreak: args.state.noImprovementStreak,
-		totalDurationMs: args.state.totalDurationMs,
+		totalDurationMs: args.projectedTotalDurationMs ?? args.state.totalDurationMs,
 	});
 	return { round, rounds: annotatedRounds };
 }

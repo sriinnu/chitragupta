@@ -22,7 +22,18 @@
  * @module lucy-bridge
  */
 
-import type { TakumiContext, TakumiResponse, TakumiEvent } from "./takumi-bridge-types.js";
+import crypto from "node:crypto";
+import type {
+	BridgeRouteProgressEvent,
+	CodingRouteResult,
+} from "./coding-router.js";
+import type {
+	TakumiArtifact,
+	TakumiContext,
+	TakumiExecutionObject,
+	TakumiFinalReport,
+	TakumiNormalizedResponse,
+} from "./takumi-bridge-types.js";
 import { routeViaBridge } from "./coding-router.js";
 import {
 	normalizeContextForReuse,
@@ -50,6 +61,12 @@ export interface TranscendenceEngineRef {
 export interface LucyBridgeConfig {
 	/** Project root directory. */
 	projectPath: string;
+	/** Preferred engine-owned execution object when the caller already owns one. */
+	execution?: TakumiExecutionObject;
+	/** Compatibility alias for callers still passing a top-level task id. */
+	taskId?: string;
+	/** Compatibility alias for callers still passing a top-level lane id. */
+	laneId?: string;
 	/** When true, bypass predictive caches and favor live reads only. */
 	noCache?: boolean;
 	/** Alias for `noCache` to make fresh-mode intent explicit at call sites. */
@@ -88,6 +105,12 @@ export interface LucyBridgeConfig {
 
 /** Episode recorded after a Lucy Bridge execution. */
 export interface LucyEpisode {
+	/** Canonical engine-owned execution object for this Lucy run. */
+	execution: TakumiExecutionObject;
+	/** Compatibility alias for consumers still keyed on task id. */
+	taskId: string;
+	/** Compatibility alias for consumers still keyed on lane id. */
+	laneId: string;
 	/** The original task description. */
 	task: string;
 	/** Project path. */
@@ -110,6 +133,12 @@ export interface LucyEpisode {
 export interface LucyTrace {
 	/** Trace type — "solution" for success, "warning" for failure. */
 	type: "solution" | "warning";
+	/** Canonical engine-owned execution object for this Lucy run. */
+	execution: TakumiExecutionObject;
+	/** Compatibility alias for consumers still keyed on task id. */
+	taskId: string;
+	/** Compatibility alias for consumers still keyed on lane id. */
+	laneId: string;
 	/** Topic tags for matching. */
 	topics: string[];
 	/** Trace content. */
@@ -122,7 +151,15 @@ export interface LucyEvent {
 	phase: "context" | "execute" | "autofix" | "record" | "done";
 	/** Human-readable message. */
 	message: string;
-	/** Optional structured data. */
+	/**
+	 * Optional structured data.
+	 *
+	 * Lucy now carries `execution`, `taskId`, and `laneId` across every lifecycle
+	 * phase so higher layers do not have to reconstruct identity from the final
+	 * report after the stream has already been displayed. Execute-phase events may
+	 * also include `eventType` to distinguish the initial lifecycle handoff from
+	 * streamed bridge progress.
+	 */
 	data?: Record<string, unknown>;
 }
 
@@ -142,7 +179,32 @@ export interface LucyResult {
 	durationMs: number;
 	/** Which CLI handled the task. */
 	cli: string;
+	/** Canonical engine-owned execution object for the Lucy task. */
+	execution: TakumiExecutionObject;
+	/** Compatibility alias for consumers still keyed on task id. */
+	taskId: string;
+	/** Compatibility alias for consumers still keyed on lane id. */
+	laneId: string;
+	/** Typed final report for the final Lucy execution result. */
+	finalReport: TakumiFinalReport;
+	/** Bridge-synthesized or executor-native artifacts for the final result. */
+	artifacts: TakumiArtifact[];
+	/** Full routed bridge result for compatibility consumers. */
+	bridgeResult?: TakumiNormalizedResponse;
 }
+
+type LucyExecutionIdentity = {
+	execution: TakumiExecutionObject;
+	taskId: string;
+	laneId: string;
+	sticky: boolean;
+};
+
+type LucyEventIdentityData = {
+	execution: TakumiExecutionObject;
+	taskId: string;
+	laneId: string;
+};
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -176,16 +238,18 @@ export async function executeLucy(
 	const startTime = Date.now();
 	let autoFixAttempts = 0;
 	const maxFix = config.maxAutoFixAttempts ?? DEFAULT_MAX_AUTOFIX;
+	const identity = ensureLucyExecutionIdentity(config);
 
 	// Phase 1: Context injection — query memory before execution
 	const context = await buildLucyContext(task, config);
 	emit(config, "context", "Injected episodic + Akasha context", {
+		...buildLucyEventIdentityData(identity),
 		episodicHints: context.episodicHints?.length ?? 0,
 		recentDecisions: context.recentDecisions?.length ?? 0,
 	});
 
 	// Phase 2: Execute via bridge
-	let result = await executeWithContext(task, config.projectPath, context, config);
+	let result = await executeWithContext(task, config.projectPath, context, config, identity);
 
 	// Phase 3: Auto-fix loop — if tests fail, attempt autonomous repair
 	while (
@@ -195,12 +259,13 @@ export async function executeLucy(
 	) {
 		autoFixAttempts++;
 		emit(config, "autofix", `Auto-fix attempt ${autoFixAttempts}/${maxFix}`, {
+			...buildLucyEventIdentityData(identity),
 			failurePattern: extractFailureHint(result.output),
 		});
 
 		const fixTask = await buildFixTask(task, result.output);
 		const fixContext = await buildLucyContext(fixTask, config);
-		result = await executeWithContext(fixTask, config.projectPath, fixContext, config);
+		result = await executeWithContext(fixTask, config.projectPath, fixContext, config, identity);
 	}
 
 	const durationMs = Date.now() - startTime;
@@ -210,12 +275,16 @@ export async function executeLucy(
 
 	// Phase 4: Record results
 	await recordLucyResults(config, {
+		execution: result.execution ?? identity.execution,
+		taskId: result.taskId ?? identity.taskId,
+		laneId: result.laneId ?? identity.laneId,
 		task, project: config.projectPath, success, filesModified,
 		testsRun, autoFixAttempts, durationMs,
 		error: success ? undefined : result.output.slice(0, 500),
-	});
+	}, identity);
 
 	emit(config, "done", success ? "Task completed successfully" : "Task failed", {
+		...buildLucyEventIdentityData(identity),
 		autoFixAttempts, durationMs, filesModified: filesModified.length,
 	});
 
@@ -227,6 +296,12 @@ export async function executeLucy(
 		autoFixAttempts,
 		durationMs,
 		cli: result.cli,
+		execution: result.execution ?? { task: { id: identity.taskId }, lane: { id: identity.laneId } },
+		taskId: result.taskId ?? identity.taskId,
+		laneId: result.laneId ?? identity.laneId,
+		finalReport: result.finalReport,
+		artifacts: result.artifacts,
+		bridgeResult: result.bridgeResult,
 	};
 }
 
@@ -291,24 +366,78 @@ async function executeWithContext(
 	projectPath: string,
 	context: TakumiContext,
 	config: LucyBridgeConfig,
-): Promise<ReturnType<typeof routeViaBridge>> {
-	emit(config, "execute", `Executing: ${task.slice(0, 80)}...`);
+	identity: LucyExecutionIdentity,
+): Promise<CodingRouteResult> {
+	emit(config, "execute", `Executing: ${task.slice(0, 80)}...`, {
+		...buildLucyEventIdentityData(identity),
+		eventType: "start",
+	});
 
-	return routeViaBridge({
+	const freshMode = isFreshLucyMode(config);
+	const result = await routeViaBridge({
 		task,
 		cwd: projectPath,
+		execution: identity.execution,
+		taskId: identity.taskId,
+		laneId: identity.laneId,
 		context,
+		noCache: freshMode,
+		fresh: freshMode,
 		sessionId: config.sessionId,
 		consumer: config.consumer,
 		routeClass: config.routeClass,
 		capability: config.capability,
-		onOutput: (chunk) => {
+		onProgress: (event) => {
 			config.onEvent?.({
 				phase: "execute",
-				message: chunk,
-			});
+				message: event.data,
+			data: buildLucyExecuteProgressData(event),
+		});
+			},
+		});
+	if (!identity.sticky) {
+		return result;
+	}
+	return {
+		...result,
+		execution: identity.execution,
+		taskId: identity.taskId,
+		laneId: identity.laneId,
+		finalReport: {
+			...result.finalReport,
+			execution: identity.execution,
+			taskId: identity.taskId,
+			laneId: identity.laneId,
 		},
-	});
+		artifacts: result.artifacts.map((artifact) => ({
+			...artifact,
+			execution: identity.execution,
+			taskId: identity.taskId,
+			laneId: identity.laneId,
+		})),
+	};
+}
+
+/**
+ * Mint one stable execution identity for the whole Lucy task.
+ *
+ * I keep this outside individual bridge attempts so the initial execution and
+ * every auto-fix retry stay correlated as one logical engine task.
+ */
+function ensureLucyExecutionIdentity(
+	config: Pick<LucyBridgeConfig, "execution" | "taskId" | "laneId">,
+): LucyExecutionIdentity {
+	const sticky = Boolean(config.execution || config.taskId || config.laneId);
+	const execution = config.execution ?? {
+		task: { id: config.taskId ?? `task-${crypto.randomUUID()}` },
+		lane: { id: config.laneId ?? `lane-${crypto.randomUUID()}` },
+	};
+	return {
+		execution,
+		taskId: execution.task.id,
+		laneId: execution.lane.id,
+		sticky,
+	};
 }
 
 // ─── Result Recording ───────────────────────────────────────────────────────
@@ -317,8 +446,9 @@ async function executeWithContext(
 async function recordLucyResults(
 	config: LucyBridgeConfig,
 	episode: LucyEpisode,
+	identity: LucyExecutionIdentity,
 ): Promise<void> {
-	emit(config, "record", "Recording results in memory");
+	emit(config, "record", "Recording results in memory", buildLucyEventIdentityData(identity));
 
 	const recordPromise = config.recordEpisode?.(episode).catch(() => {
 		/* silent — recording failure should not block */
@@ -326,6 +456,9 @@ async function recordLucyResults(
 
 	const tracePromise = config.depositAkasha?.({
 		type: episode.success ? "solution" : "warning",
+		execution: episode.execution,
+		taskId: episode.taskId,
+		laneId: episode.laneId,
 		topics: extractTopics(episode.task),
 		content: episode.success
 			? `Task completed: ${episode.task.slice(0, 200)}. ` +
@@ -370,6 +503,34 @@ function emit(
 	data?: Record<string, unknown>,
 ): void {
 	config.onEvent?.({ phase, message, data });
+}
+
+/**
+ * Keep one typed execution identity on every Lucy event phase.
+ *
+ * I use the same shape across context, execute lifecycle, autofix, record, and
+ * done events so higher layers can correlate the full autonomous run without
+ * reconstructing identity from the terminal result only.
+ */
+function buildLucyEventIdentityData(
+	identity: LucyExecutionIdentity,
+): LucyEventIdentityData {
+	return {
+		execution: identity.execution,
+		taskId: identity.taskId,
+		laneId: identity.laneId,
+	};
+}
+
+function buildLucyExecuteProgressData(
+	event: BridgeRouteProgressEvent,
+): Record<string, unknown> {
+	return {
+		execution: event.execution,
+		taskId: event.taskId,
+		laneId: event.laneId,
+		eventType: event.type,
+	};
 }
 
 function isFreshLucyMode(config: Pick<LucyBridgeConfig, "noCache" | "fresh">): boolean {

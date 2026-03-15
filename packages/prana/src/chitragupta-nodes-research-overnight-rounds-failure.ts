@@ -106,6 +106,7 @@ function buildAnnotatedFailureRound(args: {
 	failurePacked: Record<string, unknown> | null;
 	failureRecorded: Record<string, unknown> | null;
 }): OvernightResearchRound {
+	const priorRounds = args.rounds ?? [];
 	const optimized = withRoundOptimization({
 		roundNumber: args.roundNumber,
 		decision: "record",
@@ -143,7 +144,7 @@ function buildAnnotatedFailureRound(args: {
 		paretoRank: null,
 		paretoDominated: false,
 	} satisfies OvernightResearchRound, args.roundScope);
-	return annotateParetoRounds([...args.rounds, optimized]).at(-1) ?? optimized;
+	return annotateParetoRounds([...priorRounds, optimized]).at(-1) ?? optimized;
 }
 
 /**
@@ -167,7 +168,7 @@ export async function processFailedRoundClosure(args: {
 	state: RoundProgressState;
 	carryContext: string;
 	rounds: OvernightResearchRound[];
-	saveCheckpoint: SaveRoundCheckpoint;
+	saveCheckpoint?: SaveRoundCheckpoint;
 	resumeCheckpoint?: OvernightResearchCheckpoint | null;
 }): Promise<{
 	round: OvernightResearchRound;
@@ -194,24 +195,26 @@ export async function processFailedRoundClosure(args: {
 		failurePacked = resumeCheckpoint?.activeRound?.packed ?? null;
 		failureRecorded = resumeCheckpoint?.activeRound?.recorded ?? null;
 		if (resumePhase === null || resumePhase === "failure-finalize") {
-			await args.saveCheckpoint("failure-finalize", buildCheckpoint(
-				"failure-finalize",
-				scope,
-				args.state.loopKey,
-				args.currentBaseline,
-				args.state,
-				args.counts,
-				args.carryContext,
-				args.rounds,
-				roundNumber,
-				{
+			if (args.saveCheckpoint) {
+				await args.saveCheckpoint("failure-finalize", buildCheckpoint(
+					"failure-finalize",
+					scope,
+					args.state.loopKey,
+					args.currentBaseline,
+					args.state,
+					args.counts,
+					args.carryContext,
+					args.rounds,
 					roundNumber,
-					failedRun,
-					finalize: failureFinalize,
-					packed: failurePacked,
-					recorded: failureRecorded,
-				},
-			));
+					{
+						roundNumber,
+						failedRun,
+						finalize: failureFinalize,
+						packed: failurePacked,
+						recorded: failureRecorded,
+					},
+				));
+			}
 			failureFinalize = await withinRemainingLoopBudget(
 				scope,
 				totalDurationMs,
@@ -222,24 +225,26 @@ export async function processFailedRoundClosure(args: {
 			).then((result) => asRecord(result));
 		}
 		if (resumePhase === null || resumePhase === "failure-finalize" || resumePhase === "failure-pack") {
-			await args.saveCheckpoint("failure-pack", buildCheckpoint(
-				"failure-pack",
-				scope,
-				args.state.loopKey,
-				args.currentBaseline,
-				args.state,
-				args.counts,
-				args.carryContext,
-				args.rounds,
-				roundNumber,
-				{
+			if (args.saveCheckpoint) {
+				await args.saveCheckpoint("failure-pack", buildCheckpoint(
+					"failure-pack",
+					scope,
+					args.state.loopKey,
+					args.currentBaseline,
+					args.state,
+					args.counts,
+					args.carryContext,
+					args.rounds,
 					roundNumber,
-					failedRun,
-					finalize: failureFinalize,
-					packed: failurePacked,
-					recorded: failureRecorded,
-				},
-			));
+					{
+						roundNumber,
+						failedRun,
+						finalize: failureFinalize,
+						packed: failurePacked,
+						recorded: failureRecorded,
+					},
+				));
+			}
 				failurePacked = await withinRemainingLoopBudget(
 					scope,
 					totalDurationMs,
@@ -275,24 +280,26 @@ export async function processFailedRoundClosure(args: {
 				|| resumePhase === "failure-pack"
 				|| resumePhase === "failure-record"
 		) {
-			await args.saveCheckpoint("failure-record", buildCheckpoint(
-				"failure-record",
-				scope,
-				args.state.loopKey,
-				args.currentBaseline,
-				args.state,
-				args.counts,
-				args.carryContext,
-				args.rounds,
-				roundNumber,
-					{
-						roundNumber,
-						failedRun,
-						finalize: failureFinalize,
-						packed: failurePacked,
-						recorded: failureRecorded,
-					},
-				));
+			if (args.saveCheckpoint) {
+				await args.saveCheckpoint("failure-record", buildCheckpoint(
+					"failure-record",
+					scope,
+					args.state.loopKey,
+					args.currentBaseline,
+					args.state,
+					args.counts,
+					args.carryContext,
+					args.rounds,
+					roundNumber,
+						{
+							roundNumber,
+							failedRun,
+							finalize: failureFinalize,
+							packed: failurePacked,
+							recorded: failureRecorded,
+						},
+					));
+			}
 				failedRunForRecord = {
 					...failedRun,
 					roundWallClockDurationMs: Date.now() - roundStartedAt,

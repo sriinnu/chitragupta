@@ -181,20 +181,24 @@ export async function autoresearchOvernight(ctx: NodeContext): Promise<NodeResul
 		);
 		return {
 			ok: true,
-				summary:
-					result.stopReason === "no-improvement"
-						? `Overnight research stopped after ${result.roundsCompleted} rounds without improvement`
+			summary:
+				result.stopReason === "no-improvement"
+					? `Overnight research stopped after ${result.roundsCompleted} rounds without improvement`
+					: result.stopReason === "pareto-stagnation"
+						? `Overnight research stopped after ${result.roundsCompleted} rounds because recent outcomes fell behind the frontier`
 						: result.stopReason === "budget-exhausted"
 							? `Overnight research stopped after ${result.roundsCompleted} rounds because the total budget was exhausted`
 							: result.stopReason === "control-plane-lost"
 								? `Overnight research stopped after ${result.roundsCompleted} rounds because daemon loop control was lost and the run failed closed`
-							: result.stopReason === "unsafe-discard"
-								? `Overnight research stopped after ${result.roundsCompleted} rounds because a discarded round could not be safely reverted`
-								: result.stopReason === "closure-failed"
-									? `Overnight research stopped after ${result.roundsCompleted} rounds because closure degraded after a successful execution`
-									: result.stopReason === "round-failed"
-										? `Overnight research stopped after ${result.roundsCompleted} rounds because a round failed and was recorded`
-								: `Overnight research completed ${result.roundsCompleted} rounds`,
+								: result.stopReason === "unsafe-discard"
+									? `Overnight research stopped after ${result.roundsCompleted} rounds because a discarded round could not be safely reverted`
+									: result.stopReason === "closure-failed"
+										? `Overnight research stopped after ${result.roundsCompleted} rounds because closure degraded after a successful execution`
+										: result.stopReason === "round-failed"
+											? `Overnight research stopped after ${result.roundsCompleted} rounds because a round failed and was recorded`
+											: result.stopReason === "cancelled"
+												? `Overnight research stopped after ${result.roundsCompleted} rounds because the run was cancelled`
+												: `Overnight research completed ${result.roundsCompleted} rounds`,
 			data: result,
 			durationMs,
 		};

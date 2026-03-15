@@ -64,6 +64,49 @@ export interface ResearchScopedSelectiveReembeddingResult {
 	}>;
 }
 
+function widerCap(left?: number, right?: number): number | undefined {
+	if (typeof left === "number" && Number.isFinite(left) && typeof right === "number" && Number.isFinite(right)) {
+		return Math.max(left, right);
+	}
+	return typeof left === "number" && Number.isFinite(left)
+		? left
+		: typeof right === "number" && Number.isFinite(right)
+			? right
+			: undefined;
+}
+
+function widerFloor(left?: number, right?: number): number | undefined {
+	if (typeof left === "number" && Number.isFinite(left) && typeof right === "number" && Number.isFinite(right)) {
+		return Math.min(left, right);
+	}
+	return typeof left === "number" && Number.isFinite(left)
+		? left
+		: typeof right === "number" && Number.isFinite(right)
+			? right
+			: undefined;
+}
+
+/**
+ * Research-derived scope budgets should widen the current daemon envelope, not
+ * silently disappear when the scoped repair runs later through Nidra or queue replay.
+ */
+function mergeScopeRefinementBudget(
+	activeBudget: ResearchRefinementBudgetOverride | null,
+	scopeBudget: ResearchRefinementProjectScope["refinementBudget"],
+): ResearchRefinementBudgetOverride | null {
+	if (!activeBudget && !scopeBudget) return null;
+	return {
+		dailyCandidateLimit: widerCap(activeBudget?.dailyCandidateLimit, scopeBudget?.dailyCandidateLimit),
+		projectCandidateLimit: widerCap(activeBudget?.projectCandidateLimit, scopeBudget?.projectCandidateLimit),
+		dailyMinMdlScore: widerFloor(activeBudget?.dailyMinMdlScore, scopeBudget?.dailyMinMdlScore),
+		projectMinMdlScore: widerFloor(activeBudget?.projectMinMdlScore, scopeBudget?.projectMinMdlScore),
+		dailyMinPriorityScore: widerFloor(activeBudget?.dailyMinPriorityScore, scopeBudget?.dailyMinPriorityScore),
+		projectMinPriorityScore: widerFloor(activeBudget?.projectMinPriorityScore, scopeBudget?.projectMinPriorityScore),
+		dailyMinSourceSessionCount: widerFloor(activeBudget?.dailyMinSourceSessionCount, scopeBudget?.dailyMinSourceSessionCount),
+		projectMinSourceSessionCount: widerFloor(activeBudget?.projectMinSourceSessionCount, scopeBudget?.projectMinSourceSessionCount),
+	};
+}
+
 /**
  * Build one bounded selective-reembedding request for a temporal level.
  *
@@ -165,6 +208,48 @@ interface ResearchScopeSignalSummary {
 }
 
 /**
+ * Scoped research repair has to replay enough ledger history to cover the exact
+ * session group Nidra handed over.
+ *
+ * A flat 200-row replay horizon can truncate long project sessions and erase
+ * the dates/signal needed to continue the same bounded repair pass after a
+ * restart or delayed drain.
+ */
+function deriveResearchScopeReplayLimit(scope: ResearchRefinementProjectScope): number {
+	const scopeBreadth = Math.max(
+		1,
+		(scope.sessionIds?.length ?? 0)
+		+ (scope.sessionLineageKeys?.length ?? 0),
+	);
+	return Math.min(4_000, Math.max(400, scopeBreadth * 128));
+}
+
+/**
+ * Derive bounded repair pressure from the scope metadata that Nidra carried
+ * forward from overnight optimizer summaries.
+ */
+function scopeSignalBoost(scope: ResearchRefinementProjectScope): number {
+	let boost = 0;
+	if ((scope.primaryStopConditionKinds ?? []).includes("pareto-stagnation")) boost += 1;
+	// Budget exhaustion and no-improvement are weaker than unsafe failure, but
+	// they still mean the optimizer hit a bounded ceiling worth re-checking in
+	// the next semantic refinement pass.
+	if (
+		(scope.primaryStopConditionKinds ?? []).includes("budget-exhausted")
+		|| (scope.primaryStopConditionKinds ?? []).includes("no-improvement")
+	) {
+		boost += 1;
+	}
+	if (typeof scope.frontierBestScore === "number" && scope.frontierBestScore >= 0.6) boost += 1;
+	// Several policy fingerprints inside one project scope usually mean the loop
+	// changed optimizer contract over time, so I allow one extra unit of repair
+	// pressure to revisit the affected semantic summaries.
+	if ((scope.policyFingerprints?.length ?? 0) > 1) boost += 1;
+	if (typeof scope.priorityScore === "number" && scope.priorityScore >= 3) boost += 1;
+	return Math.min(boost, 5);
+}
+
+/**
  * Collapse active daily dates into bounded monthly/yearly periods so research
  * refinement only touches periods the loop actually exercised.
  */
@@ -180,6 +265,10 @@ function uniqueResearchPeriods(
 	return [...periods].sort();
 }
 
+function isIsoDateLabel(value: string): boolean {
+	return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
 /**
  * Derive the refinement pressure produced by research outcomes for one scoped project.
  *
@@ -193,9 +282,10 @@ async function deriveResearchScopeSignals(
 	const { listResearchExperiments, listResearchLoopSummaries } = await import("@chitragupta/smriti");
 	const sessionIds = new Set<string>(scope.sessionIds ?? []);
 	const sessionLineageKeys = new Set<string>(scope.sessionLineageKeys ?? []);
+	const replayLimit = deriveResearchScopeReplayLimit(scope);
 	const [loops, experiments] = await Promise.all([
-		listResearchLoopSummaries({ projectPath: scope.projectPath, limit: 200 }),
-		listResearchExperiments({ projectPath: scope.projectPath, limit: 200 }),
+		listResearchLoopSummaries({ projectPath: scope.projectPath, limit: replayLimit }),
+		listResearchExperiments({ projectPath: scope.projectPath, limit: replayLimit }),
 	]);
 	const scopedLoops = loops.filter((loop) => matchesScopeSession(loop, sessionIds, sessionLineageKeys));
 	const scopedExperiments = experiments.filter((experiment) => matchesScopeSession(experiment, sessionIds, sessionLineageKeys));
@@ -205,6 +295,7 @@ async function deriveResearchScopeSignals(
 	const unstableLoops = scopedLoops.filter((loop) =>
 		loop.stopReason === "round-failed"
 		|| loop.stopReason === "closure-failed"
+		|| loop.stopReason === "control-plane-lost"
 		|| loop.stopReason === "unsafe-discard",
 	).length;
 	const activeDates = [
@@ -214,7 +305,10 @@ async function deriveResearchScopeSignals(
 		].filter((value): value is string => Boolean(value))),
 	].sort();
 	return {
-		researchSignalCount: positiveExperiments + unstableLoops,
+		// I carry forward optimizer-derived scope pressure as a bounded boost so
+		// nightly repair does not forget a strong frontier or a Pareto stall just
+		// because the narrower follow-up query saw fewer rows on replay.
+		researchSignalCount: positiveExperiments + unstableLoops + scopeSignalBoost(scope),
 		activeDates,
 	};
 }
@@ -286,11 +380,21 @@ export async function repairSelectiveReembeddingForResearchScopes(
 	const uniqueScopes = mergeResearchRefinementScopes(scopes);
 	const results: ResearchScopedSelectiveReembeddingResult["scopes"] = [];
 	for (const scope of uniqueScopes) {
+		const scopeBudget = mergeScopeRefinementBudget(activeBudget, scope.refinementBudget);
 		const { researchSignalCount, activeDates } = await deriveResearchScopeSignals(scope);
 		// Research pressure widens the repair frontier here. Without a current
 		// signal I leave background debt to the normal epoch-refresh pipeline so
 		// this scoped path does not rewrite broad history opportunistically.
 		if (researchSignalCount === 0) continue;
+		// Optimizer-derived pressure can survive even when the replay query sees
+		// no concrete rows yet. In that case I anchor the scoped repair to the
+		// current Nidra label instead of silently dropping the signal.
+		const effectiveActiveDates =
+			activeDates.length > 0
+				? activeDates
+				: scopeSignalBoost(scope) > 0 && isIsoDateLabel(label)
+					? [label]
+					: [];
 		let dailyCandidates = 0;
 		let dailyReembedded = 0;
 		let dailyRemoteSynced = 0;
@@ -298,9 +402,9 @@ export async function repairSelectiveReembeddingForResearchScopes(
 		// I repair the exact daily artifacts first, then widen to monthly/yearly
 		// periods derived from those same dates. That keeps scoped refinement
 		// grounded in observed activity instead of jumping straight to broad periods.
-		for (const date of activeDates) {
+		for (const date of effectiveActiveDates) {
 			const dailyResult = await repairSelectiveReembedding({
-				...buildTemporalRequest("daily", date, researchSignalCount, activeBudget),
+				...buildTemporalRequest("daily", date, researchSignalCount, scopeBudget),
 				projects: [scope.projectPath],
 			} as Parameters<typeof repairSelectiveReembedding>[0] & Record<string, unknown>);
 			dailyCandidates += dailyResult.plan.candidateCount;
@@ -308,8 +412,8 @@ export async function repairSelectiveReembeddingForResearchScopes(
 			dailyRemoteSynced += dailyResult.remoteSynced;
 			dailyQualityDeferred += dailyResult.qualityDeferred;
 		}
-		const monthlyPeriods = uniqueResearchPeriods(activeDates, "monthly");
-		const yearlyPeriods = uniqueResearchPeriods(activeDates, "yearly");
+		const monthlyPeriods = uniqueResearchPeriods(effectiveActiveDates, "monthly");
+		const yearlyPeriods = uniqueResearchPeriods(effectiveActiveDates, "yearly");
 		let periodicCandidates = 0;
 		let periodicReembedded = 0;
 		let periodicRemoteSynced = 0;
@@ -321,7 +425,7 @@ export async function repairSelectiveReembeddingForResearchScopes(
 					scope.projectPath,
 					monthlyPeriods,
 					researchSignalCount,
-					activeBudget,
+					scopeBudget,
 				),
 			} as Parameters<typeof repairSelectiveReembedding>[0] & Record<string, unknown>);
 			periodicCandidates += monthlyResult.plan.candidateCount;
@@ -336,7 +440,7 @@ export async function repairSelectiveReembeddingForResearchScopes(
 					scope.projectPath,
 					yearlyPeriods,
 					researchSignalCount,
-					activeBudget,
+					scopeBudget,
 				),
 			} as Parameters<typeof repairSelectiveReembedding>[0] & Record<string, unknown>);
 			periodicCandidates += yearlyResult.plan.candidateCount;
@@ -349,7 +453,7 @@ export async function repairSelectiveReembeddingForResearchScopes(
 		// describe only the scopes that actually influenced current refinement.
 		results.push({
 			projectPath: scope.projectPath,
-			dailyDates: activeDates,
+			dailyDates: effectiveActiveDates,
 			candidates: dailyCandidates + periodicCandidates,
 			reembedded: dailyReembedded + periodicReembedded,
 			remoteSynced: dailyRemoteSynced + periodicRemoteSynced,

@@ -9,6 +9,7 @@ Some entries are direct implementations of established mathematical primitives. 
 - Direct algorithmic primitives in this repo include families such as Wilson confidence bounds, EMA smoothing, BOCPD, Personalized PageRank, contextual bandits, and SWIM-style gossip.
 - Higher-level rows such as Swapna consolidation, information-theoretic compaction, or skill evolution are repo-native compositions built from those primitives and related literature.
 - The research map lives in [research.md](./research.md). That document distinguishes direct anchors from heuristic adaptations and validation references.
+- The compaction stack uses both `mHC` budget allocation and `MDL` quality gating; see [compaction-and-refinement.md](./compaction-and-refinement.md) for the runtime split.
 - pi-mono lineage is not the provenance story for the algorithms listed here. Where pi-mono is relevant, it is mostly in adjacent operator ergonomics rather than these mathematical or retrieval components.
 
 ## Research Traceability
@@ -27,7 +28,8 @@ Some entries are direct implementations of established mathematical primitives. 
 
 | Algorithm | Location | Complexity | What It Does |
 |-----------|----------|------------|-------------|
-| **Accelerated Sinkhorn-Knopp** | `smriti/sinkhorn-accelerated.ts` | O(n^2 * k) | Doubly stochastic mixing matrix for optimal token budget allocation across 4 memory streams. Nesterov momentum + log-domain stability + adaptive epsilon convergence |
+| **Sinkhorn-family Budget Allocation (`mHC` helper + live Sinkhorn paths)** | `smriti/compactor.ts`, `smriti/sinkhorn-budget.ts`, `smriti/sinkhorn-knopp.ts`, `smriti/swapna-consolidation.ts` | O(n^2 * k) | Doubly stochastic allocation for hierarchical token budgeting across memory chunks or streams. The live runtime uses Sinkhorn-family allocation directly; `computeTokenBudgetsMHC(...)` is one explicit allocator in that family |
+| **MDL Compaction Policy** | `smriti/mdl-compaction.ts` | O(n) per artifact | Practical compaction quality heuristic that scores summaries and packed derivatives by retention plus reduction, then marks them healthy/watch/repair |
 | **Adaptive GraphRAG Scoring** | `smriti/graphrag-adaptive-scoring.ts` | O(E) per query | Thompson Sampling learned weights + temporal decay + MMR diversity for knowledge graph edge scoring |
 | **Personalized PageRank** | `smriti/graphrag-pagerank-personalized.ts` | O(V+E) full, O(1/epsilon) incremental | Topic-biased teleportation + Gauss-Seidel iteration. Incremental push-based updates — O(1/epsilon) per edge change instead of full recomputation |
 | **Information-Theoretic Compaction** | `anina/context-compaction-informational.ts` | O(n^2 * d) | TF-IDF term importance + TextRank sentence ranking + MinHash dedup + Shannon surprisal for auto-triggered context compaction |

@@ -158,7 +158,32 @@ describe("TakumiBridge", () => {
 			const result = await bridge.execute({ type: "task", task: "fix bug" });
 
 			expect(result.exitCode).toBe(127);
+			expect(result.taskId).toMatch(/^task-/);
+			expect(result.laneId).toMatch(/^lane-/);
+			expect(result.finalReport.status).toBe("failed");
+			expect(result.finalReport.failureKind).toBe("executor-unavailable");
+			expect(result.artifacts).toEqual(expect.arrayContaining([
+				expect.objectContaining({ kind: "log" }),
+			]));
 			expect(result.output).toContain("not available on PATH");
+		});
+
+		it("preserves engine-owned task and lane ids when the caller provides them", async () => {
+			configureTakumiBinary({ exists: false });
+
+			const result = await bridge.execute({
+				type: "task",
+				taskId: "task-engine-1",
+				laneId: "lane-engine-1",
+				task: "fix bug",
+			});
+
+			expect(result.taskId).toBe("task-engine-1");
+			expect(result.laneId).toBe("lane-engine-1");
+			expect(result.finalReport.taskId).toBe("task-engine-1");
+			expect(result.finalReport.laneId).toBe("lane-engine-1");
+			expect(result.artifacts.every((artifact) => artifact.taskId === "task-engine-1")).toBe(true);
+			expect(result.artifacts.every((artifact) => artifact.laneId === "lane-engine-1")).toBe(true);
 		});
 
 		it("runs Takumi in structured NDJSON mode and synthesizes a result", async () => {
@@ -221,9 +246,31 @@ describe("TakumiBridge", () => {
 			expect(result.modeUsed).toBe("rpc");
 			expect(result.cacheIntent).toBe("fresh");
 			expect(result.exitCode).toBe(0);
+			expect(result.taskId).toMatch(/^task-/);
+			expect(result.laneId).toMatch(/^lane-/);
 			expect(result.filesModified).toEqual(["src/login.ts"]);
+			expect(result.toolCalls).toEqual(["write"]);
+			expect(result.finalReport).toEqual(expect.objectContaining({
+				taskId: result.taskId,
+				laneId: result.laneId,
+				status: "completed",
+				toolCalls: ["write"],
+				failureKind: null,
+			}));
+			expect(result.artifacts.map((artifact) => artifact.kind)).toEqual(
+				expect.arrayContaining(["patch", "log"]),
+			);
 			expect(result.output).toContain("Working...");
-			expect(events).toContainEqual({ type: "tool_call", data: "write" });
+			expect(events).toContainEqual(expect.objectContaining({
+				execution: {
+					task: { id: result.taskId },
+					lane: { id: result.laneId },
+				},
+				taskId: result.taskId,
+				laneId: result.laneId,
+				type: "tool_call",
+				data: "write",
+			}));
 		});
 
 		it("falls back to plain text mode when stream execution is rejected", async () => {
@@ -376,6 +423,7 @@ describe("TakumiBridge", () => {
 			expect(env.CHITRAGUPTA_ENGINE_ROUTE_ENVELOPE).toBeDefined();
 			expect(env.CHITRAGUPTA_ENGINE_ROUTE_ENVELOPE_DIGEST).toMatch(/^[a-f0-9]{16}$/);
 
+			proc.stdout._emit("data", Buffer.from("Selected provider: openai\nSelected model: gpt-4.1\n"));
 			proc._emit("close", 0);
 			await resultPromise;
 		});
@@ -420,6 +468,10 @@ describe("TakumiBridge", () => {
 			expect(result.exitCode).toBe(1);
 			expect(result.output).toContain("Takumi execution blocked by the Chitragupta engine route contract.");
 			expect(result.output).toContain("too large for structured Takumi env transport");
+			expect(result.finalReport.failureKind).toBe("route-incompatible");
+			expect(result.artifacts).toEqual(expect.arrayContaining([
+				expect.objectContaining({ kind: "log" }),
+			]));
 			expect(mockSpawn).not.toHaveBeenCalled();
 		});
 
@@ -739,6 +791,53 @@ describe("TakumiBridge", () => {
 				"Observed provider 'anthropic' is outside the engine-selected provider set: openai",
 				"Observed model 'claude-3.7-sonnet' is outside the engine-selected model set: gpt-4.1",
 			]);
+			expect(result.finalReport.failureKind).toBe("contract-violation");
+			expect(result.artifacts).toEqual(expect.arrayContaining([
+				expect.objectContaining({ kind: "log" }),
+			]));
+		});
+
+		it("fails closed when Takumi stays silent about provider/model under an enforced engine lane", async () => {
+			configureTakumiBinary({ streamSupported: false });
+			const proc = createMockProcess();
+			mockSpawn.mockReturnValue(proc);
+
+			const resultPromise = bridge.execute({
+				type: "task",
+				task: "Strict review",
+				context: {
+					engineRoute: {
+						routeClass: "coding.review.strict",
+						capability: "coding.review",
+						selectedCapabilityId: "adapter.takumi.executor",
+						executionBinding: {
+							source: "kosha-discovery",
+							kind: "executor",
+							query: { capability: "chat", mode: "chat", role: "reviewer" },
+							selectedProviderId: "openai",
+							selectedModelId: "gpt-4.1",
+							preferredProviderIds: ["openai"],
+							preferredModelIds: ["gpt-4.1"],
+							allowCrossProvider: false,
+						},
+						enforced: true,
+					},
+				},
+			});
+
+			await tick();
+			proc.stdout._emit("data", Buffer.from("Working...\n"));
+			proc._emit("close", 0);
+
+			const result = await resultPromise;
+			expect(result.exitCode).toBe(1);
+			expect(result.contractAudit?.violations).toEqual([
+				"Takumi did not declare a provider for the enforced engine-selected lane: openai",
+				"Takumi did not declare a model for the enforced engine-selected lane: gpt-4.1",
+			]);
+			expect(result.finalReport.failureKind).toBe("contract-violation");
+			expect(result.finalReport.selectedProviderId).toBeNull();
+			expect(result.finalReport.selectedModelId).toBeNull();
 		});
 
 		it("accepts explicit Takumi provider/model declarations that stay within the enforced engine lane", async () => {
@@ -780,6 +879,52 @@ describe("TakumiBridge", () => {
 				observedModelIds: ["gpt-4.1"],
 				violations: [],
 			});
+		});
+
+		it("uses the primary envelope lane when building the compatibility final report", async () => {
+			configureTakumiBinary({ streamSupported: false });
+			const proc = createMockProcess();
+			mockSpawn.mockReturnValue(proc);
+
+			const resultPromise = bridge.execute({
+				type: "task",
+				task: "Strict review",
+				context: {
+					engineRouteEnvelope: {
+						primaryKey: "validator",
+						lanes: [
+							{
+								key: "validator",
+								routeClass: "coding.validation-high-trust",
+								capability: "coding.validation",
+								selectedCapabilityId: "adapter.takumi.executor",
+								executionBinding: {
+									source: "kosha-discovery",
+									kind: "executor",
+									query: { capability: "chat", mode: "chat", role: "validator" },
+									selectedProviderId: "openai",
+									selectedModelId: "gpt-4.1",
+									allowCrossProvider: true,
+								},
+								enforced: false,
+							},
+						],
+					},
+				},
+			});
+
+			await tick();
+			proc.stdout._emit("data", Buffer.from("Selected provider: openai\nSelected model: gpt-4.1\n"));
+			proc._emit("close", 0);
+
+			const result = await resultPromise;
+			expect(result.finalReport.usedRoute).toEqual(expect.objectContaining({
+				routeClass: "coding.validation-high-trust",
+				capability: "coding.validation",
+				selectedCapabilityId: "adapter.takumi.executor",
+				selectedProviderId: "openai",
+				selectedModelId: "gpt-4.1",
+			}));
 		});
 	});
 

@@ -3,6 +3,7 @@ import type {
 	ResearchScope,
 } from "./chitragupta-nodes-research-shared.js";
 import {
+	reconcileTerminalResearchLoopInterrupt,
 	startResearchLoopInterrupt,
 } from "./chitragupta-nodes-research-interrupt.js";
 import {
@@ -81,6 +82,12 @@ export async function executeOvernightResearchLoop(
 		scope.interruptSignal,
 	);
 	if (restored.kind === "terminal") {
+		await reconcileTerminalResearchLoopInterrupt({
+			loopKey,
+			projectPath: scope.projectPath,
+			leaseOwner: scope.leaseOwner,
+			stopReason: restored.summary.stopReason,
+		});
 		return restored.summary;
 	}
 	const interrupt = await startResearchLoopInterrupt(

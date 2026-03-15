@@ -188,7 +188,9 @@ function hasAuthoritativeSelection(
 }
 
 /** Detect the older Takumi CLI mode that cannot honor NDJSON streaming yet. */
-export function shouldFallbackToCli(result: TakumiResponse): boolean {
+export function shouldFallbackToCli(
+	result: Pick<TakumiResponse, "exitCode" | "output">,
+): boolean {
 	if (result.exitCode === 0) return false;
 	return /Unknown option:\s*--stream|invalid .*--stream|unknown .*ndjson/i.test(result.output);
 }

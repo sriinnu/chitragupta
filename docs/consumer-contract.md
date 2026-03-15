@@ -138,7 +138,8 @@ Current defaults by surface:
 - serve
   - isolated by default unless the caller passes explicit session or lineage controls
 - MCP
-  - may opt into `same_day` reuse through explicit lineage metadata for legacy continuity behavior
+  - may reuse `same_day` continuity when the bridge can derive a stable MCP client identity and corresponding lineage metadata
+  - explicit lineage metadata is still the clearest contract, but the current MCP path is not a pure opt-in-only model
 
 Consumer rule:
 
@@ -359,12 +360,14 @@ Takumi should not own:
 - canonical session truth
 - bridge auth authority
 - global routing policy
+- canonical execution identity beyond the engine-owned `execution.task.id` / `execution.lane.id` it was given
 
 Takumi route policy rule:
 
 - Takumi may schedule subtasks locally inside an engine-approved lane
 - Takumi should not replace an engine-selected lane with its own provider choice when the caller supplied an explicit route class or capability for resolution
 - when the engine resolves a non-Takumi lane, the Takumi bridge should stop and report the policy result instead of forcing execution through the bridge
+- bridge callers should prefer the canonical `execution` object at the boundary and treat top-level `taskId` / `laneId` as transition aliases only
 
 ### Takumi Extensions
 
@@ -411,6 +414,7 @@ Current consumer-facing daemon methods now include:
   - also returns optional `discoveryHints`, so provider/model inventory and cheapest-route guidance stay attached to the engine decision
   - may return an `executionBinding` envelope when the selected lane is an executor such as Takumi and the engine wants the consumer to stay inside a discovery-backed model/provider set
   - that envelope can now carry both the preferred provider/model set and the currently selected provider/model pair the consumer should honor
+  - coding/Takumi consumers should carry the resulting execution decision forward as one canonical `execution` object instead of inventing fresh task/lane ids per bridge surface
   - consumers that request explicit engine-route enforcement should treat route-resolution failure as a hard stop, not as permission to fall back to a local vendor choice
 
 - `route.resolveBatch`
@@ -477,3 +481,6 @@ The point is narrower:
 - [current-status.md](./current-status.md)
 - [vaayu-integration.md](./vaayu-integration.md)
 - [coding-agent.md](./coding-agent.md)
+- [takumi-executor-contract.md](./takumi-executor-contract.md)
+- [hard-recovery-plan.md](./hard-recovery-plan.md)
+- [vaayu-readiness-checklist.md](./vaayu-readiness-checklist.md)

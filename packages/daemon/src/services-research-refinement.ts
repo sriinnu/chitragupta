@@ -69,6 +69,7 @@ export async function triggerImmediateResearchRefinement(
 		decision === "keep"
 		|| status === "round-failed"
 		|| status === "closure-failed"
+		|| status === "control-plane-lost"
 		|| status === "unsafe-discard";
 	const refinementBudget = options.updateBudgets?.refinement ?? null;
 	const nidraBudget = options.updateBudgets?.nidra ?? null;
@@ -85,10 +86,11 @@ export async function triggerImmediateResearchRefinement(
 			elevatedSignal,
 			override: refinementBudget,
 		});
-		if (refinementBudget) {
+		if (refinementBudget || nidraBudget) {
 			// I persist explicit loop-provided refinement budgets so the next daemon
-			// sweep reuses the same operator-approved widening instead of falling
-			// back to a narrower base policy.
+			// sweep reuses the same operator-approved widening. Nidra-only overrides
+			// matter too because the later postprocess phases need that budget even
+			// when the immediate repair used the default refinement envelope.
 			upsertResearchRefinementBudget({
 				refinement: refinementBudget,
 				nidra: nidraBudget,
@@ -101,14 +103,15 @@ export async function triggerImmediateResearchRefinement(
 		const daily = await repairSelectiveReembedding(
 			requests.daily as Parameters<typeof repairSelectiveReembedding>[0] & Record<string, unknown>,
 		);
-		const project = await repairSelectiveReembedding(
-			requests.project as Parameters<typeof repairSelectiveReembedding>[0] & Record<string, unknown>,
-		);
-		return {
-			status: "repaired",
-			daily: {
-				date,
-				candidates: daily.plan.candidateCount,
+			const project = await repairSelectiveReembedding(
+				requests.project as Parameters<typeof repairSelectiveReembedding>[0] & Record<string, unknown>,
+			);
+			const qualityDeferred = daily.qualityDeferred + project.qualityDeferred;
+			return {
+				status: qualityDeferred > 0 ? "degraded" : "repaired",
+				daily: {
+					date,
+					candidates: daily.plan.candidateCount,
 				reembedded: daily.reembedded,
 				remoteSynced: daily.remoteSynced,
 				qualityDeferred: daily.qualityDeferred,

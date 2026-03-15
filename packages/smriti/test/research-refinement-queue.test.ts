@@ -32,6 +32,18 @@ describe("research refinement queue", () => {
 			projectPath: "/repo/project",
 			sessionIds: ["sess-1"],
 			sessionLineageKeys: ["lineage-1"],
+			policyFingerprints: ["policy-a"],
+			primaryObjectiveIds: ["metric-improvement"],
+			primaryStopConditionIds: ["budget-cap"],
+			primaryStopConditionKinds: ["budget-exhausted"],
+			frontierBestScore: 0.61,
+			refinementBudget: {
+				dailyCandidateLimit: 4,
+				dailyMinMdlScore: 0.58,
+			},
+			nidraBudget: {
+				maxResearchProjectsPerCycle: 2,
+			},
 			repairIntent: {
 				daily: { dates: ["2026-03-14"], levels: ["daily"] },
 			},
@@ -41,6 +53,19 @@ describe("research refinement queue", () => {
 			projectPath: "/repo/project",
 			sessionIds: ["sess-1"],
 			sessionLineageKeys: ["lineage-1"],
+			policyFingerprints: ["policy-b"],
+			primaryObjectiveIds: ["stability"],
+			primaryStopConditionIds: ["pareto-halt"],
+			primaryStopConditionKinds: ["pareto-stagnation"],
+			frontierBestScore: 0.88,
+			refinementBudget: {
+				dailyCandidateLimit: 7,
+				dailyMinMdlScore: 0.49,
+			},
+			nidraBudget: {
+				maxResearchProjectsPerCycle: 4,
+				maxSemanticPressure: 6,
+			},
 			repairIntent: {
 				project: { projects: ["/repo/project"], levels: ["monthly"], periods: ["2026-03"] },
 			},
@@ -49,10 +74,23 @@ describe("research refinement queue", () => {
 		const queued = listQueuedResearchRefinementScopes({ limit: 10 });
 		expect(queued).toHaveLength(1);
 		expect(queued[0]).toEqual(expect.objectContaining({
-			projectPath: "/repo/project",
-			sessionIds: ["sess-1"],
-			sessionLineageKeys: ["lineage-1"],
-			repairIntent: {
+				projectPath: "/repo/project",
+				sessionIds: ["sess-1"],
+				sessionLineageKeys: ["lineage-1"],
+				policyFingerprints: ["policy-a", "policy-b"],
+				primaryObjectiveIds: ["metric-improvement", "stability"],
+				primaryStopConditionIds: ["budget-cap", "pareto-halt"],
+				primaryStopConditionKinds: ["budget-exhausted", "pareto-stagnation"],
+				frontierBestScore: 0.88,
+				refinementBudget: {
+					dailyCandidateLimit: 7,
+					dailyMinMdlScore: 0.49,
+				},
+				nidraBudget: {
+					maxResearchProjectsPerCycle: 4,
+					maxSemanticPressure: 6,
+				},
+				repairIntent: {
 				daily: { dates: ["2026-03-14"], levels: ["daily"] },
 				project: { projects: ["/repo/project"], levels: ["monthly"], periods: ["2026-03"] },
 			},

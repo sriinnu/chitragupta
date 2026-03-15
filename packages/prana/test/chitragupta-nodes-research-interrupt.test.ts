@@ -85,12 +85,13 @@ describe("research interrupt control", () => {
 	afterEach(async () => {
 		const mod = await import("../src/chitragupta-nodes-research-interrupt.js");
 		for (const active of mod.listActiveResearchLoops()) {
-			mod.cancelResearchLoop(active.loopKey, "test-cleanup");
+			mod.cancelResearchLoop(active.loopKey, "test-cleanup", active.projectPath);
 			call.mockResolvedValueOnce({
 				state: { loopKey: active.loopKey, stopReason: "cancelled" },
 			});
 				await mod.completeResearchLoopInterrupt({
 					loopKey: active.loopKey,
+					projectPath: active.projectPath,
 					signal: new AbortController().signal,
 					getLeaseOwner: () => null,
 					getCancelReason: () => "test-cleanup",
@@ -136,6 +137,26 @@ describe("research interrupt control", () => {
 			expect(mod.listActiveResearchLoops()).toEqual([]);
 		});
 
+	it("keeps local interrupt handles isolated by project path when loop keys collide", async () => {
+		call.mockResolvedValueOnce({ state: { loopKey: "shared-loop", status: "running" } });
+		call.mockResolvedValueOnce({ state: { loopKey: "shared-loop", status: "running" } });
+		const mod = await import("../src/chitragupta-nodes-research-interrupt.js");
+		const otherScope = {
+			...scope,
+			projectPath: "/repo/other-project",
+		};
+
+		const first = await mod.startResearchLoopInterrupt(scope, council, "shared-loop");
+		const second = await mod.startResearchLoopInterrupt(otherScope, council, "shared-loop");
+
+		expect(first.projectPath).toBe("/repo/project");
+		expect(second.projectPath).toBe("/repo/other-project");
+		expect(mod.listActiveResearchLoops()).toEqual([
+			expect.objectContaining({ loopKey: "shared-loop", projectPath: "/repo/project" }),
+			expect.objectContaining({ loopKey: "shared-loop", projectPath: "/repo/other-project" }),
+		]);
+	});
+
 	it("fails closed when daemon heartbeat control state disappears", async () => {
 			call.mockResolvedValueOnce({ state: { loopKey: "loop-heartbeat-missing", status: "running" } });
 			const mod = await import("../src/chitragupta-nodes-research-interrupt.js");
@@ -158,6 +179,29 @@ describe("research interrupt control", () => {
 				cancelReason: "control-plane-lost",
 			}),
 		]);
+	});
+
+	it("claims durable lease ownership before completing an attach-mode loop", async () => {
+		call.mockResolvedValueOnce({
+			state: { loopKey: "loop-attach", status: "running", phase: "complete-pending" },
+		});
+		call.mockResolvedValueOnce({
+			state: { loopKey: "loop-attach", status: "running", phase: "attach" },
+		});
+		const mod = await import("../src/chitragupta-nodes-research-interrupt.js");
+
+		await mod.startResearchLoopInterrupt(scope, council, "loop-attach", "attach");
+
+		expect(call).toHaveBeenNthCalledWith(1, "research.loops.get", {
+			loopKey: "loop-attach",
+			projectPath: "/repo/project",
+		});
+		expect(call).toHaveBeenNthCalledWith(2, "research.loops.resume", expect.objectContaining({
+			loopKey: "loop-attach",
+			projectPath: "/repo/project",
+			leaseOwner: expect.stringContaining("prana:research-loop:"),
+			phase: "attach",
+		}));
 	});
 
 	it("forwards an explicit durable lease owner through start, heartbeat, and complete control calls", async () => {
@@ -189,8 +233,34 @@ describe("research interrupt control", () => {
 		}));
 		expect(call).toHaveBeenNthCalledWith(3, "research.loops.complete", expect.objectContaining({
 			loopKey: "loop-lease-owner",
+			projectPath: "/repo/project",
 			leaseOwner: "daemon:research-worker:test-daemon",
 		}));
+	});
+
+	it("generates one durable local lease owner when the scope omitted it", async () => {
+		call.mockResolvedValueOnce({ state: { loopKey: "loop-generated-lease", status: "running" } });
+		call.mockResolvedValueOnce({ state: { loopKey: "loop-generated-lease", status: "running" } });
+		call.mockResolvedValueOnce({ state: { loopKey: "loop-generated-lease", status: "completed", stopReason: "max-rounds" } });
+		const mod = await import("../src/chitragupta-nodes-research-interrupt.js");
+		const handle = await mod.startResearchLoopInterrupt(scope, council, "loop-generated-lease");
+		await mod.heartbeatResearchLoopInterrupt(handle, scope, council, {
+			currentRound: 1,
+			totalRounds: 4,
+			attemptNumber: 1,
+			phase: "run",
+		});
+		await mod.completeResearchLoopInterrupt(handle, "max-rounds");
+
+		const startLeaseOwner = call.mock.calls[0]?.[1]?.leaseOwner;
+		const heartbeatLeaseOwner = call.mock.calls[1]?.[1]?.leaseOwner;
+		const completeLeaseOwner = call.mock.calls[2]?.[1]?.leaseOwner;
+		const completeProjectPath = call.mock.calls[2]?.[1]?.projectPath;
+		expect(typeof startLeaseOwner).toBe("string");
+		expect(startLeaseOwner).toContain("prana:research-loop:");
+		expect(heartbeatLeaseOwner).toBe(startLeaseOwner);
+		expect(completeLeaseOwner).toBe(startLeaseOwner);
+		expect(completeProjectPath).toBe("/repo/project");
 	});
 
 		it("waits for aborted closure work to settle before returning", async () => {

@@ -84,14 +84,14 @@ function normalizeNidraBudgetOverride(
  * sweep and Nidra postprocess cycle can reuse.
  */
 export function upsertResearchRefinementBudget(args: {
-	refinement: ResearchRefinementBudgetOverride;
+	refinement?: ResearchRefinementBudgetOverride | null;
 	nidra?: ResearchNidraBudgetOverride | null;
 	source?: string | null;
 	ttlMs?: number;
 }): ResearchRefinementBudgetState {
 	const refinement = normalizeBudgetOverride(args.refinement);
 	const nidra = normalizeNidraBudgetOverride(args.nidra);
-	if (!refinement) {
+	if (!refinement && !nidra) {
 		clearResearchRefinementBudget();
 		return {
 			refinement: {},
@@ -104,7 +104,7 @@ export function upsertResearchRefinementBudget(args: {
 	const db = getAgentDb();
 	const now = Date.now();
 	const state: ResearchRefinementBudgetState = {
-		refinement,
+		refinement: refinement ?? {},
 		nidra: nidra ?? undefined,
 		source: args.source ?? null,
 		expiresAt: now + Math.max(args.ttlMs ?? DEFAULT_RESEARCH_REFINEMENT_BUDGET_TTL_MS, 60_000),
@@ -143,13 +143,13 @@ export function readActiveResearchRefinementBudget(
 		);
 		const expiresAt = normalizeBoundedNumber(parsed.expiresAt);
 		const updatedAt = normalizeBoundedNumber(parsed.updatedAt);
-		if (!refinement || expiresAt == null || updatedAt == null) return null;
+		if ((!refinement && !nidra) || expiresAt == null || updatedAt == null) return null;
 		if (expiresAt <= now) {
 			clearResearchRefinementBudget();
 			return null;
 		}
 		return {
-			refinement,
+			refinement: refinement ?? {},
 			nidra: nidra ?? undefined,
 			source: typeof parsed.source === "string" ? parsed.source : null,
 			expiresAt,

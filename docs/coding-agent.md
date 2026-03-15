@@ -27,8 +27,8 @@ This document also distinguishes current implementation from future binding plan
 
 | Mode | What it does | Executes changes? |
 | --- | --- | --- |
-| `full` | Runs Lucy context injection, tries the Takumi bridge first, then falls back to the generic coding CLI router if needed. | Yes |
-| `plan-only` | Builds a plan, shows context preview, and reports available CLIs. | No |
+| `full` | Runs Lucy context injection, uses the Takumi bridge when the engine-selected lane allows it, and only falls back to the generic coding CLI router when the engine contract permits that compatibility path. | Yes |
+| `plan-only` | Builds a plan, shows context preview, reports available CLIs, and preserves the caller's engine-owned execution identity in tool metadata. | No |
 | `cli` | Skips Lucy and the Takumi bridge. Routes directly to the best available coding CLI. | Yes |
 
 ## Fresh / No-Cache Behavior
@@ -66,15 +66,20 @@ Two user-facing surfaces support a fresh execution path:
 - `routeClass`
 - `capability`
 
-If `routeClass` or `capability` is supplied, the coding path forwards that contract into Lucy and the daemon bridge. That lets operators require an engine-selected lane such as `coding.review.strict` or a raw capability such as `coding.review` instead of letting the coding path fall back to generic CLI discovery.
+If `routeClass` or `capability` is supplied, the coding path forwards that contract into Lucy and the daemon bridge.
+
+The strict engine-route contract currently requires a canonical `sessionId`.
+Without `sessionId`, those fields are still carried forward as intent, but the live route-resolution path does not yet promote them into a full engine-owned lane decision.
 
 When a canonical `sessionId` is present but no explicit `routeClass` is supplied, Chitragupta now infers a default engine route class from the task itself before calling `route.resolve`. That keeps the interactive agent, MCP `coding_agent`, and Takumi bridge on the same engine-owned lane policy instead of leaving the session-aware path partially local.
 
 If the engine resolves that request to the local `tool.coding_agent` lane, the bridge respects that decision and falls back to the generic local coding CLI path instead of treating the resolution as an error.
 
+That compatibility lane preserves engine-owned route-class policy, but it is not the same thing as the final strict Takumi executor contract. In the current runtime, `tool.coding_agent` may still delegate to the generic local coding CLI router based on local availability.
+
 ## Takumi Bridge
 
-When `coding_agent` runs in `full` mode, Chitragupta tries the Takumi bridge first.
+When `coding_agent` runs in `full` mode, Chitragupta tries the Takumi bridge first unless the engine explicitly resolves the request to the local `tool.coding_agent` compatibility lane.
 
 ### Preferred path
 
@@ -99,8 +104,10 @@ If structured streaming is unavailable, Chitragupta falls back to plain printed 
 - Context is injected by synthesizing it into the prompt.
 - The bridge also exports compatibility env vars for future Takumi-side consumption.
 - The bridge now exports explicit engine-route env vars (`CHITRAGUPTA_ROUTE_CLASS`, `CHITRAGUPTA_ROUTE_CAPABILITY`, `CHITRAGUPTA_SELECTED_CAPABILITY_ID`) and marks the injected lane as authoritative.
-- If Takumi is unavailable, Chitragupta falls back to the generic coding CLI router.
+- If Takumi is unavailable and the engine did not require a strict Takumi lane, Chitragupta can still fall back to the generic coding CLI router.
+- If strict engine routing is active, route resolution failure or an unavailable engine-selected Takumi lane fails closed with an engine-route error, except for the explicit local `tool.coding_agent` compatibility lane.
 - If the engine selects a compatible model/runtime lane such as a discovered model capability or `engine.local.llamacpp`, Chitragupta keeps Takumi as the executor but passes that engine-selected lane through as an enforced envelope instead of treating it as an override error.
+- Current route-envelope enforcement is strongest when the bridge can observe explicit provider/model declarations. Without that explicit bridge-visible data, contract audit remains best-effort rather than a full typed enforcement channel.
 
 ### What is not wired today
 
@@ -150,6 +157,7 @@ If none of these are available, `coding_agent` returns an error instead of silen
 - [README.md](../README.md)
 - [docs/getting-started.md](getting-started.md)
 - [docs/runtime-integrity.md](runtime-integrity.md)
+- [docs/takumi-executor-contract.md](takumi-executor-contract.md)
 - [packages/cli/src/modes/mcp-tools-coding.ts](../packages/cli/src/modes/mcp-tools-coding.ts)
 - [packages/cli/src/modes/takumi-bridge.ts](../packages/cli/src/modes/takumi-bridge.ts)
 - [packages/cli/src/modes/lucy-bridge.ts](../packages/cli/src/modes/lucy-bridge.ts)

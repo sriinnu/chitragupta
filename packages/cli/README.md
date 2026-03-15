@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/tests-12%2C022-brightgreen" alt="Tests" />
   <img src="https://img.shields.io/badge/MCP_tools-runtime-blue" alt="MCP Tools" />
   <img src="https://img.shields.io/badge/node-%3E%3D22-blue" alt="Node" />
-  <a href="../../LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
+  <a href="../../LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-green" alt="License" /></a>
 </p>
 
 ---
@@ -552,4 +552,4 @@ await runMcpServerMode({
 
 ## License
 
-MIT
+AGPL-3.0-only

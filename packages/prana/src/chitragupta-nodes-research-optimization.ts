@@ -10,7 +10,10 @@ import type {
 	OvernightResearchRound,
 	ResearchEvaluationRecord,
 } from "./chitragupta-nodes-research-overnight-types.js";
-import { buildResearchPolicySnapshot } from "./chitragupta-nodes-research-overnight-types.js";
+import {
+	buildResearchPolicySnapshot,
+	selectPrimaryResearchStopConditionHit,
+} from "./chitragupta-nodes-research-overnight-types.js";
 
 /**
  * Minimal execution facts needed to score one completed overnight round.
@@ -295,11 +298,9 @@ export function evaluateResearchStopConditions(args: {
  */
 export function selectResearchStopReason(
 	hits: readonly ResearchStopConditionHit[],
-): "budget-exhausted" | "no-improvement" | "max-rounds" {
-	if (hits.some((hit) => hit.triggered && hit.kind === "budget-exhausted")) return "budget-exhausted";
-	if (hits.some((hit) => hit.triggered && hit.kind === "pareto-stagnation")) return "no-improvement";
-	if (hits.some((hit) => hit.triggered && hit.kind === "no-improvement")) return "no-improvement";
-	return "max-rounds";
+): "budget-exhausted" | "pareto-stagnation" | "no-improvement" | "max-rounds" {
+	const primary = selectPrimaryResearchStopConditionHit(hits);
+	return primary?.kind ?? "max-rounds";
 }
 
 /**

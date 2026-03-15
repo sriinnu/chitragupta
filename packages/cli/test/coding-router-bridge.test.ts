@@ -138,6 +138,8 @@ describe("coding-router bridge integration", () => {
 		});
 
 		expect(result.cli).toBe("takumi (cli)");
+		expect(result.taskId).toMatch(/^task-/);
+		expect(result.laneId).toMatch(/^lane-/);
 		expect(result.bridgeResult?.modeUsed).toBe("cli");
 		expect(result.bridgeResult?.cacheIntent).toBe("fresh");
 		expect(mockBridgeInjectContext).toHaveBeenCalledWith({
@@ -145,17 +147,328 @@ describe("coding-router bridge integration", () => {
 			fresh: true,
 		});
 		expect(mockBridgeExecute).toHaveBeenCalledWith(
-			{
+			expect.objectContaining({
 				type: "task",
+				taskId: expect.stringMatching(/^task-/),
+				laneId: expect.stringMatching(/^lane-/),
 				task: "Repair auth flow",
 				context: {
 					repoMap: "src/auth.ts -> src/session.ts",
 					fresh: true,
 				},
-			},
+			}),
 			expect.any(Function),
 		);
 		expect(mockBridgeDispose).toHaveBeenCalledTimes(1);
+	});
+
+		it("forwards engine-owned task and lane identity to the Takumi bridge", async () => {
+			mockBridgeDetect.mockResolvedValue({
+				mode: "rpc",
+			command: "takumi",
+			version: "takumi 1.0.0",
+		});
+		mockBridgeExecute.mockResolvedValue({
+			type: "result",
+			taskId: "task-123",
+			laneId: "lane-abc",
+			modeUsed: "rpc",
+			cacheIntent: "default",
+			filesModified: [],
+			output: "No-op",
+			exitCode: 0,
+			finalReport: {
+				taskId: "task-123",
+				laneId: "lane-abc",
+				status: "completed",
+				summary: "No-op",
+				toolCalls: [],
+				artifacts: [],
+				failureKind: null,
+			},
+			artifacts: [],
+		});
+
+		await routeViaBridge({
+			task: "Repair auth flow",
+			taskId: "task-123",
+			laneId: "lane-abc",
+			cwd: "/tmp/project",
+		});
+
+			expect(mockBridgeExecute).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: "task",
+					taskId: "task-123",
+					laneId: "lane-abc",
+					task: "Repair auth flow",
+				}),
+				expect.any(Function),
+			);
+		});
+
+		it("preserves execution identity on structured bridge progress callbacks", async () => {
+			const onOutput = vi.fn();
+			const onProgress = vi.fn();
+			mockBridgeDetect.mockResolvedValue({
+				mode: "rpc",
+				command: "takumi",
+				version: "takumi 1.0.0",
+			});
+			mockBridgeExecute.mockImplementation(async (_request, onEvent) => {
+				onEvent?.({
+					execution: {
+						task: { id: "task-stream-1" },
+						lane: { id: "lane-stream-1" },
+					},
+					taskId: "task-stream-1",
+					laneId: "lane-stream-1",
+					type: "progress",
+					data: "stream chunk",
+				});
+				return {
+					type: "result",
+					taskId: "task-stream-1",
+					laneId: "lane-stream-1",
+					execution: {
+						task: { id: "task-stream-1" },
+						lane: { id: "lane-stream-1" },
+					},
+					modeUsed: "rpc",
+					cacheIntent: "default",
+					filesModified: [],
+					output: "done",
+					exitCode: 0,
+					finalReport: {
+						execution: {
+							task: { id: "task-stream-1" },
+							lane: { id: "lane-stream-1" },
+						},
+						taskId: "task-stream-1",
+						laneId: "lane-stream-1",
+						status: "completed",
+						summary: "done",
+						toolCalls: [],
+						artifacts: [],
+						failureKind: null,
+					},
+					artifacts: [],
+				};
+			});
+
+			await routeViaBridge({
+				task: "Repair auth flow",
+				cwd: "/tmp/project",
+				taskId: "task-stream-1",
+				laneId: "lane-stream-1",
+				onOutput,
+				onProgress,
+			});
+
+			expect(onOutput).toHaveBeenCalledWith("stream chunk");
+			expect(onProgress).toHaveBeenCalledWith({
+				execution: {
+					task: { id: "task-stream-1" },
+					lane: { id: "lane-stream-1" },
+				},
+				taskId: "task-stream-1",
+				laneId: "lane-stream-1",
+				type: "progress",
+				data: "stream chunk",
+			});
+		});
+
+		it("forwards the canonical execution object to the Takumi bridge", async () => {
+			mockBridgeDetect.mockResolvedValue({
+			mode: "rpc",
+			command: "takumi",
+			version: "takumi 1.0.0",
+		});
+		mockBridgeExecute.mockResolvedValue({
+			type: "result",
+			taskId: "task-exec-1",
+			laneId: "lane-exec-1",
+			execution: {
+				task: { id: "task-exec-1" },
+				lane: { id: "lane-exec-1" },
+			},
+			modeUsed: "rpc",
+			cacheIntent: "default",
+			filesModified: [],
+			output: "No-op",
+			exitCode: 0,
+			finalReport: {
+				execution: {
+					task: { id: "task-exec-1" },
+					lane: { id: "lane-exec-1" },
+				},
+				taskId: "task-exec-1",
+				laneId: "lane-exec-1",
+				status: "completed",
+				summary: "No-op",
+				toolCalls: [],
+				artifacts: [],
+				failureKind: null,
+			},
+			artifacts: [],
+		});
+
+		await routeViaBridge({
+			task: "Repair auth flow",
+			execution: {
+				task: { id: "task-exec-1" },
+				lane: { id: "lane-exec-1" },
+			},
+			cwd: "/tmp/project",
+		});
+
+		expect(mockBridgeExecute).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: "task",
+				execution: {
+					task: { id: "task-exec-1" },
+					lane: { id: "lane-exec-1" },
+				},
+				taskId: "task-exec-1",
+				laneId: "lane-exec-1",
+			}),
+			expect.any(Function),
+		);
+	});
+
+	it("surfaces structured progress with execution identity through the public router callback", async () => {
+		mockBridgeDetect.mockResolvedValue({
+			mode: "rpc",
+			command: "takumi",
+			version: "takumi 1.0.0",
+		});
+		mockBridgeExecute.mockImplementation(async (_request, onEvent) => {
+			onEvent?.({
+				execution: {
+					task: { id: "task-progress-1" },
+					lane: { id: "lane-progress-1" },
+				},
+				taskId: "task-progress-1",
+				laneId: "lane-progress-1",
+				type: "progress",
+				data: "bridge chunk",
+			});
+			return {
+				type: "result",
+				taskId: "task-progress-1",
+				laneId: "lane-progress-1",
+				modeUsed: "rpc",
+				cacheIntent: "default",
+				filesModified: [],
+				output: "Done",
+				exitCode: 0,
+				finalReport: {
+					execution: {
+						task: { id: "task-progress-1" },
+						lane: { id: "lane-progress-1" },
+					},
+					taskId: "task-progress-1",
+					laneId: "lane-progress-1",
+					status: "completed",
+					summary: "Done",
+					toolCalls: [],
+					artifacts: [],
+					failureKind: null,
+				},
+				artifacts: [],
+			};
+		});
+		const events: Array<{ taskId: string; laneId: string; data: string; execution: { task: { id: string }; lane: { id: string } } }> = [];
+
+		await routeViaBridge({
+			task: "Repair auth flow",
+			taskId: "task-progress-1",
+			laneId: "lane-progress-1",
+			cwd: "/tmp/project",
+			onProgress: (event) => events.push(event),
+		});
+
+		expect(events).toEqual([
+			expect.objectContaining({
+				taskId: "task-progress-1",
+				laneId: "lane-progress-1",
+				data: "bridge chunk",
+				execution: {
+					task: { id: "task-progress-1" },
+					lane: { id: "lane-progress-1" },
+				},
+			}),
+		]);
+	});
+
+	it("surfaces bridge identity and report objects on the routed result", async () => {
+		mockBridgeDetect.mockResolvedValue({
+			mode: "rpc",
+			command: "takumi",
+			version: "takumi 1.0.0",
+		});
+		mockBridgeExecute.mockResolvedValue({
+			type: "result",
+			taskId: "task-789",
+			laneId: "lane-xyz",
+			modeUsed: "rpc",
+			cacheIntent: "default",
+			filesModified: ["src/auth.ts"],
+			output: "Modified: src/auth.ts",
+			exitCode: 0,
+			finalReport: {
+				taskId: "task-789",
+				laneId: "lane-xyz",
+				status: "completed",
+				summary: "Modified: src/auth.ts",
+				toolCalls: ["write"],
+				artifacts: [],
+				failureKind: null,
+			},
+			artifacts: [
+				{
+					artifactId: "artifact-1",
+					taskId: "task-789",
+					laneId: "lane-xyz",
+					kind: "patch",
+					producer: "takumi-bridge",
+					summary: "Bridge patch summary",
+					contentHash: "abc",
+					createdAt: 1,
+					promoted: false,
+				},
+			],
+		});
+
+		const result = await routeViaBridge({
+			task: "Repair auth flow",
+			cwd: "/tmp/project",
+		});
+
+		expect(result).toEqual(expect.objectContaining({
+			execution: {
+				task: { id: "task-789" },
+				lane: { id: "lane-xyz" },
+			},
+			taskId: "task-789",
+			laneId: "lane-xyz",
+			finalReport: expect.objectContaining({
+				taskId: "task-789",
+				laneId: "lane-xyz",
+				status: "completed",
+			}),
+			artifacts: expect.arrayContaining([
+				expect.objectContaining({
+					taskId: "task-789",
+					laneId: "lane-xyz",
+					kind: "patch",
+				}),
+			]),
+			bridgeResult: expect.objectContaining({
+				taskId: "task-789",
+				laneId: "lane-xyz",
+			}),
+		}));
 	});
 
 	it("falls back to the generic router when Takumi is unavailable", async () => {
@@ -185,10 +498,78 @@ describe("coding-router bridge integration", () => {
 		const result = await resultPromise;
 		expect(result.cli).toBe("codex");
 		expect(result.exitCode).toBe(0);
+		expect(result.taskId).toMatch(/^task-/);
+		expect(result.laneId).toMatch(/^lane-/);
+		expect(result.finalReport).toEqual(expect.objectContaining({
+			taskId: result.taskId,
+			laneId: result.laneId,
+			status: "completed",
+		}));
 	});
 
-	it("fails closed when engine route resolution is requested but the daemon call fails", async () => {
-		mockDaemonCall.mockRejectedValue(new Error("bridge auth required"));
+	it("preserves caller-owned identity through the local fallback path", async () => {
+		mockBridgeDetect.mockResolvedValue({
+			mode: "unavailable",
+			command: "takumi",
+		});
+		configureCliLookup(["codex"]);
+		const proc = createMockProcess();
+		mockSpawn.mockReturnValue(proc);
+
+		const resultPromise = routeViaBridge({
+			task: "Fix fallback path",
+			cwd: "/tmp/project",
+			taskId: "task-fallback-1",
+			laneId: "lane-fallback-1",
+		});
+
+		await tick();
+		proc.emitStdout("fallback ok\n");
+		proc.close(0);
+
+		const result = await resultPromise;
+		expect(result.taskId).toBe("task-fallback-1");
+		expect(result.laneId).toBe("lane-fallback-1");
+		expect(result.finalReport).toEqual(expect.objectContaining({
+			taskId: "task-fallback-1",
+			laneId: "lane-fallback-1",
+			status: "completed",
+		}));
+	});
+
+	it("preserves the canonical execution object through the local fallback path", async () => {
+		mockBridgeDetect.mockResolvedValue({
+			mode: "unavailable",
+			command: "takumi",
+		});
+		configureCliLookup(["codex"]);
+		const proc = createMockProcess();
+		mockSpawn.mockReturnValue(proc);
+
+		const resultPromise = routeViaBridge({
+			task: "Fix fallback path",
+			cwd: "/tmp/project",
+			execution: {
+				task: { id: "task-fallback-2" },
+				lane: { id: "lane-fallback-2" },
+			},
+		});
+
+		await tick();
+		proc.emitStdout("fallback ok\n");
+		proc.close(0);
+
+		const result = await resultPromise;
+		expect(result.execution).toEqual({
+			task: { id: "task-fallback-2" },
+			lane: { id: "lane-fallback-2" },
+		});
+		expect(result.taskId).toBe("task-fallback-2");
+		expect(result.laneId).toBe("lane-fallback-2");
+	});
+
+		it("fails closed when engine route resolution is requested but the daemon call fails", async () => {
+			mockDaemonCall.mockRejectedValue(new Error("bridge auth required"));
 
 		const result = await routeViaBridge({
 			task: "Strict review with engine policy",
@@ -200,10 +581,57 @@ describe("coding-router bridge integration", () => {
 		expect(result.cli).toBe("engine-route");
 		expect(result.exitCode).toBe(1);
 		expect(result.output).toContain("Engine route resolution failed");
+		expect(result.taskId).toMatch(/^task-/);
+		expect(result.laneId).toMatch(/^lane-/);
+		expect(result.finalReport).toEqual(expect.objectContaining({
+			taskId: result.taskId,
+			laneId: result.laneId,
+			status: "failed",
+			failureKind: "route-incompatible",
+		}));
 		expect(mockBridgeDetect).not.toHaveBeenCalled();
-	});
+		});
 
-	it("normalizes noCache into bridge context even without an existing context object", async () => {
+		it("fails closed when engine route envelope expansion fails after primary route resolution", async () => {
+			mockDaemonCall
+				.mockResolvedValueOnce({
+					request: { capability: "coding.review" },
+					selected: { id: "adapter.takumi.executor" },
+					routeClass: { id: "coding.review.strict", capability: "coding.review" },
+					executionBinding: {
+						source: "kosha-discovery",
+						kind: "executor",
+						query: { capability: "chat", mode: "chat" },
+						selectedModelId: "gpt-4.1",
+						selectedProviderId: "openai",
+						allowCrossProvider: true,
+					},
+				})
+				.mockRejectedValueOnce(new Error("missing session envelope"));
+
+			const result = await routeViaBridge({
+				task: "Strict review with engine policy",
+				cwd: "/tmp/project",
+				sessionId: "sess-envelope",
+				routeClass: "coding.review.strict",
+			});
+
+			expect(result.cli).toBe("engine-route");
+			expect(result.exitCode).toBe(1);
+			expect(result.output).toContain("Engine route envelope resolution failed");
+			expect(result.finalReport).toEqual(expect.objectContaining({
+				failureKind: "route-incompatible",
+				usedRoute: expect.objectContaining({
+					routeClass: "coding.review.strict",
+					selectedCapabilityId: "adapter.takumi.executor",
+					selectedProviderId: "openai",
+					selectedModelId: "gpt-4.1",
+				}),
+			}));
+			expect(mockBridgeDetect).not.toHaveBeenCalled();
+		});
+
+		it("normalizes noCache into bridge context even without an existing context object", async () => {
 		mockBridgeDetect.mockResolvedValue({
 			mode: "rpc",
 			command: "takumi",
@@ -225,14 +653,16 @@ describe("coding-router bridge integration", () => {
 		});
 
 		expect(mockBridgeInjectContext).toHaveBeenCalledWith({ noCache: true });
-		expect(mockBridgeExecute).toHaveBeenCalledWith(
-			{
-				type: "task",
-				task: "Re-inspect auth flow",
-				context: { noCache: true },
-			},
-			expect.any(Function),
-		);
+	expect(mockBridgeExecute).toHaveBeenCalledWith(
+		expect.objectContaining({
+			type: "task",
+			taskId: expect.stringMatching(/^task-/),
+			laneId: expect.stringMatching(/^lane-/),
+			task: "Re-inspect auth flow",
+			context: { noCache: true },
+		}),
+		expect.any(Function),
+	);
 	});
 
 	it("honors engine-selected Takumi route classes before bridge execution", async () => {
@@ -476,6 +906,17 @@ describe("coding-router bridge integration", () => {
 			const result = await resultPromise;
 			expect(result.cli).toBe("codex");
 			expect(result.exitCode).toBe(0);
+			expect(result.taskId).toMatch(/^task-/);
+			expect(result.laneId).toMatch(/^lane-/);
+			expect(result.finalReport).toEqual(expect.objectContaining({
+				taskId: result.taskId,
+				laneId: result.laneId,
+				status: "completed",
+				usedRoute: expect.objectContaining({
+					routeClass: "coding.fast-local",
+					selectedCapabilityId: "tool.coding_agent",
+				}),
+			}));
 		});
 
 	it("fails closed when the engine selected Takumi but Takumi is unavailable", async () => {
@@ -499,9 +940,17 @@ describe("coding-router bridge integration", () => {
 
 		expect(result.cli).toBe("engine-route");
 		expect(result.exitCode).toBe(1);
-			expect(result.output).toContain("adapter.takumi.executor");
-			expect(result.output).toContain("unavailable");
-			expect(mockSpawn).not.toHaveBeenCalled();
+		expect(result.output).toContain("adapter.takumi.executor");
+		expect(result.output).toContain("unavailable");
+		expect(result.taskId).toMatch(/^task-/);
+		expect(result.laneId).toMatch(/^lane-/);
+		expect(result.finalReport).toEqual(expect.objectContaining({
+			taskId: result.taskId,
+			laneId: result.laneId,
+			status: "failed",
+			failureKind: "executor-unavailable",
+		}));
+		expect(mockSpawn).not.toHaveBeenCalled();
 		});
 
 		it("fails closed when the engine selected a discovery-backed model lane but Takumi is unavailable", async () => {

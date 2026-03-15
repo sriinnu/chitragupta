@@ -53,6 +53,7 @@ export interface ListResearchLoopSummariesOptions {
 	updatedAfter?: number;
 	updatedBefore?: number;
 	limit?: number;
+	offset?: number;
 }
 
 function normalizeOptionalString(value: unknown): string | null {
@@ -273,8 +274,11 @@ export function listResearchLoopSummaries(
 	}
 	const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 	const limit = Math.max(1, Math.min(options.limit ?? 20, 500));
+	const offset = typeof options.offset === "number" && Number.isFinite(options.offset) && options.offset > 0
+		? Math.trunc(options.offset)
+		: 0;
 	const rows = db.prepare(
-		`SELECT * FROM research_loop_summaries ${where} ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
-	).all(...values, limit) as Array<Record<string, unknown>>;
+		`SELECT * FROM research_loop_summaries ${where} ORDER BY updated_at DESC, created_at DESC LIMIT ? OFFSET ?`,
+	).all(...values, limit, offset) as Array<Record<string, unknown>>;
 	return rows.map(parseStoredRow);
 }

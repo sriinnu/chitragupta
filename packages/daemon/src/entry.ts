@@ -18,6 +18,11 @@ import { startServer, type DaemonServer } from "./server.js";
 import { startHttpServer, type DaemonHttpServer } from "./http-server.js";
 import { registerServices } from "./services.js";
 import { getSharedAkasha, persistSharedAkasha } from "./services-knowledge-state.js";
+import {
+	claimNextResearchLoopDispatch,
+	failDurableResearchLoopDispatch,
+	requeueDurableResearchLoopDispatch,
+} from "./services-research-scheduler.js";
 import { startInternalScarlett, stopInternalScarlett } from "./scarlett-internal.js";
 import { clearLiveRegressionEntity, getLucyLiveEngine, recordLiveRegressionSignal, type SharedRegressionSignal } from "./lucy-live-state.js";
 import { injectCycleSignals } from "./scarlett-signal-bridge.js";
@@ -283,7 +288,7 @@ async function main(): Promise<void> {
  * Registers RPC methods for manual consolidation triggers.
  */
 async function startNidra(router: RpcRouter): Promise<{ stop: () => Promise<void>; nidra: import("./scarlett-internal.js").NidraLike }> {
-	const { ChitraguptaDaemon } = await import("@chitragupta/anina");
+	const { ChitraguptaDaemon, setResearchDispatchControlPlane } = await import("@chitragupta/anina");
 
 	type NidraActivity = "offline" | "listening" | "dreaming" | "consolidating" | "consolidated" | "learning";
 	const deriveNidraActivity = (
@@ -344,6 +349,62 @@ async function startNidra(router: RpcRouter): Promise<{ stop: () => Promise<void
 		notifySession(sessionId: string): void;
 		wake(): void;
 	};
+
+	setResearchDispatchControlPlane({
+		claimNextDispatch: async ({ leaseOwner, leaseTtlMs }) => {
+			const dispatch = await claimNextResearchLoopDispatch({
+				leaseOwner,
+				leaseTtlMs,
+			});
+			return dispatch?.schedule ?? null;
+		},
+			requeueDispatch: async (schedule, params) => {
+				const retry = await requeueDurableResearchLoopDispatch({
+					projectPath: schedule.projectPath,
+					loopKey: schedule.loopKey,
+					topic: schedule.topic,
+					hypothesis: schedule.hypothesis,
+					workflowId: schedule.workflowId,
+					workflowContext: schedule.workflowContext,
+					parentSessionId: schedule.parentSessionId,
+					sessionLineageKey: schedule.sessionLineageKey,
+					leaseOwner: schedule.leaseOwner,
+					availableAt: params.availableAt,
+					attemptNumber: params.attemptNumber,
+					phase: params.phase,
+				});
+				if (retry.outcome === "requeued") {
+					return;
+				}
+				if (retry.outcome === "cancelled") {
+					const completed = await failDurableResearchLoopDispatch({
+						projectPath: schedule.projectPath,
+						loopKey: schedule.loopKey,
+						leaseOwner: schedule.leaseOwner,
+						stopReason: "cancelled",
+					});
+					if (!completed) {
+						throw new Error(`Research loop ${schedule.loopKey} lost its durable lease before cancellation could be reconciled`);
+					}
+					throw new Error(`Research loop ${schedule.loopKey} cancellation was reconciled before dispatch retry`);
+				}
+				if (retry.outcome === "phase-advanced") {
+					throw new Error(`Research loop ${schedule.loopKey} advanced beyond resident-dispatch before dispatch retry could be recorded`);
+				}
+				throw new Error(`Research loop ${schedule.loopKey} lost its durable lease before dispatch retry could be recorded`);
+			},
+			failDispatch: async (schedule, params) => {
+				const completed = await failDurableResearchLoopDispatch({
+					projectPath: schedule.projectPath,
+					loopKey: schedule.loopKey,
+					leaseOwner: schedule.leaseOwner,
+					stopReason: params.stopReason,
+				});
+				if (!completed) {
+					throw new Error(`Research loop ${schedule.loopKey} durable terminal reconciliation lost the lease`);
+				}
+			},
+		});
 
 	nidra.on("consolidation", (event: { type: string; date: string; detail?: string }) => {
 		log.info("Nidra consolidation", { type: event.type, date: event.date, detail: event.detail });

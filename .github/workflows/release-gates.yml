@@ -1,0 +1,45 @@
+name: Release Gates
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+      - "chitragupta-v*"
+
+concurrency:
+  group: release-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-verify:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [22]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      # I keep perf and soak assertions out of default CI because they are
+      # release-quality gates, not the right correctness gate for every push.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build all packages
+        run: pnpm run build
+
+      - name: Run release verification gates
+        run: pnpm run release:verify

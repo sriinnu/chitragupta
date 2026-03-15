@@ -24,6 +24,7 @@ function parseStopReason(value: unknown): OvernightResearchStopReason | null {
 	switch (value) {
 		case "max-rounds":
 		case "no-improvement":
+		case "pareto-stagnation":
 		case "budget-exhausted":
 		case "cancelled":
 		case "control-plane-lost":
@@ -107,7 +108,7 @@ export async function finalizeOvernightResearchLoop(args: {
 			new Error("Research loop completion could not be committed to the daemon control plane"),
 		);
 		await saveCompletionPendingResearchLoopCheckpoint(scope, council, degradedSummary);
-		releaseResearchLoopInterrupt(interrupt.loopKey);
+		releaseResearchLoopInterrupt(interrupt.loopKey, interrupt.projectPath);
 		return {
 			...degradedSummary,
 			summaryId: null,

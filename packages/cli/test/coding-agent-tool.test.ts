@@ -153,6 +153,13 @@ describe("coding-router", () => {
 			expect(result.cli).toBe("none");
 			expect(result.exitCode).toBe(1);
 			expect(result.output).toContain("No coding CLI available");
+			expect(result.taskId).toMatch(/^task-/);
+			expect(result.laneId).toMatch(/^lane-/);
+			expect(result.finalReport).toEqual(expect.objectContaining({
+				taskId: result.taskId,
+				laneId: result.laneId,
+				failureKind: "executor-unavailable",
+			}));
 		});
 
 		it("should spawn the highest-priority CLI", async () => {
@@ -215,6 +222,55 @@ describe("coding-router", () => {
 			expect(result.cli).toBe("codex");
 			expect(result.exitCode).toBe(0);
 			expect(result.output).toContain("Task completed successfully");
+			expect(result.taskId).toMatch(/^task-/);
+			expect(result.laneId).toMatch(/^lane-/);
+			expect(result.finalReport).toEqual(expect.objectContaining({
+				taskId: result.taskId,
+				laneId: result.laneId,
+				status: "completed",
+			}));
+		});
+
+		it("should preserve caller-owned task and lane identity", async () => {
+			mockExecFile.mockImplementation(
+				(_cmd: string, args: string[], cb: (err: Error | null) => void) => {
+					if (args[0] === "codex") cb(null);
+					else cb(new Error("not found"));
+				},
+			);
+
+			const mockStdout = { on: vi.fn() };
+			const mockStderr = { on: vi.fn() };
+			const mockProc = {
+				stdout: mockStdout,
+				stderr: mockStderr,
+				on: vi.fn(),
+			};
+			mockSpawn.mockReturnValue(mockProc);
+
+			const resultPromise = routeCodingTask({
+				task: "keep identity",
+				cwd: "/tmp/project",
+				taskId: "task-owned-1",
+				laneId: "lane-owned-1",
+			});
+
+			await new Promise((r) => setTimeout(r, 10));
+
+			const closeCb = mockProc.on.mock.calls.find(
+				(c: unknown[]) => c[0] === "close",
+			);
+			if (closeCb) {
+				closeCb[1](0);
+			}
+
+			const result = await resultPromise;
+			expect(result.taskId).toBe("task-owned-1");
+			expect(result.laneId).toBe("lane-owned-1");
+			expect(result.finalReport).toEqual(expect.objectContaining({
+				taskId: "task-owned-1",
+				laneId: "lane-owned-1",
+			}));
 		});
 
 		it("should call onOutput for streaming", async () => {
@@ -236,10 +292,12 @@ describe("coding-router", () => {
 			mockSpawn.mockReturnValue(mockProc);
 
 			const chunks: string[] = [];
+			const events: Array<{ taskId: string; laneId: string; type: string; data: string }> = [];
 			const resultPromise = routeCodingTask({
 				task: "test task",
 				cwd: "/tmp",
 				onOutput: (chunk) => chunks.push(chunk),
+				onProgress: (event) => events.push(event),
 			});
 
 			await new Promise((r) => setTimeout(r, 10));
@@ -261,6 +319,20 @@ describe("coding-router", () => {
 
 			await resultPromise;
 			expect(chunks).toEqual(["chunk1", "chunk2"]);
+			expect(events).toEqual([
+				expect.objectContaining({
+					taskId: expect.stringMatching(/^task-/),
+					laneId: expect.stringMatching(/^lane-/),
+					type: "progress",
+					data: "chunk1",
+				}),
+				expect.objectContaining({
+					taskId: expect.stringMatching(/^task-/),
+					laneId: expect.stringMatching(/^lane-/),
+					type: "progress",
+					data: "chunk2",
+				}),
+			]);
 		});
 	});
 });
@@ -309,6 +381,155 @@ describe("createCodingAgentTool", () => {
 				text: expect.stringContaining("No coding CLI available"),
 			}),
 		);
+	});
+
+	it("preserves task and lane identity in cli mode", async () => {
+		mockExecFile.mockImplementation(
+			(_cmd: string, args: string[], cb: (err: Error | null) => void) => {
+				if (args[0] === "codex") cb(null);
+				else cb(new Error("not found"));
+			},
+		);
+		const mockStdout = { on: vi.fn() };
+		const mockStderr = { on: vi.fn() };
+		const mockProc = {
+			stdout: mockStdout,
+			stderr: mockStderr,
+			on: vi.fn(),
+		};
+		mockSpawn.mockReturnValue(mockProc);
+
+		const { createCodingAgentTool } = await import("../src/modes/mcp-tools-coding.js");
+		const tool = createCodingAgentTool("/tmp/project");
+		const resultPromise = tool.execute({
+			task: "fix the flaky cli path",
+			mode: "cli",
+			taskId: "task-cli-1",
+			laneId: "lane-cli-1",
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const stdoutCb = mockStdout.on.mock.calls.find((call: unknown[]) => call[0] === "data");
+		if (stdoutCb) {
+			stdoutCb[1](Buffer.from("CLI completed\n"));
+		}
+		const closeCb = mockProc.on.mock.calls.find((call: unknown[]) => call[0] === "close");
+		if (closeCb) {
+			closeCb[1](0);
+		}
+
+		const result = await resultPromise;
+		expect(result.isError).toBe(false);
+		expect(result._metadata).toEqual(expect.objectContaining({
+			mode: "cli",
+			execution: {
+				task: { id: "task-cli-1" },
+				lane: { id: "lane-cli-1" },
+			},
+			taskId: "task-cli-1",
+			laneId: "lane-cli-1",
+			finalReport: expect.objectContaining({
+				execution: {
+					task: { id: "task-cli-1" },
+					lane: { id: "lane-cli-1" },
+				},
+				taskId: "task-cli-1",
+				laneId: "lane-cli-1",
+				status: "completed",
+			}),
+			artifacts: [],
+		}));
+	});
+
+	it("preserves an explicit execution object in cli mode", async () => {
+		mockExecFile.mockImplementation(
+			(_cmd: string, args: string[], cb: (err: Error | null) => void) => {
+				if (args[0] === "codex") cb(null);
+				else cb(new Error("not found"));
+			},
+		);
+		const mockStdout = { on: vi.fn() };
+		const mockStderr = { on: vi.fn() };
+		const mockProc = {
+			stdout: mockStdout,
+			stderr: mockStderr,
+			on: vi.fn(),
+		};
+		mockSpawn.mockReturnValue(mockProc);
+
+		const { createCodingAgentTool } = await import("../src/modes/mcp-tools-coding.js");
+		const tool = createCodingAgentTool("/tmp/project");
+		const resultPromise = tool.execute({
+			task: "fix the explicit execution path",
+			mode: "cli",
+			execution: {
+				task: { id: "task-cli-2" },
+				lane: { id: "lane-cli-2" },
+			},
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const closeCb = mockProc.on.mock.calls.find((call: unknown[]) => call[0] === "close");
+		if (closeCb) {
+			closeCb[1](0);
+		}
+
+		const result = await resultPromise;
+		expect(result._metadata).toEqual(expect.objectContaining({
+			execution: {
+				task: { id: "task-cli-2" },
+				lane: { id: "lane-cli-2" },
+			},
+			taskId: "task-cli-2",
+			laneId: "lane-cli-2",
+		}));
+	});
+
+	it("preserves typed execution metadata when cli mode throws before producing a result", async () => {
+		mockExecFile.mockImplementation(
+			(_cmd: string, args: string[], cb: (err: Error | null) => void) => {
+				if (args[0] === "codex") cb(null);
+				else cb(new Error("not found"));
+			},
+		);
+		mockSpawn.mockImplementation(() => {
+			throw new Error("spawn blew up");
+		});
+
+		const { createCodingAgentTool } = await import("../src/modes/mcp-tools-coding.js");
+		const tool = createCodingAgentTool("/tmp/project");
+		const result = await tool.execute({
+			task: "fail before cli result",
+			mode: "cli",
+			taskId: "task-cli-error-1",
+			laneId: "lane-cli-error-1",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]).toEqual(expect.objectContaining({
+			type: "text",
+			text: expect.stringContaining("coding_agent failed: spawn blew up"),
+		}));
+		expect(result._metadata).toEqual(expect.objectContaining({
+			mode: "cli",
+			execution: {
+				task: { id: "task-cli-error-1" },
+				lane: { id: "lane-cli-error-1" },
+			},
+			taskId: "task-cli-error-1",
+			laneId: "lane-cli-error-1",
+			finalReport: expect.objectContaining({
+				execution: {
+					task: { id: "task-cli-error-1" },
+					lane: { id: "lane-cli-error-1" },
+				},
+				taskId: "task-cli-error-1",
+				laneId: "lane-cli-error-1",
+				status: "failed",
+				failureKind: "runtime-failure",
+			}),
+			artifacts: [],
+		}));
 	});
 });
 
@@ -615,11 +836,11 @@ describe("owned fix regressions", () => {
 		expect(handlers.getTriguna?.()).toBe(liveTriguna);
 	});
 
-	it("does not execute Lucy or CLI routing in plan-only mode", async () => {
-		vi.resetModules();
-		const routeCodingTaskSpy = vi.fn();
-		const detectCodingClisSpy = vi.fn().mockResolvedValue([{ name: "codex" }]);
-		const executeLucySpy = vi.fn();
+		it("does not execute Lucy or CLI routing in plan-only mode", async () => {
+			vi.resetModules();
+			const routeCodingTaskSpy = vi.fn();
+			const detectCodingClisSpy = vi.fn().mockResolvedValue([{ name: "codex" }]);
+			const executeLucySpy = vi.fn();
 
 		vi.doMock("../src/modes/coding-router.js", () => ({
 			routeCodingTask: routeCodingTaskSpy,
@@ -639,26 +860,40 @@ describe("owned fix regressions", () => {
 			persistAkasha: vi.fn(),
 		}));
 
-		const { createCodingAgentTool } = await import("../src/modes/mcp-tools-coding.js");
-		const tool = createCodingAgentTool("/tmp/project");
-		const result = await tool.execute({ task: "fix login bug", mode: "plan-only" });
+			const { createCodingAgentTool } = await import("../src/modes/mcp-tools-coding.js");
+			const tool = createCodingAgentTool("/tmp/project");
+			const result = await tool.execute({
+				task: "fix login bug",
+				mode: "plan-only",
+				execution: {
+					task: { id: "task-plan-1" },
+					lane: { id: "lane-plan-1" },
+				},
+			});
 
-		expect(executeLucySpy).not.toHaveBeenCalled();
-		expect(routeCodingTaskSpy).not.toHaveBeenCalled();
-		expect(result.isError).toBe(false);
+			expect(executeLucySpy).not.toHaveBeenCalled();
+			expect(routeCodingTaskSpy).not.toHaveBeenCalled();
+			expect(result.isError).toBe(false);
 		expect(result.content[0]).toEqual(
 			expect.objectContaining({
 				type: "text",
 				text: expect.stringContaining("Plan-only mode: no commands were executed."),
 			}),
 		);
-		expect(result._metadata).toEqual(
-			expect.objectContaining({
-				mode: "plan-only",
-				executed: false,
-			}),
-		);
-	});
+			expect(result._metadata).toEqual(
+				expect.objectContaining({
+					mode: "plan-only",
+					executed: false,
+					execution: {
+						task: { id: "task-plan-1" },
+						lane: { id: "lane-plan-1" },
+					},
+					taskId: "task-plan-1",
+					laneId: "lane-plan-1",
+					artifacts: [],
+				}),
+			);
+		});
 
 	it("uses the real Akasha query and leave signatures in Lucy callbacks", async () => {
 		vi.resetModules();
@@ -675,14 +910,34 @@ describe("owned fix regressions", () => {
 				topics: ["auth"],
 				content: "Keep auth changes localized",
 			});
-			return {
-				success: true,
-				output: "planned",
-				filesModified: [],
-				autoFixAttempts: 0,
-				durationMs: 12,
-				cli: "mock",
-			};
+				return {
+					success: true,
+					output: "planned",
+					filesModified: [],
+					execution: {
+						task: { id: "task-akasha-1" },
+						lane: { id: "lane-akasha-1" },
+					},
+					taskId: "task-akasha-1",
+					laneId: "lane-akasha-1",
+					finalReport: {
+						execution: {
+							task: { id: "task-akasha-1" },
+							lane: { id: "lane-akasha-1" },
+						},
+						taskId: "task-akasha-1",
+						laneId: "lane-akasha-1",
+						status: "completed" as const,
+						summary: "planned",
+						toolCalls: [],
+						artifacts: [],
+						failureKind: null,
+					},
+					artifacts: [],
+					autoFixAttempts: 0,
+					durationMs: 12,
+					cli: "mock",
+				};
 		});
 
 		vi.doMock("../src/modes/lucy-bridge.js", () => ({
@@ -717,21 +972,45 @@ describe("owned fix regressions", () => {
 	});
 
 		it("passes explicit engine route inputs into Lucy for strict engine-lane execution", async () => {
-			vi.resetModules();
+		vi.resetModules();
 			const executeLucySpy = vi.fn(async (_task: string, config: {
+				taskId?: string;
+				laneId?: string;
 				sessionId?: string;
-			consumer?: string;
-			routeClass?: string;
-			capability?: string;
-		}) => {
-			expect(config.sessionId).toBe("sess-123");
-			expect(config.consumer).toBe("mcp:test");
-			expect(config.routeClass).toBe("coding.review.strict");
-			expect(config.capability).toBe("coding.review");
-			return {
-				success: true,
-				output: "strict route",
-				filesModified: [],
+				consumer?: string;
+				routeClass?: string;
+				capability?: string;
+			}) => {
+				expect(config.taskId).toBe("task-upstream-1");
+				expect(config.laneId).toBe("lane-upstream-1");
+				expect(config.sessionId).toBe("sess-123");
+				expect(config.consumer).toBe("mcp:test");
+				expect(config.routeClass).toBe("coding.review.strict");
+				expect(config.capability).toBe("coding.review");
+				return {
+					success: true,
+					output: "strict route",
+					filesModified: [],
+					execution: {
+						task: { id: "task-strict-1" },
+						lane: { id: "lane-strict-1" },
+					},
+					taskId: "task-strict-1",
+					laneId: "lane-strict-1",
+					finalReport: {
+						execution: {
+							task: { id: "task-strict-1" },
+							lane: { id: "lane-strict-1" },
+						},
+						taskId: "task-strict-1",
+						laneId: "lane-strict-1",
+						status: "completed" as const,
+					summary: "strict route",
+					toolCalls: [],
+					artifacts: [],
+					failureKind: null,
+				},
+				artifacts: [],
 				autoFixAttempts: 0,
 				durationMs: 10,
 				cli: "mock",
@@ -758,16 +1037,27 @@ describe("owned fix regressions", () => {
 
 		const { createCodingAgentTool } = await import("../src/modes/mcp-tools-coding.js");
 		const tool = createCodingAgentTool("/tmp/project");
-		const result = await tool.execute({
-			task: "review auth flow",
-			sessionId: "sess-123",
-			consumer: "mcp:test",
-			routeClass: "coding.review.strict",
+			const result = await tool.execute({
+				task: "review auth flow",
+				taskId: "task-upstream-1",
+				laneId: "lane-upstream-1",
+				sessionId: "sess-123",
+				consumer: "mcp:test",
+				routeClass: "coding.review.strict",
 			capability: "coding.review",
 		});
 
 			expect(executeLucySpy).toHaveBeenCalledTimes(1);
 			expect(result.isError).toBe(false);
+			expect(result._metadata).toEqual(expect.objectContaining({
+				taskId: "task-strict-1",
+				laneId: "lane-strict-1",
+				finalReport: expect.objectContaining({
+					taskId: "task-strict-1",
+					laneId: "lane-strict-1",
+				}),
+				artifacts: [],
+			}));
 		});
 
 		it("uses tool-level session and consumer defaults when explicit args omit them", async () => {
@@ -778,13 +1068,33 @@ describe("owned fix regressions", () => {
 			}) => {
 				expect(config.sessionId).toBe("sess-tool-default");
 				expect(config.consumer).toBe("agent:coding_agent");
-				return {
-					success: true,
-					output: "default route",
-					filesModified: [],
-					autoFixAttempts: 0,
-					durationMs: 5,
-					cli: "mock",
+					return {
+						success: true,
+						output: "default route",
+						filesModified: [],
+						execution: {
+							task: { id: "task-default-1" },
+							lane: { id: "lane-default-1" },
+						},
+						taskId: "task-default-1",
+						laneId: "lane-default-1",
+						finalReport: {
+							execution: {
+								task: { id: "task-default-1" },
+								lane: { id: "lane-default-1" },
+							},
+							taskId: "task-default-1",
+							laneId: "lane-default-1",
+							status: "completed" as const,
+							summary: "default route",
+							toolCalls: [],
+							artifacts: [],
+							failureKind: null,
+						},
+						artifacts: [],
+						autoFixAttempts: 0,
+						durationMs: 5,
+						cli: "mock",
 				};
 			});
 
